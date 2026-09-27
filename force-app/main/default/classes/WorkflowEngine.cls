@@ -17,7 +17,8 @@ public inherited sharing class WorkflowEngine {
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
   // Operator toggle (Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c):
-  // when true, a parent terminal failure cancels its in-flight descendants.
+  // when true, a parent that enters a failure state cancels its in-flight
+  // descendants.
   public static Boolean cascadeCancelChildrenOnFailure = true;
 
   // Failure Category picklist API values

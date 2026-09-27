@@ -1,7 +1,7 @@
 /**
- * Tests for issue #94: a parent terminal failure cancels its in-flight
- * descendants through the cancel path.
- * Written before the implementation (RED phase).
+ * Tests for issue #94: a parent that enters a failure state cancels its
+ * in-flight descendants through the cancel path. The RED phase wrote these
+ * tests before the code.
  *
  * AC map:
  *  AC1 failure states cascade through the cancel traversal
@@ -137,7 +137,7 @@ private class WorkflowCascadeCancelTest {
   }
 
   // ============================================================
-  // AC1 — terminal failure states cascade
+  // AC1 — failure states cascade
   // ============================================================
 
   @IsTest
@@ -296,6 +296,29 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
+  // Builds a suspended child with a real compensatable step on its stack.
+  private static Workflow_Instance__c insertSagaChild(Id parentId) {
+    Workflow_Instance__c child = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Suspended',
+      Parent_Instance__c = parentId,
+      Correlation_Key__c = nextKey('Saga'),
+      Input__c = '{}',
+      Compensation_Stack__c = JSON.serialize(
+        new List<String>{ 'WorkflowEngineTest.CompensatableHappyStep' }
+      )
+    );
+    insert child;
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = child.Id,
+      Step_Name__c = 'WorkflowEngineTest.CompensatableHappyStep',
+      Status__c = 'Completed',
+      Output__c = '{}',
+      Retry_Count__c = 0
+    );
+    return child;
+  }
+
   // Builds a child whose rollback stalled (CompensationFailed) with one failed
   // undo attempt.
   private static Workflow_Instance__c insertStalledChild(Id parentId) {
@@ -311,10 +334,10 @@ private class WorkflowCascadeCancelTest {
     return child;
   }
 
-  // A stalled rollback runs no forward work and waits for an operator, so the
-  // cascade leaves it (it can still be resumed or cancelled explicitly).
+  // A stalled rollback is not terminal. The cascade uses the compensating cancel,
+  // so the stalled rollback resumes under the cancel phase.
   @IsTest
-  static void compensationFailedChildIsLeftForOperator() {
+  static void compensationFailedChildResumesRollback() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c parent = insertInstance(null, 'Running');
@@ -327,19 +350,42 @@ private class WorkflowCascadeCancelTest {
       Test.stopTest();
 
       System.assertEquals(
-        'CompensationFailed',
+        'Cancelling',
         statusOf(child.Id),
-        'The cascade must not resume a stalled rollback'
+        'The stalled rollback resumes under the cancel phase'
       );
       System.assertEquals(
-        1,
+        2,
         compensateLogCount(child.Id),
-        'No undo attempt is appended'
+        'A fresh undo attempt is appended; the failed one stays'
       );
       System.assertEquals(
         'Cancelled',
         statusOf(grandchild.Id),
-        'The traversal still passes through the stalled child'
+        'The walk goes through the stalled child'
+      );
+    }
+  }
+
+  // End to end: the cascaded rollback runs the compensation and drains.
+  @IsTest
+  static void cascadedRollbackDrainsToCancelled() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+      Workflow_Instance__c child = insertSagaChild(parent.Id);
+
+      Test.startTest();
+      setStatus(parent.Id, 'Failed');
+      deliverAll();
+      WorkflowEngine.runStep(child.Id, null); // compensate()
+      WorkflowEngine.runStep(child.Id, null); // stack drained
+      Test.stopTest();
+
+      System.assertEquals(
+        'Cancelled',
+        statusOf(child.Id),
+        'The cascaded rollback drains to Cancelled'
       );
     }
   }
@@ -374,11 +420,13 @@ private class WorkflowCascadeCancelTest {
       deliverAll();
       Test.stopTest();
 
-      for (Workflow_Instance__c after : [
+      List<Workflow_Instance__c> rows = [
         SELECT Status__c, Error_Message__c
         FROM Workflow_Instance__c
         WHERE Id IN :children
-      ]) {
+      ];
+      System.assertEquals(5, rows.size(), 'All terminal children read');
+      for (Workflow_Instance__c after : rows) {
         System.assertEquals(
           'original-' + after.Status__c,
           after.Error_Message__c,
@@ -489,9 +537,9 @@ private class WorkflowCascadeCancelTest {
   static void cascadeErrorNeverFailsParentAndRetries() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Instance__c parent = insertInstance(null, 'Running');
+      // Insert publishes no event, so only the retry job can reap the child.
+      Workflow_Instance__c parent = insertInstance(null, 'Failed');
       Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
-      setStatus(parent.Id, 'Failed');
 
       Test.startTest();
       WorkflowCascadeCancel.throwTestException = true;
@@ -520,9 +568,8 @@ private class WorkflowCascadeCancelTest {
   @IsTest
   static void cascadeStopsRetryAfterMaxAttempts() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Workflow_Instance__c parent = insertInstance(null, 'Running');
-      insertInstance(parent.Id, 'Running');
-      setStatus(parent.Id, 'Failed');
+      Workflow_Instance__c parent = insertInstance(null, 'Failed');
+      Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
       Workflow_Event__e last = WorkflowCascadeCancel.buildParentEvent(
         parent.Id
       );
@@ -537,6 +584,7 @@ private class WorkflowCascadeCancelTest {
       WorkflowCascadeCancel.handleEvents(new List<Workflow_Event__e>{ last });
 
       System.assertEquals(0, Limits.getQueueableJobs(), 'No retry job');
+      System.assertEquals('Running', statusOf(child.Id), 'Pass rolled back');
       System.assertEquals(
         0,
         WorkflowCascadeCancel.publishedEvents.size(),
@@ -814,8 +862,14 @@ private class WorkflowCascadeCancelTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       System.assertEquals(
         true,
+        Revenant_Config__mdt.getInstance('Default')
+          .Cascade_Cancel_Children_On_Failure__c,
+        'The shipped Default record turns the cascade on'
+      );
+      System.assertEquals(
+        true,
         WorkflowEngine.cascadeCancelChildrenOnFailure,
-        'The cascade is on by default'
+        'The engine loads the toggle as on'
       );
     }
   }
@@ -870,6 +924,32 @@ private class WorkflowCascadeCancelTest {
     };
   }
 
+  // Cost of one pass over the grandchild level (all nodes go terminal, so the
+  // parent notice and the lifecycle publish run too).
+  private static Integer[] measureLevel(Id parentId) {
+    List<Id> childIds = new List<Id>(
+      new Map<Id, Workflow_Instance__c>(
+          [
+            SELECT Id
+            FROM Workflow_Instance__c
+            WHERE Parent_Instance__c = :parentId
+          ]
+        )
+        .keySet()
+    );
+    Workflow_Event__e event = WorkflowCascadeCancel.buildParentEvent(parentId);
+    event.Payload__c = JSON.serialize(
+      new Map<String, Object>{ 'attempt' => 1, 'frontier' => childIds }
+    );
+    Integer q0 = Limits.getQueries();
+    Integer d0 = Limits.getDmlStatements();
+    WorkflowCascadeCancel.handleEvents(new List<Workflow_Event__e>{ event });
+    return new List<Integer>{
+      Limits.getQueries() - q0,
+      Limits.getDmlStatements() - d0
+    };
+  }
+
   @IsTest
   static void cascadeCostIsConstantInTreeWidth() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -879,13 +959,26 @@ private class WorkflowCascadeCancelTest {
       Id wide = buildFailedTree(12);
 
       Test.startTest();
-      // The first pass loads caches; do not measure it.
+      // The first pass runs static initializers; do not measure it.
       measureReap(warmUp);
       Integer[] narrowCost = measureReap(narrow);
       Integer[] wideCost = measureReap(wide);
-      // The next-level events reap the grandchildren.
+      measureLevel(warmUp);
+      Integer[] narrowLevel = measureLevel(narrow);
+      Integer[] wideLevel = measureLevel(wide);
       deliverAll();
       Test.stopTest();
+
+      System.assertEquals(
+        narrowLevel[0],
+        wideLevel[0],
+        'SOQL of a terminal level must not grow with width'
+      );
+      System.assertEquals(
+        narrowLevel[1],
+        wideLevel[1],
+        'DML of a terminal level must not grow with width'
+      );
 
       System.assertEquals(
         narrowCost[0],
@@ -980,6 +1073,93 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
+  // AC4: a re-hop of the failure transition (Failed -> Failed) publishes no
+  // second cascade.
+  @IsTest
+  static void failureReHopPublishesOnce() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+      Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+
+      Test.startTest();
+      WorkflowEngine.failWorkflowInstance(parent.Id, 'StepA', 'boom');
+      WorkflowEngine.failWorkflowInstance(parent.Id, 'StepA', 'boom again');
+      System.assertEquals(
+        1,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'A re-hop publishes no second event'
+      );
+      deliverAll();
+      Test.stopTest();
+
+      System.assertEquals('Failed', statusOf(parent.Id), 'Parent unchanged');
+      System.assertEquals('Cancelled', statusOf(child.Id), 'Child reaped');
+    }
+  }
+
+  // AC7 request side: one bulk failure costs one guarded query.
+  @IsTest
+  static void bulkParentFailureCostsOneQuery() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      List<Workflow_Instance__c> parents = new List<Workflow_Instance__c>{
+        newInstance(null, 'Running'),
+        newInstance(null, 'Running')
+      };
+      insert parents;
+      insertChildren(parents, 3, 'Running');
+      Boolean warm = WorkflowEngine.cascadeCancelChildrenOnFailure;
+
+      Test.startTest();
+      for (Workflow_Instance__c p : parents) {
+        p.Status__c = 'Failed';
+      }
+      Integer q0 = Limits.getQueries();
+      update parents;
+      System.assertEquals(
+        1,
+        Limits.getQueries() - q0,
+        'One guarded query for the whole batch'
+      );
+      System.assertEquals(
+        2,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'One event per failed parent'
+      );
+      deliverAll();
+      Test.stopTest();
+
+      System.assert(warm, 'Toggle on');
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Parent_Instance__c IN :parents AND Status__c = 'Running'
+        ],
+        'All children of both parents reaped'
+      );
+    }
+  }
+
+  @IsTest
+  static void malformedEventIsDropped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      WorkflowCascadeCancel.handleEvents(
+        new List<Workflow_Event__e>{
+          new Workflow_Event__e(
+            Workflow_Instance_Id__c = 'not-an-id',
+            Event_Type__c = WorkflowCascadeCancel.EVENT_TYPE
+          )
+        }
+      );
+      Test.stopTest();
+      System.assertEquals(0, Limits.getQueueableJobs(), 'No retry for junk');
+    }
+  }
+
   // ============================================================
   // AC8 — chain handoff and append-only log
   // ============================================================
@@ -990,6 +1170,8 @@ private class WorkflowCascadeCancelTest {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c parent = insertInstance(null, 'Running');
       Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+      child.Sleep_Until__c = System.now().addHours(1);
+      update child;
       Workflow_Step_Execution__c done = new Workflow_Step_Execution__c(
         Workflow_Instance__c = child.Id,
         Step_Name__c = 'StepZ',
@@ -1043,6 +1225,28 @@ private class WorkflowCascadeCancelTest {
         .Sleep_Until__c,
         'The timed wait is disarmed'
       );
+    }
+  }
+
+  // AC8: a cascaded rollback starts its own orchestrator chain.
+  @IsTest
+  static void cascadedRollbackEnqueuesOrchestrator() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
+      Workflow_Instance__c parent = insertInstance(null, 'Failed');
+      insertSagaChild(parent.Id);
+      WorkflowEngine.cascadeCancelChildrenOnFailure = true;
+
+      Test.startTest();
+      WorkflowEngine.disableQueueableInTest = false;
+      WorkflowCascadeCancel.reapFailedParents(new Set<Id>{ parent.Id });
+      System.assertEquals(
+        1,
+        Limits.getQueueableJobs(),
+        'The Cancelling child gets one orchestrator hop'
+      );
+      WorkflowEngine.disableQueueableInTest = true;
+      Test.stopTest();
     }
   }
 }

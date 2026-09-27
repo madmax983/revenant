@@ -5,11 +5,13 @@
  * completed steps. Descendants are gathered breadth-first (one set-based query per
  * tree level) with a visited-id guard rather than by recursive cancel calls, so
  * deep/wide trees cannot exhaust the SOQL or stack-depth governors. The nodes are
- * then cancelled set-based: the SOQL/DML cost does not grow with the node count.
+ * then cancelled set-based: the SOQL/DML cost does not grow with the node count
+ * (except best-effort timeout arming for each resumed rollback).
  * Parent-before-child ordering and the FOR UPDATE locking are preserved from the
  * pre-extraction engine. Extracted from `WorkflowEngine`, which retains the thin
  * public `cancel` delegator. The cascade cancel of issue #94
- * ({@link WorkflowCascadeCancel}) uses the same traversal and node cancel. The
+ * ({@link WorkflowCascadeCancel}) walks the same child query one page per event
+ * ({@link queryActiveChildrenPage}) and uses the same node cancel. The
  * resident `WorkflowEngine.WorkflowException`, `WorkflowEngine.disableQueueableInTest`,
  * `WorkflowCompensation.preCreateFirstCompensationSteps` and
  * `WorkflowCompensationStepLog.appendCompensationRetrySteps` members are referenced
@@ -17,8 +19,8 @@
  */
 public inherited sharing class WorkflowCancellation {
   /**
-   * @description Child states the descendant traversal walks through (the
-   * non-terminal states that a cancel can reach).
+   * @description Child states that the descendant traversal walks through.
+   * `Compensating` is not in the set: that child already rolls back.
    */
   public static final Set<String> ACTIVE_CHILD_STATUSES = new Set<String>{
     'Pending',
@@ -68,18 +70,13 @@ public inherited sharing class WorkflowCancellation {
   /**
    * @description Cascade entry (issue #94). Cancels the given nodes with saga
    * compensation, in the given order. Skips terminal nodes and nodes already
-   * `Cancelling`, so a repeated cascade does not cancel a node two times. Also
-   * skips `CompensationFailed` nodes: a stalled rollback runs no forward work and
-   * waits for an operator decision.
+   * `Cancelling`, so a repeated cascade does not cancel a node two times. A
+   * `CompensationFailed` node resumes its rollback under the cancel phase, as in
+   * {@link cancelWithCompensations}.
    * @param orderedIds the nodes to cancel, parent before child
    */
   public static void cascadeCancelNodes(List<Id> orderedIds) {
-    cancelNodes(
-      orderedIds,
-      true,
-      null,
-      new Set<String>{ 'Cancelling', 'CompensationFailed' }
-    );
+    cancelNodes(orderedIds, true, null, new Set<String>{ 'Cancelling' });
   }
 
   /**
@@ -246,10 +243,11 @@ public inherited sharing class WorkflowCancellation {
    * rollback;</li>
    * <li>else: terminal `Cancelled`.</li>
    * </ul>
-   * Active step executions are cancelled, scheduled jobs are aborted and any
-   * timed-wait deadline is disarmed for every cancelled node. Terminal nodes get
-   * one bulk parent notification and one bulk lifecycle publish at the end.
-   * The SOQL/DML cost is constant in the node count.
+   * For each cancelled node, it cancels the active step executions, aborts the
+   * scheduled jobs and disarms the timed-wait deadline. At the end, it sends one
+   * bulk parent notification and one bulk lifecycle publish for the terminal
+   * nodes. The SOQL/DML cost is constant in the node count, except best-effort
+   * timeout arming for each resumed rollback.
    * @param orderedIds the nodes to cancel, parent before child
    * @param runCompensations true to roll back completed steps via saga compensation
    * @param requiredId a node that must exist (else not-found exception), or null
@@ -386,8 +384,8 @@ public inherited sharing class WorkflowCancellation {
 
   /**
    * @description Selects the rollback group of a node: a stalled rollback
-   * (`CompensationFailed`) resumes, a live stack starts the cancel phase. The
-   * stack is parsed only where the former per-node cancel parsed it, so a
+   * (`CompensationFailed`) resumes, a live stack starts the cancel phase. It
+   * parses the stack only where the former per-node cancel parsed it, so a
    * malformed stack throws in the same cases.
    * @param plan the batch plan that owns the groups
    * @param instance the node to classify

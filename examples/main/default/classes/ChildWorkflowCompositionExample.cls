@@ -23,11 +23,11 @@
  *
  * 4. WorkflowEngine.cancel(parentId) cancels the parent and all of its
  *    active descendants (root-first traversal over Parent_Instance__c), so
- *    explicitly cancelling a parent reaps its in-flight children.  Note this is
- *    cancellation only: a parent that FAILS is not cascaded — failWorkflowInstance
- *    does not traverse Parent_Instance__c — and a child that fails or times out
- *    never publishes ChildCompleted, so its parent stays Suspended.  A production
- *    composite would add its own child-failure/timeout signal to cover that path.
+ *    explicitly cancelling a parent reaps its in-flight children.  A parent that
+ *    FAILS also cancels its in-flight children (issue #94, README section 6).  A
+ *    child that fails or times out never publishes ChildCompleted, so its parent
+ *    stays Suspended.  A production composite would add its own
+ *    child-failure/timeout signal to cover that path.
  */
 public inherited sharing class ChildWorkflowCompositionExample implements WorkflowDefinition {
   /** Minimum credit score required to approve the loan. */

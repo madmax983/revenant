@@ -20,17 +20,18 @@
  * - The cascade never changes the parent. An error never fails the parent.
  * - Every event carries the failed parent. A parent that is no longer in a
  *   failure state (for example, redriven) keeps its children.
- * - Terminal, `Cancelling` and `CompensationFailed` descendants stay untouched,
- *   so a redelivered event is a no-op. The walk goes through the last two.
+ * - Terminal and `Cancelling` descendants stay untouched, so a redelivered event
+ *   is a no-op. The walk goes through `Cancelling` nodes. A `CompensationFailed`
+ *   descendant resumes its rollback under the cancel phase.
  * - One pass reads at most {@link maxNodesPerPass} + 1 rows for each event and
  *   cancels at most {@link maxNodesPerPass} nodes. The order is root first: a
  *   node is cancelled before its children.
  * - A failed pass rolls back. A delayed {@link RetryJob} runs each request
  *   alone, with backoff, at most {@link MAX_ATTEMPTS} attempts in total. A row
  *   lock on a busy child clears; a bad node stops only its own request.
- * - `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c` (default on),
- *   surfaced as `WorkflowEngine.cascadeCancelChildrenOnFailure`, disables all of
- *   this.
+ * - Set `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c` (default
+ *   on, surfaced as `WorkflowEngine.cascadeCancelChildrenOnFailure`) to false to
+ *   stop the cascade.
  */
 public inherited sharing class WorkflowCascadeCancel {
   public static final String EVENT_TYPE = 'CASCADE_CANCEL';
@@ -69,9 +70,9 @@ public inherited sharing class WorkflowCascadeCancel {
 
   /**
    * @description Publishes a cascade event for each parent that has an active
-   * child. Fire-and-forget: it never throws, so it can never roll back the
-   * parent's terminal failure write.
-   * @param parentIds instances that entered a terminal failure state
+   * child. Fire-and-forget: it catches all catchable exceptions and guards its
+   * budgets, so it does not roll back the parent's failure write.
+   * @param parentIds instances that entered a failure state
    */
   public static void requestCascade(Set<Id> parentIds) {
     if (
@@ -111,8 +112,8 @@ public inherited sharing class WorkflowCascadeCancel {
   /**
    * @description Handles one batch of cascade events in a savepoint. On error it
    * rolls back the pass and schedules a delayed retry for each request that has
-   * attempts left. It never throws, so the other events of the trigger batch are
-   * not lost.
+   * attempts left. It catches all catchable exceptions, so the other events of
+   * the trigger batch are not lost.
    * @param events the `CASCADE_CANCEL` events of one trigger batch
    */
   public static void handleEvents(List<Workflow_Event__e> events) {
@@ -139,7 +140,7 @@ public inherited sharing class WorkflowCascadeCancel {
 
   /**
    * @description Runs one cascade pass for each parent that is still in a
-   * terminal failure state. It cancels the first page of children now; the
+   * failure state. It cancels the first page of children now; the
    * events it publishes reap the rest. Synchronous entry for tests and operators.
    * @param parentIds the failed parents
    */

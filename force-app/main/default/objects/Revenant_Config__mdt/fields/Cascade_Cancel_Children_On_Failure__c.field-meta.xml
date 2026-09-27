@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Cascade_Cancel_Children_On_Failure__c</fullName>
     <defaultValue>true</defaultValue>
-    <description>If checked (default), a parent that becomes Failed, Compensated or CompensationFailed cancels its in-flight descendants. Children with a compensation stack roll back. Uncheck to keep the old behavior: the children continue to run.</description>
+    <description>If checked (default), a parent that becomes Failed, Compensated or CompensationFailed cancels its in-flight descendants. Children with a compensation stack roll back. Uncheck to let the children continue to run.</description>
     <externalId>false</externalId>
     <fieldManageability>SubscriberControlled</fieldManageability>
     <label>Cascade Cancel Children On Failure</label>

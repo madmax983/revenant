@@ -163,8 +163,8 @@ public inherited sharing class WorkflowCompensationStepLog {
   /**
    * Set-based appendCompensationRetryStep (issue #94): for each instance, appends a
    * fresh Pending attempt for the top of its compensation stack with the same
-   * rules. The SOQL/DML cost is constant in the instance count. Only the latest
-   * attempt's payload is read, as in the single-instance path.
+   * rules. The SOQL/DML cost is constant in the instance count. It reads the
+   * payload of the latest attempt only, as the single-instance path does.
    * @param instances the instances whose stalled rollback resumes
    */
   public static void appendCompensationRetrySteps(
@@ -232,8 +232,9 @@ public inherited sharing class WorkflowCompensationStepLog {
   }
 
   /**
-   * @description Latest step execution per (instance | step name). Reads the
-   * light columns of every attempt first, then the payload of the latest only.
+   * @description Latest step execution per (instance | step name). It reads the
+   * Ids of all attempts first. Then it reads the payload of the latest attempt
+   * only.
    * Shared with WorkflowCompensation.preCreateFirstCompensationSteps.
    * @param instanceIds the instances to read
    * @param stepNames the step names to read

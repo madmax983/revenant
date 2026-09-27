@@ -1,10 +1,9 @@
 /**
  * Handler for WorkflowEventTrigger. All Workflow_Event__e after-insert logic lives
- * here so the trigger itself stays a thin delegate (AvoidLogicInTrigger). Behavior is
- * identical to the original in-trigger implementation: events are classified in-order,
- * resume/signal requests are executed in bulk, and any throttled overflow is republished
- * in a single EventBus.publish call. `CASCADE_CANCEL` events go to
- * WorkflowCascadeCancel (issue #94).
+ * here so the trigger itself stays a thin delegate (AvoidLogicInTrigger). Events are
+ * classified in-order, resume/signal requests are executed in bulk, and any throttled
+ * overflow is republished in a single EventBus.publish call. `CASCADE_CANCEL` events
+ * go to WorkflowCascadeCancel (issue #94).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and
@@ -45,7 +44,7 @@ public inherited sharing class WorkflowEventTriggerHandler {
     // 2. Execute bulk resume and signal requests
     dispatchRequests();
 
-    // 2b. Reap children of failed parents (isolated; never throws)
+    // 2b. Reap children of failed parents (own savepoint; catches its errors)
     WorkflowCascadeCancel.handleEvents(cascadeEvents);
 
     // 3. Publish throttled events in a single bulk DML statement

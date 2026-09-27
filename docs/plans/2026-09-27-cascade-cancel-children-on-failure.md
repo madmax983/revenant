@@ -20,19 +20,19 @@
 
 ## 2. Reverse brainstorming (how can this fail?)
 
-| Failure mode                                                                                    | Control                                                                                                             |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| The cascade error rolls back the parent failure.                                                | Async event. The handler uses a savepoint and a catch.                                                              |
-| A redelivered event cancels a child two times.                                                  | Skip descendants in `Cancelling`. The cancel path skips terminal ones.                                              |
-| An operator redrives the parent before the event arrives. Children of a live run are cancelled. | The handler reads the parent again. It reaps only when the parent is still in a failure state.                      |
-| A wide tree uses all SOQL rows or DML.                                                          | Paged walk: each event reads one page (`maxNodesPerPass` + 1 rows) of one level. Set-based cancel.                  |
-| A later page reaps the children of a redriven parent.                                           | Every event carries the failed parent. Each pass re-checks it.                                                      |
-| A child is cancelled before its parent and wakes the parent with `ChildFailed`.                 | The next-level event is published only after its page is cancelled.                                                 |
-| A row lock or a bad node drops the cascade.                                                     | Delayed `RetryJob`: each request alone, backoff 1, 2, 4, 8 minutes, 5 attempts.                                     |
-| A failed event publish rolls back the parent.                                                   | Budget guard and catch in the publisher (same as `WorkflowLifecyclePublisher`).                                     |
-| Each failure spends a platform event, also with no children.                                    | One guarded SOQL (at most 2000 rows) filters to parents with active children.                                       |
-| Orgs that need the old behavior break.                                                          | `Cascade_Cancel_Children_On_Failure__c` toggle. Default is on. The handler reads the toggle again.                  |
-| The bulk refactor changes explicit `cancel()`.                                                  | Keep the same order, messages, branches, exception and enqueue calls. Existing cancel tests are the regression net. |
+| Failure mode                                                                                    | Control                                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The cascade error rolls back the parent failure.                                                | Async event. The handler uses a savepoint and a catch.                                                                                                                                                       |
+| A redelivered event cancels a child two times.                                                  | Skip descendants in `Cancelling`. The cancel path skips terminal ones.                                                                                                                                       |
+| An operator redrives the parent before the event arrives. Children of a live run are cancelled. | The handler reads the parent again. It reaps only when the parent is still in a failure state.                                                                                                               |
+| A wide tree uses all SOQL rows or DML.                                                          | Paged walk: each event reads one page (`maxNodesPerPass` + 1 rows) of one level. Set-based cancel.                                                                                                           |
+| A later page reaps the children of a redriven parent.                                           | Every event carries the failed parent. Each pass re-checks it.                                                                                                                                               |
+| A running child wakes from `ChildFailed` because its parent is still live.                      | Root first: a node is cancelled before its children. The next-level event is published only after its page is cancelled. (A `Cancelling` parent still gets `ChildFailed`, as with explicit cancel.)          |
+| A row lock or a bad node drops the cascade.                                                     | Delayed `RetryJob`: each request alone, backoff 1, 2, 4, 8 minutes, 5 attempts.                                                                                                                              |
+| A failed event publish rolls back the parent.                                                   | Budget guard and catch in the publisher (same as `WorkflowLifecyclePublisher`).                                                                                                                              |
+| Each failure spends a platform event, also with no children.                                    | One guarded SOQL (at most 2000 rows) filters to parents with active children.                                                                                                                                |
+| Orgs that need the old behavior break.                                                          | `Cascade_Cancel_Children_On_Failure__c` toggle. Default is on. The handler reads the toggle again.                                                                                                           |
+| The bulk refactor changes explicit `cancel()`.                                                  | Keep the same outcomes, messages, branches and exception. One bulk enqueue replaces the per-node enqueue. Timeout arming for resumed rollbacks is best-effort. Existing cancel tests are the regression net. |
 
 ## 3. Six Thinking Hats
 
@@ -69,8 +69,8 @@ sequenceDiagram
 
 1. Trigger on the change of `Status__c` into the failure set. Insert does not trigger.
 2. The cascade does not change the parent.
-3. Targets: active descendants from the BFS, except `Cancelling` and `CompensationFailed`. The BFS still walks through them.
-   - Decision: a `CompensationFailed` child is a stalled rollback. It runs no forward work and holds no Queueable chain. An operator decides to resume or cancel it. An automatic resume can loop on a bad compensation. An explicit `cancelWithCompensations()` still resumes it.
+3. Targets: active descendants from the walk, except `Cancelling`. The walk still goes through them.
+   - Decision: a `CompensationFailed` child is not terminal (AC 1, AC 3). The cascade resumes its rollback under the cancel phase, as `cancelWithCompensations()` does (AC 2). A second undo failure stops it again as `CompensationFailed`. No loop occurs: a child failure does not re-trigger the parent.
 4. Cancel mode: `runCompensations = true`.
 5. Paging: one pass reads one page of one level per event and cancels at most `maxNodesPerPass` nodes. Every event carries the failed parent, the frontier and an Id cursor.
 6. Retry: a failed pass rolls back. A delayed `RetryJob` runs each request alone. Maximum 5 attempts.
