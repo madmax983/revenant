@@ -106,9 +106,10 @@ public inherited sharing class WorkflowSignalPayloads {
   ) {
     List<ContentVersion> files = new List<ContentVersion>();
     for (Workflow_Signal__c row : targets) {
-      // ContentVersion.Title allows 255 characters.
+      // ContentVersion.Title allows 255 characters. The existing engine prefix
+      // `Output_` keeps the file in the purge and footprint scope.
       String title =
-        'Signal_' +
+        'Output_Signal_' +
         String.valueOf(row.Signal_Name__c)
           .replaceAll('[^a-zA-Z0-9]', '_')
           .left(TITLE_NAME_LIMIT);

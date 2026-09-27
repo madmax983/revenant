@@ -892,7 +892,11 @@ public class WorkflowPayloadCodecE2ETest {
       );
       System.assertEquals(
         1,
-        [SELECT COUNT() FROM ContentDocument WHERE Title LIKE 'Signal_Other%'],
+        [
+          SELECT COUNT()
+          FROM ContentDocument
+          WHERE Title LIKE 'Output_Signal_Other%'
+        ],
         'The duplicate delivery leaves no offload file'
       );
     }

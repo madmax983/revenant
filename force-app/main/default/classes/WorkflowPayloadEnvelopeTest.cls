@@ -55,6 +55,13 @@ private class WorkflowPayloadEnvelopeTest {
         WorkflowPayloadEnvelope.kindOf('{"$codec":"NOPE","data":"abc"}'),
         'Unknown kind stays plaintext'
       );
+      System.assertEquals(
+        null,
+        WorkflowPayloadEnvelope.kindOf(
+          '{"$codec":"STEP_OUTPUT","data":"line1\nline2"}'
+        ),
+        'Raw control characters are not valid JSON, so this is plaintext'
+      );
       System.assertEquals(null, WorkflowPayloadEnvelope.kindOf(null));
     }
   }

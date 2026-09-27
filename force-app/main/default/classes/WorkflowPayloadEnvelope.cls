@@ -10,6 +10,8 @@ public inherited sharing class WorkflowPayloadEnvelope {
   private static final String DATA_MARKER = '","data":"';
   private static final String ENVELOPE_END = '"}';
   private static final Map<String, CodecContext.PayloadKind> KINDS = kindsByName();
+  // JSON strings cannot hold raw control characters.
+  private static final Pattern CONTROL_CHAR = Pattern.compile('[\\x00-\\x1f]');
 
   /**
    * @description Makes an envelope.
@@ -48,6 +50,11 @@ public inherited sharing class WorkflowPayloadEnvelope {
   private static Boolean hasOnlyData(String stored, Integer markerAt) {
     Integer dataStart = markerAt + DATA_MARKER.length();
     Integer dataEnd = stored.length() - ENVELOPE_END.length();
+    Matcher control = CONTROL_CHAR.matcher(stored);
+    control.region(dataStart, dataEnd);
+    if (control.find()) {
+      return false;
+    }
     if (stored.indexOf('"', dataStart) == dataEnd) {
       return true;
     }

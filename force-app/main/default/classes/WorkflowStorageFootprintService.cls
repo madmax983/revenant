@@ -376,9 +376,6 @@ public inherited sharing class WorkflowStorageFootprintService {
         OR Title LIKE 'Resume_%'
         OR Title LIKE 'ContinueInput_%'
         OR Title LIKE 'Captures_%'
-        OR Title LIKE 'Signal_%'
-        OR Title LIKE 'Progress_%'
-        OR Title LIKE 'ChildFailedOutcome_%'
         OR Title LIKE 'VerificationPayload%')
       WITH SYSTEM_MODE
     ];
