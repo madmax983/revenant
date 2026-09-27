@@ -32,7 +32,8 @@ public class WorkflowDefinitionChangeTest {
   private static final String STEP_X = 'WorkflowDefinitionChangeTest.StepX';
   private static final String STEP_C = 'WorkflowDefinitionChangeTest.StepC';
 
-  // 0 = [A, B]; 1 = [A, X, B] (insert); 2 = [A, C] (B removed).
+  // 0 = [A, B]; 1 = [A, X, B] (insert); 2 = [A, C] (B removed);
+  // 3 = [A, B] plus names too long for the marker Output__c.
   public static Integer shape = 0;
   public static Integer stepBRuns = 0;
   public static Integer stepXRuns = 0;
@@ -126,6 +127,13 @@ public class WorkflowDefinitionChangeTest {
     }
     if (shape == 2) {
       return new List<String>{ STEP_A, STEP_C };
+    }
+    if (shape == 3) {
+      List<String> huge = new List<String>{ STEP_A, STEP_B };
+      for (Integer i = 0; i < 600; i++) {
+        huge.add('Unused.Step' + 'x'.repeat(240) + i);
+      }
+      return huge;
     }
     return new List<String>{ STEP_A, STEP_B };
   }
@@ -351,6 +359,34 @@ public class WorkflowDefinitionChangeTest {
         String.isNotBlank(parked.Error_Message__c),
         'Park must explain the halt'
       );
+    }
+  }
+
+  // Codex review: a live list larger than Output__c must not roll back the park.
+  @IsTest
+  static void testParkWithOversizedLiveListStillParks() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRunFirstHop(
+        WF,
+        'DefChg-Huge-' + Datetime.now().getTime()
+      );
+      shape = 3;
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+
+      System.assertEquals(
+        'DefinitionChanged',
+        load(instId).Status__c,
+        'An oversized live list must still park'
+      );
+      List<Workflow_Step_Execution__c> halt = markers(instId);
+      System.assertEquals(1, halt.size(), 'One marker');
+      System.assert(
+        halt[0].Output__c.contains('liveStepsOmitted'),
+        'The marker must flag the omitted list'
+      );
+      System.assertEquals(0, stepBRuns, 'StepB must not run');
     }
   }
 

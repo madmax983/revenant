@@ -20,6 +20,9 @@ public inherited sharing class WorkflowDefinitionChangeGate {
   /** @description Step name of the appended halt marker row. */
   public static final String MARKER_STEP_NAME = 'Workflow_Definition_Changed';
 
+  // Length of Workflow_Step_Execution__c.Output__c.
+  private static final Integer MARKER_OUTPUT_MAX = 131072;
+
   // Length of Workflow_Instance__c.Error_Message__c.
   private static final Integer ERROR_MESSAGE_MAX = 255;
 
@@ -130,13 +133,11 @@ public inherited sharing class WorkflowDefinitionChangeGate {
         Status__c = STATUS,
         Retry_Count__c = 0,
         Error_Details__c = detail,
-        Output__c = JSON.serialize(
-          new Map<String, Object>{
-            'storedFingerprint' => instance.Definition_Fingerprint__c,
-            'liveFingerprint' => live,
-            'liveSteps' => liveSteps,
-            'currentStep' => locked.Current_Step__c
-          }
+        Output__c = markerOutput(
+          instance.Definition_Fingerprint__c,
+          live,
+          liveSteps,
+          locked.Current_Step__c
         )
       ),
       true,
@@ -146,6 +147,29 @@ public inherited sharing class WorkflowDefinitionChangeGate {
     WorkflowLog.warn('DefinitionChanged', detail, locked.Id);
     instance.Status__c = STATUS;
     return true;
+  }
+
+  // Marker payload. A live list that does not fit Output__c is left out, so the
+  // park never fails on field size. The dashboard reads the live list itself.
+  private static String markerOutput(
+    String stored,
+    String live,
+    List<String> liveSteps,
+    String currentStep
+  ) {
+    Map<String, Object> payload = new Map<String, Object>{
+      'storedFingerprint' => stored,
+      'liveFingerprint' => live,
+      'liveSteps' => liveSteps,
+      'currentStep' => currentStep
+    };
+    String serialized = JSON.serialize(payload);
+    if (serialized.length() <= MARKER_OUTPUT_MAX) {
+      return serialized;
+    }
+    payload.remove('liveSteps');
+    payload.put('liveStepsOmitted', true);
+    return JSON.serialize(payload);
   }
 
   // Engine-internal workflows (watchdog, cleanup, bulk jobs), with or without a
