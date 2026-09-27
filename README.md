@@ -349,7 +349,8 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 - **Asynchronous.** The parent transition publishes a `CASCADE_CANCEL` `Workflow_Event__e`. The children are reaped in a new transaction. An error in the cascade never fails the parent.
 - **Left untouched:** terminal descendants (`Completed`, `Failed`, `Compensated`, `Cancelled`, `ContinuedAsNew`), descendants already `Cancelling`, and stalled rollbacks (`CompensationFailed`). An operator resumes or cancels a stalled rollback.
 - **Idempotent.** A redelivered event does nothing more. A parent that is redriven before the event arrives keeps its children.
-- **Bulk-safe.** The SOQL/DML cost of one pass does not grow with tree width. One pass cancels at most 200 nodes. A continuation event reaps the rest.
+- **Bulk-safe.** The cascade walks the tree one page at a time: each event reads at most 201 rows and cancels at most 200 nodes. A parent is cancelled before its children. The SOQL/DML cost of one pass does not grow with tree width.
+- **Retry.** A failed pass rolls back. A delayed Queueable retries each request alone (backoff 1, 2, 4, 8 minutes; 5 attempts in total). A lock on a busy child clears; a bad node stops only its own request.
 - **Opt out.** Clear `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c` to keep the old behavior (children continue to run).
 
 **Minimal launcher + resume step**

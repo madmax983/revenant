@@ -93,8 +93,13 @@ public inherited sharing class WorkflowCancellation {
     Id instanceId,
     Boolean runCompensations
   ) {
-    // The traversal always yields the target first. The target keeps the original
-    // not-found semantics (it must exist); descendants are best-effort.
+    // The target keeps the original not-found semantics (it must exist);
+    // descendants are best-effort.
+    if (instanceId == null) {
+      throw new WorkflowEngine.WorkflowException(
+        'Workflow instance not found: ' + instanceId
+      );
+    }
     cancelNodes(
       collectActiveTree(new List<Id>{ instanceId }),
       runCompensations,
@@ -111,7 +116,7 @@ public inherited sharing class WorkflowCancellation {
    * @param rootIds Ids of the instances at the root of the traversal
    * @return the roots plus all active descendant Ids in parent-before-child order
    */
-  public static List<Id> collectActiveTree(List<Id> rootIds) {
+  private static List<Id> collectActiveTree(List<Id> rootIds) {
     List<Id> ordered = new List<Id>();
     Set<Id> seen = new Set<Id>();
     for (Id rootId : rootIds) {
@@ -159,6 +164,45 @@ public inherited sharing class WorkflowCancellation {
         Parent_Instance__c IN :frontier
         AND Status__c IN :ACTIVE_CHILD_STATUSES
       WITH SYSTEM_MODE
+    ];
+  }
+
+  /**
+   * @description One page of {@link queryActiveChildren}, in Id order. The
+   * cascade cancel (issue #94) walks the same traversal one page per event, so
+   * one transaction never reads a whole wide level.
+   * @param frontier the instance ids to fetch children of
+   * @param afterId the cursor: return only Ids after it, or null for the start
+   * @param pageSize the maximum number of rows
+   * @return the active child instances of the page
+   */
+  public static List<Workflow_Instance__c> queryActiveChildrenPage(
+    List<Id> frontier,
+    Id afterId,
+    Integer pageSize
+  ) {
+    if (afterId == null) {
+      return [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          Parent_Instance__c IN :frontier
+          AND Status__c IN :ACTIVE_CHILD_STATUSES
+        WITH SYSTEM_MODE
+        ORDER BY Id
+        LIMIT :pageSize
+      ];
+    }
+    return [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE
+        Parent_Instance__c IN :frontier
+        AND Status__c IN :ACTIVE_CHILD_STATUSES
+        AND Id > :afterId
+      WITH SYSTEM_MODE
+      ORDER BY Id
+      LIMIT :pageSize
     ];
   }
 
@@ -225,8 +269,11 @@ public inherited sharing class WorkflowCancellation {
     }
 
     List<Workflow_Instance__c> targets = new List<Workflow_Instance__c>();
+    Set<Id> seen = new Set<Id>();
     for (Id nodeId : orderedIds) {
-      Workflow_Instance__c instance = locked.get(nodeId);
+      Workflow_Instance__c instance = seen.add(nodeId)
+        ? locked.get(nodeId)
+        : null;
       // Note: CompensationFailed is intentionally NOT treated as terminal here — a
       // stalled rollback is resumable and still holds un-reversed side effects, so
       // cancellation must reach it rather than skip it.
@@ -242,6 +289,10 @@ public inherited sharing class WorkflowCancellation {
       return;
     }
 
+    // Plan first: it changes records in memory only, so a malformed stack throws
+    // before any side effect.
+    NodePlan plan = planNodes(targets, runCompensations);
+
     cancelActiveStepExecs(targets);
 
     // Abort all scheduled jobs for these nodes (sleeps, retries, timeouts)
@@ -249,7 +300,6 @@ public inherited sharing class WorkflowCancellation {
       new Map<Id, Workflow_Instance__c>(targets).keySet()
     );
 
-    NodePlan plan = planNodes(targets, runCompensations);
     WorkflowCompensation.preCreateFirstCompensationSteps(plan.compensating);
     Database.update(targets, true, AccessLevel.SYSTEM_MODE);
 

@@ -131,8 +131,9 @@ public compensating-cancel entry point is `WorkflowCancellation.cancelWithCompen
 - `WorkflowCascadeCancel` — a parent that becomes `Failed`, `Compensated` or
   `CompensationFailed` cancels its in-flight descendants (issue #94). The
   `WorkflowInstanceTrigger` (after update) publishes a `CASCADE_CANCEL`
-  `Workflow_Event__e`. The event handler reaps through the `WorkflowCancellation`
-  traversal and node cancel, with saga compensation. Toggle:
+  `Workflow_Event__e`. Each event reaps one page of the `WorkflowCancellation`
+  traversal through its node cancel, with saga compensation, and publishes the
+  next level and the next page. A delayed `RetryJob` retries a failed pass. Toggle:
   `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c`.
 - `WorkflowCompensation`, `WorkflowCompensationRunner`,
   `WorkflowCompensationStepLog`, `WorkflowCompensationContext`,

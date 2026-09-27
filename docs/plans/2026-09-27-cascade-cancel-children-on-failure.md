@@ -25,12 +25,12 @@
 | The cascade error rolls back the parent failure.                                                | Async event. The handler uses a savepoint and a catch.                                                              |
 | A redelivered event cancels a child two times.                                                  | Skip descendants in `Cancelling`. The cancel path skips terminal ones.                                              |
 | An operator redrives the parent before the event arrives. Children of a live run are cancelled. | The handler reads the parent again. It reaps only when the parent is still in a failure state.                      |
-| A wide tree uses all SOQL or DML.                                                               | Set-based cancel. Node cap per pass (`maxNodesPerPass`). The remainder goes to a continuation event.                |
-| The continuation cannot reach the remainder because a reaped node is now terminal.              | The continuation event carries the remaining target Ids. They are the new roots.                                    |
-| A child is cancelled before its parent and wakes the parent with `ChildFailed`.                 | Root-first order. The cap takes a prefix of the BFS order.                                                          |
-| An error drops the cascade forever.                                                             | Republish with an attempt count. Maximum 3 attempts.                                                                |
+| A wide tree uses all SOQL rows or DML.                                                          | Paged walk: each event reads one page (`maxNodesPerPass` + 1 rows) of one level. Set-based cancel.                  |
+| A later page reaps the children of a redriven parent.                                           | Every event carries the failed parent. Each pass re-checks it.                                                      |
+| A child is cancelled before its parent and wakes the parent with `ChildFailed`.                 | The next-level event is published only after its page is cancelled.                                                 |
+| A row lock or a bad node drops the cascade.                                                     | Delayed `RetryJob`: each request alone, backoff 1, 2, 4, 8 minutes, 5 attempts.                                     |
 | A failed event publish rolls back the parent.                                                   | Budget guard and catch in the publisher (same as `WorkflowLifecyclePublisher`).                                     |
-| Each failure spends a platform event, also with no children.                                    | One guarded SOQL filters to parents with active children.                                                           |
+| Each failure spends a platform event, also with no children.                                    | One guarded SOQL (at most 2000 rows) filters to parents with active children.                                       |
 | Orgs that need the old behavior break.                                                          | `Cascade_Cancel_Children_On_Failure__c` toggle. Default is on. The handler reads the toggle again.                  |
 | The bulk refactor changes explicit `cancel()`.                                                  | Keep the same order, messages, branches, exception and enqueue calls. Existing cancel tests are the regression net. |
 
@@ -57,11 +57,12 @@ sequenceDiagram
     T->>C: requestCascade(parentIds)
     C->>E: publish (only parents with active children)
     E-->>H: after commit
-    H->>C: reap(events) in savepoint
+    H->>C: handleEvents(events) in savepoint
     C->>C: toggle on? parent still failed?
-    C->>W: collectActiveDescendants(roots)
-    C->>W: cancelNodes(prefix, runCompensations = true)
-    C->>E: continuation (remaining Ids) if over cap
+    C->>W: queryActiveChildrenPage(frontier, afterId, cap + 1)
+    C->>W: cascadeCancelNodes(page, runCompensations = true)
+    C->>E: next level (frontier = page) and next page (afterId)
+    C-->>C: on error: rollback, delayed RetryJob
 ```
 
 ### Rules
@@ -71,16 +72,16 @@ sequenceDiagram
 3. Targets: active descendants from the BFS, except `Cancelling` and `CompensationFailed`. The BFS still walks through them.
    - Decision: a `CompensationFailed` child is a stalled rollback. It runs no forward work and holds no Queueable chain. An operator decides to resume or cancel it. An automatic resume can loop on a bad compensation. An explicit `cancelWithCompensations()` still resumes it.
 4. Cancel mode: `runCompensations = true`.
-5. Cap: `maxNodesPerPass` nodes in BFS order. Continuation roots are also targets.
-6. Retry: at most 3 attempts for each event.
+5. Paging: one pass reads one page of one level per event and cancels at most `maxNodesPerPass` nodes. Every event carries the failed parent, the frontier and an Id cursor.
+6. Retry: a failed pass rolls back. A delayed `RetryJob` runs each request alone. Maximum 5 attempts.
 
 ## 5. Tasks
 
 1. RED: `WorkflowCascadeCancelTest` for all AC.
 2. Field `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c` (default on). Load it in `WorkflowEngine`.
-3. `WorkflowInstanceTrigger` after update. `WorkflowInstanceTriggerHandler.handleAfterSave`.
-4. `WorkflowCascadeCancel`: `requestCascade`, `reap`.
+3. `WorkflowInstanceTrigger` after update. `WorkflowInstanceTriggerHandler.handleAfterUpdate`.
+4. `WorkflowCascadeCancel`: `requestCascade`, `handleEvents`, `RetryJob`.
 5. `WorkflowEventTriggerHandler`: route `CASCADE_CANCEL`.
-6. `WorkflowCancellation`: multi-root BFS, set-based `cancelNodes`.
+6. `WorkflowCancellation`: `queryActiveChildrenPage`, set-based `cancelNodes`.
 7. Set-based helpers: `WorkflowCompensation.preCreateFirstCompensationSteps`, `WorkflowCompensationStepLog.appendCompensationRetrySteps`.
-8. Docs: README §6, `ARCHITECTURE.md`, `docs/workflow-lifecycle-event.md` if needed.
+8. Docs: README §6 and config list, `ARCHITECTURE.md`.

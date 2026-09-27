@@ -10,27 +10,31 @@
  *    `PublishAfterCommit`: a rolled-back failure sends no event.
  * 3. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
  *    transaction with its own governor limits.
- * 4. {@link reap} walks the tree with the `WorkflowCancellation` traversal and
- *    cancels the descendants with saga compensation through the same node cancel
- *    that `WorkflowEngine.cancel()` uses.
+ * 4. Each pass walks one page of the cancel traversal: the active children of a
+ *    frontier, in Id order. It cancels them with saga compensation through the
+ *    node cancel that `WorkflowEngine.cancel()` uses. Then it publishes one event
+ *    for the next level (the cancelled page) and, when the level has more rows,
+ *    one event for the next page.
  *
  * Rules:
  * - The cascade never changes the parent. An error never fails the parent.
- * - A parent that is no longer in a failure state (for example, redriven) keeps
- *   its children.
+ * - Every event carries the failed parent. A parent that is no longer in a
+ *   failure state (for example, redriven) keeps its children.
  * - Terminal, `Cancelling` and `CompensationFailed` descendants stay untouched,
- *   so a redelivered event is a no-op.
- * - One pass cancels at most {@link maxNodesPerPass} nodes, root first. A
- *   continuation event carries the remaining node Ids.
- * - A failed pass rolls back and republishes its events, at most
- *   {@link MAX_ATTEMPTS} attempts in total.
+ *   so a redelivered event is a no-op. The walk goes through the last two.
+ * - One pass reads at most {@link maxNodesPerPass} + 1 rows for each event and
+ *   cancels at most {@link maxNodesPerPass} nodes. The order is root first: a
+ *   node is cancelled before its children.
+ * - A failed pass rolls back. A delayed {@link RetryJob} runs each request
+ *   alone, with backoff, at most {@link MAX_ATTEMPTS} attempts in total. A row
+ *   lock on a busy child clears; a bad node stops only its own request.
  * - `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c` (default on),
  *   surfaced as `WorkflowEngine.cascadeCancelChildrenOnFailure`, disables all of
  *   this.
  */
 public inherited sharing class WorkflowCascadeCancel {
   public static final String EVENT_TYPE = 'CASCADE_CANCEL';
-  public static final Integer MAX_ATTEMPTS = 3;
+  public static final Integer MAX_ATTEMPTS = 5;
 
   // Parent states that start a cascade.
   public static final Set<String> FAILURE_STATUSES = new Set<String>{
@@ -39,10 +43,18 @@ public inherited sharing class WorkflowCascadeCancel {
     'CompensationFailed'
   };
 
-  // Node Ids in one continuation event (about 45 KB of the 128 KB payload).
-  private static final Integer CONTINUATION_CHUNK = 2000;
+  // Maximum events that one pass reads (one page query each). Other events wait
+  // for the next pass.
+  private static final Integer MAX_REQUESTS_PER_PASS = 25;
 
-  // Maximum nodes that one pass cancels. It bounds the DML rows and the
+  // Requests that one retry job runs (one savepoint and pass each).
+  private static final Integer RETRY_REQUESTS_PER_JOB = 8;
+
+  // Upper bound on the rows that the pre-filter reads in the parent's failure
+  // transaction.
+  private static final Integer PREFILTER_ROW_CAP = 2000;
+
+  // Maximum nodes that one pass cancels. It bounds the rows, the DML and the
   // scheduled-job abort filter of one transaction.
   @TestVisible
   private static Integer maxNodesPerPass = 200;
@@ -98,8 +110,9 @@ public inherited sharing class WorkflowCascadeCancel {
 
   /**
    * @description Handles one batch of cascade events in a savepoint. On error it
-   * rolls back the pass and republishes each event that has attempts left. It
-   * never throws, so the other events of the trigger batch are not lost.
+   * rolls back the pass and schedules a delayed retry for each request that has
+   * attempts left. It never throws, so the other events of the trigger batch are
+   * not lost.
    * @param events the `CASCADE_CANCEL` events of one trigger batch
    */
   public static void handleEvents(List<Workflow_Event__e> events) {
@@ -113,32 +126,21 @@ public inherited sharing class WorkflowCascadeCancel {
     List<CascadeRequest> requests = parseEvents(events);
     Savepoint sp = Database.setSavepoint();
     try {
-      Set<Id> parentIds = new Set<Id>();
-      List<Id> targetIds = new List<Id>();
-      for (CascadeRequest req : requests) {
-        if (req.targetIds.isEmpty()) {
-          parentIds.add(req.rootId);
-        } else {
-          targetIds.addAll(req.targetIds);
-        }
-      }
-      reap(parentIds, targetIds);
-      if (Test.isRunningTest() && throwTestException) {
-        throw new WorkflowEngine.WorkflowException('Simulated cascade failure');
-      }
+      runPass(requests);
     } catch (Exception ex) {
       Database.rollback(sp);
       System.debug(
         LoggingLevel.ERROR,
         'Cascade cancel pass failed: ' + ex.getMessage()
       );
-      publishRetries(requests);
+      scheduleRetries(requests, new List<CascadeRequest>());
     }
   }
 
   /**
-   * @description Reaps the in-flight descendants of each parent that is still in
-   * a terminal failure state. Synchronous entry for tests and operators.
+   * @description Runs one cascade pass for each parent that is still in a
+   * terminal failure state. It cancels the first page of children now; the
+   * events it publishes reap the rest. Synchronous entry for tests and operators.
    * @param parentIds the failed parents
    */
   public static void reapFailedParents(Set<Id> parentIds) {
@@ -149,41 +151,77 @@ public inherited sharing class WorkflowCascadeCancel {
     ) {
       return;
     }
-    reap(parentIds, new List<Id>());
+    List<CascadeRequest> requests = new List<CascadeRequest>();
+    for (Id parentId : parentIds) {
+      requests.add(new CascadeRequest(parentId));
+    }
+    runPass(requests);
   }
 
   /**
-   * @description One cascade pass. Roots are the parents still in a failure
-   * state (not cancelled) plus the continuation targets (cancelled). Cancels the
-   * first {@link maxNodesPerPass} nodes in root-first order and sends the rest
-   * to a continuation event.
-   * @param parentIds failed parents to re-check
-   * @param targetIds continuation nodes to cancel
+   * @description One cascade pass. For each request whose parent is still
+   * failed, reads one page of the active children of its frontier. Cancels all
+   * pages together (root first, at most {@link maxNodesPerPass} nodes), then
+   * publishes the next-level and next-page events.
+   * @param requests the parsed cascade requests
    */
-  private static void reap(Set<Id> parentIds, List<Id> targetIds) {
-    Set<Id> stillFailed = stillFailedParents(parentIds);
-    List<Id> roots = new List<Id>(stillFailed);
-    roots.addAll(targetIds);
-    if (roots.isEmpty()) {
-      return;
+  private static void runPass(List<CascadeRequest> requests) {
+    Set<Id> parentIds = new Set<Id>();
+    for (CascadeRequest req : requests) {
+      parentIds.add(req.parentId);
     }
+    Set<Id> stillFailed = stillFailedParents(parentIds);
 
-    List<Id> pass = new List<Id>();
-    List<Id> remaining = new List<Id>();
-    for (Id nodeId : WorkflowCancellation.collectActiveTree(roots)) {
-      if (stillFailed.contains(nodeId)) {
+    Integer budget = maxNodesPerPass;
+    Integer pagesRead = 0;
+    Set<String> seenKeys = new Set<String>();
+    Set<Id> toCancel = new Set<Id>();
+    List<Workflow_Event__e> next = new List<Workflow_Event__e>();
+    for (CascadeRequest req : requests) {
+      // Drop a stale request (parent redriven) and a duplicate in this batch.
+      if (!stillFailed.contains(req.parentId) || !seenKeys.add(req.key())) {
         continue;
       }
-      if (pass.size() < maxNodesPerPass) {
-        pass.add(nodeId);
-      } else {
-        remaining.add(nodeId);
+      if (budget <= 0 || pagesRead >= MAX_REQUESTS_PER_PASS) {
+        next.add(req.toEvent());
+        continue;
+      }
+      pagesRead++;
+      List<Workflow_Instance__c> page = WorkflowCancellation.queryActiveChildrenPage(
+        req.frontier,
+        req.afterId,
+        budget + 1
+      );
+      List<Id> pageIds = new List<Id>();
+      for (Integer i = 0; i < page.size() && i < budget; i++) {
+        pageIds.add(page[i].Id);
+      }
+      if (pageIds.isEmpty()) {
+        continue;
+      }
+      budget -= pageIds.size();
+      toCancel.addAll(pageIds);
+      // Next level: the children of this page, after the page is cancelled.
+      next.add(new CascadeRequest(req.parentId, pageIds, null).toEvent());
+      if (page.size() > pageIds.size()) {
+        // Next page of the same level.
+        next.add(
+          new CascadeRequest(
+              req.parentId,
+              req.frontier,
+              pageIds[pageIds.size() - 1]
+            )
+            .toEvent()
+        );
       }
     }
-    if (!pass.isEmpty()) {
-      WorkflowCancellation.cascadeCancelNodes(pass);
+    if (!toCancel.isEmpty()) {
+      WorkflowCancellation.cascadeCancelNodes(new List<Id>(toCancel));
     }
-    publish(buildContinuationEvents(roots[0], remaining, 1));
+    if (Test.isRunningTest() && throwTestException) {
+      throw new WorkflowEngine.WorkflowException('Simulated cascade failure');
+    }
+    publish(next);
   }
 
   private static Set<Id> stillFailedParents(Set<Id> parentIds) {
@@ -202,35 +240,73 @@ public inherited sharing class WorkflowCascadeCancel {
     return stillFailed;
   }
 
-  // Filters the parents to those with an active child. When SOQL headroom is
-  // low it skips the filter; the handler then finds no child and does nothing.
+  // Filters the parents to those with an active child. It reads at most
+  // PREFILTER_ROW_CAP rows. When the cap is hit, or headroom is low, it keeps all
+  // parents; the handler then finds no child for some and does nothing.
   private static Set<Id> parentsWithActiveChildren(Set<Id> parentIds) {
-    if (Limits.getLimitQueries() - Limits.getQueries() < 2) {
+    Integer rowCap = Math.min(
+      PREFILTER_ROW_CAP,
+      (Limits.getLimitQueryRows() - Limits.getQueryRows()) / 2
+    );
+    if (Limits.getLimitQueries() - Limits.getQueries() < 2 || rowCap < 1) {
+      return parentIds;
+    }
+    Set<String> activeStatuses = WorkflowCancellation.ACTIVE_CHILD_STATUSES;
+    List<Workflow_Instance__c> children = [
+      SELECT Parent_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c IN :parentIds AND Status__c IN :activeStatuses
+      WITH SYSTEM_MODE
+      LIMIT :rowCap
+    ];
+    if (children.size() >= rowCap) {
       return parentIds;
     }
     Set<Id> withChildren = new Set<Id>();
-    Set<String> activeStatuses = WorkflowCancellation.ACTIVE_CHILD_STATUSES;
-    for (AggregateResult row : [
-      SELECT Parent_Instance__c parentId
-      FROM Workflow_Instance__c
-      WHERE
-        Parent_Instance__c IN :parentIds
-        AND Status__c IN :activeStatuses
-      WITH SYSTEM_MODE
-      GROUP BY Parent_Instance__c
-    ]) {
-      withChildren.add((Id) row.get('parentId'));
+    for (Workflow_Instance__c child : children) {
+      withChildren.add(child.Parent_Instance__c);
     }
     return withChildren;
   }
 
   /**
-   * @description One parsed cascade event.
+   * @description One cascade work item: reap the active children of `frontier`
+   * (after the `afterId` cursor) for the failed `parentId`.
    */
   private class CascadeRequest {
-    Id rootId;
+    Id parentId;
+    List<Id> frontier;
+    Id afterId;
     Integer attempt = 1;
-    List<Id> targetIds = new List<Id>();
+
+    CascadeRequest(Id parentId) {
+      this(parentId, new List<Id>{ parentId }, null);
+    }
+
+    CascadeRequest(Id parentId, List<Id> frontier, Id afterId) {
+      this.parentId = parentId;
+      this.frontier = frontier;
+      this.afterId = afterId;
+    }
+
+    String key() {
+      return parentId + '|' + JSON.serialize(frontier) + '|' + afterId;
+    }
+
+    Workflow_Event__e toEvent() {
+      Map<String, Object> payload = new Map<String, Object>{
+        'attempt' => attempt,
+        'frontier' => frontier
+      };
+      if (afterId != null) {
+        payload.put('after', afterId);
+      }
+      return new Workflow_Event__e(
+        Workflow_Instance_Id__c = parentId,
+        Event_Type__c = EVENT_TYPE,
+        Payload__c = JSON.serialize(payload)
+      );
+    }
   }
 
   // Parses the events. An event with a bad Id or payload is dropped.
@@ -252,8 +328,9 @@ public inherited sharing class WorkflowCascadeCancel {
   }
 
   private static CascadeRequest parseEvent(Workflow_Event__e event) {
-    CascadeRequest req = new CascadeRequest();
-    req.rootId = Id.valueOf(event.Workflow_Instance_Id__c);
+    CascadeRequest req = new CascadeRequest(
+      Id.valueOf(event.Workflow_Instance_Id__c)
+    );
     if (String.isBlank(event.Payload__c)) {
       return req;
     }
@@ -263,69 +340,110 @@ public inherited sharing class WorkflowCascadeCancel {
     if (payload.get('attempt') != null) {
       req.attempt = Integer.valueOf(payload.get('attempt'));
     }
-    List<Object> targets = (List<Object>) payload.get('targets');
-    if (targets != null) {
-      for (Object target : targets) {
-        req.targetIds.add(Id.valueOf((String) target));
+    List<Object> frontier = (List<Object>) payload.get('frontier');
+    if (frontier != null && !frontier.isEmpty()) {
+      req.frontier = new List<Id>();
+      for (Object nodeId : frontier) {
+        req.frontier.add(Id.valueOf((String) nodeId));
       }
+    }
+    if (payload.get('after') != null) {
+      req.afterId = Id.valueOf((String) payload.get('after'));
     }
     return req;
   }
 
-  private static void publishRetries(List<CascadeRequest> requests) {
-    List<Workflow_Event__e> retries = new List<Workflow_Event__e>();
-    for (CascadeRequest req : requests) {
+  // Schedules one delayed RetryJob for the failed requests that have attempts
+  // left (next attempt) and the unrun requests (same attempt). When no Queueable
+  // is left, it republishes them as events.
+  private static void scheduleRetries(
+    List<CascadeRequest> failed,
+    List<CascadeRequest> unrun
+  ) {
+    List<CascadeRequest> retries = new List<CascadeRequest>(unrun);
+    for (CascadeRequest req : failed) {
       if (req.attempt >= MAX_ATTEMPTS) {
         System.debug(
           LoggingLevel.ERROR,
           'Cascade cancel dropped after ' +
             MAX_ATTEMPTS +
             ' attempts: ' +
-            req.rootId
+            req.parentId
         );
         continue;
       }
-      retries.add(buildEvent(req.rootId, req.targetIds, req.attempt + 1));
+      req.attempt++;
+      retries.add(req);
     }
-    publish(retries);
-  }
-
-  private static List<Workflow_Event__e> buildContinuationEvents(
-    Id rootId,
-    List<Id> remaining,
-    Integer attempt
-  ) {
-    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
-    List<Id> chunk = new List<Id>();
-    for (Id nodeId : remaining) {
-      chunk.add(nodeId);
-      if (chunk.size() == CONTINUATION_CHUNK) {
-        events.add(buildEvent(rootId, chunk, attempt));
-        chunk = new List<Id>();
+    if (retries.isEmpty()) {
+      return;
+    }
+    // A test cannot chain Queueables.
+    Boolean canEnqueue =
+      Limits.getQueueableJobs() < Limits.getLimitQueueableJobs() &&
+      !(Test.isRunningTest() && System.isQueueable());
+    if (!canEnqueue) {
+      List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+      for (CascadeRequest req : retries) {
+        events.add(req.toEvent());
       }
+      publish(events);
+      return;
     }
-    if (!chunk.isEmpty()) {
-      events.add(buildEvent(rootId, chunk, attempt));
-    }
-    return events;
+    System.enqueueJob(new RetryJob(retries), retryDelayMinutes(retries));
   }
 
-  private static Workflow_Event__e buildEvent(
-    Id rootId,
-    List<Id> targetIds,
-    Integer attempt
-  ) {
-    Map<String, Object> payload = new Map<String, Object>{
-      'attempt' => attempt
-    };
-    if (!targetIds.isEmpty()) {
-      payload.put('targets', targetIds);
+  // Backoff: 1, 2, 4, 8 minutes for attempts 2 to 5 (Queueable maximum 10).
+  private static Integer retryDelayMinutes(List<CascadeRequest> retries) {
+    Integer attempt = 1;
+    for (CascadeRequest req : retries) {
+      attempt = Math.max(attempt, req.attempt);
     }
-    return new Workflow_Event__e(
-      Workflow_Instance_Id__c = rootId,
-      Event_Type__c = EVENT_TYPE,
-      Payload__c = JSON.serialize(payload)
-    );
+    return Math.min(10, Math.pow(2, Math.max(0, attempt - 2)).intValue());
+  }
+
+  /**
+   * @description Delayed retry of failed cascade requests. It runs each request
+   * alone in its own savepoint, so one bad node stops only its own request.
+   */
+  public class RetryJob implements Queueable {
+    private final List<CascadeRequest> requests;
+
+    private RetryJob(List<CascadeRequest> requests) {
+      this.requests = requests;
+    }
+
+    /**
+     * @description Runs up to RETRY_REQUESTS_PER_JOB requests, each in its own
+     * savepoint. Schedules the failed and the unrun requests again.
+     * @param context the Queueable context
+     */
+    public void execute(QueueableContext context) {
+      if (!WorkflowEngine.cascadeCancelChildrenOnFailure) {
+        return;
+      }
+      List<CascadeRequest> failed = new List<CascadeRequest>();
+      List<CascadeRequest> unrun = new List<CascadeRequest>();
+      for (Integer i = 0; i < requests.size(); i++) {
+        CascadeRequest req = requests[i];
+        if (i >= RETRY_REQUESTS_PER_JOB) {
+          unrun.add(req);
+          continue;
+        }
+        Savepoint sp = Database.setSavepoint();
+        try {
+          runPass(new List<CascadeRequest>{ req });
+        } catch (Exception ex) {
+          Database.rollback(sp);
+          System.debug(
+            LoggingLevel.ERROR,
+            'Cascade cancel retry failed: ' + ex.getMessage()
+          );
+          failed.add(req);
+        }
+      }
+      scheduleRetries(failed, unrun);
+    }
   }
 
   // Publishes best-effort. It skips the publish when the DML budget is spent,

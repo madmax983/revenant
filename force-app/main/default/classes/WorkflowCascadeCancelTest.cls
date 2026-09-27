@@ -124,6 +124,14 @@ private class WorkflowCascadeCancelTest {
     ];
   }
 
+  // Delivers the cascade events level by level. Each pass publishes the events
+  // of the next level, so one tree needs one delivery for each level.
+  private static void deliverAll() {
+    for (Integer i = 0; i < 6; i++) {
+      deliverAll();
+    }
+  }
+
   private static void setStatus(Id instanceId, String status) {
     update new Workflow_Instance__c(Id = instanceId, Status__c = status);
   }
@@ -141,7 +149,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       WorkflowEngine.failWorkflowInstance(parent.Id, 'StepA', 'boom');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -166,7 +174,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Compensated');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -186,7 +194,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'CompensationFailed');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -212,7 +220,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals('Cancelled', statusOf(child.Id), 'Child reaped');
@@ -255,7 +263,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       Workflow_Instance__c after = [
@@ -315,7 +323,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -363,7 +371,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       for (Workflow_Instance__c after : [
@@ -466,7 +474,7 @@ private class WorkflowCascadeCancelTest {
       setStatus(parent.Id, 'Failed');
       // An operator redrives the parent before the event arrives.
       setStatus(parent.Id, 'Running');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -487,7 +495,6 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       WorkflowCascadeCancel.throwTestException = true;
-      WorkflowCascadeCancel.publishedEvents.clear();
       WorkflowCascadeCancel.handleEvents(
         new List<Workflow_Event__e>{
           WorkflowCascadeCancel.buildParentEvent(parent.Id)
@@ -498,16 +505,11 @@ private class WorkflowCascadeCancelTest {
       System.assertEquals('Running', statusOf(child.Id), 'Pass rolled back');
       System.assertEquals(
         1,
-        WorkflowCascadeCancel.publishedEvents.size(),
-        'A failed pass must republish one retry event'
-      );
-      System.assert(
-        WorkflowCascadeCancel.publishedEvents[0]
-          .Payload__c.contains('"attempt":2'),
-        'The retry carries the next attempt number'
+        Limits.getQueueableJobs(),
+        'A failed pass must schedule one delayed retry job'
       );
 
-      // The retry succeeds when the fault is gone.
+      // The retry job runs at stopTest and succeeds when the fault is gone.
       WorkflowCascadeCancel.throwTestException = false;
       Test.stopTest();
 
@@ -534,6 +536,7 @@ private class WorkflowCascadeCancelTest {
       WorkflowCascadeCancel.publishedEvents.clear();
       WorkflowCascadeCancel.handleEvents(new List<Workflow_Event__e>{ last });
 
+      System.assertEquals(0, Limits.getQueueableJobs(), 'No retry job');
       System.assertEquals(
         0,
         WorkflowCascadeCancel.publishedEvents.size(),
@@ -541,6 +544,77 @@ private class WorkflowCascadeCancelTest {
       );
       WorkflowCascadeCancel.throwTestException = false;
       Test.stopTest();
+    }
+  }
+
+  // A bad node fails the merged pass. The retry job runs each request alone,
+  // so the healthy parent is still reaped.
+  @IsTest
+  static void retryIsolatesPoisonRequest() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
+      Workflow_Instance__c poisonParent = insertInstance(null, 'Failed');
+      Workflow_Instance__c poison = newInstance(poisonParent.Id, 'Running');
+      poison.Compensation_Stack__c = 'not json';
+      Workflow_Instance__c healthyParent = insertInstance(null, 'Failed');
+      Workflow_Instance__c healthy = newInstance(healthyParent.Id, 'Running');
+      insert new List<Workflow_Instance__c>{ poison, healthy };
+      WorkflowEngine.cascadeCancelChildrenOnFailure = true;
+
+      Test.startTest();
+      WorkflowCascadeCancel.handleEvents(
+        new List<Workflow_Event__e>{
+          WorkflowCascadeCancel.buildParentEvent(poisonParent.Id),
+          WorkflowCascadeCancel.buildParentEvent(healthyParent.Id)
+        }
+      );
+      System.assertEquals(
+        'Running',
+        statusOf(healthy.Id),
+        'The merged pass rolled back'
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        'Cancelled',
+        statusOf(healthy.Id),
+        'The retry reaps the healthy request alone'
+      );
+      System.assertEquals(
+        'Running',
+        statusOf(poison.Id),
+        'The bad node stops only its own request'
+      );
+    }
+  }
+
+  // A redriven parent keeps the children that later pages would reap.
+  @IsTest
+  static void nextPageRechecksParent() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+      insertChildren(new List<Workflow_Instance__c>{ parent }, 5, 'Running');
+
+      Test.startTest();
+      WorkflowCascadeCancel.maxNodesPerPass = 2;
+      setStatus(parent.Id, 'Failed');
+      Test.getEventBus().deliver();
+      // An operator redrives the parent between two pages.
+      setStatus(parent.Id, 'Running');
+      deliverAll();
+      Test.stopTest();
+
+      System.assertEquals(
+        3,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Parent_Instance__c = :parent.Id AND Status__c = 'Running'
+        ],
+        'The next page must not reap the children of a redriven parent'
+      );
     }
   }
 
@@ -557,7 +631,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Completed');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -676,6 +750,19 @@ private class WorkflowCascadeCancelTest {
   }
 
   @IsTest
+  static void explicitCancelNullIdStillThrows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Boolean threw = false;
+      try {
+        WorkflowEngine.cancel(null);
+      } catch (WorkflowEngine.WorkflowException ex) {
+        threw = ex.getMessage().contains('Workflow instance not found');
+      }
+      System.assert(threw, 'A null root must still throw');
+    }
+  }
+
+  @IsTest
   static void explicitCancelMissingInstanceStillThrows() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c gone = insertInstance(null, 'Running');
@@ -709,7 +796,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');
-      Test.getEventBus().deliver();
+      deliverAll();
       WorkflowCascadeCancel.reapFailedParents(new Set<Id>{ parent.Id });
       Test.stopTest();
 
@@ -796,6 +883,8 @@ private class WorkflowCascadeCancelTest {
       measureReap(warmUp);
       Integer[] narrowCost = measureReap(narrow);
       Integer[] wideCost = measureReap(wide);
+      // The next-level events reap the grandchildren.
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -822,6 +911,38 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
+  // One pass reads one page, not the whole level.
+  @IsTest
+  static void wideLevelPassReadsBoundedRows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+      insertChildren(new List<Workflow_Instance__c>{ parent }, 60, 'Running');
+      setStatus(parent.Id, 'Failed');
+
+      Test.startTest();
+      WorkflowCascadeCancel.maxNodesPerPass = 3;
+      Integer rows0 = Limits.getQueryRows();
+      WorkflowCascadeCancel.reapFailedParents(new Set<Id>{ parent.Id });
+      Integer rowsRead = Limits.getQueryRows() - rows0;
+
+      System.assert(
+        rowsRead < 20,
+        'A pass must read a bounded page, not 60 rows: ' + rowsRead
+      );
+      System.assertEquals(
+        57,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Parent_Instance__c = :parent.Id AND Status__c = 'Running'
+        ],
+        'One pass cancels one page'
+      );
+      Test.stopTest();
+    }
+  }
+
   @IsTest
   static void overCapTreeContinuesInNextEvent() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -832,7 +953,7 @@ private class WorkflowCascadeCancelTest {
       Test.startTest();
       WorkflowCascadeCancel.maxNodesPerPass = 2;
       setStatus(parent.Id, 'Failed');
-      // Pass 1 reaps 2 nodes and publishes a continuation.
+      // Pass 1 reaps 2 nodes and publishes the next page.
       Test.getEventBus().deliver();
       System.assertEquals(
         3,
@@ -843,9 +964,8 @@ private class WorkflowCascadeCancelTest {
         ],
         'The cap bounds one pass'
       );
-      // Passes 2 and 3 reap the rest.
-      Test.getEventBus().deliver();
-      Test.getEventBus().deliver();
+      // The next events reap the rest.
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
@@ -892,7 +1012,7 @@ private class WorkflowCascadeCancelTest {
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');
-      Test.getEventBus().deliver();
+      deliverAll();
       Test.stopTest();
 
       System.assertEquals(
