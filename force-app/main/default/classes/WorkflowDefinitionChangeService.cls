@@ -43,7 +43,11 @@ public inherited sharing class WorkflowDefinitionChangeService {
         'Cannot read the live definition ' + inst.Workflow_Name__c + '.'
       );
     }
-    List<String> missing = missingCurrentSteps(inst.Current_Step__c, liveSteps);
+    List<String> missing = missingCurrentSteps(
+      inst.Id,
+      inst.Current_Step__c,
+      liveSteps
+    );
     if (!missing.isEmpty()) {
       throw new WorkflowEngine.WorkflowException(
         'Current step ' +
@@ -131,26 +135,63 @@ public inherited sharing class WorkflowDefinitionChangeService {
         : WorkflowDefinitionFingerprint.compute(live),
       'currentStep' => instance.Current_Step__c,
       'currentStepInLive' => live != null &&
-      missingCurrentSteps(instance.Current_Step__c, live).isEmpty()
+      missingCurrentSteps(instance.Id, instance.Current_Step__c, live).isEmpty()
     };
   }
 
-  // Current step names (one, or a comma list for parallel) not in liveSteps.
+  // Open current steps (one, or the unfinished parallel branches) that are not
+  // in liveSteps. A finished branch is not checked: release does not run it.
   private static List<String> missingCurrentSteps(
+    Id instanceId,
     String currentStep,
     List<String> liveSteps
   ) {
     List<String> missing = new List<String>();
-    if (String.isBlank(currentStep)) {
-      return missing;
-    }
     Set<String> liveKeys = keys(liveSteps);
-    for (String step : currentStep.split(',')) {
-      if (!liveKeys.contains(step.trim().toLowerCase())) {
-        missing.add(step.trim());
+    for (String step : openCurrentSteps(instanceId, currentStep)) {
+      if (!liveKeys.contains(key(step))) {
+        missing.add(step);
       }
     }
     return missing;
+  }
+
+  // The current step, or for a parallel list the branches whose latest row is
+  // not Completed or OperatorSkipped. A serial step needs no query.
+  private static List<String> openCurrentSteps(
+    Id instanceId,
+    String currentStep
+  ) {
+    List<String> steps = new List<String>();
+    if (String.isBlank(currentStep)) {
+      return steps;
+    }
+    for (String step : currentStep.split(',')) {
+      steps.add(step.trim());
+    }
+    if (steps.size() < 2 || instanceId == null) {
+      return steps;
+    }
+    Map<String, String> latestStatus = new Map<String, String>();
+    for (Workflow_Step_Execution__c exec : [
+      SELECT Step_Name__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c IN :steps
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      if (!latestStatus.containsKey(exec.Step_Name__c)) {
+        latestStatus.put(exec.Step_Name__c, exec.Status__c);
+      }
+    }
+    List<String> open = new List<String>();
+    for (String step : steps) {
+      String status = latestStatus.get(step);
+      if (status != 'Completed' && status != 'OperatorSkipped') {
+        open.add(step);
+      }
+    }
+    return open;
   }
 
   // Names in left that are not in right, in left order.

@@ -873,6 +873,62 @@ public class WorkflowDefinitionChangeTest {
     }
   }
 
+  // Codex review: a finished parallel branch that the live definition removed
+  // must not block release. An open branch that was removed must block it.
+  @IsTest
+  static void testReleaseChecksOnlyOpenParallelBranches() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      shape = 0; // Live list [A, B]: StepX is removed.
+      List<Id> ids = new List<Id>();
+      for (String xStatus : new List<String>{ 'Completed', 'Pending' }) {
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+          Workflow_Name__c = WF,
+          Status__c = 'DefinitionChanged',
+          Current_Step__c = STEP_X + ',' + STEP_B,
+          Definition_Fingerprint__c = 'v1:old',
+          Correlation_Key__c = 'DefChg-Open-' +
+            xStatus +
+            Datetime.now().getTime()
+        );
+        insert inst;
+        insert new List<Workflow_Step_Execution__c>{
+          new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = STEP_X,
+            Status__c = xStatus,
+            Retry_Count__c = 0
+          ),
+          new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = STEP_B,
+            Status__c = 'Pending',
+            Retry_Count__c = 0
+          )
+        };
+        ids.add(inst.Id);
+      }
+      // X finished: only B is open, and B is live.
+      WorkflowDefinitionChangeService.release(ids[0]);
+      System.assertEquals(
+        'Running',
+        load(ids[0]).Status__c,
+        'A removed but finished branch must not block release'
+      );
+      // X still open and removed: release must refuse.
+      String error;
+      try {
+        WorkflowDefinitionChangeService.release(ids[1]);
+      } catch (WorkflowEngine.WorkflowException ex) {
+        error = ex.getMessage();
+      }
+      System.assert(
+        error != null && error.contains(STEP_X),
+        'An open removed branch must block release: ' + error
+      );
+    }
+  }
+
   @IsTest
   static void testReleaseParallelInstanceResumes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
