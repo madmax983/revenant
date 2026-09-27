@@ -19,6 +19,7 @@
  * 13. Signal to a parked instance is held, not dropped.
  * 14. Start stamps the fingerprint and shape.
  * 15. Timeout sweep skips a parked instance.
+ * 16. Engine-internal workflows never park.
  */
 @IsTest
 public class WorkflowDefinitionChangeTest {
@@ -416,6 +417,41 @@ public class WorkflowDefinitionChangeTest {
       System.assertEquals(false, stopped, 'A match must not stop the delivery');
       System.assertEquals(q0, q1, 'Gate must add no SOQL on a match');
       System.assertEquals(d0, d1, 'Gate must add no DML on a match');
+    }
+  }
+
+  // Review finding: a parked watchdog stops every sweep, so the gate must never
+  // park an engine-internal workflow, even when its step list changed.
+  @IsTest
+  static void testGateNeverParksEngineWorkflows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String staleFingerprint = WorkflowDefinitionFingerprint.compute(
+        new List<String>{ 'OldWatchdogStep' }
+      );
+      Test.startTest();
+      Integer d0 = Limits.getDmlStatements();
+      for (
+        String name : new List<String>{
+          'WatchdogWorkflow',
+          'CleanupWorkflow',
+          'BulkRedriveWorkflow',
+          'BulkCancelWorkflow'
+        }
+      ) {
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+          Workflow_Name__c = name,
+          Status__c = 'Running',
+          Definition_Fingerprint__c = staleFingerprint
+        );
+        System.assertEquals(
+          false,
+          WorkflowDefinitionChangeGate.parkIfChanged(inst),
+          name + ' must never park'
+        );
+      }
+      Integer d1 = Limits.getDmlStatements();
+      Test.stopTest();
+      System.assertEquals(d0, d1, 'No park DML for engine workflows');
     }
   }
 

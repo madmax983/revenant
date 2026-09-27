@@ -10,7 +10,8 @@
  * Warn log row. It changes no prior step row and not the compensation stack.
  * A VersionedWorkflow mismatch (ADVISORY) and a blank stored fingerprint
  * (UNKNOWN) do not stop the hop. When the live definition cannot be read, the
- * hop continues. All DML and SOQL run in system mode.
+ * hop continues. The gate never parks an engine-internal workflow, such as
+ * the watchdog. All DML and SOQL run in system mode.
  */
 public inherited sharing class WorkflowDefinitionChangeGate {
   /** @description Instance status of a parked instance. */
@@ -41,6 +42,9 @@ public inherited sharing class WorkflowDefinitionChangeGate {
     }
     if (String.isBlank(instance.Definition_Fingerprint__c)) {
       return false; // Unknown: started before issue #89.
+    }
+    if (isEngineWorkflow(instance.Workflow_Name__c)) {
+      return false; // A parked watchdog stops the engine. Never park it.
     }
     WorkflowDefinition def = WorkflowDefinitionFingerprint.resolve(
       instance.Workflow_Name__c
@@ -139,5 +143,13 @@ public inherited sharing class WorkflowDefinitionChangeGate {
     WorkflowLog.warn('DefinitionChanged', detail, locked.Id);
     instance.Status__c = STATUS;
     return true;
+  }
+
+  // Engine-internal workflows (watchdog, cleanup, bulk jobs), with or without a
+  // namespace prefix. The pause gate exempts the same names.
+  private static Boolean isEngineWorkflow(String workflowName) {
+    return String.isNotBlank(workflowName) &&
+      (WorkflowPauseGate.isReserved(workflowName) ||
+      WorkflowPauseGate.isReserved(workflowName.substringAfterLast('.')));
   }
 }

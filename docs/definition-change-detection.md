@@ -60,3 +60,4 @@ Release writes the live fingerprint and shape, sets `Running`, re-arms step time
 - The fingerprint covers the step list only. It does not cover `getNextStep()` logic or step code.
 - The engine does not migrate an instance to the new shape.
 - To change a shape without a park, implement `VersionedWorkflow` and route by version.
+- The engine never parks its own workflows (`WatchdogWorkflow`, `CleanupWorkflow`, `BulkRedriveWorkflow`, `BulkCancelWorkflow`). A parked watchdog stops all sweeps.
