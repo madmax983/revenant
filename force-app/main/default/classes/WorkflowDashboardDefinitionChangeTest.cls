@@ -155,16 +155,19 @@ private class WorkflowDashboardDefinitionChangeTest {
         'DashDefChgErr-' + Datetime.now().getTime(),
         null
       );
-      Boolean threw = false;
+      String message;
       try {
         WorkflowDashboardCommandController.releaseDefinitionChangedInstance(
           instId
         );
       } catch (AuraHandledException ex) {
-        threw = true;
+        message = ex.getMessage();
       }
       Test.stopTest();
-      System.assert(threw, 'A non-parked release must surface an error');
+      System.assert(
+        message != null && message.contains('not in DefinitionChanged'),
+        'A non-parked release must surface the reason: ' + message
+      );
     }
   }
 
@@ -190,6 +193,17 @@ private class WorkflowDashboardDefinitionChangeTest {
         UserName = 'defchg_' + Datetime.now().getTime() + '@testorg.com'
       );
       insert stdUser;
+      // View-only operator: passes the view gate, so the action gate decides.
+      insert new PermissionSetAssignment(
+        AssigneeId = stdUser.Id,
+        PermissionSetId = [
+          SELECT Id
+          FROM PermissionSet
+          WHERE Name = 'Revenant_Operator'
+          LIMIT 1
+        ]
+        .Id
+      );
     }
     Id instId;
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -203,10 +217,13 @@ private class WorkflowDashboardDefinitionChangeTest {
           instId
         );
       } catch (AuraHandledException ex) {
-        denied = ex.getMessage().startsWith('Unauthorized');
+        denied = ex.getMessage().contains('Workflow_Operator_Action');
       }
     }
     Test.stopTest();
-    System.assert(denied, 'Release must require operator permission');
+    System.assert(
+      denied,
+      'Release must fail on the operator-action gate, not the view gate'
+    );
   }
 }

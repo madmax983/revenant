@@ -114,6 +114,9 @@ public inherited sharing class WorkflowDefinitionChangeGate {
       '. Release or cancel.')
       .abbreviate(ERROR_MESSAGE_MAX);
 
+    // A scheduled sleep, retry or timeout job must not fire into the park.
+    // Release re-arms the step timeout.
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(locked.Id);
     locked.Status__c = STATUS;
     locked.Error_Message__c = reason;
     locked.Sleep_Until__c = null;

@@ -44,6 +44,9 @@ A match costs no SOQL and no DML. The gate reads the stored value from the insta
 1. It sets `Status__c` to `DefinitionChanged` and writes a short reason in `Error_Message__c`.
 2. It appends one `Workflow_Step_Execution__c` row. `Step_Name__c` is `Workflow_Definition_Changed`. `Status__c` is `DefinitionChanged`. `Output__c` holds the stored and live fingerprints, the live step list and the current step.
 3. It writes a Warn `Workflow_Log__c` line.
+4. It cancels the scheduled sleep, retry and timeout jobs of the instance.
+
+A parallel branch that was running before the park can finish. Its result is kept. It does not undo the park. Release starts only the open branches.
 
 A park does not change prior step rows. A park does not change `Compensation_Stack__c`. A parked instance keeps its correlation key. It keeps its concurrency slot, if it holds one. The watchdog does not time out its steps. The engine holds a signal to it until release.
 

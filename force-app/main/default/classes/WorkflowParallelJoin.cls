@@ -93,6 +93,15 @@ public inherited sharing class WorkflowParallelJoin {
       latestExecByStep
     );
     if (verdict == 'SUSPEND') {
+      // A branch that was in flight when the instance parked (DefinitionChanged or
+      // Paused) must not undo the park. The park consumed the open branch's
+      // delivery, and only release or resume drives it again.
+      if (
+        instance.Status__c == WorkflowDefinitionChangeGate.STATUS ||
+        instance.Status__c == 'Paused'
+      ) {
+        return;
+      }
       instance.Status__c = 'Suspended';
       Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     } else if (verdict == 'FAIL') {

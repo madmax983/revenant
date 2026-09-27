@@ -189,7 +189,9 @@ public inherited sharing class WorkflowHarnessCore {
     for (Workflow_Step_Execution__c se : [
       SELECT Step_Name__c, Status__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :ctx.rootInstanceId
+      WHERE
+        Workflow_Instance__c = :ctx.rootInstanceId
+        AND Step_Name__c != :WorkflowDefinitionChangeGate.MARKER_STEP_NAME
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
     ]) {

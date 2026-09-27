@@ -20,6 +20,8 @@
  * 14. Start stamps the fingerprint and shape.
  * 15. Timeout sweep skips a parked instance.
  * 16. Engine-internal workflows never park.
+ * 17. Cancel cascades to a parked child; pause gate order; unreadable and
+ *     parallel release; continue-as-new stamping; in-flight branch keeps park.
  */
 @IsTest
 public class WorkflowDefinitionChangeTest {
@@ -201,6 +203,49 @@ public class WorkflowDefinitionChangeTest {
      */
     public StepResult execute(StepContext ctx) {
       return StepResult.complete(null, 'OutC');
+    }
+  }
+
+  /**
+   * @description One-step workflow that continues as new once.
+   */
+  public class LoopWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the step list.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ 'WorkflowDefinitionChangeTest.LoopStep' };
+    }
+    /**
+     * @description Returns the first step.
+     * @return The initial step name.
+     */
+    public String getInitialStep() {
+      return 'WorkflowDefinitionChangeTest.LoopStep';
+    }
+    /**
+     * @description Ends the workflow.
+     * @param current The completed step.
+     * @param result The step result.
+     * @return Always null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return null;
+    }
+  }
+
+  /**
+   * @description Step that asks for a continue-as-new successor.
+   */
+  public class LoopStep implements WorkflowStep {
+    /**
+     * @description Continues as new.
+     * @param ctx The step context.
+     * @return A CONTINUE_AS_NEW result.
+     */
+    public StepResult execute(StepContext ctx) {
+      return StepResult.continueAsNew(null);
     }
   }
 
@@ -509,6 +554,53 @@ public class WorkflowDefinitionChangeTest {
     }
   }
 
+  // Review finding: a parallel branch that was in flight when the instance
+  // parked must not overwrite the park with Suspended. Otherwise the open
+  // branch has no delivery and no Release action, and the instance strands.
+  @IsTest
+  static void testInFlightBranchCompletionKeepsPark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      for (
+        String parkedStatus : new List<String>{ 'DefinitionChanged', 'Paused' }
+      ) {
+        Workflow_Instance__c inst = new Workflow_Instance__c(
+          Workflow_Name__c = WF,
+          Status__c = parkedStatus,
+          Current_Step__c = STEP_A + ',' + STEP_B,
+          Correlation_Key__c = 'DefChg-Par-' +
+            parkedStatus +
+            Datetime.now().getTime()
+        );
+        insert inst;
+        insert new List<Workflow_Step_Execution__c>{
+          new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = STEP_A,
+            Status__c = 'Completed',
+            Retry_Count__c = 0
+          ),
+          new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = STEP_B,
+            Status__c = 'Pending',
+            Retry_Count__c = 0
+          )
+        };
+        WorkflowEngine.StepOutcomeContext outcome = new WorkflowEngine.StepOutcomeContext();
+        outcome.instance = inst;
+        outcome.isParallel = true;
+
+        WorkflowParallelJoin.completeParallelBranch(outcome);
+
+        System.assertEquals(
+          parkedStatus,
+          load(inst.Id).Status__c,
+          'An in-flight branch must not undo a ' + parkedStatus + ' park'
+        );
+      }
+    }
+  }
+
   // ============================================================
   // 7. APPEND-ONLY AUDIT AND LIFO STACK UNTOUCHED
   // ============================================================
@@ -692,6 +784,125 @@ public class WorkflowDefinitionChangeTest {
     }
   }
 
+  @IsTest
+  static void testCancelCascadesToParkedChild() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      String stamp = String.valueOf(Datetime.now().getTime());
+      Workflow_Instance__c parent = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'Suspended',
+        Current_Step__c = STEP_A,
+        Correlation_Key__c = 'DefChg-Parent-' + stamp
+      );
+      insert parent;
+      Workflow_Instance__c child = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'DefinitionChanged',
+        Current_Step__c = STEP_B,
+        Parent_Instance__c = parent.Id,
+        Correlation_Key__c = 'DefChg-Child-' + stamp
+      );
+      insert child;
+      Test.startTest();
+      WorkflowEngine.cancel(parent.Id);
+      Test.stopTest();
+      System.assertEquals(
+        'Cancelled',
+        load(child.Id).Status__c,
+        'Cancel must cascade to a parked child'
+      );
+    }
+  }
+
+  // Review finding: the gate must run before the pause gate. Otherwise a
+  // stale delivery on a paused definition turns the park into Paused.
+  @IsTest
+  static void testParkedInstanceStaysParkedWhenDefinitionPaused() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = parkWithInsertedStep(
+        'DefChg-PauseOrder-' + Datetime.now().getTime()
+      );
+      WorkflowPauseGate.pauseDefinition(WF, 'order test');
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+      System.assertEquals(
+        'DefinitionChanged',
+        load(instId).Status__c,
+        'A paused definition must not overwrite the park'
+      );
+    }
+  }
+
+  @IsTest
+  static void testReleaseRefusesUnreadableDefinition() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'No_Such_Workflow_89',
+        Status__c = 'DefinitionChanged',
+        Current_Step__c = STEP_B,
+        Correlation_Key__c = 'DefChg-NoDef-' + Datetime.now().getTime()
+      );
+      insert inst;
+      String error;
+      Test.startTest();
+      try {
+        WorkflowDefinitionChangeService.release(inst.Id);
+      } catch (WorkflowEngine.WorkflowException ex) {
+        error = ex.getMessage();
+      }
+      Test.stopTest();
+      System.assert(
+        error != null && error.contains('Cannot read the live definition'),
+        'Release must refuse an unreadable definition: ' + error
+      );
+      Map<String, Object> change = WorkflowDefinitionChangeService.describe(
+        inst
+      );
+      System.assertEquals(
+        false,
+        change.get('liveAvailable'),
+        'Live unreadable'
+      );
+      System.assertEquals(
+        false,
+        change.get('currentStepInLive'),
+        'No live list means no current-step match'
+      );
+    }
+  }
+
+  @IsTest
+  static void testReleaseParallelInstanceResumes() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      shape = 1;
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'DefinitionChanged',
+        Current_Step__c = STEP_X + ',' + STEP_B,
+        Definition_Fingerprint__c = 'v1:old',
+        Correlation_Key__c = 'DefChg-ParRel-' + Datetime.now().getTime()
+      );
+      insert inst;
+      // No Test.stopTest(): the branch RUN_STEP events stay undelivered, so
+      // this test checks the release itself, not the branch runs.
+      WorkflowDefinitionChangeService.release(inst.Id);
+      Workflow_Instance__c released = load(inst.Id);
+      System.assertEquals(
+        'Running',
+        released.Status__c,
+        'Release sets Running'
+      );
+      System.assertEquals(
+        WorkflowDefinitionFingerprint.compute(stepsForShape()),
+        released.Definition_Fingerprint__c,
+        'Release stamps the live fingerprint on a parallel instance'
+      );
+    }
+  }
+
   // ============================================================
   // 12. CORRELATION KEY RESERVED
   // ============================================================
@@ -804,6 +1015,34 @@ public class WorkflowDefinitionChangeTest {
     }
   }
 
+  @IsTest
+  static void testContinueAsNewSuccessorIsStamped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Test.startTest();
+      Id instId = WorkflowEngine.start(
+        'WorkflowDefinitionChangeTest.LoopWorkflow',
+        'DefChg-Can-' + Datetime.now().getTime(),
+        null
+      );
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+      List<Workflow_Instance__c> successors = [
+        SELECT Definition_Fingerprint__c, Definition_Shape__c
+        FROM Workflow_Instance__c
+        WHERE Previous_Instance__c = :instId
+      ];
+      System.assertEquals(1, successors.size(), 'One successor');
+      System.assertEquals(
+        WorkflowDefinitionFingerprint.compute(
+          new List<String>{ 'WorkflowDefinitionChangeTest.LoopStep' }
+        ),
+        successors[0].Definition_Fingerprint__c,
+        'The successor takes the live fingerprint'
+      );
+    }
+  }
+
   // ============================================================
   // 15. TIMEOUT SWEEP SKIPS A PARKED INSTANCE
   // ============================================================
@@ -812,17 +1051,35 @@ public class WorkflowDefinitionChangeTest {
   static void testTimeoutSweepSkipsParkedInstance() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
-      Id instId = parkWithInsertedStep(
+      Id parkedId = parkWithInsertedStep(
         'DefChg-Timeout-' + Datetime.now().getTime()
       );
       Workflow_Step_Execution__c pendingB = [
         SELECT Id
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instId AND Step_Name__c = :STEP_B
+        WHERE Workflow_Instance__c = :parkedId AND Step_Name__c = :STEP_B
         LIMIT 1
       ];
       pendingB.Timeout_At__c = Datetime.now().addMinutes(-5);
       update pendingB;
+      // A later, runnable instance with an overdue step.
+      Workflow_Instance__c live = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'Running',
+        Current_Step__c = STEP_B,
+        Correlation_Key__c = 'DefChg-TimeoutLive-' + Datetime.now().getTime()
+      );
+      insert live;
+      Workflow_Step_Execution__c liveStep = new Workflow_Step_Execution__c(
+        Workflow_Instance__c = live.Id,
+        Step_Name__c = STEP_B,
+        Status__c = 'Running',
+        Retry_Count__c = 0,
+        Timeout_At__c = Datetime.now().addMinutes(-5)
+      );
+      insert liveStep;
+      // With a batch of one, a selected parked row would starve the live row.
+      WorkflowTimeoutSweep.watchdogTimeoutBatchSize = 1;
       WorkflowTimeoutSweep.processTimedOutSteps(
         Datetime.now(),
         new List<Workflow_Instance__c>()
@@ -831,8 +1088,18 @@ public class WorkflowDefinitionChangeTest {
 
       System.assertEquals(
         'DefinitionChanged',
-        load(instId).Status__c,
+        load(parkedId).Status__c,
         'The watchdog must not fail a parked instance'
+      );
+      System.assertEquals(
+        'Failed',
+        [
+          SELECT Status__c
+          FROM Workflow_Step_Execution__c
+          WHERE Id = :liveStep.Id
+        ]
+        .Status__c,
+        'The sweep must skip parked rows and time out the live step'
       );
     }
   }

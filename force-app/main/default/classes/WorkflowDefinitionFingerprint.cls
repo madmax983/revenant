@@ -55,8 +55,10 @@ public inherited sharing class WorkflowDefinitionFingerprint {
    * @return The JSON list, or null when it does not fit the field.
    */
   public static String shapeJson(List<String> steps) {
-    String json = JSON.serialize(steps == null ? new List<String>() : steps);
-    return json.length() > MAX_SHAPE_LENGTH ? null : json;
+    String serialized = JSON.serialize(
+      steps == null ? new List<String>() : steps
+    );
+    return serialized.length() > MAX_SHAPE_LENGTH ? null : serialized;
   }
 
   /**
