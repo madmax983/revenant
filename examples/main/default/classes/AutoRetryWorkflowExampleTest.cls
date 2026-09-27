@@ -127,6 +127,48 @@ public class AutoRetryWorkflowExampleTest {
   }
 
   @IsTest
+  static void fractionalAmountFailsWithoutRetry() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      Test.startTest();
+      WorkflowTestHarness.Result result = runOrder(
+        'AutoRetry_Fraction',
+        Decimal.valueOf('4200.99')
+      );
+      Test.stopTest();
+
+      Assert.areEqual('Compensated', result.status, 'Bad amount fails');
+      Assert.areEqual(
+        0,
+        MockFlakyOrderServices.chargeAttempts,
+        'The gateway is not called'
+      );
+      Workflow_Step_Execution__c charge = chargeRow();
+      Assert.areEqual(
+        0,
+        charge.Retry_Count__c.intValue(),
+        'fail() is not retried'
+      );
+      Assert.isTrue(
+        charge.Error_Details__c.startsWith('Invalid amountCents: 4200.99'),
+        'Details show the bad amount: ' + charge.Error_Details__c
+      );
+    }
+  }
+
+  @IsTest
+  static void refundIsIdempotentByKey() {
+    MockFlakyOrderServices.reset();
+    MockFlakyOrderServices.refund('refund-key', 'ch_1');
+    MockFlakyOrderServices.refund('refund-key', 'ch_1');
+    Assert.areEqual(
+      1,
+      MockFlakyOrderServices.refunds,
+      'A repeat refund with the same key does nothing'
+    );
+  }
+
+  @IsTest
   static void longGatewayOutageRollsBack() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       MockFlakyOrderServices.reset();
