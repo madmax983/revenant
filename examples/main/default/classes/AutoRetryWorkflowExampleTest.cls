@@ -1,0 +1,129 @@
+/**
+ * @description Tests for AutoRetryWorkflowExample (issue #101). They show that
+ * a short gateway outage recovers with no rollback, that a long outage rolls
+ * back LIFO, and that an opted-out step fails fast.
+ */
+@IsTest
+public class AutoRetryWorkflowExampleTest {
+  private static final String WF = 'AutoRetryWorkflowExample.OrderSaga';
+  private static final String RESERVE = 'AutoRetryWorkflowExample.ReserveInventoryStep';
+  private static final String CHARGE = 'AutoRetryWorkflowExample.ChargePaymentStep';
+  private static final String RECEIPT = 'AutoRetryWorkflowExample.SendReceiptStep';
+
+  private static WorkflowTestHarness.Result runOrder(String key) {
+    Id instanceId = WorkflowEngine.start(
+      WF,
+      key,
+      new Map<String, Object>{ 'orderId' => 'O-1001', 'amountCents' => 4200 }
+    );
+    return new WorkflowTestHarness(instanceId).drive();
+  }
+
+  private static Workflow_Step_Execution__c chargeRow() {
+    return [
+      SELECT Status__c, Retry_Count__c, Error_Details__c
+      FROM Workflow_Step_Execution__c
+      WHERE Step_Name__c = :CHARGE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+  }
+
+  @IsTest
+  static void shortGatewayOutageIsRetriedAndOrderCompletes() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      MockFlakyOrderServices.gatewayOutagesLeft = 2;
+      Test.startTest();
+      WorkflowTestHarness.Result result = runOrder('AutoRetry_OK');
+      Test.stopTest();
+
+      Assert.areEqual('Completed', result.status, 'Two 503s do not fail it');
+      Assert.isTrue(
+        result.compensatedSteps.isEmpty(),
+        'A recovered outage does not roll back the saga'
+      );
+      Assert.areEqual(
+        3,
+        MockFlakyOrderServices.chargeAttempts,
+        'Gateway is called 3 times: 503, 503, 200'
+      );
+      Assert.areEqual(
+        1,
+        MockFlakyOrderServices.effectiveCharges,
+        'The card is charged once'
+      );
+      Assert.areEqual(
+        2,
+        chargeRow().Retry_Count__c.intValue(),
+        'Two auto-retries are counted'
+      );
+      Assert.areEqual(1, MockFlakyOrderServices.receiptsSent, 'One receipt');
+      Assert.areEqual(
+        2,
+        [SELECT COUNT() FROM Workflow_Log__c WHERE Log_Type__c = 'AutoRetry'],
+        'Each retried attempt is logged'
+      );
+    }
+  }
+
+  @IsTest
+  static void longGatewayOutageRollsBackLifo() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      MockFlakyOrderServices.gatewayOutagesLeft = 99;
+      Test.startTest();
+      WorkflowTestHarness.Result result = runOrder('AutoRetry_Down');
+      Test.stopTest();
+
+      Assert.areEqual('Compensated', result.status, 'Saga rolls back');
+      Assert.areEqual(
+        new List<String>{ RESERVE + '_Compensate' },
+        result.compensatedSteps,
+        'Only the reservation is released: no charge was made'
+      );
+      Assert.areEqual(
+        4,
+        MockFlakyOrderServices.chargeAttempts,
+        'Gateway is called maximumAttempts (4) times'
+      );
+      Assert.areEqual(
+        0,
+        MockFlakyOrderServices.effectiveCharges,
+        'No charge'
+      );
+      Workflow_Step_Execution__c charge = chargeRow();
+      Assert.areEqual('Failed', charge.Status__c, 'Charge step fails');
+      Assert.isTrue(
+        charge.Error_Details__c.startsWith(
+          'Auto-retry exhausted after 4 attempts: 503 Service Unavailable'
+        ),
+        'Details show the exhausted auto-retry: ' + charge.Error_Details__c
+      );
+    }
+  }
+
+  @IsTest
+  static void optedOutReceiptStepFailsFastAndRefunds() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      MockFlakyOrderServices.receiptOutagesLeft = 1;
+      Test.startTest();
+      WorkflowTestHarness.Result result = runOrder('AutoRetry_Receipt');
+      Test.stopTest();
+
+      Assert.areEqual('Compensated', result.status, 'Receipt fails fast');
+      Assert.areEqual(
+        new List<String>{ CHARGE + '_Compensate', RESERVE + '_Compensate' },
+        result.compensatedSteps,
+        'Refund, then release (LIFO)'
+      );
+      Assert.areEqual(
+        1,
+        MockFlakyOrderServices.receiptAttempts,
+        'The receipt step is not retried'
+      );
+      Assert.areEqual(1, MockFlakyOrderServices.refunds, 'Card is refunded');
+    }
+  }
+}
