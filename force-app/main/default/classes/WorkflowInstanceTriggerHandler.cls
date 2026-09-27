@@ -1,10 +1,12 @@
 /**
- * Handler for WorkflowInstanceTrigger. All before-insert / before-update logic for
- * Workflow_Instance__c lives here so the trigger stays a thin delegate
- * (AvoidLogicInTrigger). Behavior is identical to the original in-trigger implementation:
+ * Handler for WorkflowInstanceTrigger. All Workflow_Instance__c trigger logic lives
+ * here so the trigger stays a thin delegate (AvoidLogicInTrigger).
+ * Before save (same behavior and order as the original in-trigger code):
  * correlation-key defaulting, active-key reservation, terminal-timestamp stamping,
  * failure-category clearing, and the single centralized concurrency-slot release
- * chokepoint (issue #28) are all preserved in the same order.
+ * chokepoint (issue #28).
+ * After update: it requests the cascade cancel of in-flight children for each
+ * parent that enters a failure state (issue #94).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and
@@ -56,6 +58,28 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     this.oldMap = oldMap;
     this.isInsert = operationType == System.TriggerOperation.BEFORE_INSERT;
     this.isUpdate = operationType == System.TriggerOperation.BEFORE_UPDATE;
+  }
+
+  /**
+   * @description Requests the cascade cancel of in-flight children for each
+   * instance whose status changed into a failure state. Insert does not
+   * request a cascade: a new record has no children.
+   */
+  public void handleAfterUpdate() {
+    if (oldMap == null || !WorkflowEngine.cascadeCancelChildrenOnFailure) {
+      return;
+    }
+    Set<Id> failedParentIds = new Set<Id>();
+    for (Workflow_Instance__c instance : newInstances) {
+      Workflow_Instance__c oldInstance = oldMap.get(instance.Id);
+      if (
+        WorkflowCascadeCancel.FAILURE_STATUSES.contains(instance.Status__c) &&
+        instance.Status__c != oldInstance.Status__c
+      ) {
+        failedParentIds.add(instance.Id);
+      }
+    }
+    WorkflowCascadeCancel.requestCascade(failedParentIds);
   }
 
   /**

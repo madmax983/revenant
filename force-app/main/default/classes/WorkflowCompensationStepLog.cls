@@ -97,7 +97,6 @@ public inherited sharing class WorkflowCompensationStepLog {
     String activeStepName,
     List<Workflow_Step_Execution__c> existing
   ) {
-    String compensationStepLogName = activeStepName + '_Compensate';
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Input__c, Output__c
       FROM Workflow_Step_Execution__c
@@ -108,35 +107,179 @@ public inherited sharing class WorkflowCompensationStepLog {
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1
     ];
-    String forwardInput = !originalExecs.isEmpty()
-      ? originalExecs[0].Input__c
-      : null;
-    String forwardOutput = !originalExecs.isEmpty()
-      ? originalExecs[0].Output__c
-      : null;
+    Database.insert(
+      buildCompensationRetryStep(
+        instance.Id,
+        activeStepName,
+        existing.isEmpty() ? null : existing[0],
+        originalExecs.isEmpty() ? null : originalExecs[0]
+      ),
+      true,
+      AccessLevel.SYSTEM_MODE
+    );
+  }
 
-    String priorInput = (!existing.isEmpty() &&
-      String.isNotBlank(existing[0].Input__c))
-      ? existing[0].Input__c
+  /**
+   * Builds the appended compensation retry step. Seeding rules are documented on
+   * insertCompensationRetryStep.
+   * @param instanceId the compensating instance
+   * @param activeStepName the forward step name being compensated
+   * @param latest the latest compensation-step attempt, or null
+   * @param forward the latest forward execution, or null
+   * @return the new Pending compensation step log (not inserted)
+   */
+  private static Workflow_Step_Execution__c buildCompensationRetryStep(
+    Id instanceId,
+    String activeStepName,
+    Workflow_Step_Execution__c latest,
+    Workflow_Step_Execution__c forward
+  ) {
+    String forwardInput = forward != null ? forward.Input__c : null;
+    String forwardOutput = forward != null ? forward.Output__c : null;
+
+    String priorInput = (latest != null && String.isNotBlank(latest.Input__c))
+      ? latest.Input__c
       : forwardInput;
-    String checkpointOutput = (!existing.isEmpty() &&
-      String.isNotBlank(existing[0].Output__c))
-      ? existing[0].Output__c
+    String checkpointOutput = (latest != null &&
+      String.isNotBlank(latest.Output__c))
+      ? latest.Output__c
       : forwardOutput;
-    String priorCaptures = (!existing.isEmpty() &&
-      String.isNotBlank(existing[0].Captured_Values__c))
-      ? existing[0].Captured_Values__c
+    String priorCaptures = (latest != null &&
+      String.isNotBlank(latest.Captured_Values__c))
+      ? latest.Captured_Values__c
       : null;
 
     Workflow_Step_Execution__c compStepExec = new Workflow_Step_Execution__c();
-    compStepExec.Workflow_Instance__c = instance.Id;
-    compStepExec.Step_Name__c = compensationStepLogName;
+    compStepExec.Workflow_Instance__c = instanceId;
+    compStepExec.Step_Name__c = activeStepName + '_Compensate';
     compStepExec.Status__c = 'Pending';
     compStepExec.Input__c = priorInput;
     compStepExec.Output__c = checkpointOutput;
     compStepExec.Captured_Values__c = priorCaptures;
     compStepExec.Retry_Count__c = 0;
-    Database.insert(compStepExec, true, AccessLevel.SYSTEM_MODE);
+    return compStepExec;
+  }
+
+  /**
+   * Set-based appendCompensationRetryStep (issue #94): for each instance, appends a
+   * fresh Pending attempt for the top of its compensation stack with the same
+   * rules. The SOQL/DML cost is constant in the instance count. It reads the
+   * payload of the latest attempt only, as the single-instance path does.
+   * @param instances the instances whose stalled rollback resumes
+   */
+  public static void appendCompensationRetrySteps(
+    List<Workflow_Instance__c> instances
+  ) {
+    Map<Id, String> activeById = new Map<Id, String>();
+    for (Workflow_Instance__c instance : instances) {
+      if (
+        instance.Id == null || String.isBlank(instance.Compensation_Stack__c)
+      ) {
+        continue;
+      }
+      List<String> stack = (List<String>) JSON.deserialize(
+        instance.Compensation_Stack__c,
+        List<String>.class
+      );
+      if (!stack.isEmpty() && stack[stack.size() - 1] != null) {
+        activeById.put(instance.Id, stack[stack.size() - 1]);
+      }
+    }
+    if (activeById.isEmpty()) {
+      return;
+    }
+
+    Set<String> compNames = new Set<String>();
+    for (String active : activeById.values()) {
+      compNames.add(active + '_Compensate');
+    }
+    Map<String, Workflow_Step_Execution__c> latestAttempt = latestExecs(
+      activeById.keySet(),
+      compNames
+    );
+    Map<String, Workflow_Step_Execution__c> latestForward = latestExecs(
+      activeById.keySet(),
+      new Set<String>(activeById.values())
+    );
+
+    List<Workflow_Step_Execution__c> toInsert = new List<Workflow_Step_Execution__c>();
+    for (Id instanceId : activeById.keySet()) {
+      String active = activeById.get(instanceId);
+      Workflow_Step_Execution__c latest = latestAttempt.get(
+        instanceId + '|' + active + '_Compensate'
+      );
+      // If an attempt is already in flight, do not stack a duplicate (idempotency).
+      if (
+        latest != null &&
+        isCompensationAttemptInFlight(
+          new List<Workflow_Step_Execution__c>{ latest }
+        )
+      ) {
+        continue;
+      }
+      toInsert.add(
+        buildCompensationRetryStep(
+          instanceId,
+          active,
+          latest,
+          latestForward.get(instanceId + '|' + active)
+        )
+      );
+    }
+    if (!toInsert.isEmpty()) {
+      Database.insert(toInsert, true, AccessLevel.SYSTEM_MODE);
+    }
+  }
+
+  /**
+   * @description Latest step execution per (instance | step name). It reads the
+   * Ids of all attempts first. Then it reads the payload of the latest attempt
+   * only.
+   * Shared with WorkflowCompensation.preCreateFirstCompensationSteps.
+   * @param instanceIds the instances to read
+   * @param stepNames the step names to read
+   * @return the latest execution by "instanceId|stepName"
+   */
+  public static Map<String, Workflow_Step_Execution__c> latestExecs(
+    Set<Id> instanceIds,
+    Set<String> stepNames
+  ) {
+    Map<String, Id> latestIdByKey = new Map<String, Id>();
+    for (Workflow_Step_Execution__c exec : [
+      SELECT Id, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds AND Step_Name__c IN :stepNames
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ]) {
+      String key = exec.Workflow_Instance__c + '|' + exec.Step_Name__c;
+      if (!latestIdByKey.containsKey(key)) {
+        latestIdByKey.put(key, exec.Id);
+      }
+    }
+    Map<String, Workflow_Step_Execution__c> latestByKey = new Map<String, Workflow_Step_Execution__c>();
+    if (latestIdByKey.isEmpty()) {
+      return latestByKey;
+    }
+    Set<Id> latestIds = new Set<Id>(latestIdByKey.values());
+    for (Workflow_Step_Execution__c exec : [
+      SELECT
+        Workflow_Instance__c,
+        Step_Name__c,
+        Status__c,
+        Input__c,
+        Output__c,
+        Captured_Values__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id IN :latestIds
+      WITH SYSTEM_MODE
+    ]) {
+      latestByKey.put(
+        exec.Workflow_Instance__c + '|' + exec.Step_Name__c,
+        exec
+      );
+    }
+    return latestByKey;
   }
 
   /**

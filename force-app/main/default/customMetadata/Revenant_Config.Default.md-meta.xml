@@ -3,6 +3,10 @@
     <label>Default</label>
     <protected>false</protected>
     <values>
+        <field>Cascade_Cancel_Children_On_Failure__c</field>
+        <value xsi:type="xsd:boolean">true</value>
+    </values>
+    <values>
         <field>Publish_Lifecycle_Events__c</field>
         <value xsi:type="xsd:boolean">true</value>
     </values>
