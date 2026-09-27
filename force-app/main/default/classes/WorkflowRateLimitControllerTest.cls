@@ -53,7 +53,7 @@ private class WorkflowRateLimitControllerTest {
           System.assertEquals(
             panelMessage,
             e.getMessage(),
-            'Unexpected value of e.getMessage()'
+            'The denial must match the other dashboard panels'
           );
         }
       }
@@ -79,16 +79,16 @@ private class WorkflowRateLimitControllerTest {
       List<Map<String, Object>> rows = (List<Map<String, Object>>) result.get(
         'rows'
       );
-      System.assertEquals(1, rows.size(), 'Unexpected value of rows.size()');
+      System.assertEquals(1, rows.size(), 'One row per mock config');
       System.assertEquals(
         'IDLE',
         rows[0].get('status'),
-        'Unexpected value of rows[0].get(\'status\')'
+        'A key with no state row is Idle'
       );
       System.assertNotEquals(
         null,
         result.get('asOfMs'),
-        'Unexpected value of result.get(\'asOfMs\')'
+        'The envelope carries the server clock'
       );
     }
   }

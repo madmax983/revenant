@@ -228,8 +228,8 @@ public inherited sharing class RateLimiter {
     return existingStates[0];
   }
 
-  // Refills the bucket for elapsed time and consumes one token when available. The
-  // refill and wait math is shared with the dashboard Rate Limits panel.
+  // Refills the bucket for elapsed time and consumes one token when available.
+  // The Rate Limits panel uses the same refill and wait math.
   private static AcquireResult refillAndConsume(
     Rate_Limit_State__c state,
     Rate_Limit_Config__mdt config,
