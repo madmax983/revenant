@@ -7,6 +7,10 @@
  */
 public inherited sharing class WorkflowSignalPayloads {
   private static final Integer INLINE_LIMIT = 100000;
+  private static final Integer TITLE_NAME_LIMIT = 200;
+  // Files that offloadOversized made in this transaction. discardOffloads
+  // deletes only these, never a file that a payload names.
+  private static Set<Id> createdDocIds = new Set<Id>();
 
   /**
    * @description Encodes a signal payload for storage. Every signal payload is
@@ -58,6 +62,7 @@ public inherited sharing class WorkflowSignalPayloads {
     List<ContentDocumentLink> links = new List<ContentDocumentLink>();
     for (Integer i = 0; i < targets.size(); i++) {
       Id docId = docByFile.get(files[i].Id);
+      createdDocIds.add(docId);
       links.add(
         new ContentDocumentLink(
           ContentDocumentId = docId,
@@ -75,8 +80,9 @@ public inherited sharing class WorkflowSignalPayloads {
 
   /**
    * @description Deletes the offload files of signal rows that were not
-   * inserted, for example keyed rows that lost a duplicate race. One DML for
-   * all rows.
+   * inserted, for example keyed rows that lost a duplicate race. It deletes
+   * only files that {@link #offloadOversized} made in this transaction. A
+   * marker that a caller sent is never deleted. One DML for all rows.
    * @param rows the rows that were not inserted
    */
   public static void discardOffloads(List<Workflow_Signal__c> rows) {
@@ -86,8 +92,8 @@ public inherited sharing class WorkflowSignalPayloads {
         row.Payload__c,
         '$attachmentId'
       );
-      if (docId != null) {
-        docIds.add(docId);
+      if (docId instanceof Id && createdDocIds.contains((Id) docId)) {
+        docIds.add((Id) docId);
       }
     }
     if (!docIds.isEmpty()) {
@@ -100,9 +106,12 @@ public inherited sharing class WorkflowSignalPayloads {
   ) {
     List<ContentVersion> files = new List<ContentVersion>();
     for (Workflow_Signal__c row : targets) {
+      // ContentVersion.Title allows 255 characters.
       String title =
         'Signal_' +
-        String.valueOf(row.Signal_Name__c).replaceAll('[^a-zA-Z0-9]', '_');
+        String.valueOf(row.Signal_Name__c)
+          .replaceAll('[^a-zA-Z0-9]', '_')
+          .left(TITLE_NAME_LIMIT);
       files.add(
         new ContentVersion(
           Title = title,

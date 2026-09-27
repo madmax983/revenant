@@ -128,11 +128,17 @@ public inherited sharing class WorkflowParentNotifier {
         // bus. The parent decodes it only after it checks the child record.
         'output' => child.Output__c
       };
-      payload = WorkflowPayloadOffload.savePayloadIfNeeded(
-        parent.Id,
-        JSON.serialize(outcomeData),
-        'ChildFailedOutcome_' + child.Id
-      );
+      // With a codec, the wrapper stays inline. The signal insert encodes it
+      // and offloads the encoded text when it is too large, so the signal
+      // read resolves it in one pass. An offload here would give a marker
+      // that the signal insert encodes as input.
+      payload = WorkflowPayloadCodecs.isIdentity()
+        ? WorkflowPayloadOffload.savePayloadIfNeeded(
+            parent.Id,
+            JSON.serialize(outcomeData),
+            'ChildFailedOutcome_' + child.Id
+          )
+        : JSON.serialize(outcomeData);
     }
 
     signalName += String.isNotBlank(child.Correlation_Key__c)
