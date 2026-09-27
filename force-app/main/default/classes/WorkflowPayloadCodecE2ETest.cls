@@ -974,7 +974,7 @@ public class WorkflowPayloadCodecE2ETest {
   }
 
   @IsTest
-  static void largeFailureDataIsOffloaded() {
+  static void failureDetailsFitTheField() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowPayloadCodecs.setCodec(new AesCodec());
       Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -987,27 +987,47 @@ public class WorkflowPayloadCodecE2ETest {
         Workflow_Instance__c = inst.Id,
         Step_Name__c = 'WorkflowPayloadCodecE2ETest.FailWithDataStep'
       );
-      // 99 000 plaintext characters grow past the field limit after AES.
-      String failureData = '{"ssn":"' + SECRET + 'x'.repeat(99000) + '"}';
+      // 99 000 plaintext characters grow past the offload limit after AES.
+      String bigData = '{"ssn":"' + SECRET + 'x'.repeat(99000) + '"}';
+      // 60 000 characters stay inline after AES, but not with a long reason.
+      String midData = '{"ssn":"' + SECRET + 'y'.repeat(60000) + '"}';
+      String longReason = 'r'.repeat(60000);
 
-      String stored = WorkflowPayloadCodecs.saveFailureData(
+      String offloaded = WorkflowPayloadCodecs.failureDetails(
         stepExec,
-        failureData
+        'Declined',
+        bigData
+      );
+      String inline = WorkflowPayloadCodecs.failureDetails(
+        stepExec,
+        longReason,
+        midData
       );
 
+      String marker = offloaded.substringAfter('\nfailureData: ');
       System.assert(
-        stored.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX),
+        marker.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX),
         'Large encoded failure data goes to a file'
       );
       System.assertEquals(
-        failureData,
-        WorkflowPayloadOffload.resolvePayload(stored)
+        bigData,
+        WorkflowPayloadOffload.resolvePayload(marker)
+      );
+      System.assert(inline.length() <= 131072, 'The value fits the field');
+      System.assertEquals(
+        midData,
+        WorkflowPayloadCodecs.decode(inline.substringAfter('\nfailureData: ')),
+        'The failure data does not change'
       );
       WorkflowPayloadCodecs.setCodec(null);
       System.assertEquals(
-        failureData,
-        WorkflowPayloadCodecs.saveFailureData(stepExec, failureData),
-        'Identity keeps the legacy inline value'
+        'Declined\nfailureData: ' + bigData,
+        WorkflowPayloadCodecs.failureDetails(stepExec, 'Declined', bigData),
+        'Identity keeps the legacy value'
+      );
+      System.assertEquals(
+        'Declined',
+        WorkflowPayloadCodecs.failureDetails(stepExec, 'Declined', null)
       );
     }
   }

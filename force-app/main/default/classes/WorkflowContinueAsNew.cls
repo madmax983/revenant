@@ -321,15 +321,12 @@ public inherited sharing class WorkflowContinueAsNew {
     // Plain-text schema matches RETRY/crash paths. When failureData is present
     // the raw JSON is appended on a second line for downstream inspection without
     // needing to detect a JSON envelope.
-    stepExec.Error_Details__c = (result.directive().failureDataJson != null)
-      ? result.directive().failureReason +
-        '\nfailureData: ' +
-        // failureData is author data, so the payload codec encodes it.
-        WorkflowPayloadCodecs.saveFailureData(
-          stepExec,
-          result.directive().failureDataJson
-        )
-      : result.directive().failureReason;
+    // failureData is author data, so the payload codec encodes it.
+    stepExec.Error_Details__c = WorkflowPayloadCodecs.failureDetails(
+      stepExec,
+      result.directive().failureReason,
+      result.directive().failureDataJson
+    );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
     // Circuit-breaker failure sink (issue #128): a deliberate terminal failure of a

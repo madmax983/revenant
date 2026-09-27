@@ -372,15 +372,12 @@ public inherited sharing class WorkflowCompensationOutcome {
     // with the author's reason, preserving the remaining LIFO stack for operator
     // resume. Same format as the RETRY-exhausted and thrown-exception paths.
     stepExec.Status__c = 'Failed';
-    stepExec.Error_Details__c = (result.directive().failureDataJson != null)
-      ? result.directive().failureReason +
-        '\nfailureData: ' +
-        // failureData is author data, so the payload codec encodes it.
-        WorkflowPayloadCodecs.saveFailureData(
-          stepExec,
-          result.directive().failureDataJson
-        )
-      : result.directive().failureReason;
+    // failureData is author data, so the payload codec encodes it.
+    stepExec.Error_Details__c = WorkflowPayloadCodecs.failureDetails(
+      stepExec,
+      result.directive().failureReason,
+      result.directive().failureDataJson
+    );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
     failCompensationRecoverable(
