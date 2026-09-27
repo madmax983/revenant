@@ -157,6 +157,31 @@ public class AutoRetryWorkflowExampleTest {
   }
 
   @IsTest
+  static void tooLargeAmountFailsWithoutRetry() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      Test.startTest();
+      WorkflowTestHarness.Result result = runOrder(
+        'AutoRetry_TooLarge',
+        Decimal.valueOf('3000000000')
+      );
+      Test.stopTest();
+
+      Assert.areEqual('Compensated', result.status, 'Bad amount fails');
+      Assert.areEqual(
+        0,
+        MockFlakyOrderServices.chargeAttempts,
+        'The gateway is not called'
+      );
+      Assert.areEqual(
+        0,
+        chargeRow().Retry_Count__c.intValue(),
+        'fail() is not retried'
+      );
+    }
+  }
+
+  @IsTest
   static void refundIsIdempotentByKey() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       MockFlakyOrderServices.reset();
