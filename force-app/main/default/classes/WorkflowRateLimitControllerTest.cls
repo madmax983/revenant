@@ -50,7 +50,11 @@ private class WorkflowRateLimitControllerTest {
             e.getMessage().contains('Unauthorized'),
             e.getMessage()
           );
-          System.assertEquals(panelMessage, e.getMessage());
+          System.assertEquals(
+            panelMessage,
+            e.getMessage(),
+            'Unexpected value of e.getMessage()'
+          );
         }
       }
     }
@@ -75,9 +79,17 @@ private class WorkflowRateLimitControllerTest {
       List<Map<String, Object>> rows = (List<Map<String, Object>>) result.get(
         'rows'
       );
-      System.assertEquals(1, rows.size());
-      System.assertEquals('IDLE', rows[0].get('status'));
-      System.assertNotEquals(null, result.get('asOfMs'));
+      System.assertEquals(1, rows.size(), 'Unexpected value of rows.size()');
+      System.assertEquals(
+        'IDLE',
+        rows[0].get('status'),
+        'Unexpected value of rows[0].get(\'status\')'
+      );
+      System.assertNotEquals(
+        null,
+        result.get('asOfMs'),
+        'Unexpected value of result.get(\'asOfMs\')'
+      );
     }
   }
 

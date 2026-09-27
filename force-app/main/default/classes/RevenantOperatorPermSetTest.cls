@@ -354,7 +354,7 @@ public class RevenantOperatorPermSetTest {
   }
 
   /**
-   * A read-only operator can open the Rate Limits panel (#61). The panel uses the same
+   * @description A read-only operator can open the Rate Limits panel (#61). The panel uses the same
    * view gate as the other dashboard panels.
    */
   @IsTest
@@ -378,7 +378,11 @@ public class RevenantOperatorPermSetTest {
       Map<String, Object> result = WorkflowRateLimitController.getRateLimitStatus(
         'op'
       );
-      System.assertNotEquals(null, result.get('rows'));
+      System.assertNotEquals(
+        null,
+        result.get('rows'),
+        'Unexpected value of result.get(\'rows\')'
+      );
     }
   }
 }
