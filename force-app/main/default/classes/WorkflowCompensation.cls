@@ -203,7 +203,7 @@ public inherited sharing class WorkflowCompensation {
     Map<Id, Id> sourceById = resolveForwardSourceInstanceIds(
       activeById.keySet()
     );
-    Map<String, Workflow_Step_Execution__c> latestForward = latestForwardExecs(
+    Map<String, Workflow_Step_Execution__c> latestForward = WorkflowCompensationStepLog.latestExecs(
       new Set<Id>(sourceById.values()),
       new Set<String>(activeById.values())
     );
@@ -281,44 +281,6 @@ public inherited sharing class WorkflowCompensation {
       );
     }
     return sourceById;
-  }
-
-  // Latest forward step execution per (source instance | step name). Reads the
-  // light columns of every attempt first, then the payload of the latest only.
-  private static Map<String, Workflow_Step_Execution__c> latestForwardExecs(
-    Set<Id> sourceIds,
-    Set<String> stepNames
-  ) {
-    Map<String, Id> latestIdByKey = new Map<String, Id>();
-    for (Workflow_Step_Execution__c exec : [
-      SELECT Id, Workflow_Instance__c, Step_Name__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :sourceIds AND Step_Name__c IN :stepNames
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-    ]) {
-      String key = exec.Workflow_Instance__c + '|' + exec.Step_Name__c;
-      if (!latestIdByKey.containsKey(key)) {
-        latestIdByKey.put(key, exec.Id);
-      }
-    }
-    Map<String, Workflow_Step_Execution__c> latestByKey = new Map<String, Workflow_Step_Execution__c>();
-    if (latestIdByKey.isEmpty()) {
-      return latestByKey;
-    }
-    Set<Id> latestIds = new Set<Id>(latestIdByKey.values());
-    for (Workflow_Step_Execution__c exec : [
-      SELECT Workflow_Instance__c, Step_Name__c, Input__c, Output__c
-      FROM Workflow_Step_Execution__c
-      WHERE Id IN :latestIds
-      WITH SYSTEM_MODE
-    ]) {
-      latestByKey.put(
-        exec.Workflow_Instance__c + '|' + exec.Step_Name__c,
-        exec
-      );
-    }
-    return latestByKey;
   }
 
   // Builds the first Pending compensation step log, seeded from the latest

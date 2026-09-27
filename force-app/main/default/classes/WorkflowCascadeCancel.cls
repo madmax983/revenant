@@ -39,16 +39,6 @@ public inherited sharing class WorkflowCascadeCancel {
     'CompensationFailed'
   };
 
-  // Child states the cancel traversal walks through (WorkflowCancellation).
-  private static final Set<String> TRAVERSED_CHILD_STATUSES = new Set<String>{
-    'Pending',
-    'Running',
-    'Suspended',
-    'Cancelling',
-    'CompensationFailed',
-    'Paused'
-  };
-
   // Node Ids in one continuation event (about 45 KB of the 128 KB payload).
   private static final Integer CONTINUATION_CHUNK = 2000;
 
@@ -219,12 +209,13 @@ public inherited sharing class WorkflowCascadeCancel {
       return parentIds;
     }
     Set<Id> withChildren = new Set<Id>();
+    Set<String> activeStatuses = WorkflowCancellation.ACTIVE_CHILD_STATUSES;
     for (AggregateResult row : [
       SELECT Parent_Instance__c parentId
       FROM Workflow_Instance__c
       WHERE
         Parent_Instance__c IN :parentIds
-        AND Status__c IN :TRAVERSED_CHILD_STATUSES
+        AND Status__c IN :activeStatuses
       WITH SYSTEM_MODE
       GROUP BY Parent_Instance__c
     ]) {

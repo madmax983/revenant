@@ -30,13 +30,6 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     'ContinuedAsNew'
   };
 
-  // Terminal failure states that cancel in-flight descendants (issue #94).
-  private static final Set<String> CASCADE_FAILURE_STATUSES = new Set<String>{
-    'Failed',
-    'Compensated',
-    'CompensationFailed'
-  };
-
   private final List<Workflow_Instance__c> newInstances;
   private final Map<Id, Workflow_Instance__c> oldMap;
   private final Boolean isInsert;
@@ -80,7 +73,7 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     for (Workflow_Instance__c instance : newInstances) {
       Workflow_Instance__c oldInstance = oldMap.get(instance.Id);
       if (
-        CASCADE_FAILURE_STATUSES.contains(instance.Status__c) &&
+        WorkflowCascadeCancel.FAILURE_STATUSES.contains(instance.Status__c) &&
         instance.Status__c != oldInstance.Status__c
       ) {
         failedParentIds.add(instance.Id);

@@ -16,6 +16,19 @@
  * fully qualified. All SOQL/DML executes in system mode.
  */
 public inherited sharing class WorkflowCancellation {
+  /**
+   * @description Child states the descendant traversal walks through (the
+   * non-terminal states that a cancel can reach).
+   */
+  public static final Set<String> ACTIVE_CHILD_STATUSES = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Cancelling',
+    'CompensationFailed',
+    'Paused'
+  };
+
   private static final String CANCELLED_MESSAGE = 'Cancelled by user.';
   private static final String CANCELLING_MESSAGE = 'Cancelled by user. Compensating.';
 
@@ -144,14 +157,7 @@ public inherited sharing class WorkflowCancellation {
       FROM Workflow_Instance__c
       WHERE
         Parent_Instance__c IN :frontier
-        AND Status__c IN (
-          'Pending',
-          'Running',
-          'Suspended',
-          'Cancelling',
-          'CompensationFailed',
-          'Paused'
-        )
+        AND Status__c IN :ACTIVE_CHILD_STATUSES
       WITH SYSTEM_MODE
     ];
   }

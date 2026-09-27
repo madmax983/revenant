@@ -232,13 +232,14 @@ public inherited sharing class WorkflowCompensationStepLog {
   }
 
   /**
-   * Latest step execution per (instance | step name). Reads the light columns of
-   * every attempt first, then the payload of the latest only.
+   * @description Latest step execution per (instance | step name). Reads the
+   * light columns of every attempt first, then the payload of the latest only.
+   * Shared with WorkflowCompensation.preCreateFirstCompensationSteps.
    * @param instanceIds the instances to read
    * @param stepNames the step names to read
    * @return the latest execution by "instanceId|stepName"
    */
-  private static Map<String, Workflow_Step_Execution__c> latestExecs(
+  public static Map<String, Workflow_Step_Execution__c> latestExecs(
     Set<Id> instanceIds,
     Set<String> stepNames
   ) {
