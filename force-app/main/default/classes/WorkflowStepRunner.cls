@@ -35,6 +35,10 @@ public inherited sharing class WorkflowStepRunner {
     public Workflow_Step_Execution__c stepExec;
     public Integer stepVisit = 0;
     public String activeStepName;
+    // Auto-retry policy for thrown errors (issue #101). Null means fail fast.
+    public RetryPolicy autoRetryPolicy;
+    // Exception that execute() threw and the engine caught for auto-retry.
+    public Exception thrownError;
   }
 
   /**

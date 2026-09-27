@@ -48,12 +48,19 @@ public inherited sharing class WorkflowStepContext {
       // Persist the cleaned input back to the locked record so the engine marker
       // does not linger in the durable audit row (saved with the exec below).
       stepExec.Input__c = resolvedInput;
+      // A timeout fallback run does not auto-retry (issue #101): a retry loses
+      // the timeout marker. Clear the policy before max attempts is resolved.
+      ctx.autoRetryPolicy = null;
     }
 
     Integer attempt = stepExec.Retry_Count__c != null
       ? (Integer) stepExec.Retry_Count__c + 1
       : 1;
-    CaptureContext cc = resolveCaptureContext(stepInstance, stepExec);
+    CaptureContext cc = resolveCaptureContext(
+      stepInstance,
+      stepExec,
+      ctx.autoRetryPolicy
+    );
 
     StepContext.Builder contextBuilder = new StepContext.Builder()
       .instanceId(ctx.instanceId)
@@ -125,11 +132,13 @@ public inherited sharing class WorkflowStepContext {
       : 1;
   }
 
-  // Resolve the captured-values map and the effective max attempts (from a
-  // RetryConfigurable policy, or a persisted __maxAttempts, defaulting to 1).
+  // Resolve the captured-values map and the effective max attempts. Priority:
+  // persisted __maxAttempts (not for a RetryConfigurable step without an
+  // auto-retry policy), then RetryConfigurable, then auto-retry policy, then 1.
   private static CaptureContext resolveCaptureContext(
     WorkflowStep stepInstance,
-    Workflow_Step_Execution__c stepExec
+    Workflow_Step_Execution__c stepExec,
+    RetryPolicy autoRetryPolicy
   ) {
     CaptureContext cc = new CaptureContext();
     if (stepInstance instanceof RetryConfigurable) {
@@ -137,22 +146,28 @@ public inherited sharing class WorkflowStepContext {
         ((RetryConfigurable) stepInstance).getRetryPolicy()
       );
       cc.maxAttempts = policy.maximumAttempts;
+    } else if (autoRetryPolicy != null) {
+      cc.maxAttempts = WorkflowRetryScheduling.sanitizePolicy(autoRetryPolicy)
+        .maximumAttempts;
     }
-    applyCapturedValues(cc, stepInstance, stepExec);
+    // With an auto-retry policy, the persisted value is from the policy of the
+    // last retry, so it wins over RetryConfigurable (issue #101).
+    Boolean usePersisted =
+      !(stepInstance instanceof RetryConfigurable) || autoRetryPolicy != null;
+    applyCapturedValues(cc, usePersisted, stepExec);
     return cc;
   }
 
   /**
    * @description Merges the step's persisted captured-values map into the capture
-   * context and, for a non-RetryConfigurable step, adopts a persisted
-   * __maxAttempts override.
+   * context and, when allowed, adopts a persisted __maxAttempts override.
    * @param cc the capture context to populate
-   * @param stepInstance the step being executed
+   * @param usePersisted true to adopt a persisted __maxAttempts
    * @param stepExec the step execution row carrying Captured_Values__c
    */
   private static void applyCapturedValues(
     CaptureContext cc,
-    WorkflowStep stepInstance,
+    Boolean usePersisted,
     Workflow_Step_Execution__c stepExec
   ) {
     if (String.isBlank(stepExec.Captured_Values__c)) {
@@ -168,10 +183,7 @@ public inherited sharing class WorkflowStepContext {
       cc.capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
         resolvedCaptures
       );
-      if (
-        !(stepInstance instanceof RetryConfigurable) &&
-        cc.capturesMap.containsKey('__maxAttempts')
-      ) {
+      if (usePersisted && cc.capturesMap.containsKey('__maxAttempts')) {
         cc.maxAttempts = Integer.valueOf(cc.capturesMap.get('__maxAttempts'));
       }
     } catch (Exception ignored) {
