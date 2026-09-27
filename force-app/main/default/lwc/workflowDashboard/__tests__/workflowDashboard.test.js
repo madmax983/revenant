@@ -14,6 +14,7 @@ import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardControlle
 import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.redriveMatchingInstances";
 import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
+import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -134,6 +135,13 @@ jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getStorageFootprint",
   () => ({
     default: jest.fn(() => Promise.resolve(null)),
+  }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus",
+  () => ({
+    default: jest.fn(() => Promise.resolve({ asOfMs: 0, rows: [] })),
   }),
   { virtual: true },
 );
@@ -2505,5 +2513,220 @@ describe("c-workflow-dashboard workflow catalog", () => {
       ][0].criteria;
     expect(criteria.workflowName).toBe("PurchaseApprovalWorkflow");
     expect(criteria.status).toBe("Failed");
+  });
+});
+
+describe("c-workflow-dashboard rate limits panel (#61)", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  // Mounts the dashboard and opens the System Doctor view.
+  async function openDoctor() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  const RATE_LIMITS = {
+    asOfMs: Date.UTC(2026, 8, 27, 12, 0, 0),
+    rows: [
+      {
+        integrationKey: "StripeApi",
+        capacity: 10,
+        refillRatePerSecond: 2,
+        status: "THROTTLING",
+        availableTokens: 0.5,
+        secondsUntilNextToken: 1,
+      },
+      {
+        integrationKey: "SlackApi",
+        capacity: 5,
+        refillRatePerSecond: 1,
+        status: "AVAILABLE",
+        availableTokens: 3.4,
+        secondsUntilNextToken: null,
+      },
+      {
+        integrationKey: "LedgerApi",
+        capacity: 20,
+        refillRatePerSecond: 0.5,
+        status: "IDLE",
+        availableTokens: 20,
+        secondsUntilNextToken: null,
+      },
+    ],
+  };
+
+  it("loads rate limits when System Doctor opens, with a cache buster", async () => {
+    getRateLimitStatus.mockResolvedValueOnce(RATE_LIMITS);
+    await openDoctor();
+
+    expect(getRateLimitStatus).toHaveBeenCalledTimes(1);
+    const params = getRateLimitStatus.mock.calls[0][0];
+    expect(typeof params.cacheBuster).toBe("string");
+    expect(params.cacheBuster.length).toBeGreaterThan(0);
+  });
+
+  it("renders one row per key with config, live tokens and status", async () => {
+    getRateLimitStatus.mockResolvedValueOnce(RATE_LIMITS);
+    const element = await openDoctor();
+
+    const rows = element.shadowRoot.querySelectorAll(
+      '[data-id="rate-limit-row"]',
+    );
+    expect(rows.length).toBe(3);
+
+    const stripe = rows[0].textContent;
+    expect(stripe).toContain("StripeApi");
+    expect(stripe).toContain("Capacity 10");
+    expect(stripe).toContain("refill 2/s");
+    expect(stripe).toContain("0.50 / 10 tokens");
+
+    expect(rows[1].textContent).toContain("3.40 / 5 tokens");
+    expect(rows[2].textContent).toContain("20.00 / 20 tokens");
+  });
+
+  it("flags a throttling key with glyph, word and seconds to next token", async () => {
+    getRateLimitStatus.mockResolvedValueOnce(RATE_LIMITS);
+    const element = await openDoctor();
+
+    const rows = element.shadowRoot.querySelectorAll(
+      '[data-id="rate-limit-row"]',
+    );
+    const status = rows[0].querySelector('[data-id="rate-limit-status"]');
+    expect(status.textContent).toContain("Throttling");
+    expect(status.className).toContain("badge-orange");
+    const icon = rows[0].querySelector("lightning-icon");
+    expect(icon).not.toBeNull();
+    expect(icon.alternativeText).toBe("Throttling");
+    const next = rows[0].querySelector('[data-id="rate-limit-next"]');
+    expect(next.textContent).toContain("Next token in 1 s");
+
+    // Only throttling rows show a next-token hint.
+    expect(rows[1].querySelector('[data-id="rate-limit-next"]')).toBeNull();
+
+    const summary = element.shadowRoot.querySelector(
+      '[data-id="rate-limit-summary"]',
+    );
+    expect(summary.textContent).toContain("1 throttling");
+  });
+
+  it("renders a never-used key as Idle at full capacity", async () => {
+    getRateLimitStatus.mockResolvedValueOnce(RATE_LIMITS);
+    const element = await openDoctor();
+
+    const idle = element.shadowRoot.querySelectorAll(
+      '[data-id="rate-limit-row"]',
+    )[2];
+    const status = idle.querySelector('[data-id="rate-limit-status"]');
+    expect(status.textContent).toContain("Idle");
+    expect(status.className).toContain("badge-grey");
+    expect(idle.textContent).toContain("Not used yet");
+    expect(idle.textContent).toContain("20.00 / 20 tokens");
+  });
+
+  it("renders Available and Invalid config states with a word, not colour only", async () => {
+    getRateLimitStatus.mockResolvedValueOnce({
+      asOfMs: 0,
+      rows: [
+        {
+          integrationKey: "BrokenApi",
+          capacity: 0,
+          refillRatePerSecond: 1,
+          status: "INVALID",
+          availableTokens: null,
+          secondsUntilNextToken: null,
+        },
+        RATE_LIMITS.rows[1],
+      ],
+    });
+    const element = await openDoctor();
+
+    const rows = element.shadowRoot.querySelectorAll(
+      '[data-id="rate-limit-row"]',
+    );
+    const broken = rows[0].querySelector('[data-id="rate-limit-status"]');
+    expect(broken.textContent).toContain("Invalid config");
+    expect(broken.className).toContain("badge-red");
+    expect(rows[0].textContent).toContain("— / 0 tokens");
+    const ok = rows[1].querySelector('[data-id="rate-limit-status"]');
+    expect(ok.textContent).toContain("Available");
+    expect(ok.className).toContain("badge-green");
+  });
+
+  it("shows the empty state when no rate limit is configured", async () => {
+    getRateLimitStatus.mockResolvedValueOnce({ asOfMs: 0, rows: [] });
+    const element = await openDoctor();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-empty"]'),
+    ).not.toBeNull();
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="rate-limit-row"]').length,
+    ).toBe(0);
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-error"]'),
+    ).toBeNull();
+  });
+
+  it("shows an unavailable state with the reason when the call fails", async () => {
+    getRateLimitStatus.mockRejectedValueOnce({
+      body: {
+        message:
+          "Unauthorized: Access to the Workflow Dashboard is restricted.",
+      },
+    });
+    const element = await openDoctor();
+
+    const error = element.shadowRoot.querySelector(
+      '[data-id="rate-limit-error"]',
+    );
+    expect(error).not.toBeNull();
+    expect(error.textContent).toContain("Rate limit status is not available.");
+    expect(error.textContent).toContain("Unauthorized");
+    // Unknown is never shown as healthy or empty.
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-empty"]'),
+    ).toBeNull();
+  });
+
+  it("treats a missing response as unavailable, not as empty", async () => {
+    getRateLimitStatus.mockResolvedValueOnce(undefined);
+    const element = await openDoctor();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-error"]'),
+    ).not.toBeNull();
+    expect(
+      element.shadowRoot.querySelector('[data-id="rate-limit-empty"]'),
+    ).toBeNull();
+  });
+
+  it("reloads with a new cache buster on Refresh Status", async () => {
+    getRateLimitStatus.mockResolvedValue(RATE_LIMITS);
+    const element = await openDoctor();
+
+    findButton(element, (btn) => btn.label === "Refresh Status").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+
+    expect(getRateLimitStatus).toHaveBeenCalledTimes(2);
+    const first = getRateLimitStatus.mock.calls[0][0].cacheBuster;
+    const second = getRateLimitStatus.mock.calls[1][0].cacheBuster;
+    expect(second).not.toBe(first);
   });
 });
