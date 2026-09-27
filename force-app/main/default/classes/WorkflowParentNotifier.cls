@@ -124,16 +124,13 @@ public inherited sharing class WorkflowParentNotifier {
         'errorMessage' => child.Error_Message__c != null
           ? child.Error_Message__c.left(10000)
           : null,
-        // Decode an inline envelope so the wrapper does not nest one. The
-        // save below encodes the whole wrapper again.
-        'output' => WorkflowPayloadCodecs.decode(child.Output__c)
+        // The stored form, not plaintext: nothing decoded goes on the event
+        // bus. The parent decodes it only after it checks the child record.
+        'output' => child.Output__c
       };
       payload = WorkflowPayloadOffload.savePayloadIfNeeded(
         parent.Id,
-        WorkflowPayloadCodecs.encode(
-          JSON.serialize(outcomeData),
-          CodecContext.PayloadKind.SIGNAL_PAYLOAD
-        ),
+        JSON.serialize(outcomeData),
         'ChildFailedOutcome_' + child.Id
       );
     }

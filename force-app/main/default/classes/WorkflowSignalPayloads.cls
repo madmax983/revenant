@@ -7,27 +7,17 @@
  */
 public inherited sharing class WorkflowSignalPayloads {
   private static final Integer INLINE_LIMIT = 100000;
-  // Engine child-completion signals carry the child's stored output.
-  private static final Set<String> STORED_FORM_PREFIXES = new Set<String>{
-    'ChildCompleted:',
-    'ChildFailed:'
-  };
 
   /**
-   * @description Encodes a signal payload for storage. A child-completion
-   * signal keeps the stored form that the engine sent. All other payloads are
-   * external input, so they are always encoded.
-   * @param signalName the signal name
+   * @description Encodes a signal payload for storage. Every signal payload is
+   * external input, so it is always encoded, also when it looks like an
+   * envelope. A child-completion payload is the child's stored output. The
+   * parent decodes it again only after it checks the child record (see
+   * StepChildOutcomes), so a forged signal cannot decrypt ciphertext.
    * @param payload the signal payload
    * @return the stored form
    */
-  public static String encode(String signalName, String payload) {
-    if (isChildOutcome(signalName)) {
-      return WorkflowPayloadCodecs.encodeStored(
-        payload,
-        CodecContext.PayloadKind.SIGNAL_PAYLOAD
-      );
-    }
+  public static String encode(String payload) {
     return WorkflowPayloadCodecs.encode(
       payload,
       CodecContext.PayloadKind.SIGNAL_PAYLOAD
@@ -103,15 +93,6 @@ public inherited sharing class WorkflowSignalPayloads {
     if (!docIds.isEmpty()) {
       Database.delete(new List<Id>(docIds), false, AccessLevel.SYSTEM_MODE);
     }
-  }
-
-  private static Boolean isChildOutcome(String signalName) {
-    for (String prefix : STORED_FORM_PREFIXES) {
-      if (signalName != null && signalName.startsWith(prefix)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private static List<ContentVersion> insertFiles(

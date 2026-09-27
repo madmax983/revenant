@@ -8,9 +8,9 @@
  * passes through unchanged, so rows written before the codec stay readable.
  * The identity codec adds no envelope, so stored bytes do not change.
  *
- * `encode` always encodes non-blank external input, also when the input looks
- * like an envelope. Only engine copy paths call `encodeStored`, which keeps a
- * stored form unchanged.
+ * `encode` always encodes non-blank input, also when the input looks like an
+ * envelope. Engine copy paths copy stored forms field to field and do not call
+ * `encode`.
  *
  * The engine does not encode control values: offload markers
  * (`{"$attachmentId":...}`), wait markers, status, compensation stack, keys and
@@ -88,22 +88,6 @@ public inherited sharing class WorkflowPayloadCodecs {
   }
 
   /**
-   * @description Encodes a value that can already be a stored form. An engine
-   * copy path uses it, for example a child output that becomes a signal
-   * payload. A valid envelope stays unchanged. Other values go to
-   * {@link #encode}.
-   * @param value the plaintext or stored form
-   * @param kind the payload class for plaintext
-   * @return the stored form
-   */
-  public static String encodeStored(
-    String value,
-    CodecContext.PayloadKind kind
-  ) {
-    return isEncoded(value) ? value : encode(value, kind);
-  }
-
-  /**
    * @description Decodes a stored value. Returns the value unchanged when it
    * has no valid envelope. This method is read-only.
    * @param stored the stored field value or offload file text
@@ -136,15 +120,16 @@ public inherited sharing class WorkflowPayloadCodecs {
   }
 
   /**
-   * @description Estimates whether the engine can offload a payload. A payload
-   * codec makes the stored text larger, so the estimate assumes up to 2x growth
-   * when a codec is active. Use it for DML reserve estimates.
+   * @description Estimates whether the engine can offload a payload. Use it for
+   * DML reserve estimates. A codec can make the stored text much larger, and
+   * {@link PayloadCodec} sets no limit on the growth. So with a codec, every
+   * non-blank payload counts. A high estimate only drops best-effort rows.
    * @param payload the plaintext payload
    * @return true when the payload can go to a file
    */
   public static Boolean mayOffload(String payload) {
-    Integer limitChars = WorkflowPayloadCodecs.isIdentity() ? 100000 : 50000;
-    return String.isNotBlank(payload) && payload.length() > limitChars;
+    return String.isNotBlank(payload) &&
+      (!isIdentity() || payload.length() > 100000);
   }
 
   /**

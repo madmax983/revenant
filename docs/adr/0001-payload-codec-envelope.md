@@ -22,8 +22,10 @@ add-on. An ISV cannot assume that a subscriber org has it.
    status rehydrators. Most engine paths already use these seams.
 4. Wrap codec output in an engine envelope:
    `{"$codec":"<KIND>","data":"..."}`. The identity codec adds no envelope.
-5. Always encode external input, also input that looks like an envelope. Only
-   engine copy paths (child-completion signals) keep a stored form.
+5. Always encode external input, also input that looks like an envelope. A
+   signal name gives no trust. A child-completion payload is decoded again
+   only when it is exactly the output of a child of the reading instance
+   (`WorkflowChildPayloadProvenance`).
 6. Do not encode control data: offload markers, engine wait markers, status,
    compensation stack, keys and timestamps.
 7. Fail closed. Misconfiguration, a config read failure or a missing codec
@@ -33,8 +35,7 @@ add-on. An ISV cannot assume that a subscriber org has it.
 ## Why an envelope
 
 - The engine can tell encoded values from legacy plaintext rows.
-- Engine copies of stored values (for example, a child output that becomes a
-  signal payload) do not get a second encode.
+- Engine copies of stored values between fields do not get a second encode.
 - `decode` gets the same kind as `encode`, from the envelope.
 - The envelope is valid JSON, so JSON readers do not fail on it.
 

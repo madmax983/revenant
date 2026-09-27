@@ -211,14 +211,6 @@ private class WorkflowPayloadCodecsTest {
         'A replayed envelope decodes to its own text, not to plaintext'
       );
       System.assertEquals(
-        once,
-        WorkflowPayloadCodecs.encodeStored(
-          once,
-          CodecContext.PayloadKind.STEP_OUTPUT
-        ),
-        'Engine copies keep the stored form'
-      );
-      System.assertEquals(
         marker,
         WorkflowPayloadCodecs.encode(
           marker,
@@ -458,7 +450,7 @@ private class WorkflowPayloadCodecsTest {
       Workflow_Signal__c row = new Workflow_Signal__c(
         Workflow_Instance__c = inst.Id,
         Signal_Name__c = 'Go',
-        Payload__c = WorkflowSignalPayloads.encode('Go', big)
+        Payload__c = WorkflowSignalPayloads.encode(big)
       );
 
       WorkflowSignalPayloads.offloadOversized(
@@ -485,16 +477,13 @@ private class WorkflowPayloadCodecsTest {
           new Workflow_Signal__c(
             Workflow_Instance__c = inst.Id,
             Signal_Name__c = 'Go',
-            Payload__c = WorkflowSignalPayloads.encode('Go', plain)
+            Payload__c = WorkflowSignalPayloads.encode(plain)
           )
         );
       }
       Workflow_Signal__c unowned = new Workflow_Signal__c(
         Signal_Name__c = 'Go',
-        Payload__c = WorkflowSignalPayloads.encode(
-          'Go',
-          '{"ssn":"' + SECRET + '"}'
-        )
+        Payload__c = WorkflowSignalPayloads.encode('{"ssn":"' + SECRET + '"}')
       );
       rows.add(unowned);
 
@@ -528,7 +517,7 @@ private class WorkflowPayloadCodecsTest {
       Workflow_Signal__c row = new Workflow_Signal__c(
         Workflow_Instance__c = inst.Id,
         Signal_Name__c = 'Lost',
-        Payload__c = WorkflowSignalPayloads.encode('Lost', 'L'.repeat(100001))
+        Payload__c = WorkflowSignalPayloads.encode('L'.repeat(100001))
       );
       WorkflowSignalPayloads.offloadOversized(
         new List<Workflow_Signal__c>{ row }
@@ -548,7 +537,7 @@ private class WorkflowPayloadCodecsTest {
   }
 
   @IsTest
-  static void childSignalsKeepStoredForm() {
+  static void signalPayloadsAlwaysEncode() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowPayloadCodecs.setCodec(new AesCodec());
       String childOutput = WorkflowPayloadCodecs.encode(
@@ -556,16 +545,68 @@ private class WorkflowPayloadCodecsTest {
         CodecContext.PayloadKind.STEP_OUTPUT
       );
 
-      System.assertEquals(
-        childOutput,
-        WorkflowSignalPayloads.encode('ChildCompleted:k1', childOutput),
-        'Child output is already stored'
-      );
+      String stored = WorkflowSignalPayloads.encode(childOutput);
+
       System.assertNotEquals(
         childOutput,
-        WorkflowSignalPayloads.encode('Approve', childOutput),
-        'Other signals always encode'
+        stored,
+        'The signal name gives no trust: every payload is encoded'
       );
+      System.assertEquals(childOutput, WorkflowPayloadCodecs.decode(stored));
+    }
+  }
+
+  @IsTest
+  static void childPayloadDecodesOnlyWhenItIsTheChildOutput() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      Workflow_Instance__c parent = insertInstance();
+      Workflow_Instance__c child = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowPayloadCodecsTest.Stub',
+        Correlation_Key__c = 'child-key-1',
+        Status__c = 'Completed',
+        Parent_Instance__c = parent.Id,
+        Output__c = WorkflowPayloadCodecs.encode(
+          '{"child":1}',
+          CodecContext.PayloadKind.STEP_OUTPUT
+        )
+      );
+      insert as system child;
+      Workflow_Signal__c sig = new Workflow_Signal__c(
+        Workflow_Instance__c = parent.Id,
+        Signal_Name__c = 'ChildCompleted:child-key-1',
+        Status__c = 'Received'
+      );
+      insert as system sig;
+      String forged = WorkflowPayloadCodecs.encode(
+        '{"ssn":"' + SECRET + '"}',
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      );
+
+      List<String> trusted = WorkflowChildPayloadProvenance.trustedOnly(
+        new List<String>{ child.Output__c, forged, '{"plain":true}' },
+        new List<Id>{ sig.Id, sig.Id, sig.Id },
+        new List<String>{ 'CHILD-KEY-1', 'child-key-1', 'child-key-1' }
+      );
+
+      System.assertEquals(child.Output__c, trusted[0], 'The real output');
+      System.assertEquals(null, trusted[1], 'A forged envelope is not trusted');
+      System.assertEquals('{"plain":true}', trusted[2], 'Plaintext passes');
+    }
+  }
+
+  @IsTest
+  static void childPayloadCheckDoesNoQueryForPlaintext() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
+      Integer queriesBefore = Limits.getQueries();
+      List<String> trusted = WorkflowChildPayloadProvenance.trustedOnly(
+        new List<String>{ '{"a":1}' },
+        new List<Id>{ null },
+        new List<String>{ 'k' }
+      );
+      System.assertEquals('{"a":1}', trusted[0]);
+      System.assertEquals(queriesBefore, Limits.getQueries(), 'No query');
     }
   }
 
@@ -624,6 +665,22 @@ private class WorkflowPayloadCodecsTest {
         WorkflowPayloadOffload.resolveControlPayload(encoded),
         'Operator views do not decode author state'
       );
+    }
+  }
+
+  @IsTest
+  static void mayOffloadCountsEveryPayloadWithCodec() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
+      System.assert(!WorkflowPayloadCodecs.mayOffload('{"a":1}'));
+      System.assert(WorkflowPayloadCodecs.mayOffload('x'.repeat(100001)));
+
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      System.assert(
+        WorkflowPayloadCodecs.mayOffload('{"a":1}'),
+        'Codec growth has no limit, so reserve for any payload'
+      );
+      System.assert(!WorkflowPayloadCodecs.mayOffload(''));
     }
   }
 

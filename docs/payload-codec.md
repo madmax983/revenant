@@ -117,6 +117,11 @@ check stored text must also resolve it first.
 `StepContext`, `ctx.signals()`, `getStatus`, the status Flow action and
 `WorkflowTestHarness` already give decoded payloads.
 
+Read child results with `ctx.signals().getChildOutcome(key)`. With a codec, a
+raw `getSignal('ChildCompleted:<key>').payload` gives the child's stored
+(encoded) output. `getChildOutcome` decodes it only after it checks that the
+value is the output of a child of this instance.
+
 ## Stored form
 
 The engine wraps codec output in an envelope:
@@ -131,6 +136,9 @@ The engine wraps codec output in an envelope:
 - The engine encodes all external input, also input that looks like an
   envelope. If a user copies ciphertext into a signal or a start input, the
   step gets the copied text, not the plaintext.
+- A signal name gives no trust. A forged `ChildCompleted:<key>` signal with
+  copied ciphertext is not decoded, because the value is not the output of a
+  child of the reading instance.
 - Do not start a payload with `{"$codec":` or `{"$attachmentId":`. The engine
   reads these as stored forms. With the identity codec, a value in the exact
   envelope shape cannot be read.

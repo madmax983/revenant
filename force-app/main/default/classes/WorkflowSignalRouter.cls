@@ -284,7 +284,7 @@ public inherited sharing class WorkflowSignalRouter {
     Workflow_Signal__c sig = new Workflow_Signal__c();
     sig.Workflow_Instance__c = instance.Id;
     sig.Signal_Name__c = req.signalName;
-    sig.Payload__c = WorkflowSignalPayloads.encode(req.signalName, req.payload);
+    sig.Payload__c = WorkflowSignalPayloads.encode(req.payload);
     sig.Status__c = 'Received';
 
     if (String.isNotBlank(req.idempotencyKey)) {

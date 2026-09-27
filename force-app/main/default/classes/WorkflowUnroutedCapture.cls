@@ -67,7 +67,7 @@ public inherited sharing class WorkflowUnroutedCapture {
         Correlation_Key__c = req.keyOrId,
         Signal_Name__c = req.signalName,
         // No owner instance exists yet. The encoded payload stays inline.
-        Payload__c = WorkflowSignalPayloads.encode(req.signalName, req.payload),
+        Payload__c = WorkflowSignalPayloads.encode(req.payload),
         Status__c = 'Unrouted'
       );
       String dedupVal;
