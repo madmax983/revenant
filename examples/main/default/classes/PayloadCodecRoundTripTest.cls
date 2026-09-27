@@ -7,11 +7,32 @@
  * resolved output. They must be the same.
  *
  * Each run uses its own correlation key, so start dedup does not join the runs.
- * The AES run also reads the stored root Output__c. It must be an envelope, not
- * the plaintext output.
+ * The AES run also reads the stored root Output__c and Input__c. They must be
+ * envelopes, not plaintext. The identity run runs before Test.startTest(), and
+ * the AES run runs in it, so each run has its own governor limits.
  *
- * Not covered here: RevenantCursorFanoutExample. Its dependency is not in this
- * checkout.
+ * Some scenarios also compare a detail text: the resolved root input, the
+ * error message and each step payload, in audit order.
+ *
+ * Not covered here:
+ * - RevenantCursorFanoutExample. Its dependency is not in this checkout.
+ * - CalloutTimeoutWorkflowExampleTest: testCalloutSuccess,
+ *   testCalloutFailureAndRetry, testAsyncCalloutJobAndFinalizerDirectly. They
+ *   need Test.stopTest() to run a Queueable, and a method can call it one time
+ *   only. The harness scenarios below use the same resume paths.
+ *   testTimeoutTriggersSagaCompensation writes a compensation stack of a
+ *   different workflow on the instance. It is not a real run.
+ * - CircuitBreakerWorkflowExampleTest runStep tests, and
+ *   SagaStalledRollbackExampleTest.testResumeCompensationIsIdempotent. They
+ *   insert instance rows by hand, with no payloads.
+ * - PatchExampleWorkflowTest: the mocked-date variants and the adoption count
+ *   test. They use the same payload paths as the patch scenarios below.
+ * - ParallelSignalFanInWorkflowExampleTest: the partial and case-variant ack
+ *   tests. They drive one branch through WorkflowOrchestrator. The full-set
+ *   scenario below uses the same signal payloads.
+ * - Tests with no workflow run, or that stop at the first suspend: the ReAct
+ *   parser tests, the unknown-tool ReAct test, the trigger bridge bulk and
+ *   inactive-process tests, and the Opportunity non-Closed-Won test.
  */
 @IsTest
 private class PayloadCodecRoundTripTest {
@@ -47,6 +68,11 @@ private class PayloadCodecRoundTripTest {
     List<String> completedSteps;
     List<String> compensatedSteps;
     String output;
+    // Resolved input, error and step payloads. Null when not recorded.
+    String detail;
+  }
+
+  private class CodecTestException extends Exception {
   }
 
   // ─── helpers ────────────────────────────────────────────────────────────
@@ -71,20 +97,109 @@ private class PayloadCodecRoundTripTest {
     return s;
   }
 
-  // Replaces run-specific values (key, instance Id, masked fields) with
-  // placeholders, so two runs can have the same output text. It also sorts
-  // the JSON keys, because a child query can return rows in a different order.
+  // Also records the detail text. Each record Id changes to a placeholder.
+  private static Snapshot snap(
+    WorkflowTestHarness.Result result,
+    String key,
+    Set<String> maskedKeys,
+    List<Id> recordIds
+  ) {
+    Snapshot s = snap(result, key, maskedKeys);
+    List<String> values = tokens(key, result.instanceId, recordIds);
+    s.output = normalize(result.output, values, maskedKeys);
+    s.detail = detail(result.instanceId, values, maskedKeys);
+    return s;
+  }
+
+  // Joins the resolved root input, the error message and each step payload.
+  private static String detail(
+    Id instanceId,
+    List<String> values,
+    Set<String> maskedKeys
+  ) {
+    Workflow_Instance__c inst = [
+      SELECT Input__c, Error_Message__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+    ];
+    List<Workflow_Step_Execution__c> execs = [
+      SELECT Step_Name__c, Status__c, Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+    List<String> raw = new List<String>{ inst.Input__c };
+    for (Workflow_Step_Execution__c exec : execs) {
+      raw.add(exec.Output__c);
+    }
+    List<String> resolved = WorkflowPayloadOffload.resolvePayloads(raw);
+    List<String> lines = new List<String>{
+      'input: ' + normalize(resolved[0], values, maskedKeys),
+      'error: ' + normalize(inst.Error_Message__c, values, maskedKeys)
+    };
+    for (Integer i = 0; i < execs.size(); i++) {
+      lines.add(
+        execs[i].Step_Name__c +
+          ' ' +
+          execs[i].Status__c +
+          ': ' +
+          normalize(resolved[i + 1], values, maskedKeys)
+      );
+    }
+    return String.join(lines, '\n');
+  }
+
+  // Run-specific values, in replace order. The instance Id and the key come
+  // first, because a key can contain a record Id.
+  private static List<String> tokens(
+    String key,
+    Id instanceId,
+    List<Id> recordIds
+  ) {
+    List<String> values = new List<String>{ String.valueOf(instanceId), key };
+    for (Id recordId : recordIds) {
+      values.add(String.valueOf(recordId));
+    }
+    return values;
+  }
+
+  private static String placeholder(Integer index) {
+    if (index == 0) {
+      return '<instanceId>';
+    }
+    return index == 1 ? '<key>' : '<record' + (index - 2) + '>';
+  }
+
   private static String normalize(
     String output,
     String key,
     Id instanceId,
     Set<String> maskedKeys
   ) {
+    return normalize(
+      output,
+      tokens(key, instanceId, new List<Id>()),
+      maskedKeys
+    );
+  }
+
+  // Replaces run-specific values (key, instance Id, record Ids, masked fields)
+  // with placeholders, so two runs can have the same output text. It also sorts
+  // the JSON keys, because a child query can return rows in a different order.
+  private static String normalize(
+    String output,
+    List<String> values,
+    Set<String> maskedKeys
+  ) {
     if (String.isBlank(output)) {
       return output;
     }
-    String text = output.replace(String.valueOf(instanceId), '<instanceId>')
-      .replace(key, '<key>');
+    String text = output;
+    for (Integer i = 0; i < values.size(); i++) {
+      text = text.replace(values[i], placeholder(i));
+    }
     Object data;
     try {
       data = JSON.deserializeUntyped(text);
@@ -144,9 +259,49 @@ private class PayloadCodecRoundTripTest {
       encoded.output,
       'Resolved output must not change with the codec'
     );
+    System.assertEquals(
+      identity.detail,
+      encoded.detail,
+      'Resolved input, error and step payloads must not change with the codec'
+    );
     System.assert(aes.encodeCount > 0, 'The AES run must use the codec');
     assertStoredOutput(identity, false);
     assertStoredOutput(encoded, true);
+    assertStoredInput(identity, false);
+    assertStoredInput(encoded, true);
+  }
+
+  // Checks the stored root Input__c. It does not check an offload marker.
+  private static void assertStoredInput(Snapshot s, Boolean expectEncoded) {
+    String stored = [
+      SELECT Input__c
+      FROM Workflow_Instance__c
+      WHERE Id = :s.instanceId
+      WITH SYSTEM_MODE
+    ]
+    .Input__c;
+    if (String.isBlank(stored) || stored.startsWith('{"$attachmentId":')) {
+      return;
+    }
+    System.assertEquals(
+      expectEncoded,
+      WorkflowPayloadCodecs.isEncoded(stored),
+      (expectEncoded
+        ? 'The AES run must store an encoded input, got: '
+        : 'The identity run must store a plaintext input, got: ') + stored
+    );
+  }
+
+  // Returns the one instance with this correlation key.
+  private static Id instanceIdFor(String key) {
+    List<Workflow_Instance__c> rows = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = :key
+      WITH SYSTEM_MODE
+    ];
+    System.assertEquals(1, rows.size(), 'One instance must have key ' + key);
+    return rows[0].Id;
   }
 
   // Compares the stored root Output__c with the resolved output.
@@ -534,6 +689,545 @@ private class PayloadCodecRoundTripTest {
     );
   }
 
+  // Source: CalloutTimeoutWorkflowExampleTest (async callout path). The step
+  // suspends. The finalizer resumes it with an error, so the step retries and
+  // suspends again. Then the callout job resumes it with the 200 response.
+  private static Snapshot runCalloutAsyncResume(
+    PayloadCodec codec,
+    String key
+  ) {
+    useCodec(codec);
+    CalloutTimeoutWorkflowExample.forceAsyncInTest = true;
+    Id instanceId = WorkflowEngine.start(
+      'CalloutTimeoutWorkflowExample.CalloutWorkflow',
+      key,
+      new Map<String, Object>{ 'endpoint' => 'https://httpbin.org/status/200' }
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    System.assertEquals('Suspended', harness.drive().status);
+
+    new CalloutTimeoutWorkflowExample.ResumeFinalizer(instanceId)
+      .handleResult(
+        System.ParentJobResult.UNHANDLED_EXCEPTION,
+        new CodecTestException('async job died')
+      );
+    System.assertEquals(
+      'Suspended',
+      harness.drive().status,
+      'The retry must suspend for a new callout'
+    );
+
+    WorkflowResumeService.resumeInstance(
+      instanceId,
+      JSON.serialize(
+        new Map<String, Object>{
+          'status' => 200,
+          'body' => '{"success": true}'
+        }
+      )
+    );
+    return snap(harness.drive(), key, new Set<String>(), new List<Id>());
+  }
+
+  // Source: CalloutTimeoutWorkflowExampleTest (watchdog timeout). The harness
+  // fires the shipped timeout job. It does not write the status by hand.
+  private static Snapshot runCalloutTimeout(PayloadCodec codec, String key) {
+    useCodec(codec);
+    Id instanceId = WorkflowEngine.start(
+      'CalloutTimeoutWorkflowExample.CalloutWorkflow',
+      key,
+      new Map<String, Object>{ 'endpoint' => 'https://httpbin.org/status/500' }
+    );
+    return snap(
+      new WorkflowTestHarness(instanceId)
+        .fireTimeout('CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'),
+      key,
+      new Set<String>(),
+      new List<Id>()
+    );
+  }
+
+  // Source: CaseDebounceTriggerHandlerTest. Three Case edits start one
+  // instance. The key has the Case Id, so each run has its own key.
+  private static Snapshot runCaseDebounce(PayloadCodec codec) {
+    useCodec(codec);
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.mockNow = Datetime.now();
+    Case c = new Case(
+      Subject = 'Initial Subject',
+      Description = 'Initial Description'
+    );
+    insert c;
+    for (
+      String subject : new List<String>{ 'Edit 1', 'Edit 2', 'Final Edit' }
+    ) {
+      c.Subject = subject;
+      update c;
+    }
+    WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(6);
+    WorkflowEngine.processWatchdogHeartbeat();
+    WorkflowEngine.mockNow = null;
+
+    String key = 'Case_Debounce_' + c.Id;
+    return snap(
+      new WorkflowTestHarness(instanceIdFor(key)).drive(),
+      key,
+      new Set<String>(),
+      new List<Id>{ c.Id }
+    );
+  }
+
+  // Source: CircuitBreakerWorkflowExampleTest (started fleet). Two failures
+  // open the breaker, the next instance parks, and a half-open probe completes
+  // it. Each run starts with no breaker state.
+  private static Snapshot runCircuitBreaker(PayloadCodec codec, String key) {
+    useCodec(codec);
+    CircuitBreakerWorkflowExample.reset();
+    CircuitBreakerGate.mockConfigs.put(
+      CircuitBreakerWorkflowExample.DEPENDENCY_KEY,
+      (Circuit_Breaker_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"ExternalPaymentsApi","Failure_Threshold__c":2,' +
+          '"Rolling_Window_Seconds__c":300,"Open_Duration_Seconds__c":30,' +
+          '"Half_Open_Probe_Count__c":1}',
+        Circuit_Breaker_Config__mdt.class
+      )
+    );
+    delete as system [
+      SELECT Id
+      FROM Circuit_Breaker_State__c
+      WITH SYSTEM_MODE
+    ];
+
+    String wf = 'CircuitBreakerWorkflowExample.CircuitBreakerWorkflow';
+    Id trip1 = WorkflowEngine.start(wf, key + '-trip1', null);
+    Id trip2 = WorkflowEngine.start(wf, key + '-trip2', null);
+    Id parked = WorkflowEngine.start(wf, key, null);
+    System.assertEquals(
+      'Failed',
+      new WorkflowTestHarness(trip1).drive().status
+    );
+    System.assertEquals(
+      'Failed',
+      new WorkflowTestHarness(trip2).drive().status
+    );
+
+    WorkflowTestHarness harness = new WorkflowTestHarness(parked);
+    harness.disableAutoTimeSkip = true;
+    System.assert(
+      harness.drive().isSleeping,
+      'The open breaker must park the instance'
+    );
+
+    // The dependency heals, the open time ends and the sleep is due.
+    CircuitBreakerWorkflowExample.dependencyHealthy = true;
+    Circuit_Breaker_State__c breaker = [
+      SELECT Id
+      FROM Circuit_Breaker_State__c
+      WHERE Dependency_Key__c = :CircuitBreakerWorkflowExample.DEPENDENCY_KEY
+      WITH SYSTEM_MODE
+    ];
+    breaker.Opened_At__c = Datetime.now().addSeconds(-120);
+    update as system breaker;
+    Workflow_Instance__c sleeper = new Workflow_Instance__c(
+      Id = parked,
+      Sleep_Until__c = Datetime.now().addSeconds(-60)
+    );
+    update as system sleeper;
+
+    harness.disableAutoTimeSkip = false;
+    WorkflowEngine.processWatchdogHeartbeat();
+    return snap(harness.drive(), key, new Set<String>(), new List<Id>());
+  }
+
+  // Source: DeadlineWorkflowExampleTest. The step suspends with a step state.
+  // The watchdog fails the instance after the deadline.
+  private static Snapshot runDeadline(PayloadCodec codec, String key) {
+    useCodec(codec);
+    WorkflowEngine.disableQueueableInTest = true;
+    Id instanceId = WorkflowEngine.start('DeadlineWorkflowExample', key, null);
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    System.assertEquals('Suspended', harness.drive().status);
+
+    Workflow_Instance__c inst = [
+      SELECT Id, Deadline_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+    ];
+    System.assertNotEquals(null, inst.Deadline_At__c);
+    inst.Deadline_At__c = Datetime.now().addSeconds(-15);
+    update as system inst;
+    WorkflowEngine.processWatchdogHeartbeat();
+    return snap(harness.inspect(), key, new Set<String>(), new List<Id>());
+  }
+
+  // Source: EventAggregationWorkflowExampleTest. Three events go to one
+  // instance through signalOrStart. The step state keys are signal Ids, so
+  // this scenario does not record the detail text.
+  private static Snapshot runEventAggregation(PayloadCodec codec, String key) {
+    useCodec(codec);
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.StartRequest startReq = new WorkflowEngine.StartRequest(
+      'EventAggregationWorkflowExample',
+      key,
+      null
+    );
+    Id instanceId;
+    List<String> items = new List<String>{ '"Item-A"', '"Item-B"', '"Item-C"' };
+    for (Integer i = 0; i < items.size(); i++) {
+      instanceId = WorkflowEngine.signalOrStart(
+          new WorkflowEngine.SignalOrStartRequest(
+              startReq,
+              EventAggregationWorkflowExample.EVENT_SIGNAL,
+              items[i]
+            )
+            .withIdempotencyKey(key + '-E' + i)
+        )
+        .instanceId;
+      WorkflowEngine.runStep(instanceId);
+    }
+    // The third event completes the accumulate step. Run the batch step.
+    WorkflowEngine.runStep(instanceId);
+    return snap(
+      new WorkflowTestHarness(instanceId).inspect(),
+      key,
+      new Set<String>()
+    );
+  }
+
+  // Source: IncrementalSyncWorkflowExampleTest. The snapshot joins the status
+  // of two runs. The detail text is from the first run, because the second
+  // run count depends on the clock.
+  private static Snapshot runIncrementalSync(PayloadCodec codec, String key) {
+    useCodec(codec);
+    IncrementalSyncWorkflowExample.coldStartLookbackHours = 1;
+    Id run1Id = WorkflowEngine.start(
+      'IncrementalSyncWorkflowExample.SyncPollerWorkflow',
+      key,
+      null
+    );
+    Snapshot s = snap(
+      new WorkflowTestHarness(run1Id).drive(),
+      key,
+      new Set<String>{ 'since' },
+      new List<Id>()
+    );
+    Workflow_Instance__c run2 = [
+      SELECT Id, Previous_Run_At__c
+      FROM Workflow_Instance__c
+      WHERE Previous_Instance__c = :run1Id
+      WITH SYSTEM_MODE
+    ];
+    System.assertNotEquals(null, run2.Previous_Run_At__c);
+    s.status += '>' + new WorkflowTestHarness(run2.Id).drive().status;
+    return s;
+  }
+
+  // Source: NativeApprovalWorkflowExampleTest. Approve, or reject with a
+  // redelivered decision signal.
+  private static Snapshot runNativeApproval(
+    PayloadCodec codec,
+    String key,
+    Boolean approve
+  ) {
+    useCodec(codec);
+    Id instanceId = WorkflowEngine.start(
+      'NativeApprovalWorkflowExample',
+      key,
+      new Map<String, Object>{ 'amount' => approve ? 500 : 1000 }
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    System.assertEquals('Suspended', harness.drive().status);
+    WorkflowTestHarness.Result done;
+    if (approve) {
+      done = harness.injectSignal(
+        key,
+        NativeApprovalWorkflowExample.DECISION_SIGNAL,
+        '{"approved":true,"approver":"manager@example.com"}'
+      );
+    } else {
+      String decision = '{"approved":false,"comments":"duplicate test"}';
+      WorkflowEngine.signal(
+        key,
+        NativeApprovalWorkflowExample.DECISION_SIGNAL,
+        decision
+      );
+      WorkflowEngine.signal(
+        key,
+        NativeApprovalWorkflowExample.DECISION_SIGNAL,
+        decision
+      );
+      done = harness.drive();
+    }
+    return snap(done, key, new Set<String>(), new List<Id>());
+  }
+
+  // Source: NativeApprovalTriggerBridgeExampleTest. The Case trigger starts the
+  // workflow and sends the decision signal. The key is the Case Id.
+  private static Snapshot runTriggerBridge(
+    PayloadCodec codec,
+    String approvalStatus
+  ) {
+    useCodec(codec);
+    Case cse = new Case(Subject = 'Codec trigger bridge test');
+    insert cse;
+    String key = String.valueOf(cse.Id);
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceIdFor(key));
+    System.assertEquals('Suspended', harness.drive().status);
+    cse.Approval_Status__c = approvalStatus;
+    update cse;
+    return snap(
+      harness.drive(),
+      key,
+      new Set<String>(),
+      new List<Id>{ cse.Id }
+    );
+  }
+
+  // Source: OpportunityTriggerHandlerTest. Closed Won starts the onboarding
+  // workflow. The amount is 25000, so it waits for the VIP approval signal.
+  private static Snapshot runOpportunityOnboarding(
+    PayloadCodec codec,
+    Id accountId
+  ) {
+    useCodec(codec);
+    Opportunity opp = new Opportunity(
+      Name = 'Codec Onboarding Opp',
+      AccountId = accountId,
+      StageName = 'Prospecting',
+      CloseDate = Date.today().addDays(30),
+      Amount = 25000.00
+    );
+    insert opp;
+    opp.StageName = 'Closed Won';
+    update opp;
+
+    String key = 'Opp_Onboarding_' + opp.Id;
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceIdFor(key));
+    System.assertEquals('Suspended', harness.drive().status);
+    WorkflowTestHarness.Result done = harness.injectSignal(
+      key,
+      'Approve:VIPOrderApproval',
+      '{"approved":true,"comments":"Approved VIP Customer"}'
+    );
+    // These values are random or time values, so mask them.
+    return snap(
+      done,
+      key,
+      new Set<String>{ 'completedDate', 'sandboxOrgId', 'billingAccountId' },
+      new List<Id>{ opp.Id }
+    );
+  }
+
+  // Source: ParallelSignalFanInWorkflowExampleTest. Kick and three acks are
+  // buffered. The collector branch reads all acks with one getSignals() call.
+  private static Snapshot runParallelSignalFanIn(
+    PayloadCodec codec,
+    String key
+  ) {
+    useCodec(codec);
+    Id instanceId = WorkflowEngine.start(
+      'ParallelSignalFanInWorkflowExample',
+      key,
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    System.assertEquals('Suspended', harness.drive().status);
+    WorkflowEngine.signal(key, 'Kick', '{}');
+    WorkflowEngine.signal(key, 'Ack:US', '{"ok":true}');
+    WorkflowEngine.signal(key, 'Ack:EU', '{"ok":true}');
+    return snap(
+      harness.injectSignal(key, 'Ack:APAC', '{"ok":true}'),
+      key,
+      new Set<String>(),
+      new List<Id>()
+    );
+  }
+
+  // Source: PatchExampleWorkflowTest (brand-new instance takes the patch).
+  private static Snapshot runPatchNew(PayloadCodec codec, String key) {
+    useCodec(codec);
+    Id instanceId = WorkflowEngine.start(
+      'PatchExampleWorkflow.PatchSagaWorkflow',
+      key,
+      null
+    );
+    return snap(
+      new WorkflowTestHarness(instanceId).drive(),
+      key,
+      new Set<String>(),
+      new List<Id>()
+    );
+  }
+
+  // Source: PatchExampleWorkflowTest (in-flight instance with a recorded false
+  // decision). The seeded captures are plaintext, as rows from before a codec.
+  private static Snapshot runPatchInFlight(PayloadCodec codec, String key) {
+    useCodec(codec);
+    Id instanceId = WorkflowEngine.start(
+      'PatchExampleWorkflow.PatchSagaWorkflow',
+      key,
+      null
+    );
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Id = instanceId,
+      Current_Step__c = 'PatchExampleWorkflow.BookCar'
+    );
+    update as system inst;
+    Workflow_Step_Execution__c hotel = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = 'PatchExampleWorkflow.BookHotel',
+      Status__c = 'Completed',
+      Captured_Values__c = '{"hotelBooked":true,"__patch:insert-flight":false}'
+    );
+    insert as system hotel;
+    return snap(
+      new WorkflowTestHarness(instanceId).drive(),
+      key,
+      new Set<String>(),
+      new List<Id>()
+    );
+  }
+
+  // Source: PatchExampleWorkflowTest (retired patch fails the step). The
+  // seeded step input and captures are plaintext.
+  private static Snapshot runPatchRetired(PayloadCodec codec, String key) {
+    useCodec(codec);
+    Id instanceId = WorkflowEngine.start(
+      'PatchExampleWorkflow.PatchSagaWorkflow',
+      key,
+      'triggerRetiredError'
+    );
+    Workflow_Step_Execution__c hotel = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = 'PatchExampleWorkflow.BookHotel',
+      Status__c = 'Running',
+      Input__c = '"triggerRetiredError"',
+      Captured_Values__c = '{"__patch:retired-patch":false}'
+    );
+    insert as system hotel;
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    harness.step();
+    return snap(harness.inspect(), key, new Set<String>(), new List<Id>());
+  }
+
+  // Source: ReActLoopWorkflowExampleTest. The model replies are mocks.
+  private static Snapshot runReAct(
+    PayloadCodec codec,
+    String key,
+    List<String> replies,
+    String question
+  ) {
+    useCodec(codec);
+    ReActLoopWorkflowExample.mockLlmResponses = replies;
+    Id instanceId = WorkflowEngine.start(
+      'ReActLoopWorkflowExample.ReActLoopWorkflow',
+      key,
+      new Map<String, Object>{ 'question' => question }
+    );
+    return snap(
+      new WorkflowTestHarness(instanceId).drive(),
+      key,
+      new Set<String>(),
+      new List<Id>()
+    );
+  }
+
+  // Source: SagaStalledRollbackExampleTest. One compensation fails, the
+  // rollback stops, and the operator resumes it. The snapshot joins the
+  // stalled status and the last status.
+  private static Snapshot runStalledRollback(PayloadCodec codec, String key) {
+    useCodec(codec);
+    WorkflowEngine.disableQueueableInTest = true;
+    SagaStalledRollbackExample.failShipmentCompensation = true;
+    Id instanceId = WorkflowEngine.start(
+      'SagaStalledRollbackExample.StalledSagaWorkflow',
+      key,
+      '{"orderId":"ord_777"}'
+    );
+    // Charge, reserve, ship, book courier.
+    for (Integer i = 0; i < 4; i++) {
+      WorkflowEngine.runStep(instanceId, null);
+    }
+    try {
+      WorkflowEngine.runStep(instanceId, null);
+      System.assert(false, 'ConfirmDeliveryStep must throw');
+    } catch (Exception ex) {
+      WorkflowEngine.handleCrash(instanceId, ex);
+    }
+    // Courier compensation passes. Shipment compensation fails.
+    WorkflowEngine.runStep(instanceId, null);
+    WorkflowEngine.runStep(instanceId, null);
+    String stalled = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+    ]
+    .Status__c;
+
+    SagaStalledRollbackExample.failShipmentCompensation = false;
+    WorkflowCompensation.resumeCompensation(instanceId);
+    // Ship, reserve, charge, then the empty stack.
+    for (Integer i = 0; i < 4; i++) {
+      WorkflowEngine.runStep(instanceId, null);
+    }
+    Snapshot s = snap(
+      new WorkflowTestHarness(instanceId).inspect(),
+      key,
+      new Set<String>(),
+      new List<Id>()
+    );
+    s.status = stalled + '>' + s.status;
+    return s;
+  }
+
+  // Source: ThrottledCalloutWorkflowExampleTest. The bucket holds one token,
+  // so the second instance sleeps until the refill. Each run starts with no
+  // limiter state.
+  private static Snapshot runThrottledCallout(PayloadCodec codec, String key) {
+    useCodec(codec);
+    ThrottledCalloutWorkflowExample.reset();
+    RateLimiter.mockConfigs.put(
+      'ThrottledService',
+      (Rate_Limit_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"ThrottledService","Capacity__c":1.0,"Refill_Rate_Per_Second__c":0.001}',
+        Rate_Limit_Config__mdt.class
+      )
+    );
+    delete as system [SELECT Id FROM Rate_Limit_State__c WITH SYSTEM_MODE];
+
+    String wf = 'ThrottledCalloutWorkflowExample.ThrottledCalloutWorkflow';
+    Id first = WorkflowEngine.start(wf, key + '-first', null);
+    Id second = WorkflowEngine.start(wf, key, null);
+    System.assertEquals(
+      'Completed',
+      new WorkflowTestHarness(first).drive().status
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(second);
+    harness.disableAutoTimeSkip = true;
+    System.assert(
+      harness.drive().isSleeping,
+      'The empty bucket must park the second instance'
+    );
+
+    Rate_Limit_State__c state = [
+      SELECT Id, Last_Refill_Time_Ms__c
+      FROM Rate_Limit_State__c
+      WHERE Integration_Key__c = 'ThrottledService'
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    state.Last_Refill_Time_Ms__c = state.Last_Refill_Time_Ms__c - 2000000;
+    update as system state;
+
+    harness.disableAutoTimeSkip = false;
+    WorkflowTestHarness.Result done = harness.drive();
+    System.assertEquals(2, ThrottledCalloutWorkflowExample.successfulCallouts);
+    System.assertEquals(2, ThrottledCalloutWorkflowExample.calloutAttempts);
+    return snap(done, key, new Set<String>(), new List<Id>());
+  }
+
   // ─── tests ──────────────────────────────────────────────────────────────
 
   @IsTest
@@ -568,8 +1262,10 @@ private class PayloadCodecRoundTripTest {
   static void approvalSignalPayloadRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Snapshot identity = runApprovalSignal(null, 'CodecApprovalSig_Identity');
+      Test.startTest();
       AesCodec aes = new AesCodec();
       Snapshot encoded = runApprovalSignal(aes, 'CodecApprovalSig_Aes');
+      Test.stopTest();
 
       System.assertEquals('Completed', identity.status);
       System.assert(
@@ -850,6 +1546,389 @@ private class PayloadCodecRoundTripTest {
         identity.output.contains('"totalProcessed":5'),
         'The output must add the chunk counts, got: ' + identity.output
       );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void calloutAsyncResumeRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runCalloutAsyncResume(null, 'CodecCallout_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runCalloutAsyncResume(aes, 'CodecCallout_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"status":200'),
+        'The output must carry the resume payload, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void calloutWatchdogTimeoutRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runCalloutTimeout(null, 'CodecTimeout_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runCalloutTimeout(aes, 'CodecTimeout_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Failed', identity.status);
+      System.assert(
+        identity.detail.contains('timed out'),
+        'The error must name the timeout, got: ' + identity.detail
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void caseDebounceRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runCaseDebounce(null);
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runCaseDebounce(aes);
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.detail.contains('"subject":"Final Edit"'),
+        'The input must carry the last edit, got: ' + identity.detail
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void circuitBreakerRecoveryRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runCircuitBreaker(null, 'CodecBreaker_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runCircuitBreaker(aes, 'CodecBreaker_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void deadlineRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runDeadline(null, 'CodecDeadline_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runDeadline(aes, 'CodecDeadline_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Failed', identity.status);
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void eventAggregationRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runEventAggregation(null, 'CodecCart_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runEventAggregation(aes, 'CodecCart_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('Processed 3 events: Item-A, Item-B, Item-C'),
+        'The output must carry the three events, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void incrementalSyncRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert new Account(Name = 'Revenant Codec Account');
+      Snapshot identity = runIncrementalSync(null, 'CodecSync_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runIncrementalSync(aes, 'CodecSync_Aes');
+      Test.stopTest();
+
+      System.assertEquals('ContinuedAsNew>ContinuedAsNew', identity.status);
+      System.assert(
+        identity.detail.contains('"processedCount":1'),
+        'The first run must count the new account, got: ' + identity.detail
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void nativeApprovalApproveRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runNativeApproval(
+        null,
+        'CodecNativeOk_Identity',
+        true
+      );
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runNativeApproval(aes, 'CodecNativeOk_Aes', true);
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"result":"approved"'),
+        'The output must confirm the approval, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void nativeApprovalDuplicateRejectRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runNativeApproval(
+        null,
+        'CodecNativeNo_Identity',
+        false
+      );
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runNativeApproval(aes, 'CodecNativeNo_Aes', false);
+      Test.stopTest();
+
+      System.assertEquals('Compensated', identity.status);
+      System.assertEquals(
+        new List<String>{
+          'NativeApprovalWorkflowExample.ReserveBudgetStep_Compensate'
+        },
+        identity.compensatedSteps
+      );
+      System.assert(
+        identity.detail.contains('duplicate test'),
+        'The error must carry the signal comment, got: ' + identity.detail
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void triggerBridgeApproveRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runTriggerBridge(null, 'Approved');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runTriggerBridge(aes, 'Approved');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"result":"approved"'),
+        'The output must confirm the approval, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void triggerBridgeRejectRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runTriggerBridge(null, 'Rejected');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runTriggerBridge(aes, 'Rejected');
+      Test.stopTest();
+
+      System.assertEquals('Compensated', identity.status);
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void opportunityOnboardingRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Account acc = new Account(Name = 'Test Account');
+      insert acc;
+      Snapshot identity = runOpportunityOnboarding(null, acc.Id);
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runOpportunityOnboarding(aes, acc.Id);
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.detail.contains('"email":"customer@testaccount.com"'),
+        'The input must come from the Opportunity, got: ' + identity.detail
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void parallelSignalFanInRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runParallelSignalFanIn(null, 'CodecFanIn_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runParallelSignalFanIn(aes, 'CodecFanIn_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.detail.contains('"count":3'),
+        'The collector must see three acks, got: ' + identity.detail
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void patchNewInstanceRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runPatchNew(null, 'CodecPatchNew_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runPatchNew(aes, 'CodecPatchNew_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"carType":"Luxury SUV"'),
+        'A new instance must take the patch, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void patchInFlightRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runPatchInFlight(null, 'CodecPatchOld_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runPatchInFlight(aes, 'CodecPatchOld_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"carType":"Economy Sedan"'),
+        'The plaintext false decision must hold, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void patchRetiredRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runPatchRetired(null, 'CodecPatchRetired_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runPatchRetired(aes, 'CodecPatchRetired_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Failed', identity.status);
+      System.assert(
+        identity.detail.contains('retired code path for patch: retired-patch'),
+        'The error must name the retired patch, got: ' + identity.detail
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void reActToolLoopRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<String> replies = new List<String>{
+        'Thought: I should look up Salesforce\'s FY2025 revenue.\nAction: Search[sfdc revenue]',
+        'Thought: That is about $38 billion; the question asks for double that.\nAction: Calculator[38 * 2]',
+        'Thought: I have computed the final answer.\nAction: Finish[76]'
+      };
+      String question = 'Roughly double Salesforce\'s FY2025 revenue in billions.';
+      Snapshot identity = runReAct(
+        null,
+        'CodecReAct_Identity',
+        replies,
+        question
+      );
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runReAct(aes, 'CodecReAct_Aes', replies, question);
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('"finalAnswer":"76"'),
+        'The output must carry the answer, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void reActLoopGuardRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<String> replies = new List<String>();
+      for (Integer i = 0; i < ReActLoopWorkflowExample.maxIterations; i++) {
+        replies.add('Thought: Still looking.\nAction: Search[sfdc revenue]');
+      }
+      String question = 'A question the model can never answer.';
+      Snapshot identity = runReAct(
+        null,
+        'CodecReActGuard_Identity',
+        replies,
+        question
+      );
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runReAct(
+        aes,
+        'CodecReActGuard_Aes',
+        replies,
+        question
+      );
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assert(
+        identity.output.contains('Could not reach a final answer'),
+        'The loop guard must finish the run, got: ' + identity.output
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void stalledRollbackResumeRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runStalledRollback(null, 'CodecStalled_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runStalledRollback(aes, 'CodecStalled_Aes');
+      Test.stopTest();
+
+      System.assertEquals('CompensationFailed>Compensated', identity.status);
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void throttledCalloutRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runThrottledCallout(null, 'CodecThrottle_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runThrottledCallout(aes, 'CodecThrottle_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
       assertRoundTrip(identity, encoded, aes);
     }
   }
