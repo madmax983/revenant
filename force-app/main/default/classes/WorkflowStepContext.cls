@@ -129,9 +129,9 @@ public inherited sharing class WorkflowStepContext {
       : 1;
   }
 
-  // Resolve the captured-values map and the effective max attempts (from a
-  // RetryConfigurable policy, a persisted __maxAttempts, or the auto-retry
-  // policy, defaulting to 1).
+  // Resolve the captured-values map and the effective max attempts. Priority:
+  // persisted __maxAttempts (not for a RetryConfigurable step without an
+  // auto-retry policy), then RetryConfigurable, then auto-retry policy, then 1.
   private static CaptureContext resolveCaptureContext(
     WorkflowStep stepInstance,
     Workflow_Step_Execution__c stepExec,
@@ -147,21 +147,24 @@ public inherited sharing class WorkflowStepContext {
       cc.maxAttempts = WorkflowRetryScheduling.sanitizePolicy(autoRetryPolicy)
         .maximumAttempts;
     }
-    applyCapturedValues(cc, stepInstance, stepExec);
+    // With an auto-retry policy, the persisted value is from the policy of the
+    // last retry, so it wins over RetryConfigurable (issue #101).
+    Boolean usePersisted =
+      !(stepInstance instanceof RetryConfigurable) || autoRetryPolicy != null;
+    applyCapturedValues(cc, usePersisted, stepExec);
     return cc;
   }
 
   /**
    * @description Merges the step's persisted captured-values map into the capture
-   * context and, for a non-RetryConfigurable step, adopts a persisted
-   * __maxAttempts override.
+   * context and, when allowed, adopts a persisted __maxAttempts override.
    * @param cc the capture context to populate
-   * @param stepInstance the step being executed
+   * @param usePersisted true to adopt a persisted __maxAttempts
    * @param stepExec the step execution row carrying Captured_Values__c
    */
   private static void applyCapturedValues(
     CaptureContext cc,
-    WorkflowStep stepInstance,
+    Boolean usePersisted,
     Workflow_Step_Execution__c stepExec
   ) {
     if (String.isBlank(stepExec.Captured_Values__c)) {
@@ -177,10 +180,7 @@ public inherited sharing class WorkflowStepContext {
       cc.capturesMap = (Map<String, Object>) JSON.deserializeUntyped(
         resolvedCaptures
       );
-      if (
-        !(stepInstance instanceof RetryConfigurable) &&
-        cc.capturesMap.containsKey('__maxAttempts')
-      ) {
+      if (usePersisted && cc.capturesMap.containsKey('__maxAttempts')) {
         cc.maxAttempts = Integer.valueOf(cc.capturesMap.get('__maxAttempts'));
       }
     } catch (Exception ignored) {

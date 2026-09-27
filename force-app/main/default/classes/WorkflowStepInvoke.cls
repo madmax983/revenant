@@ -39,6 +39,10 @@ public inherited sharing class WorkflowStepInvoke {
       stepInstance,
       prevOutput
     );
+    // A timeout fallback run does not auto-retry: a retry loses the timeout marker.
+    if (context.retry().isTimeoutResume()) {
+      ctx.autoRetryPolicy = null;
+    }
     StepResult result = executeStepWithTimeout(ctx, stepInstance, context);
 
     // 6. Handle Step Outcome
@@ -177,19 +181,33 @@ public inherited sharing class WorkflowStepInvoke {
     return result;
   }
 
-  // Auto-retry (issue #101): change a catchable throw into a RETRY result under
-  // the declared policy, and keep the exception for the exhausted message. No
-  // savepoint is set, because a savepoint blocks callouts. DML done before the
-  // throw is kept, as with a manual try/catch. LimitException is not catchable,
-  // so it stays on the finalizer fail-fast path.
+  // Auto-retry (issue #101): change a catchable thrown exception into a RETRY
+  // result under the declared policy. A savepoint undoes the step DML, as a
+  // crash does. A CalloutStep gets no savepoint, because a savepoint blocks a
+  // callout; its DML before the throw is kept. A row-lock error keeps its own
+  // retry path. LimitException is not catchable, so it fails fast.
   private static StepResult executeStepWithAutoRetry(
     WorkflowStepRunner.RunStepContext ctx,
     WorkflowStep stepInstance,
     StepContext context
   ) {
+    Savepoint sp = WorkflowAutoRetry.canRollBack(stepInstance)
+      ? Database.setSavepoint()
+      : null;
     try {
       return executeStep(ctx, stepInstance, context);
     } catch (Exception ex) {
+      if (WorkflowAutoRetry.isExcluded(ex)) {
+        throw ex;
+      }
+      if (sp != null) {
+        Database.rollback(sp);
+        if (WorkflowAutoRetry.isCalloutConflict(ex)) {
+          throw new WorkflowEngine.WorkflowException(
+            WorkflowAutoRetry.CALLOUT_CONFLICT + ex.getMessage()
+          );
+        }
+      }
       ctx.thrownError = ex;
       return StepResult.retry(ctx.autoRetryPolicy);
     }

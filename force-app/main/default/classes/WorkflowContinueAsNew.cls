@@ -44,23 +44,28 @@ public inherited sharing class WorkflowContinueAsNew {
     WorkflowRetryScheduling.persistRetryMaxAttempts(instance, stepExec, policy);
 
     if (stepExec.Retry_Count__c >= policy.maximumAttempts) {
-      // An exhausted auto-retry (issue #101) keeps the thrown message and stack.
-      Exception thrown = outcome.thrownError;
+      // Auto-retry (issue #101): the texts keep the thrown message and stack.
+      Integer attempts = stepExec.Retry_Count__c.intValue();
       stepExec.Status__c = 'Failed';
-      stepExec.Error_Details__c = thrown == null
-        ? 'Max retries (' + policy.maximumAttempts + ') exceeded.'
-        : WorkflowAutoRetry.exhaustedDetails(policy.maximumAttempts, thrown);
+      stepExec.Error_Details__c = WorkflowAutoRetry.exhaustedDetails(
+        policy.maximumAttempts,
+        attempts,
+        outcome.thrownError
+      );
       WorkflowStepExecStore.saveStepExec(stepExec);
 
       WorkflowEngine.FailInstanceRequest maxRetriesReq = new WorkflowEngine.FailInstanceRequest();
       maxRetriesReq.instanceId = instance.Id;
-      maxRetriesReq.stepName = instance.Current_Step__c;
-      maxRetriesReq.errorMessage = thrown == null
-        ? 'Max retries exceeded.'
-        : WorkflowAutoRetry.exhaustedMessage(policy.maximumAttempts, thrown);
+      // The step name, not Current_Step__c: a parallel branch has a list there.
+      maxRetriesReq.stepName = stepExec.Step_Name__c;
+      maxRetriesReq.errorMessage = WorkflowAutoRetry.exhaustedMessage(
+        attempts,
+        outcome.thrownError
+      );
       maxRetriesReq.failureCategory = WorkflowEngine.CAT_RETRIES_EXHAUSTED;
       WorkflowEngine.failWorkflowInstance(maxRetriesReq);
     } else {
+      WorkflowAutoRetry.logRetriedAttempt(outcome, policy.maximumAttempts);
       WorkflowRetryScheduling.scheduleExponentialRetry(
         instance,
         stepExec,
