@@ -325,9 +325,9 @@ public inherited sharing class WorkflowContinueAsNew {
       ? result.directive().failureReason +
         '\nfailureData: ' +
         // failureData is author data, so the payload codec encodes it.
-        WorkflowPayloadCodecs.encode(
-          result.directive().failureDataJson,
-          CodecContext.PayloadKind.STEP_OUTPUT
+        WorkflowPayloadCodecs.saveFailureData(
+          stepExec,
+          result.directive().failureDataJson
         )
       : result.directive().failureReason;
     WorkflowStepExecStore.saveStepExec(stepExec);

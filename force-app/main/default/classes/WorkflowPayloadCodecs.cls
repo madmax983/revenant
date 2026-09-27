@@ -136,6 +136,28 @@ public inherited sharing class WorkflowPayloadCodecs {
   }
 
   /**
+   * @description Encodes `failureData` for `Error_Details__c`. With a codec, the
+   * encoded text is offloaded when it is too large, so the field limit holds.
+   * The identity codec keeps the legacy inline value.
+   * @param stepExec the failed step execution (owner and file title)
+   * @param failureDataJson the author failure data
+   * @return the stored form to append to Error_Details__c
+   */
+  public static String saveFailureData(
+    Workflow_Step_Execution__c stepExec,
+    String failureDataJson
+  ) {
+    if (isIdentity()) {
+      return failureDataJson;
+    }
+    return WorkflowPayloadOffload.savePayloadIfNeeded(
+      stepExec.Workflow_Instance__c,
+      encode(failureDataJson, CodecContext.PayloadKind.STEP_OUTPUT),
+      'Output_Failure_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+  }
+
+  /**
    * @description Finds a reserved stored-form key (`$attachmentId` or `$codec`)
    * in JSON text. Operator input must not contain one.
    * @param jsonText the JSON text to check

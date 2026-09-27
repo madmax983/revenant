@@ -972,4 +972,43 @@ public class WorkflowPayloadCodecE2ETest {
       );
     }
   }
+
+  @IsTest
+  static void largeFailureDataIsOffloaded() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowPayloadCodecE2ETest.SagaWorkflow',
+        Correlation_Key__c = 'codec-failure-data',
+        Status__c = 'Running'
+      );
+      insert as system inst;
+      Workflow_Step_Execution__c stepExec = new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = 'WorkflowPayloadCodecE2ETest.FailWithDataStep'
+      );
+      // 99 000 plaintext characters grow past the field limit after AES.
+      String failureData = '{"ssn":"' + SECRET + 'x'.repeat(99000) + '"}';
+
+      String stored = WorkflowPayloadCodecs.saveFailureData(
+        stepExec,
+        failureData
+      );
+
+      System.assert(
+        stored.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX),
+        'Large encoded failure data goes to a file'
+      );
+      System.assertEquals(
+        failureData,
+        WorkflowPayloadOffload.resolvePayload(stored)
+      );
+      WorkflowPayloadCodecs.setCodec(null);
+      System.assertEquals(
+        failureData,
+        WorkflowPayloadCodecs.saveFailureData(stepExec, failureData),
+        'Identity keeps the legacy inline value'
+      );
+    }
+  }
 }
