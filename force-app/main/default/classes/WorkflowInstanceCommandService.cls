@@ -92,6 +92,23 @@ public inherited sharing class WorkflowInstanceCommandService {
   }
 
   /**
+   * @description Operator action to release an instance parked in
+   * DefinitionChanged (issue #89) onto the live definition and resume it.
+   * @param instanceId The DefinitionChanged instance to release.
+   */
+  public static void releaseDefinitionChanged(Id instanceId) {
+    WorkflowDashboardSupport.checkAuthorization();
+    WorkflowDashboardSupport.checkOperatorAction();
+    try {
+      WorkflowDefinitionChangeService.release(instanceId);
+    } catch (Exception ex) {
+      AuraHandledException wrapped = new AuraHandledException(ex.getMessage());
+      wrapped.setMessage(ex.getMessage());
+      throw wrapped;
+    }
+  }
+
+  /**
    * @description Operator action to resume a stalled saga rollback (status
    * CompensationFailed) from exactly the failed compensation point. Idempotent: a
    * repeated/overlapping call after the rollback has already resumed is a safe no-op.

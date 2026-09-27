@@ -23,6 +23,7 @@ import getCancelEligibleCount from "@salesforce/apex/WorkflowDashboardController
 import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.cancelMatchingInstances";
 import resumeWorkflowInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumeWorkflowInstance";
 import resumeCompensationInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumeCompensationInstance";
+import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
 import cancelWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.cancelWorkflow";
 import submitApproval from "@salesforce/apex/WorkflowDashboardCommandController.submitApproval";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
@@ -237,6 +238,7 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Cancelled", value: "Cancelled" },
     { label: "ContinuedAsNew", value: "ContinuedAsNew" },
     { label: "Paused", value: "Paused" },
+    { label: "Definition Changed", value: "DefinitionChanged" },
   ];
 
   failureCategoryOptions = [
@@ -404,6 +406,32 @@ export default class WorkflowDashboard extends LightningElement {
     );
   }
 
+  // Issue #89: parked because the definition step list changed in flight.
+  get isDefinitionChanged() {
+    return (
+      this.selectedInst && this.selectedInst.Status__c === "DefinitionChanged"
+    );
+  }
+
+  get definitionChange() {
+    return this.selectedInst ? this.selectedInst.definitionChange : null;
+  }
+
+  // A park reason is not a failure, so the panel above shows it instead.
+  get showFailureMessage() {
+    return (
+      !!this.selectedInst &&
+      !!this.selectedInst.Error_Message__c &&
+      !this.isDefinitionChanged
+    );
+  }
+
+  // Release is safe only when every current step is still in the live list.
+  get isReleaseDisabled() {
+    const change = this.definitionChange;
+    return !change || !change.currentStepInLive;
+  }
+
   get pendingCompensationCount() {
     return this.selectedInst ? this.selectedInst.pendingCompensationCount : 0;
   }
@@ -440,6 +468,7 @@ export default class WorkflowDashboard extends LightningElement {
       status === "Running" ||
       status === "Suspended" ||
       status === "Paused" ||
+      status === "DefinitionChanged" ||
       status === "CompensationFailed"
     );
   }
@@ -1022,6 +1051,7 @@ export default class WorkflowDashboard extends LightningElement {
           pendingCompensationCount: result.pendingCompensationCount || 0,
           pendingCompensations: result.pendingCompensations || [],
           attributes: result.attributes || [],
+          definitionChange: this.mapDefinitionChange(result.definitionChange),
         };
 
         // Map children
@@ -2402,6 +2432,55 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
+  handleReleaseDefinitionChanged() {
+    this.loadingDetails = true;
+    releaseDefinitionChangedInstance({ instanceId: this.selectedInstanceId })
+      .then(() => {
+        this.showToast(
+          "Success",
+          "Instance released onto the live definition. The current step runs next.",
+          "success",
+        );
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to release instance: " + this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
+  // Marks added (live only) and removed (stored only) steps for the diff view.
+  mapDefinitionChange(change) {
+    if (!change) {
+      return null;
+    }
+    const lower = (names) =>
+      new Set((names || []).map((n) => (n || "").trim().toLowerCase()));
+    const added = lower(change.addedSteps);
+    const removed = lower(change.removedSteps);
+    const mark = (names, changed, cls, prefix) =>
+      (names || []).map((name, index) => ({
+        key: `${prefix}_${index}_${name}`,
+        name,
+        cssClass: changed.has((name || "").trim().toLowerCase())
+          ? `slds-text-body_small ${cls}`
+          : "slds-text-body_small",
+      }));
+    return {
+      ...change,
+      storedRows: mark(change.storedSteps, removed, "step-removed", "s"),
+      liveRows: mark(change.liveSteps, added, "step-added", "l"),
+    };
+  }
+
   handleResumeRollback() {
     this.loadingDetails = true;
     resumeCompensationInstance({ instanceId: this.selectedInstanceId })
@@ -2508,6 +2587,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "badge badge-grey";
       case "Paused":
         return "badge badge-orange";
+      case "DefinitionChanged":
+        return "badge badge-purple pulse-glow";
       default:
         return "badge";
     }
@@ -2537,6 +2618,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "timeline-marker bg-yellow";
       case "Cancelled":
         return "timeline-marker bg-grey";
+      case "DefinitionChanged":
+        return "timeline-marker bg-purple";
       default:
         return "timeline-marker";
     }

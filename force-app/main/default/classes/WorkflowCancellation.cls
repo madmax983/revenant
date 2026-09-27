@@ -140,7 +140,8 @@ public inherited sharing class WorkflowCancellation {
           'Suspended',
           'Cancelling',
           'CompensationFailed',
-          'Paused'
+          'Paused',
+          'DefinitionChanged'
         )
       WITH SYSTEM_MODE
     ];

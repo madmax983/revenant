@@ -18,7 +18,8 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     'Compensating',
     'Cancelling',
     'CompensationFailed',
-    'Paused'
+    'Paused',
+    'DefinitionChanged'
   };
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',

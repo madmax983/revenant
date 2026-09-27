@@ -241,6 +241,19 @@
 .bg-orange {
   background-color: var(--slds-g-color-palette-orange-60, hsl(30, 95%, 45%));
 }
+.bg-purple {
+  background-color: var(--slds-g-color-palette-purple-50, hsl(270, 70%, 55%));
+}
+
+/* Definition-change diff (issue #89). */
+.step-added {
+  color: var(--slds-g-color-palette-green-50, hsl(140, 80%, 30%));
+  font-weight: 600;
+}
+.step-removed {
+  color: var(--slds-g-color-palette-red-50, hsl(0, 80%, 55%));
+  text-decoration: line-through;
+}
 
 .step-card {
   background: var(--slds-g-color-surface-1, #fdfefe);

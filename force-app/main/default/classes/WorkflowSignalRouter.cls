@@ -34,6 +34,7 @@ public inherited sharing class WorkflowSignalRouter {
     // 'Paused' is included in both branches so a signal reaches a parked instance:
     // a forward signal is held (Received) and re-observed on resume, and a Cancel
     // signal can still cancel a paused instance (matching the bulk signal path).
+    // 'DefinitionChanged' (issue #89) is a park too, so it gets the same rule.
     Boolean isCancelSignal = WorkflowSignalHelpers.isCancelSignalName(
       signalName
     );
@@ -100,7 +101,8 @@ public inherited sharing class WorkflowSignalRouter {
           'Running',
           'Suspended',
           'CompensationFailed',
-          'Paused'
+          'Paused',
+          'DefinitionChanged'
         }
       : new List<String>{
           'Pending',
@@ -108,7 +110,8 @@ public inherited sharing class WorkflowSignalRouter {
           'Suspended',
           'Compensating',
           'Cancelling',
-          'Paused'
+          'Paused',
+          'DefinitionChanged'
         };
   }
 

@@ -1267,6 +1267,17 @@
                                                  class="slds-m-right_small">
                                              </lightning-button>
                                          </template>
+                                         <template if:true={isDefinitionChanged}>
+                                             <lightning-button
+                                                 data-id="release-definition-btn"
+                                                 label="Release"
+                                                 icon-name="utility:play"
+                                                 variant="brand"
+                                                 disabled={isReleaseDisabled}
+                                                 onclick={handleReleaseDefinitionChanged}
+                                                 class="slds-m-right_small brand-button">
+                                             </lightning-button>
+                                         </template>
                                          <template if:true={isRollbackIncomplete}>
                                              <lightning-button
                                                  label="Resume Rollback"
@@ -1443,7 +1454,44 @@
                                             </ul>
                                         </div>
                                     </template>
-                                    <template if:true={selectedInst.Error_Message__c}>
+                                    <template if:true={isDefinitionChanged}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small" data-id="definition-change-panel">
+                                            <div class="slds-text-title text-purple">Definition Changed</div>
+                                            <div class="slds-text-body_regular slds-m-bottom_x-small">
+                                                The workflow definition step list changed after this instance started.
+                                                The engine stopped the instance before the next step. No step ran against the new list.
+                                                Reconcile the change. Then use <strong>Release</strong> to continue on the live definition, or cancel the instance.
+                                            </div>
+                                            <template if:true={definitionChange}>
+                                                <template if:false={definitionChange.currentStepInLive}>
+                                                    <div class="slds-text-body_small text-red slds-m-bottom_x-small">
+                                                        The current step is not in the live definition. Restore the step or cancel the instance.
+                                                    </div>
+                                                </template>
+                                                <div class="slds-grid slds-gutters">
+                                                    <div class="slds-col slds-size_1-of-2">
+                                                        <div class="slds-text-title">Stored at start</div>
+                                                        <ol class="slds-list_ordered">
+                                                            <template for:each={definitionChange.storedRows} for:item="row">
+                                                                <li key={row.key} data-id="stored-step" class={row.cssClass}>{row.name}</li>
+                                                            </template>
+                                                        </ol>
+                                                        <div class="slds-text-body_small slds-text-color_weak">{definitionChange.storedFingerprint}</div>
+                                                    </div>
+                                                    <div class="slds-col slds-size_1-of-2">
+                                                        <div class="slds-text-title">Live now</div>
+                                                        <ol class="slds-list_ordered">
+                                                            <template for:each={definitionChange.liveRows} for:item="row">
+                                                                <li key={row.key} data-id="live-step" class={row.cssClass}>{row.name}</li>
+                                                            </template>
+                                                        </ol>
+                                                        <div class="slds-text-body_small slds-text-color_weak">{definitionChange.liveFingerprint}</div>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template if:true={showFailureMessage}>
                                         <div class="slds-col slds-size_1-of-1 slds-p-bottom_small">
                                             <div class="slds-text-title text-red">Workflow Failure Message</div>
                                             <pre class="code-block error-block">{selectedInst.Error_Message__c}</pre>

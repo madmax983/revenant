@@ -54,7 +54,9 @@ public inherited sharing class WorkflowEngine {
     // A parked (operator-paused) run is in-flight and resumes later, so it keeps
     // reserving its correlation key — mirroring the trigger's reservation — so dedup
     // returns the live paused instance rather than a stale terminal row in the window.
-    'Paused'
+    'Paused',
+    // A definition-change park (issue #89) is in-flight and resumes on release.
+    'DefinitionChanged'
   };
 
   // Upper bound on rows read by a single dedup lookup, so a hot correlation key
