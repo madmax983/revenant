@@ -396,6 +396,66 @@ private class WorkflowPayloadCodecsTest {
     }
   }
 
+  // ─── operator-surface helpers ───────────────────────────────────────────
+
+  @IsTest
+  static void findReservedMarkerFindsStoredFormKeys() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      System.assertEquals(
+        '$attachmentId',
+        WorkflowPayloadCodecs.findReservedMarker('{"$attachmentId":"x"}')
+      );
+      System.assertEquals(
+        '$codec',
+        WorkflowPayloadCodecs.findReservedMarker('{"a":{"$codec":"x"}}')
+      );
+      System.assertEquals(
+        null,
+        WorkflowPayloadCodecs.findReservedMarker('{"note":"see $codec docs"}'),
+        'Only a quoted reserved token matches'
+      );
+      System.assertEquals(null, WorkflowPayloadCodecs.findReservedMarker(null));
+    }
+  }
+
+  @IsTest
+  static void redactForLogHidesPayloadOnlyWithCodec() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String plain = '{"ssn":"' + SECRET + '"}';
+      System.assertEquals(plain, WorkflowPayloadCodecs.redactForLog(plain));
+
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      System.assertEquals(
+        WorkflowPayloadCodecs.REDACTED_PAYLOAD,
+        WorkflowPayloadCodecs.redactForLog(plain)
+      );
+      System.assertEquals(null, WorkflowPayloadCodecs.redactForLog(null));
+    }
+  }
+
+  @IsTest
+  static void resolveControlPayloadSkipsAuthorCiphertext() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String marker = '{"waitingForApproval":true,"approvalKey":"K"}';
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      String encoded = WorkflowPayloadCodecs.encode(
+        '{"state":"' + SECRET + '"}',
+        CodecContext.PayloadKind.STEP_STATE
+      );
+
+      System.assertEquals(
+        marker,
+        WorkflowPayloadOffload.resolveControlPayload(marker),
+        'Control markers stay readable'
+      );
+      System.assertEquals(
+        null,
+        WorkflowPayloadOffload.resolveControlPayload(encoded),
+        'Operator views do not decode author state'
+      );
+    }
+  }
+
   // ─── configuration ──────────────────────────────────────────────────────
 
   @IsTest
