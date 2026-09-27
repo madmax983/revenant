@@ -104,4 +104,4 @@ record access checks for the decoding read APIs.
 - Read sites: `WorkflowParallelJoin`, `WorkflowOperatorSkipParallel`,
   `WorkflowDebounceSweeper`, `WorkflowParentNotifier`,
   `WorkflowWaitDescriptorService`.
-- Docs: `docs/payload-codec.md`, ADR 0001, README.
+- Docs: `docs/payload-codec.md`, ADR 0002, README.

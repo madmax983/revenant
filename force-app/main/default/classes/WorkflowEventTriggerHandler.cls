@@ -1,9 +1,9 @@
 /**
  * Handler for WorkflowEventTrigger. All Workflow_Event__e after-insert logic lives
- * here so the trigger itself stays a thin delegate (AvoidLogicInTrigger). Behavior is
- * identical to the original in-trigger implementation: events are classified in-order,
- * resume/signal requests are executed in bulk, and any throttled overflow is republished
- * in a single EventBus.publish call.
+ * here so the trigger itself stays a thin delegate (AvoidLogicInTrigger). Events are
+ * classified in-order, resume/signal requests are executed in bulk, and any throttled
+ * overflow is republished in a single EventBus.publish call. `CASCADE_CANCEL` events
+ * go to WorkflowCascadeCancel (issue #94).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and
@@ -19,6 +19,7 @@ public inherited sharing class WorkflowEventTriggerHandler {
   private final List<WorkflowEngine.ResumeRequest> resumeRequests = new List<WorkflowEngine.ResumeRequest>();
   private final List<WorkflowEngine.SignalRequest> signalRequests = new List<WorkflowEngine.SignalRequest>();
   private final List<Workflow_Event__e> throttledEvents = new List<Workflow_Event__e>();
+  private final List<Workflow_Event__e> cascadeEvents = new List<Workflow_Event__e>();
   private Integer processedResumeSignals = 0;
 
   /**
@@ -43,6 +44,9 @@ public inherited sharing class WorkflowEventTriggerHandler {
     // 2. Execute bulk resume and signal requests
     dispatchRequests();
 
+    // 2b. Reap children of failed parents (own savepoint; catches its errors)
+    WorkflowCascadeCancel.handleEvents(cascadeEvents);
+
     // 3. Publish throttled events in a single bulk DML statement
     publishThrottledEvents();
   }
@@ -59,6 +63,8 @@ public inherited sharing class WorkflowEventTriggerHandler {
       event.Event_Type__c == 'NEXT_STEP'
     ) {
       routeStepExecution(event);
+    } else if (event.Event_Type__c == WorkflowCascadeCancel.EVENT_TYPE) {
+      cascadeEvents.add(event);
     }
   }
 

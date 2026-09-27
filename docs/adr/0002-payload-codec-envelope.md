@@ -1,4 +1,4 @@
-# ADR 0001: Payload codec at the offload seam, with an engine envelope
+# ADR 0002: Payload codec at the offload seam, with an engine envelope
 
 - Status: Accepted
 - Date: 2026-09-27

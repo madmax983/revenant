@@ -330,6 +330,8 @@ static void testSagaRollbackWithFault() {
 }
 ```
 
+An injected fault is a thrown exception. If the step or the definition implements `AutoRetryConfigurable`, the engine retries the step. Use `failStepOnce` to test that a temporary error recovers with no compensation. Use `failStep` to test that the saga compensates when all attempts fail. See `WorkflowAutoRetryTest`.
+
 ---
 
 ## Pattern 11 — Durable timer (sleep)

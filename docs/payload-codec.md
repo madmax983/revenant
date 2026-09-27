@@ -180,4 +180,4 @@ The engine wraps codec output in an envelope:
 - Decryption in the dashboard.
 - Field-level masking inside a payload. The codec gets the full payload.
 
-See [ADR 0001](adr/0001-payload-codec-envelope.md) for the design decision.
+See [ADR 0002](adr/0002-payload-codec-envelope.md) for the design decision.
