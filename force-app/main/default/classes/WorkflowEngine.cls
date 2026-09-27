@@ -694,6 +694,8 @@ public inherited sharing class WorkflowEngine {
     public List<String> stack;
     public StepContext context;
     public Boolean isParallel;
+    // Exception caught for auto-retry (issue #101). Null for a returned result.
+    public Exception thrownError;
   }
 
   /**

@@ -3,8 +3,9 @@
  * step of the runStep orchestration. Resolves and instantiates the `WorkflowStep`,
  * asks `WorkflowStepContext` to hydrate the step's `StepContext`, executes the
  * step under its timeout bookkeeping (honoring test fault injection), and hands
- * the resulting `StepResult` to `WorkflowStepOutcome.handleStepResult`. All DML
- * and SOQL run in system mode.
+ * the resulting `StepResult` to `WorkflowStepOutcome.handleStepResult`. With an
+ * `AutoRetryConfigurable` policy, a thrown exception becomes a RETRY result
+ * (issue #101). All DML and SOQL run in system mode.
  */
 public inherited sharing class WorkflowStepInvoke {
   /**
@@ -29,6 +30,10 @@ public inherited sharing class WorkflowStepInvoke {
       return;
     }
 
+    ctx.autoRetryPolicy = WorkflowAutoRetry.resolvePolicy(
+      ctx.instance,
+      stepInstance
+    );
     StepContext context = WorkflowStepContext.buildStepContext(
       ctx,
       stepInstance,
@@ -42,6 +47,7 @@ public inherited sharing class WorkflowStepInvoke {
     outcome.stepExec = ctx.stepExec;
     outcome.result = result;
     outcome.context = context;
+    outcome.thrownError = ctx.thrownError;
     WorkflowStepOutcome.handleStepResult(outcome);
   }
 
@@ -134,16 +140,9 @@ public inherited sharing class WorkflowStepInvoke {
 
     StepResult result;
     try {
-      if (Test.isRunningTest() && WorkflowFaultInjection.hasArmedFaults()) {
-        result = WorkflowFaultInjection.checkAndInjectFault(
-          ctx.instanceId,
-          ctx.activeStepName,
-          stepInstance
-        );
-      }
-      if (result == null) {
-        result = stepInstance.execute(context);
-      }
+      result = ctx.autoRetryPolicy == null
+        ? executeStep(ctx, stepInstance, context)
+        : executeStepWithAutoRetry(ctx, stepInstance, context);
     } finally {
       if (timeoutSeconds != null && timeoutSeconds > 0) {
         stepExec.Timeout_At__c = null;
@@ -155,5 +154,58 @@ public inherited sharing class WorkflowStepInvoke {
       }
     }
     return result;
+  }
+
+  // Run the step once (honoring test fault injection). A throw goes up to the
+  // finalizer, which fails fast.
+  private static StepResult executeStep(
+    WorkflowStepRunner.RunStepContext ctx,
+    WorkflowStep stepInstance,
+    StepContext context
+  ) {
+    StepResult result;
+    if (Test.isRunningTest() && WorkflowFaultInjection.hasArmedFaults()) {
+      result = WorkflowFaultInjection.checkAndInjectFault(
+        ctx.instanceId,
+        ctx.activeStepName,
+        stepInstance
+      );
+    }
+    if (result == null) {
+      result = stepInstance.execute(context);
+    }
+    return result;
+  }
+
+  // Auto-retry (issue #101): change a catchable thrown exception into a RETRY
+  // result under the declared policy. A savepoint undoes the step DML, as a
+  // crash does. A CalloutStep gets no savepoint, because a savepoint blocks a
+  // callout; its DML before the throw is kept. A row-lock error keeps its own
+  // retry path. LimitException is not catchable, so it fails fast.
+  private static StepResult executeStepWithAutoRetry(
+    WorkflowStepRunner.RunStepContext ctx,
+    WorkflowStep stepInstance,
+    StepContext context
+  ) {
+    Savepoint sp = WorkflowAutoRetry.canRollBack(stepInstance)
+      ? Database.setSavepoint()
+      : null;
+    try {
+      return executeStep(ctx, stepInstance, context);
+    } catch (Exception ex) {
+      if (WorkflowAutoRetry.isExcluded(ex)) {
+        throw ex;
+      }
+      if (sp != null) {
+        Database.rollback(sp);
+        if (WorkflowAutoRetry.isCalloutConflict(ex)) {
+          throw new WorkflowEngine.WorkflowException(
+            WorkflowAutoRetry.CALLOUT_CONFLICT + ex.getMessage()
+          );
+        }
+      }
+      ctx.thrownError = ex;
+      return StepResult.retry(ctx.autoRetryPolicy);
+    }
   }
 }
