@@ -36,9 +36,32 @@ public inherited sharing class WorkflowPayloadEnvelope {
       return null;
     }
     Integer markerAt = stored.indexOf(DATA_MARKER, KIND_START.length());
-    return markerAt < 0
+    CodecContext.PayloadKind kind = markerAt < 0
       ? null
       : KINDS.get(stored.substring(KIND_START.length(), markerAt));
+    return (kind != null && hasOnlyData(stored, markerAt)) ? kind : null;
+  }
+
+  // True when `data` is the last and only other property. Engine data without
+  // escapes has no inner quote, so an index check is enough. Escaped data gets
+  // a full JSON check.
+  private static Boolean hasOnlyData(String stored, Integer markerAt) {
+    Integer dataStart = markerAt + DATA_MARKER.length();
+    Integer dataEnd = stored.length() - ENVELOPE_END.length();
+    if (stored.indexOf('"', dataStart) == dataEnd) {
+      return true;
+    }
+    if (stored.indexOf('\\', dataStart) < 0) {
+      return false;
+    }
+    try {
+      Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(
+        stored
+      );
+      return parsed.size() == 2 && parsed.get('data') instanceof String;
+    } catch (Exception e) {
+      return false;
+    }
   }
 
   /**
