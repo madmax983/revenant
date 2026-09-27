@@ -9,9 +9,11 @@ public inherited sharing class MockFlakyOrderServices {
   public class ServiceUnavailableException extends Exception {
   }
 
-  /** @description Number of gateway calls that throw a 503. */
+  /** @description Number of the next gateway calls that throw a 503. */
   public static Integer gatewayOutagesLeft = 0;
-  /** @description Number of receipt calls that throw. */
+  /** @description Number of the next charges whose response is lost (504). */
+  public static Integer lostResponsesLeft = 0;
+  /** @description Number of the next receipt calls that throw. */
   public static Integer receiptOutagesLeft = 0;
   /** @description Number of charge calls, including failed calls. */
   public static Integer chargeAttempts = 0;
@@ -19,6 +21,8 @@ public inherited sharing class MockFlakyOrderServices {
   public static Integer effectiveCharges = 0;
   /** @description Number of refunds. */
   public static Integer refunds = 0;
+  /** @description Charge id of the last refund. */
+  public static String lastRefundedChargeId;
   /** @description Number of receipt calls, including failed calls. */
   public static Integer receiptAttempts = 0;
   /** @description Number of receipts sent. */
@@ -28,7 +32,8 @@ public inherited sharing class MockFlakyOrderServices {
 
   /**
    * @description Charges a card. Throws a 503 while the gateway is down. A
-   * repeat call with the same key returns the first charge.
+   * lost response charges the card, then throws a 504. A repeat call with the
+   * same key returns the first charge.
    * @param idempotencyKey The key that stops a double charge.
    * @param amountCents The amount in cents.
    * @return The charge id.
@@ -43,6 +48,10 @@ public inherited sharing class MockFlakyOrderServices {
       effectiveCharges++;
       chargeIdByKey.put(idempotencyKey, 'ch_' + effectiveCharges);
     }
+    if (lostResponsesLeft > 0) {
+      lostResponsesLeft--;
+      throw new ServiceUnavailableException('504 Gateway Timeout');
+    }
     return chargeIdByKey.get(idempotencyKey);
   }
 
@@ -52,6 +61,7 @@ public inherited sharing class MockFlakyOrderServices {
    */
   public static void refund(String chargeId) {
     refunds++;
+    lastRefundedChargeId = chargeId;
   }
 
   /**
@@ -67,9 +77,14 @@ public inherited sharing class MockFlakyOrderServices {
     receiptsSent++;
   }
 
+  /**
+   * @description Sets all counters and outages to the start values.
+   */
   @TestVisible
   private static void reset() {
     gatewayOutagesLeft = 0;
+    lostResponsesLeft = 0;
+    lastRefundedChargeId = null;
     receiptOutagesLeft = 0;
     chargeAttempts = 0;
     effectiveCharges = 0;

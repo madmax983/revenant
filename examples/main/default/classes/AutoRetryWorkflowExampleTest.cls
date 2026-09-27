@@ -1,7 +1,8 @@
 /**
- * @description Tests for AutoRetryWorkflowExample (issue #101). They show that
- * a short gateway outage recovers with no rollback, that a long outage rolls
- * back LIFO, and that an opted-out step fails fast.
+ * @description Tests for AutoRetryWorkflowExample (issue #101). A short
+ * gateway outage recovers with no rollback. A lost response does not charge
+ * the card two times. A long outage rolls back the saga. An opted-out step
+ * fails fast.
  */
 @IsTest
 public class AutoRetryWorkflowExampleTest {
@@ -68,7 +69,30 @@ public class AutoRetryWorkflowExampleTest {
   }
 
   @IsTest
-  static void longGatewayOutageRollsBackLifo() {
+  static void lostResponseIsRetriedWithoutDoubleCharge() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      MockFlakyOrderServices.reset();
+      MockFlakyOrderServices.lostResponsesLeft = 1;
+      Test.startTest();
+      WorkflowTestHarness.Result result = runOrder('AutoRetry_Lost');
+      Test.stopTest();
+
+      Assert.areEqual('Completed', result.status, 'A 504 does not fail it');
+      Assert.areEqual(
+        2,
+        MockFlakyOrderServices.chargeAttempts,
+        'Gateway is called 2 times: 504, then 200'
+      );
+      Assert.areEqual(
+        1,
+        MockFlakyOrderServices.effectiveCharges,
+        'The idempotency key stops a second charge'
+      );
+    }
+  }
+
+  @IsTest
+  static void longGatewayOutageRollsBack() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       MockFlakyOrderServices.reset();
       MockFlakyOrderServices.gatewayOutagesLeft = 99;
@@ -88,8 +112,14 @@ public class AutoRetryWorkflowExampleTest {
         'Gateway is called maximumAttempts (4) times'
       );
       Assert.areEqual(0, MockFlakyOrderServices.effectiveCharges, 'No charge');
+      Assert.areEqual(0, MockFlakyOrderServices.refunds, 'Nothing to refund');
       Workflow_Step_Execution__c charge = chargeRow();
       Assert.areEqual('Failed', charge.Status__c, 'Charge step fails');
+      Assert.areEqual(
+        4,
+        charge.Retry_Count__c.intValue(),
+        'Retry count equals attempts'
+      );
       Assert.isTrue(
         charge.Error_Details__c.startsWith(
           'Auto-retry exhausted after 4 attempts: 503 Service Unavailable'
@@ -120,6 +150,11 @@ public class AutoRetryWorkflowExampleTest {
         'The receipt step is not retried'
       );
       Assert.areEqual(1, MockFlakyOrderServices.refunds, 'Card is refunded');
+      Assert.areEqual(
+        'ch_1',
+        MockFlakyOrderServices.lastRefundedChargeId,
+        'Refund uses the charge id from the step output'
+      );
     }
   }
 }

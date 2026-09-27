@@ -5,13 +5,15 @@
  * OrderSaga implements AutoRetryConfigurable. When a step throws (for example a
  * 503 from the payment gateway), the engine retries the step with backoff. A
  * short outage does not roll back the saga. ChargePaymentStep has no try/catch.
- * The saga rolls back LIFO only when all 4 attempts fail.
+ * When all 4 charge attempts fail, the saga rolls back (LIFO). The idempotency
+ * key stops a second charge when the gateway charged but the response was lost.
  *
  * SendReceiptStep returns a null policy. A receipt email is not idempotent, so
  * a thrown exception there fails fast.
  *
- * In production the charge is an HTTP callout. Then ChargePaymentStep must
- * implement CalloutStep, because a savepoint prevents a callout.
+ * In production, the charge is an HTTP callout. Then ChargePaymentStep must
+ * implement CalloutStep. The engine sets a savepoint before execute(), and a
+ * savepoint blocks a callout.
  */
 public inherited sharing class AutoRetryWorkflowExample {
   private static final String RESERVE = 'AutoRetryWorkflowExample.ReserveInventoryStep';
