@@ -3129,6 +3129,54 @@ describe("c-workflow-dashboard watchdog liveness (#113)", () => {
     expect(livenessDetail(element).textContent).toContain("No sweep recorded");
   });
 
+  it("warns when the watchdog record is active but stale", async () => {
+    const element = await openDoctorWith({
+      state: "STALE",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: 45,
+      thresholdMinutes: 20,
+      cadenceMinutes: 10,
+    });
+
+    const warn = element.shadowRoot.querySelector(
+      '[data-id="watchdog-running-stale"]',
+    );
+    expect(warn).not.toBeNull();
+    expect(warn.textContent).toContain("Enqueue Watchdog");
+    expect(livenessDetail(element).className).toContain(
+      "slds-text-color_error",
+    );
+  });
+
+  it("shows no stale warning when the watchdog is healthy", async () => {
+    const element = await openDoctorWith({
+      state: "HEALTHY",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: 1,
+      thresholdMinutes: 20,
+      cadenceMinutes: 10,
+    });
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="watchdog-running-stale"]'),
+    ).toBeNull();
+  });
+
+  it("omits the elapsed text when elapsedMinutes is missing", async () => {
+    const element = await openDoctorWith({
+      state: "HEALTHY",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: null,
+      thresholdMinutes: null,
+      cadenceMinutes: 10,
+    });
+
+    const detail = livenessDetail(element).textContent;
+    expect(detail).toContain("Last sweep");
+    expect(detail).not.toContain("null");
+    expect(detail).not.toContain("Stale after");
+  });
+
   it("shows Unknown when the server sends no liveness", async () => {
     const element = await openDoctorWith(undefined);
 

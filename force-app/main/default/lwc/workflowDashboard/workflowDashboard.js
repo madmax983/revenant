@@ -71,6 +71,13 @@ const RATE_LIMIT_UNKNOWN = {
   iconClass: "slds-m-right_xx-small text-weak-icon",
 };
 
+// Watchdog liveness (#113): state code to word and colour.
+const LIVENESS_STATUS = {
+  HEALTHY: { label: "Healthy", badgeClass: "badge badge-green" },
+  STALE: { label: "Stale", badgeClass: "badge badge-red" },
+};
+const LIVENESS_UNKNOWN = { label: "Unknown", badgeClass: "badge badge-grey" };
+
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
   RETRIES_EXHAUSTED: "Retries Exhausted",
@@ -1770,31 +1777,38 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadRateLimitStatus();
   }
 
-  // Watchdog liveness (#113). The server computes the state on each read.
+  // Watchdog liveness (#113). The server calculates the state on each read.
   get watchdogLiveness() {
     return (this.doctorData && this.doctorData.liveness) || {};
   }
 
+  get livenessStatus() {
+    return LIVENESS_STATUS[this.watchdogLiveness.state] || LIVENESS_UNKNOWN;
+  }
+
   get livenessLabel() {
-    const state = this.watchdogLiveness.state;
-    if (state === "HEALTHY") {
-      return "Healthy";
-    }
-    if (state === "STALE") {
-      return "Stale";
-    }
-    return "Unknown";
+    return this.livenessStatus.label;
   }
 
   get livenessBadgeClass() {
-    const state = this.watchdogLiveness.state;
-    let color = "badge-grey";
-    if (state === "HEALTHY") {
-      color = "badge-green";
-    } else if (state === "STALE") {
-      color = "badge-red";
-    }
-    return `badge ${color} slds-m-right_small`;
+    return `${this.livenessStatus.badgeClass} slds-m-right_small`;
+  }
+
+  get isLivenessStale() {
+    return this.watchdogLiveness.state === "STALE";
+  }
+
+  get livenessDetailClass() {
+    return this.isLivenessStale
+      ? "slds-text-body_small slds-text-color_error"
+      : "slds-text-body_small slds-text-color_weak";
+  }
+
+  // An active watchdog record with no recent sweep: the chain can be dead.
+  get watchdogRunningButStale() {
+    return (
+      !!(this.doctorData && this.doctorData.isRunning) && this.isLivenessStale
+    );
   }
 
   get livenessDetail() {
@@ -1802,14 +1816,15 @@ export default class WorkflowDashboard extends LightningElement {
     if (!live.lastSweepAt) {
       return "No sweep recorded yet.";
     }
-    const stale =
-      live.thresholdMinutes != null
-        ? ` Stale after ${live.thresholdMinutes} min.`
-        : "";
-    return (
-      `Last sweep ${this.formatDateTime(live.lastSweepAt)} ` +
-      `(${live.elapsedMinutes} min ago).${stale}`
-    );
+    let text = `Last sweep ${this.formatDateTime(live.lastSweepAt)}`;
+    if (live.elapsedMinutes != null) {
+      text += ` (${live.elapsedMinutes} min ago)`;
+    }
+    text += ".";
+    if (live.thresholdMinutes != null) {
+      text += ` Stale after ${live.thresholdMinutes} min.`;
+    }
+    return text;
   }
 
   get hasConcurrencyRows() {

@@ -4,7 +4,7 @@
     <description>Watchdog cadence in minutes at the last good sweep. The stale threshold is 2 times the cadence.</description>
     <externalId>false</externalId>
     <label>Cadence Minutes</label>
-    <precision>2</precision>
+    <precision>18</precision>
     <required>false</required>
     <scale>0</scale>
     <trackTrending>false</trackTrending>

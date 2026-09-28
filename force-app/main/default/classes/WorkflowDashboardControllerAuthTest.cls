@@ -530,8 +530,10 @@ public class WorkflowDashboardControllerAuthTest {
   @IsTest
   static void testWatchdogStatusShowsLiveness() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Whole-second GMT time: DateTime fields drop milliseconds.
+      Datetime sweptAt = Datetime.newInstanceGmt(2026, 9, 28, 10, 0, 0);
       WorkflowEngine.watchdogDelayMinutes = 10;
-      Datetime sweptAt = Datetime.now().addMinutes(-45);
+      WorkflowEngine.mockNow = sweptAt.addMinutes(45);
       insert new Watchdog_Liveness__c(
         SetupOwnerId = UserInfo.getOrganizationId(),
         Last_Sweep_At__c = sweptAt,
@@ -546,7 +548,20 @@ public class WorkflowDashboardControllerAuthTest {
       Assert.areEqual('STALE', liveness.get('state'));
       Assert.areEqual(sweptAt, liveness.get('lastSweepAt'));
       Assert.areEqual(20, liveness.get('thresholdMinutes'));
-      Assert.isTrue((Integer) liveness.get('elapsedMinutes') >= 45);
+      Assert.areEqual(45, liveness.get('elapsedMinutes'));
+    }
+  }
+
+  @IsTest
+  static void testWatchdogStatusLivenessUnknownWithNoSweep() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+
+      Map<String, Object> liveness = (Map<String, Object>) status.get(
+        'liveness'
+      );
+      Assert.areEqual('UNKNOWN', liveness.get('state'));
+      Assert.isNull(liveness.get('lastSweepAt'));
     }
   }
 
