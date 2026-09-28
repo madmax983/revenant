@@ -84,8 +84,12 @@ If the config is missing or not valid, `acquire()` throws a
   token. To take a token for each call, make `getNextStep()` return the
   acquire step after the callout step. A loop starts a new step visit, so the
   callout gets a new key. Use a loop only when the API applied no effect.
-- The example fails the step after `MAX_REMOTE_THROTTLES` HTTP 429 sleeps, so
-  a daily quota or a bad endpoint does not loop forever.
+- The example fails the step when the API still returns HTTP 429
+  `MAX_REMOTE_THROTTLE_SECONDS` (24 h) after the first 429. It keeps the time
+  of the first 429 with `ctx.captures().once()`, because a retry clears the
+  step state. A daily quota or a bad endpoint does not loop forever. An
+  operator re-drive keeps the time too, so after a re-drive, a new 429 fails
+  the step at once.
 - When the bucket is empty, `acquire()` gives each waiter the time to the next
   token, plus 0.5 to 1.5 s. Many waiters wake at almost the same time. One
   gets the token and the others sleep again. For a large backlog, this uses

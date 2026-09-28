@@ -74,27 +74,29 @@ A review found more gaps. The example now also:
 - Parses the HTTP-date form of `Retry-After`.
 - Retries a timeout or HTTP 408, 409, or 5xx with the same key
   (`AutoRetryConfigurable`, `StepResult.retry`). Other 4xx codes fail.
-- Fails after `MAX_REMOTE_THROTTLES` HTTP 429 sleeps, so a 429 cannot loop
-  forever.
+- Fails when the API still returns HTTP 429 24 h after the first 429. The
+  time of the first 429 is a capture (`once()`), because a retry clears the
+  step state.
 
 ## Test Plan
 
-| Test                                            | AC            |
-| ----------------------------------------------- | ------------- |
-| `emptyBucketSleepsThenCompletesAfterRefill`     | 1, 4a, 4b, 4c |
-| `throttleNeverRollsBackTheSaga`                 | 2, 4c         |
-| `remoteThrottleKeepsOneEffectAcrossSleepResume` | 3             |
-| `acquireStepSleepsWhenBucketIsEmpty`            | 1, 2          |
-| `acquireStepRoutesToCalloutWhenTokenIsFree`     | 1             |
-| `calloutSendsIdempotencyKeyHeader`              | 3             |
-| `calloutRerunKeepsOneEffect`                    | 3             |
-| `tooManyRequestsSleepsForRetryAfter`            | 2             |
-| `badRetryAfterUsesDefaultOrCap`                 | 2             |
-| `httpDateRetryAfterSleepsUntilThatTime`         | 2             |
-| `tooManyRequestsCountsSleepsInStepState`        | 2             |
-| `endlessTooManyRequestsFailsTheStep`            | contract      |
-| `unknownResultRetriesWithTheSameKey`            | 3             |
-| `clientErrorFailsTheStep`                       | contract      |
-| `thrownCalloutExceptionHasAnAutoRetryPolicy`    | 3             |
-| `httpTransportSendsTheRequest`                  | 1             |
-| `bucketAdmitsCapacityThenSleepsTheRest`         | metric        |
+| Test                                             | AC            |
+| ------------------------------------------------ | ------------- |
+| `emptyBucketSleepsThenCompletesAfterRefill`      | 1, 4a, 4b, 4c |
+| `throttleNeverRollsBackTheSaga`                  | 2, 4c         |
+| `remoteThrottleKeepsOneEffectAcrossSleepResume`  | 3             |
+| `acquireStepSleepsWhenBucketIsEmpty`             | 1, 2          |
+| `acquireStepRoutesToCalloutWhenTokenIsFree`      | 1             |
+| `calloutSendsIdempotencyKeyHeader`               | 3             |
+| `calloutRerunKeepsOneEffect`                     | 3             |
+| `tooManyRequestsSleepsForRetryAfter`             | 2             |
+| `badRetryAfterUsesDefaultOrCap`                  | 2             |
+| `httpDateRetryAfterSleepsUntilThatTime`          | 2             |
+| `tooManyRequestsBeforeTheDeadlineSleeps`         | 2             |
+| `tooManyRequestsAfterTheDeadlineFailsTheStep`    | contract      |
+| `retryBetweenThrottlesKeepsTheKeyAndTheDeadline` | 3             |
+| `unknownResultRetriesWithTheSameKey`             | 3             |
+| `clientErrorFailsTheStep`                        | contract      |
+| `thrownCalloutExceptionHasAnAutoRetryPolicy`     | 3             |
+| `httpTransportSendsTheRequest`                   | 1             |
+| `bucketAdmitsCapacityThenSleepsTheRest`          | metric        |

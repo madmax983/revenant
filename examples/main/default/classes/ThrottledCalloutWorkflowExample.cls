@@ -43,7 +43,6 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
 
   private static final String ACQUIRE_STEP = 'ThrottledCalloutWorkflowExample.AcquireTokenStep';
   private static final String CALLOUT_STEP = 'ThrottledCalloutWorkflowExample.ThrottledCalloutStep';
-  private static final String THROTTLES_KEY = 'remoteThrottles';
   private static final List<String> MONTHS = new List<String>{
     'Jan',
     'Feb',
@@ -188,32 +187,32 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
   }
 
   // HTTP 429: the API refuses more requests now. Sleep for Retry-After. Do not
-  // fail. Count the sleeps in the step state, so a 429 that does not stop
-  // fails the step after MAX_REMOTE_THROTTLES sleeps.
+  // fail. once() keeps the time of the first 429 across sleeps and retries.
+  // If the API still returns 429 after MAX_REMOTE_THROTTLE_SECONDS, fail.
   private static StepResult remoteThrottle(StepContext ctx, HttpResponse res) {
-    Integer throttles = remoteThrottles(ctx.stepStateJson) + 1;
-    if (throttles > MAX_REMOTE_THROTTLES) {
+    Long firstMs = Long.valueOf(
+      (String) ctx.captures().once(FIRST_THROTTLE_KEY, new NowProducer())
+    );
+    Long waitedSeconds = (System.currentTimeMillis() - firstMs) / 1000;
+    if (waitedSeconds >= MAX_REMOTE_THROTTLE_SECONDS) {
       return StepResult.fail(
-        'Throttled API returned HTTP 429 ' + throttles + ' times'
+        'Throttled API returned HTTP 429 for ' + waitedSeconds + ' s'
       );
     }
-    return StepResult.sleep(retryAfterSeconds(res))
-      .withStepState(
-        JSON.serialize(new Map<String, Object>{ THROTTLES_KEY => throttles })
-      );
+    return StepResult.sleep(retryAfterSeconds(res));
   }
 
-  // Reads the HTTP 429 count from the step state. Returns 0 when it is absent.
-  private static Integer remoteThrottles(String stepStateJson) {
-    if (String.isBlank(stepStateJson)) {
-      return 0;
+  /**
+   * @description Produces the current time in epoch milliseconds, as a String.
+   */
+  private class NowProducer implements CaptureProducer {
+    /**
+     * @description Returns the current time.
+     * @return The epoch milliseconds, as a String.
+     */
+    public Object produce() {
+      return String.valueOf(System.currentTimeMillis());
     }
-    Object state = JSON.deserializeUntyped(stepStateJson);
-    if (!(state instanceof Map<String, Object>)) {
-      return 0;
-    }
-    Object count = ((Map<String, Object>) state).get(THROTTLES_KEY);
-    return (count instanceof Integer) ? (Integer) count : 0;
   }
 
   // Reads Retry-After as seconds or as an HTTP-date. Uses the default for a
