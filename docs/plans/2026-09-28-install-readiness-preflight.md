@@ -15,22 +15,22 @@ Give the operator one read-only check list on System Doctor. Each check tells if
 
 ## Brainstorming (options)
 
-| #   | Idea                                                                                                                 | Keep?                                                                       |
-| --- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| B1  | Add the method to `WorkflowDashboardController`.                                                                     | No. PMD public-member limit. Use `WorkflowReadinessController`, as #61 did. |
-| B2  | New `WorkflowReadinessService` with one row per check: `key`, `name`, `status`, `finding`, `remediation`.            | Yes. Typed DTO, not a map.                                                  |
-| B3  | Read config records with `getInstance('Default')`.                                                                   | Yes. No SOQL.                                                               |
-| B4  | Read the trigger status from `ApexTrigger`.                                                                          | Yes. One bounded SOQL.                                                      |
-| B5  | Call `getWatchdogStatus()` and read `isRunning`.                                                                     | No. It runs 5+ queries.                                                     |
-| B6  | Extract `watchdogRunning()` from `WorkflowDashboardStatusService`. Both panels use the same query and the same rule. | Yes. Reuse, not a copy.                                                     |
-| B7  | Check access of the user that opens the dashboard with `Schema` describe.                                            | Yes. No SOQL.                                                               |
-| B8  | Check the Automated Process user through `ObjectPermissions`.                                                        | No. Out of scope. The engine writes in system mode.                         |
-| B9  | Inject a `Probe` so a test can make a broken install.                                                                | Yes. The only seam for metadata and trigger status.                         |
-| B10 | Make `WorkflowAlertManager.isAlertActionable` public and reuse it.                                                   | Yes. Same rule as the alert path.                                           |
-| B11 | One access row per core object (instance, step, signal).                                                             | Yes. Each row names the object and fields.                                  |
-| B14 | Check all custom fields (describe), not a fixed list.                                                                | Yes. A new engine field is covered without an edit (Codex review).          |
-| B12 | Show a "Run Checks" button and the round-trip time on the panel.                                                     | Yes. One click. Shows the < 2 s target.                                     |
-| B13 | Add a button that starts the watchdog on the panel.                                                                  | No. Link to the existing **Enqueue Watchdog** button.                       |
+| #   | Idea                                                                                                                 | Keep?                                                                                                     |
+| --- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| B1  | Add the method to `WorkflowDashboardController`.                                                                     | No. PMD public-member limit. Use `WorkflowReadinessController`, as #61 did.                               |
+| B2  | New `WorkflowReadinessService` with one row per check: `key`, `name`, `status`, `finding`, `remediation`.            | Yes. Typed DTO, not a map.                                                                                |
+| B3  | Read config records with `getInstance('Default')`.                                                                   | Yes. No SOQL.                                                                                             |
+| B4  | Read the trigger status from `ApexTrigger`.                                                                          | Yes. One bounded SOQL.                                                                                    |
+| B5  | Call `getWatchdogStatus()` and read `isRunning`.                                                                     | No. It runs 5+ queries.                                                                                   |
+| B6  | Extract `watchdogRunning()` from `WorkflowDashboardStatusService`. Both panels use the same query and the same rule. | Yes. Reuse, not a copy.                                                                                   |
+| B7  | Check access of the user that opens the dashboard with `Schema` describe.                                            | Yes. No SOQL.                                                                                             |
+| B8  | Check the Automated Process user through `ObjectPermissions`.                                                        | No. Out of scope. The engine writes in system mode.                                                       |
+| B9  | Inject a `Probe` so a test can make a broken install.                                                                | Yes. The only seam for metadata and trigger status.                                                       |
+| B10 | Make `WorkflowAlertManager.isAlertActionable` public and reuse it.                                                   | Yes. Same rule as the alert path.                                                                         |
+| B11 | One access row per core object (instance, step, signal).                                                             | Yes. Each row names the object and fields.                                                                |
+| B14 | Check all package fields (describe), not a fixed list. Skip fields of other namespaces.                              | Yes. A new engine field is covered without an edit. A subscriber field gives no false gap (Codex review). |
+| B12 | Show a "Run Checks" button and the round-trip time on the panel.                                                     | Yes. One click. Shows the < 2 s target.                                                                   |
+| B13 | Add a button that starts the watchdog on the panel.                                                                  | No. Link to the existing **Enqueue Watchdog** button.                                                     |
 
 ## Reverse Brainstorming (how can this fail?)
 

@@ -599,6 +599,46 @@ private class WorkflowReadinessControllerTest {
   }
 
   /**
+   * @description Only fields of this package are checked. A field of another package
+   * or, in a namespaced install, a subscriber field is not checked.
+   */
+  @IsTest
+  static void testOnlyPackageFieldsAreChecked() {
+    System.assert(
+      WorkflowReadinessService.isPackageField('Input__c', 'Input__c', null),
+      'No namespace: a field with no prefix belongs to the package'
+    );
+    System.assert(
+      !WorkflowReadinessService.isPackageField(
+        'other__Extra__c',
+        'Extra__c',
+        null
+      ),
+      'No namespace: a field of another package is skipped'
+    );
+    System.assert(
+      WorkflowReadinessService.isPackageField(
+        'rvnt__Input__c',
+        'Input__c',
+        'rvnt'
+      ),
+      'Namespace: a field with the package prefix belongs to the package'
+    );
+    System.assert(
+      !WorkflowReadinessService.isPackageField('Extra__c', 'Extra__c', 'rvnt'),
+      'Namespace: a subscriber field is skipped'
+    );
+    System.assert(
+      !WorkflowReadinessService.isPackageField(
+        'other__Extra__c',
+        'Extra__c',
+        'rvnt'
+      ),
+      'Namespace: a field of another package is skipped'
+    );
+  }
+
+  /**
    * @description A read gap and a create gap on one object give one Fail row that
    * names both.
    */

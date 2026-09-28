@@ -153,6 +153,21 @@ public inherited sharing class WorkflowReadinessService {
     return checks;
   }
 
+  // True when the field belongs to this package. With a namespace, the field name must
+  // start with it. Without a namespace, the field must have no namespace prefix, so
+  // fields of other packages are not included.
+  @TestVisible
+  private static Boolean isPackageField(
+    String name,
+    String localName,
+    String namespace
+  ) {
+    if (String.isBlank(namespace)) {
+      return name == localName;
+    }
+    return name.startsWithIgnoreCase(namespace + '__');
+  }
+
   // The namespace of this package, or null when not in a namespace.
   private static String packageNamespace() {
     String className = WorkflowReadinessService.class.getName();
@@ -345,16 +360,23 @@ public inherited sharing class WorkflowReadinessService {
       return toCheck(objectName, readGaps, createGaps);
     }
 
-    // All custom fields that hold data (no formula, no auto number), sorted by name.
+    // The custom fields of this package that hold data (no formula, no auto number),
+    // sorted by name. Fields of other packages are not included.
     private List<Schema.SObjectField> customFields() {
       Map<String, Schema.SObjectField> byName = objectType.getDescribe()
         .fields.getMap();
       List<String> names = new List<String>(byName.keySet());
       names.sort();
+      String namespace = packageNamespace();
       List<Schema.SObjectField> result = new List<Schema.SObjectField>();
       for (String fieldName : names) {
         Schema.DescribeFieldResult d = byName.get(fieldName).getDescribe();
-        if (d.isCustom() && !d.isCalculated() && !d.isAutoNumber()) {
+        if (
+          d.isCustom() &&
+          !d.isCalculated() &&
+          !d.isAutoNumber() &&
+          isPackageField(d.getName(), d.getLocalName(), namespace)
+        ) {
           result.add(byName.get(fieldName));
         }
       }
@@ -397,7 +419,7 @@ public inherited sharing class WorkflowReadinessService {
       return pass(
         'This user can read and create ' +
           objectName +
-          ' and all its custom fields.'
+          ' and all its package fields.'
       );
     }
   }
