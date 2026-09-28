@@ -139,7 +139,7 @@ public inherited sharing class BulkWorkflowSelector {
   private String buildWhere(Criteria c, Id afterId, Map<String, Object> binds) {
     binds.put('excludeName', excludeWorkflowName);
     List<String> clauses = new List<String>{
-      'Status__c IN :statuses',
+      statusClause(c, binds),
       'Workflow_Name__c != :excludeName'
     };
     if (afterId != null) {
@@ -160,5 +160,15 @@ public inherited sharing class BulkWorkflowSelector {
       );
     }
     return String.join(clauses, ' AND ');
+  }
+
+  // The Held filter (issue #119) also covers a hold that waits to park, the
+  // same as the dashboard list. Such a row must have an eligible status.
+  private String statusClause(Criteria c, Map<String, Object> binds) {
+    if (c.status != WorkflowInstanceHoldGate.STATUS) {
+      return 'Status__c IN :statuses';
+    }
+    binds.put('heldEligible', new List<String>(eligibleStatuses));
+    return '(Status__c IN :statuses OR (Held_At__c != NULL AND Status__c IN :heldEligible))';
   }
 }

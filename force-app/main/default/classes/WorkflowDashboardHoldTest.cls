@@ -161,6 +161,35 @@ private class WorkflowDashboardHoldTest {
     }
   }
 
+  // Codex review: bulk cancel must act on the rows the Held filter shows.
+  @IsTest
+  static void testCancelCountUsesHeldFilter() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id waitingId = startAndRunFirstHop(
+        'DashHoldBulk-' + Datetime.now().getTime()
+      );
+      Id parkedId = startAndRunFirstHop(
+        'DashHoldBulkP-' + Datetime.now().getTime()
+      );
+      startAndRunFirstHop('DashHoldBulkF-' + Datetime.now().getTime());
+      WorkflowInstanceHold.hold(waitingId, 'x');
+      WorkflowInstanceHold.hold(parkedId, 'x');
+      WorkflowEngine.runStep(parkedId);
+      Integer count = WorkflowDashboardController.getCancelEligibleCount(
+        WF,
+        'Held',
+        ''
+      );
+      Test.stopTest();
+      System.assertEquals(
+        2,
+        count,
+        'Parked and waiting holds, not the free run'
+      );
+    }
+  }
+
   @IsTest
   static void testActionReturnsOperatorMessage() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
