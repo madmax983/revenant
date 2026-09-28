@@ -309,6 +309,8 @@ public class ThrottledCalloutWorkflowExampleTest {
       '1.5' => fallback,
       '9999999999' => ThrottledCalloutWorkflowExample.MAX_RETRY_AFTER_SECONDS,
       '99999' => ThrottledCalloutWorkflowExample.MAX_RETRY_AFTER_SECONDS,
+      '0000000005' => 5,
+      '0000000000' => fallback,
       'Sun, 06 Nov 1994 08:49:37 GMT' => fallback,
       'Wed, 21 Oct 2099 07:28:00 GMT' => ThrottledCalloutWorkflowExample.MAX_RETRY_AFTER_SECONDS,
       'Wed, 21 Foo 2099 07:28:00 GMT' => fallback,
@@ -373,14 +375,20 @@ public class ThrottledCalloutWorkflowExampleTest {
   @IsTest
   static void unknownResultRetriesWithTheSameKey() {
     MockThrottledApi.reset();
+    StepContext ctx = context(CALLOUT);
     for (Integer code : new List<Integer>{ 408, 409, 500, 503 }) {
       MockThrottledApi.queue(code, null);
-      StepResult.StepDirective d = callout(context(CALLOUT));
+      StepResult.StepDirective d = callout(ctx);
       Assert.areEqual(StepResult.ActionType.RETRY, d.action, 'HTTP ' + code);
       Assert.areEqual(
         4,
         d.retry.policy.maximumAttempts,
         'Uses the step retry policy'
+      );
+      Assert.areEqual(
+        ctx.idempotencyKey,
+        MockThrottledApi.lastRequest.getHeader('Idempotency-Key'),
+        'Each retry sends the same key'
       );
     }
     Assert.areEqual(0, MockThrottledApi.effects, 'No effect yet');

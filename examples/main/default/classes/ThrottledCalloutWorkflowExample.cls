@@ -221,8 +221,9 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
     String raw = res.getHeader('Retry-After');
     raw = (raw == null) ? '' : raw.trim();
     Long seconds = null;
-    if (raw.isNumeric() && raw.length() <= 9) {
-      seconds = Long.valueOf(raw);
+    String digits = raw.replaceFirst('^0+(?=\\d)', '');
+    if (raw.isNumeric() && digits.length() <= 9) {
+      seconds = Long.valueOf(digits);
     } else if (raw.isNumeric()) {
       seconds = MAX_RETRY_AFTER_SECONDS;
     } else {
