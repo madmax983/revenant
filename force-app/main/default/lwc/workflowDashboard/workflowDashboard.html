@@ -388,6 +388,58 @@
                                     </div>
                                 </div>
 
+                                <!-- Readiness (#114): install checks, read-only -->
+                                <div data-id="readiness-panel" class="slds-m-bottom_large">
+                                    <div class="slds-grid slds-wrap slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                        <h3 class="slds-text-heading_small font-outfit">
+                                            Readiness
+                                            <span data-id="readiness-summary" aria-live="polite" class={readinessSummaryClass}>{readinessSummary}</span>
+                                        </h3>
+                                        <div class="slds-grid slds-grid_vertical-align-center">
+                                            <span data-id="readiness-timing" class="slds-text-body_small slds-text-color_weak slds-m-right_small">{readinessTimingLabel}</span>
+                                            <lightning-button
+                                                data-id="readiness-run"
+                                                label="Run Checks"
+                                                icon-name="utility:check"
+                                                variant="neutral"
+                                                disabled={readinessRunning}
+                                                onclick={handleRunReadiness}>
+                                            </lightning-button>
+                                        </div>
+                                    </div>
+                                    <template if:true={showReadinessLoading}>
+                                        <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center">
+                                            Running readiness checks…
+                                        </div>
+                                    </template>
+                                    <template if:true={hasReadinessRows}>
+                                        <div class="panel-card slds-p-around_medium">
+                                            <template for:each={readinessRows} for:item="check">
+                                                <div key={check.key} data-id="readiness-row" class="slds-grid slds-grid_align-spread slds-p-vertical_x-small border-bottom">
+                                                    <div class="slds-col slds-p-right_small">
+                                                        <div class="slds-text-body_regular font-bold">{check.name}</div>
+                                                        <div class="slds-text-body_small">{check.finding}</div>
+                                                        <template if:true={check.showRemediation}>
+                                                            <code data-id="readiness-remediation" class="readiness-remediation">{check.remediation}</code>
+                                                        </template>
+                                                    </div>
+                                                    <div class="slds-no-flex slds-text-align_right">
+                                                        <lightning-icon icon-name={check.icon} size="xx-small" class={check.iconClass}></lightning-icon>
+                                                        <span data-id="readiness-status" class={check.badgeClass}>{check.statusLabel}</span>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template if:true={readinessError}>
+                                        <div data-id="readiness-error" class="panel-card slds-p-around_medium slds-text-align_center">
+                                            <lightning-icon icon-name="utility:warning" size="xx-small" alternative-text="Unavailable" class="slds-m-right_xx-small text-red-icon"></lightning-icon>
+                                            Readiness checks are not available.
+                                            <div class="slds-text-body_small slds-text-color_weak">{readinessError}</div>
+                                        </div>
+                                    </template>
+                                </div>
+
                                 <!-- Watchdog Health Panel -->
                                 <div class="slds-card slds-p-around_small slds-m-bottom_large status-card">
                                     <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">

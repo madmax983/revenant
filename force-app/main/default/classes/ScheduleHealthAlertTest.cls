@@ -225,14 +225,19 @@ private class ScheduleHealthAlertTest {
       ScheduleHealthAlert.forOverdue(a, emailConfig('a@test.com'), 10),
       ScheduleHealthAlert.forFailed(a, emailConfig('a@test.com'), null),
       ScheduleHealthAlert.forOverdue(a, emailConfig('b@test.com'), 10),
-      ScheduleHealthAlert.forOverdue(a, config(), 10)
+      ScheduleHealthAlert.forOverdue(a, config(), 10),
+      ScheduleHealthAlert.forOverdue(a, emailConfig(' ; '), 10)
     };
 
     Map<String, List<ScheduleHealthAlert>> groups = ScheduleHealthAlert.groupByRecipients(
       alerts
     );
 
-    Assert.areEqual(2, groups.size(), 'An alert with no recipient is left out');
+    Assert.areEqual(
+      2,
+      groups.size(),
+      'An alert with no recipient or only separators is left out'
+    );
     Assert.areEqual(2, groups.get('a@test.com').size());
     Assert.areEqual(1, groups.get('b@test.com').size());
   }

@@ -405,12 +405,17 @@ private class ScheduleHealthAlerterTest {
   static void failingChannelDoesNotStarveLaterAlerts() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       setUp();
-      enableDefaultAlerts();
-      // A recipient list with no valid address: the email never sends.
+      // "Good" alerts by email. "Broken" alerts only by event, and the
+      // event publish fails, so its channel never sends.
+      WorkflowAlertManager.mockConfigs.put(
+        'Default',
+        alertConfig('ops@test.com', false)
+      );
       WorkflowAlertManager.mockConfigs.put(
         'BrokenFlow',
-        alertConfig(' ; ', false)
+        alertConfig(null, true)
       );
+      WorkflowAlertManager.forceDmlBudgetExhausted = true;
       ScheduleHealthAlerter.maxAlertsPerSweep = 1;
       // The broken schedule has the oldest cursor, so it is first in the list.
       insertSchedule(
@@ -442,7 +447,7 @@ private class ScheduleHealthAlerterTest {
       List<Workflow_Log__c> logs = claims();
       Assert.areEqual(1, logs.size(), String.valueOf(logs));
       Assert.areEqual(good.Id, logs[0].Schedule__c);
-      Assert.areEqual(1, WorkflowAlertManager.publishedEvents.size());
+      Assert.areEqual(1, WorkflowAlertManager.sentEmailsCount);
     }
   }
 

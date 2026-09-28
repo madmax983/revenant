@@ -194,8 +194,8 @@ public inherited sharing class ScheduleHealthAlert implements Comparable {
   }
 
   /**
-   * @description Groups the alerts that have email recipients by the raw
-   * recipient list, so each list gets one email.
+   * @description Groups the alerts that have one or more email recipients by
+   * the raw recipient list, so each list gets one email.
    * @param alerts The alerts.
    * @return Alerts by recipient list.
    */
@@ -205,7 +205,9 @@ public inherited sharing class ScheduleHealthAlert implements Comparable {
     Map<String, List<ScheduleHealthAlert>> result = new Map<String, List<ScheduleHealthAlert>>();
     for (ScheduleHealthAlert alert : alerts) {
       String recipients = alert.config.Email_Recipients__c;
-      if (String.isBlank(recipients)) {
+      // Same rule as the other alert paths: a list of only separators has
+      // no recipient (issue #114).
+      if (!WorkflowAlertEmailBuilder.hasRecipients(recipients)) {
         continue;
       }
       if (!result.containsKey(recipients)) {
