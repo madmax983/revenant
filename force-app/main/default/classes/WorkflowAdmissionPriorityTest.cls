@@ -233,6 +233,24 @@ public class WorkflowAdmissionPriorityTest {
     System.assert(!isAdmitted(high), 'High keeps its place for its own visit');
   }
 
+  // ── The ahead scan is capped. A full capped scan yields ─────────────────
+  @IsTest
+  static void testCappedScanYieldsWhenFull() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(5, 60);
+    ConcurrencyAdmissionOrder.maxAheadScan = 1;
+    Id high = newWaiting('cap-high', 9);
+    Id low = newWaiting('cap-low', 0);
+
+    Test.startTest();
+    WorkflowEngine.runStep(low, null); // 5 free, scan cap 1, 1 row ahead
+    WorkflowEngine.runStep(high, null); // nothing ahead
+    Test.stopTest();
+
+    System.assert(!isAdmitted(low), 'A full capped scan yields');
+    System.assert(isAdmitted(high), 'The head admits');
+  }
+
   // ── Gate result names the rows the visitor yields to ────────────────────
   @IsTest
   static void testGateReportsRowsAhead() {

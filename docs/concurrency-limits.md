@@ -143,8 +143,9 @@ effect. A large window lets low-priority work wait longer.
   gate reads the queue through this field, not through a table scan.
 - The gate holds the counter lock. When a slot is free, it reads the waiting
   instances that rank ahead of the candidate, up to the number of free
-  slots. If fewer instances are ahead than slots are free, the candidate
-  gets a slot. If not, the candidate yields.
+  slots (max 1,000). If fewer instances are ahead than slots are free, the
+  candidate gets a slot. If not, the candidate yields. When more than 1,000
+  slots are free and the scan is full, the candidate also yields.
 - After the decision, the gate wakes the instances ahead (up to the number
   of free slots, max 10) with one admit-only Queueable
   (`ConcurrencyAdmissionWake`). The gate enqueues the wake before the

@@ -163,10 +163,14 @@ public inherited sharing class ConcurrencyGate {
       return rejected();
     }
 
+    // Read at most maxAheadScan rows. When more slots are free than that and
+    // the scan is full, the candidate yields: the order stays correct, and the
+    // woken rows ahead take the slots.
+    Integer scanRows = Math.min(free, ConcurrencyAdmissionOrder.maxAheadScan);
     List<Id> aheadIds = (candidate == null)
       ? new List<Id>()
-      : ConcurrencyAdmissionOrder.findAhead(candidate, free);
-    if (aheadIds.size() >= free) {
+      : ConcurrencyAdmissionOrder.findAhead(candidate, scanRows);
+    if (aheadIds.size() >= scanRows) {
       return withAhead(rejected(), aheadIds);
     }
     state.In_Flight_Count__c = inFlight + 1;

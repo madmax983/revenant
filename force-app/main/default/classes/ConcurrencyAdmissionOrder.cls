@@ -35,6 +35,11 @@ public inherited sharing class ConcurrencyAdmissionOrder {
     'Compensating',
     'Cancelling'
   };
+  /**
+   * @description The maximum number of rows ahead that one gate visit reads. It
+   * keeps the scan below the query-row limit for a very large ceiling.
+   */
+  public static Integer maxAheadScan = 1000;
   /** @description The maximum number of rows that one gate visit wakes. */
   public static final Integer MAX_WAKES = 10;
 

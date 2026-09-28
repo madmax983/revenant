@@ -115,4 +115,5 @@ these problems. The fixes replace parts of the decision above.
 | The wake job locks the counter, then more instance rows (round 2).    | Lock all wake rows first, in Id order.                                    |
 | A parked row that rolls back can join the queue (round 2).            | The trigger clears the marker on `Compensating`/`Cancelling`.             |
 | The old timer is aborted after the new one is scheduled (round 2).    | Abort first. Log a failed wake. Backfill uses `allOrNone = false`.        |
+| The ahead scan has no row cap for a huge ceiling (Codex).             | Cap the scan at 1,000 rows. A full capped scan yields.                    |
 | Admin can edit engine fields.                                         | Read-only in both permission sets.                                        |
