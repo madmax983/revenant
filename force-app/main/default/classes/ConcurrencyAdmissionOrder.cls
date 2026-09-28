@@ -50,6 +50,14 @@ public inherited sharing class ConcurrencyAdmissionOrder {
   @TestVisible
   private static Boolean skipQueueSync = false;
 
+  // Test seam: rows that the backfill fails to update (a workflow name that
+  // is too long for the field).
+  @TestVisible
+  private static Set<Id> backfillFailIds = new Set<Id>();
+
+  // Pages that one backfill call reads when full pages fail.
+  private static final Integer BACKFILL_PAGES = 5;
+
   /**
    * @description Returns the priority for a new instance: the clamped
    * override, else the clamped config value, else MIN_PRIORITY.
@@ -161,12 +169,52 @@ public inherited sharing class ConcurrencyAdmissionOrder {
   /**
    * @description Sets `Admission_Queue__c` on waiting rows from before this
    * feature. Until then the gate does not see them. The watchdog heartbeat
-   * calls it. An admin can also run it once after deploy.
-   * @param maxRows The maximum number of rows to fix in one call.
+   * calls it. An admin can also run it once after deploy. When a full page of
+   * rows fails to update, the call reads the next page (max
+   * BACKFILL_PAGES pages), so failing rows cannot block the rows after them.
+   * Each failed page is logged.
+   * @param maxRows The page size.
    * @return The number of rows fixed.
    */
   public static Integer backfillQueue(Integer maxRows) {
-    List<Workflow_Instance__c> rows = [
+    Integer fixed = 0;
+    Id afterId = null;
+    for (Integer page = 0; page < BACKFILL_PAGES; page++) {
+      List<Workflow_Instance__c> rows = queryUnqueuedWaiting(afterId, maxRows);
+      if (rows.isEmpty()) {
+        break;
+      }
+      Integer pageFixed = updateQueueField(rows);
+      fixed += pageFixed;
+      // Progress, or the last page: the next call starts again at the top.
+      if (pageFixed > 0 || rows.size() < maxRows) {
+        break;
+      }
+      afterId = rows[rows.size() - 1].Id;
+    }
+    return fixed;
+  }
+
+  // Waiting rows with a blank queue field, in Id order, after the cursor.
+  private static List<Workflow_Instance__c> queryUnqueuedWaiting(
+    Id afterId,
+    Integer maxRows
+  ) {
+    if (afterId == null) {
+      return [
+        SELECT Id, Workflow_Name__c
+        FROM Workflow_Instance__c
+        WHERE
+          Admission_Queue__c = NULL
+          AND Concurrency_Parked__c = TRUE
+          AND Concurrency_Slot_Held__c = FALSE
+          AND Status__c IN :WAITING_STATUSES
+        WITH SYSTEM_MODE
+        ORDER BY Id ASC
+        LIMIT :maxRows
+      ];
+    }
+    return [
       SELECT Id, Workflow_Name__c
       FROM Workflow_Instance__c
       WHERE
@@ -174,18 +222,23 @@ public inherited sharing class ConcurrencyAdmissionOrder {
         AND Concurrency_Parked__c = TRUE
         AND Concurrency_Slot_Held__c = FALSE
         AND Status__c IN :WAITING_STATUSES
+        AND Id > :afterId
       WITH SYSTEM_MODE
       ORDER BY Id ASC
       LIMIT :maxRows
     ];
+  }
+
+  // Sets the queue field with allOrNone = false. Logs a page that fails.
+  // Returns the number of rows fixed.
+  private static Integer updateQueueField(List<Workflow_Instance__c> rows) {
     for (Workflow_Instance__c row : rows) {
       row.Admission_Queue__c = row.Workflow_Name__c;
+      if (Test.isRunningTest() && backfillFailIds.contains(row.Id)) {
+        row.Workflow_Name__c = row.Workflow_Name__c.rightPad(300, 'x');
+      }
     }
     Integer fixed = 0;
-    if (rows.isEmpty()) {
-      return fixed;
-    }
-    // allOrNone = false: one bad row must not block the other rows.
     for (
       Database.SaveResult result : Database.update(
         rows,
@@ -196,6 +249,15 @@ public inherited sharing class ConcurrencyAdmissionOrder {
       if (result.isSuccess()) {
         fixed++;
       }
+    }
+    if (fixed < rows.size()) {
+      WorkflowLog.warn(
+        'AdmissionQueueBackfill',
+        (rows.size() - fixed) +
+          ' waiting row(s) failed the admission queue backfill. First Id: ' +
+          rows[0].Id,
+        null
+      );
     }
     return fixed;
   }

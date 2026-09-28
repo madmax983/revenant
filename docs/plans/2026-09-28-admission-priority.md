@@ -116,4 +116,6 @@ these problems. The fixes replace parts of the decision above.
 | A parked row that rolls back can join the queue (round 2).            | The trigger clears the marker on `Compensating`/`Cancelling`.             |
 | The old timer is aborted after the new one is scheduled (round 2).    | Abort first. Log a failed wake. Backfill uses `allOrNone = false`.        |
 | The ahead scan has no row cap for a huge ceiling (Codex).             | Cap the scan at 1,000 rows. A full capped scan yields.                    |
+| An aging change mixes keys in one class (Codex).                      | Documented: change aging only with an empty queue. No re-rank.            |
+| Failing rows block the backfill (Codex).                              | Read the next page when a full page fails (max 5). Log failed pages.      |
 | Admin can edit engine fields.                                         | Read-only in both permission sets.                                        |

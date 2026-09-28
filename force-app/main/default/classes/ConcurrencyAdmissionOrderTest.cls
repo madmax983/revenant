@@ -246,6 +246,51 @@ public class ConcurrencyAdmissionOrderTest {
     );
   }
 
+  // Rows that always fail the backfill must not block the rows after them.
+  @IsTest
+  static void testBackfillSkipsPastFailingPage() {
+    ConcurrencyAdmissionOrder.skipQueueSync = true;
+    List<Workflow_Instance__c> rows = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 3; i++) {
+      rows.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = WF,
+          Status__c = 'Suspended',
+          Correlation_Key__c = 'queue-fail-' + i,
+          Concurrency_Parked__c = true
+        )
+      );
+    }
+    insert rows;
+    ConcurrencyAdmissionOrder.skipQueueSync = false;
+    List<Workflow_Instance__c> ordered = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Id IN :rows
+      ORDER BY Id ASC
+    ];
+    ConcurrencyAdmissionOrder.backfillFailIds = new Set<Id>{
+      ordered[0].Id,
+      ordered[1].Id
+    };
+
+    Test.startTest();
+    Integer fixed = ConcurrencyAdmissionOrder.backfillQueue(2);
+    Test.stopTest();
+
+    System.assertEquals(1, fixed, 'The row after the failing page is fixed');
+    System.assertEquals(
+      WF,
+      [
+        SELECT Admission_Queue__c
+        FROM Workflow_Instance__c
+        WHERE Id = :ordered[2].Id
+      ]
+      .Admission_Queue__c,
+      'The third row is in the queue'
+    );
+  }
+
   // A rollback does not use admission. A compensation step that suspends
   // later must not join the queue.
   @IsTest

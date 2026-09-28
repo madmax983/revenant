@@ -136,6 +136,11 @@ complete. The bound uses the aging value at insert of each instance.
 Select the aging window carefully. A small window gives priority less
 effect. A large window lets low-priority work wait longer.
 
+Change the aging window only when the queue of that workflow is empty. The
+key of each instance keeps the aging value at its insert. After a change,
+instances in the same priority class (above 0) can be out of FIFO order until
+the older instances are admitted. The engine does not re-rank the queue.
+
 ### How the gate uses the order
 
 - The instance trigger keeps the indexed field `Admission_Queue__c` equal to
