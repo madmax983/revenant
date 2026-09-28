@@ -44,7 +44,7 @@ Show all generations of a Continue-As-New chain as one ordered list. Give the li
 | Way to fail | Prevention |
 |-------------|-----------|
 | A long chain uses too many SOQL queries. | Constant query count: max 5. A test compares a 3-row and a 30-row chain. |
-| A long chain uses too many query rows or too much heap. | Page cap 200. `COUNT()` uses one row. No long text field. |
+| A long chain uses too many query rows or too much heap. | Page cap 200. The count cap keeps rows free. No long text field. |
 | Two members give different chains. | Same window rule for each member. A test reads from each member. |
 | An independent run with the same key joins the chain. | Window split at each first generation (B5). A test. |
 | A different workflow with the same key joins the chain. | Filter on `Workflow_Name__c`. A test. |
@@ -75,8 +75,8 @@ Steps:
 2. Anchor: the cursor anchor, else the Id, else the newest row with `Correlation_Key__c = key OR Root_Correlation_Key__c = key`.
 3. No predecessor and no successor, or no root: return one entry.
 4. Range: pivot = predecessor of the anchor, or the anchor. Start = newest first generation at or before the pivot. End = oldest first generation after the pivot. Members: the start row, and rows whose predecessor is in the range.
-5. Total: `COUNT()` in the window, `LIMIT` 50,000.
-6. Page: rows in the window (and after the cursor), `LIMIT pageSize + 1`.
+5. Total: `COUNT()` of the members, `LIMIT` at the count cap (max 50,000).
+6. Page: members (after the cursor), `LIMIT pageSize + 1`.
 
 Dashboard: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)` maps the page to a `Map`. The LWC shows a "Continue-As-New Generations" section, "Showing X of N generations", and "Show older generations".
 
