@@ -153,9 +153,10 @@ public inherited sharing class WorkflowStepHistoryGuard {
   public static void recordWarning(WorkflowStepRunner.RunStepContext ctx) {
     if (
       String.isBlank(ctx.stepHistoryWarning) ||
-      Limits.getDmlStatements() >= Limits.getLimitDmlStatements()
+      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() >= Limits.getLimitDmlRows()
     ) {
-      return; // No warning, or no DML statement left: try on the next hop.
+      return; // No warning, or no DML budget left: try on the next hop.
     }
     Database.insert(
       new Workflow_Log__c(

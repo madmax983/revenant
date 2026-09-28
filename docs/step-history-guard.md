@@ -57,7 +57,7 @@ On each hop that continues:
 - One SOQL (`COUNT()` with `LIMIT`).
 - One query row. No heap for rows.
 - No DML below the warn threshold.
-- From the warn threshold: one insert statement (one DML statement) after the step outcome, on each hop. When no DML statement is left, the engine does not write the row. It tries again on the next hop. A second row for the same instance fails on the unique `Fire_Key__c` and is ignored. The insert occurs after `execute()`, so it does not block callouts.
+- From the warn threshold: one insert statement (one DML statement) after the step outcome, on each hop. When no DML statement or DML row is left, the engine does not write the row. It tries again on the next hop. A second row for the same instance fails on the unique `Fire_Key__c` and is ignored. The insert occurs after `execute()`, so it does not block callouts.
 
 A parked, paused or stale delivery does not pay: the guard runs after these gates.
 
