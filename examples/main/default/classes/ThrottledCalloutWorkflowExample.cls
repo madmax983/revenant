@@ -1,28 +1,24 @@
 /**
- * Reference example for durable rate limiting.
+ * @description Reference example for durable back-off under rate limiting (#106).
  *
- * Demonstrates a safe two-step pattern to throttle outbound callouts:
- *   1. AcquireTokenStep: Calls RateLimiter.acquire(). If allowed, transitions to the callout step.
- *      If blocked, yields a durable sleep. This commits the DML in a separate transaction.
- *   2. ThrottledCalloutStep: Executes the callout using ctx.idempotencyKey.
- *      Runs in a fresh transaction, avoiding System.CalloutException (uncommitted work pending).
+ * Contract:
+ *   1. AcquireTokenStep calls RateLimiter.acquire(). An empty bucket returns
+ *      StepResult.sleep(sleepDurationSeconds). It does not throw, fail, or loop.
+ *   2. ThrottledCalloutStep sends the request with the header
+ *      Idempotency-Key = ctx.idempotencyKey. An HTTP 429 returns
+ *      StepResult.sleep(Retry-After). The step runs again on resume with the
+ *      same key, so the API applies one effect.
  *
- * Note on Retries & Re-drives:
- * ----------------------------
- * When a callout fails (e.g. transient network error) and is retried via a RetryPolicy,
- * or when an operator manually re-drives the ThrottledCalloutStep from the dashboard,
- * the engine re-executes ThrottledCalloutStep directly, bypassing AcquireTokenStep.
+ * Why two steps: acquire() does DML. Apex blocks a callout after DML in the
+ * same transaction. The engine runs each step in a new transaction.
  *
- * This is the intended behavior:
- *   - Transaction Safety: AcquireTokenStep performs DML (RateLimiter.acquire), while
- *     ThrottledCalloutStep performs the HTTP Callout. Apex prohibits HTTP Callouts after
- *     DML in the same transaction, so they must be separated.
- *   - Built-in Back-off: Callout retries are already throttled by the step's own
- *     RetryPolicy back-off delay (which sleeps durably between attempts).
+ * A sleep is not a failure. It does not unwind the compensation stack.
  *
- * If you must enforce rate-limiting on every single callout retry, you can handle
- * callout exceptions in ThrottledCalloutStep and return a transition back to
- * AcquireTokenStep instead of using the engine's built-in RetryPolicy.
+ * A RetryPolicy retry, an HTTP 429 resume, or an operator re-drive runs
+ * ThrottledCalloutStep again without a new token. To take a token for each
+ * call, return StepResult.complete(ACQUIRE_STEP, null) from the callout step.
+ *
+ * See docs/rate-limiting.md.
  */
 public inherited sharing class ThrottledCalloutWorkflowExample {
   /** @description Rate_Limit_Config__mdt DeveloperName for the bucket. */
@@ -33,6 +29,9 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
   public static final Integer DEFAULT_RETRY_AFTER_SECONDS = 60;
   /** @description Longest sleep for one HTTP 429. */
   public static final Integer MAX_RETRY_AFTER_SECONDS = 3600;
+
+  private static final String ACQUIRE_STEP = 'ThrottledCalloutWorkflowExample.AcquireTokenStep';
+  private static final String CALLOUT_STEP = 'ThrottledCalloutWorkflowExample.ThrottledCalloutStep';
 
   /** @description Sends the HTTP request. Tests replace it with a fake. */
   public interface Transport {
@@ -59,113 +58,109 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
   @TestVisible
   private static Transport transport = new HttpTransport();
 
-  public static Integer calloutAttempts = 0;
-  public static Integer successfulCallouts = 0;
-  private static Set<String> processedKeys = new Set<String>();
-
   /**
-   * @description Simulates the throttled outbound callout, counting every attempt
-   * and recording a successful call only once per idempotency key.
-   * @param idempotencyKey The key that makes the callout effectively-once.
-   */
-  public static void performCallout(String idempotencyKey) {
-    calloutAttempts++;
-    if (processedKeys.contains(idempotencyKey)) {
-      return;
-    }
-    processedKeys.add(idempotencyKey);
-    successfulCallouts++;
-  }
-
-  /**
-   * @description Resets the callout counters and processed-key set so tests start
-   * from a clean state.
-   */
-  public static void reset() {
-    calloutAttempts = 0;
-    successfulCallouts = 0;
-    processedKeys.clear();
-  }
-
-  /**
-   * @description Two-step workflow DAG: acquire a rate-limiter token, then perform
-   * the callout in a separate transaction.
+   * @description Two steps: take a token, then call the API.
    */
   public class ThrottledCalloutWorkflow implements WorkflowDefinition {
     /**
-     * @description Lists the ordered step names in this workflow.
-     * @return The step names in execution order.
+     * @description Lists the steps in order.
+     * @return The step names.
      */
     public List<String> getSteps() {
-      return new List<String>{
-        'ThrottledCalloutWorkflowExample.AcquireTokenStep',
-        'ThrottledCalloutWorkflowExample.ThrottledCalloutStep'
-      };
+      return new List<String>{ ACQUIRE_STEP, CALLOUT_STEP };
     }
+
     /**
-     * @description Names the first step to run when an instance starts.
-     * @return The initial step name.
+     * @description Names the first step.
+     * @return The acquire step.
      */
     public String getInitialStep() {
-      return 'ThrottledCalloutWorkflowExample.AcquireTokenStep';
+      return ACQUIRE_STEP;
     }
+
     /**
-     * @description Determines the step to run after the current one completes.
-     * @param currentStepName The name of the step that just completed.
-     * @param result The result of the completed step.
-     * @return The callout step after acquiring a token, or null when complete.
+     * @description Names the next step.
+     * @param currentStepName The step that completed.
+     * @param result The result of that step.
+     * @return The callout step after the acquire step, else null.
      */
     public String getNextStep(String currentStepName, StepResult result) {
-      if (
-        currentStepName == 'ThrottledCalloutWorkflowExample.AcquireTokenStep'
-      ) {
-        return 'ThrottledCalloutWorkflowExample.ThrottledCalloutStep';
-      }
-      return null;
+      return currentStepName == ACQUIRE_STEP ? CALLOUT_STEP : null;
     }
   }
 
   /**
-   * @description Acquires a rate-limiter token; on success advances to the callout
-   * step, otherwise yields a durable sleep so the DML commits in its own transaction.
+   * @description Takes a token. An empty bucket makes a durable sleep.
    */
   public class AcquireTokenStep implements WorkflowStep {
     /**
-     * @description Calls the rate limiter and either sleeps until a token frees up or
-     * transitions to the throttled callout step.
-     * @param ctx The durable step context for this execution.
-     * @return A sleep result when throttled, or completion routing to the callout.
+     * @description Takes a token, or sleeps until the bucket refills.
+     * @param ctx The step context.
+     * @return SLEEP when the bucket is empty, else COMPLETE to the callout step.
      */
     public StepResult execute(StepContext ctx) {
-      RateLimiter.AcquireResult result = RateLimiter.acquire(
-        'ThrottledService'
-      );
-      if (!result.isAllowed) {
-        return StepResult.sleep(result.sleepDurationSeconds);
+      RateLimiter.AcquireResult token = RateLimiter.acquire(INTEGRATION_KEY);
+      if (!token.isAllowed) {
+        // Not a failure. The engine runs this step again after the sleep.
+        return StepResult.sleep(token.sleepDurationSeconds);
       }
-      return StepResult.complete(
-        'ThrottledCalloutWorkflowExample.ThrottledCalloutStep',
-        null
-      );
+      return StepResult.complete(CALLOUT_STEP, null);
     }
   }
 
   /**
-   * @description Performs the outbound callout in a fresh transaction, keyed by the
-   * step's idempotency key so retries and re-drives stay effectively-once.
+   * @description Calls the API with the step's idempotency key. An HTTP 429
+   * makes a durable sleep.
    */
   public class ThrottledCalloutStep implements WorkflowStep, CalloutStep {
     /**
-     * @description Executes the idempotent callout and completes the workflow.
-     * @param ctx The durable step context for this execution.
-     * @return A completion result reporting success.
+     * @description Sends the request and maps the status code.
+     * @param ctx The step context.
+     * @return COMPLETE for 2xx, SLEEP for 429, else FAIL.
      */
     public StepResult execute(StepContext ctx) {
-      ThrottledCalloutWorkflowExample.performCallout(ctx.idempotencyKey);
-      return StepResult.complete(
-        null,
-        new Map<String, Object>{ 'status' => 'Success' }
+      HttpRequest req = new HttpRequest();
+      req.setEndpoint(ENDPOINT);
+      req.setMethod('POST');
+      req.setHeader('Content-Type', 'application/json');
+      // The key is the same on each run of this step visit. The API applies
+      // one effect.
+      req.setHeader('Idempotency-Key', ctx.idempotencyKey);
+      req.setBody(
+        String.isBlank(ctx.workflowInputJson) ? '{}' : ctx.workflowInputJson
       );
+
+      HttpResponse res = transport.send(req);
+      Integer code = res.getStatusCode();
+      if (code == 429) {
+        // The API is full. Sleep. Do not fail.
+        return StepResult.sleep(retryAfterSeconds(res));
+      }
+      if (code >= 200 && code < 300) {
+        return StepResult.complete(
+          null,
+          new Map<String, Object>{ 'statusCode' => code }
+        );
+      }
+      return StepResult.fail('Throttled API returned HTTP ' + code);
     }
+  }
+
+  // Reads Retry-After in seconds. Uses the default for a missing, non-integer,
+  // or zero value. Caps the value at MAX_RETRY_AFTER_SECONDS.
+  private static Integer retryAfterSeconds(HttpResponse res) {
+    String raw = res.getHeader('Retry-After');
+    raw = (raw == null) ? '' : raw.trim();
+    if (!raw.isNumeric()) {
+      return DEFAULT_RETRY_AFTER_SECONDS;
+    }
+    if (raw.length() > 9) {
+      return MAX_RETRY_AFTER_SECONDS;
+    }
+    Integer seconds = Integer.valueOf(raw);
+    if (seconds < 1) {
+      return DEFAULT_RETRY_AFTER_SECONDS;
+    }
+    return Math.min(seconds, MAX_RETRY_AFTER_SECONDS);
   }
 }
