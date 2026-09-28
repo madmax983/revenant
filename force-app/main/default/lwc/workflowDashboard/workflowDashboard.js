@@ -99,6 +99,12 @@ const READINESS_UNKNOWN = {
   icon: "utility:question",
   iconClass: "slds-m-right_xx-small text-weak-icon",
 };
+// Watchdog liveness (#113): state code to word and colour.
+const LIVENESS_STATUS = {
+  HEALTHY: { label: "Healthy", badgeClass: "badge badge-green" },
+  STALE: { label: "Stale", badgeClass: "badge badge-red" },
+};
+const LIVENESS_UNKNOWN = { label: "Unknown", badgeClass: "badge badge-grey" };
 
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
@@ -1915,6 +1921,56 @@ export default class WorkflowDashboard extends LightningElement {
     return this.readinessElapsedMs === null
       ? ""
       : `Checked in ${this.readinessElapsedMs} ms`;
+  }
+
+  // Watchdog liveness (#113). The server calculates the state on each read.
+  get watchdogLiveness() {
+    return (this.doctorData && this.doctorData.liveness) || {};
+  }
+
+  get livenessStatus() {
+    return LIVENESS_STATUS[this.watchdogLiveness.state] || LIVENESS_UNKNOWN;
+  }
+
+  get livenessLabel() {
+    return this.livenessStatus.label;
+  }
+
+  get livenessBadgeClass() {
+    return `${this.livenessStatus.badgeClass} slds-m-right_small`;
+  }
+
+  get isLivenessStale() {
+    return this.watchdogLiveness.state === "STALE";
+  }
+
+  get livenessDetailClass() {
+    return this.isLivenessStale
+      ? "slds-text-body_small slds-text-color_error"
+      : "slds-text-body_small slds-text-color_weak";
+  }
+
+  // An active watchdog record with no recent sweep: the chain can be dead.
+  get watchdogRunningButStale() {
+    return (
+      !!(this.doctorData && this.doctorData.isRunning) && this.isLivenessStale
+    );
+  }
+
+  get livenessDetail() {
+    const live = this.watchdogLiveness;
+    if (!live.lastSweepAt) {
+      return "No sweep recorded yet.";
+    }
+    let text = `Last sweep ${this.formatDateTime(live.lastSweepAt)}`;
+    if (live.elapsedMinutes != null) {
+      text += ` (${live.elapsedMinutes} min ago)`;
+    }
+    text += ".";
+    if (live.thresholdMinutes != null) {
+      text += ` Stale after ${live.thresholdMinutes} min.`;
+    }
+    return text;
   }
 
   get hasConcurrencyRows() {

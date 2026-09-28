@@ -95,10 +95,10 @@ public inherited sharing class WorkflowAlertManager {
   }
 
   /**
-   * @description True when the config can send an alert: alerts are on and it has
-   * email recipients or event publish. The Readiness panel (#114) uses it too.
-   * @param config The alert config, or null.
-   * @return True when a failure alert can reach someone.
+   * @description True when alerts are on and at least one channel is set. The
+   * Readiness panel (#114) uses it too.
+   * @param config The resolved alert config, or null.
+   * @return True when the config can send an alert.
    */
   public static Boolean isAlertActionable(Workflow_Alert_Config__mdt config) {
     if (config == null || !config.Enable_Alerts__c) {
@@ -178,10 +178,11 @@ public inherited sharing class WorkflowAlertManager {
    * statement or DML row budget cannot safely absorb the events so alerting never rolls back
    * the engine's terminal-state writes. Publication failures are swallowed.
    * @param events The platform events to publish; null or empty is a no-op.
+   * @return True when every event was published.
    */
-  public static void publishEvents(List<Workflow_Alert__e> events) {
+  public static Boolean publishEvents(List<Workflow_Alert__e> events) {
     if (events == null || events.isEmpty()) {
-      return;
+      return false;
     }
 
     // Never spend the transaction's last DML statement or DML rows here.
@@ -193,15 +194,21 @@ public inherited sharing class WorkflowAlertManager {
       Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
       Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
     ) {
-      return;
+      return false;
     }
 
     if (Test.isRunningTest()) {
       publishedEvents.addAll(events);
     }
     try {
-      EventBus.publish(events);
+      for (Database.SaveResult result : EventBus.publish(events)) {
+        if (!result.isSuccess()) {
+          return false;
+        }
+      }
+      return true;
     } catch (Exception ignored) {
+      return false;
     }
   }
 
@@ -232,5 +239,14 @@ public inherited sharing class WorkflowAlertManager {
    */
   public static void detectAndAlertStalls() {
     WorkflowStallDetector.detectAndAlertStalls();
+  }
+
+  /**
+   * @description Sends one alert when the watchdog heartbeat is stale (issue
+   * #113). Calls WatchdogStallDetector.
+   * @return True when this call sent the alert.
+   */
+  public static Boolean detectAndAlertWatchdogStall() {
+    return WatchdogStallDetector.detectAndAlert();
   }
 }
