@@ -8,43 +8,49 @@ then schedules the next attempt or fails the step.
 
 ## Fields
 
-| Field                         | Meaning                                                                                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Workflow_Definition__c`      | Required. Workflow API name, as in `Workflow_Instance__c.Workflow_Name__c`.                                                                      |
-| `Step_Name__c`                | Optional. Step name, as in `Workflow_Step_Execution__c.Step_Name__c` (for example `RetryConfigWorkflowExample.PushOrderStep`). Blank: all steps. |
-| `Initial_Interval_Seconds__c` | Seconds before the first retry.                                                                                                                  |
-| `Backoff_Coefficient__c`      | Multiplier for each next interval. 1.0 gives a fixed interval.                                                                                   |
-| `Maximum_Attempts__c`         | Attempts before the step fails.                                                                                                                  |
-| `Override_Author_Policy__c`   | For incidents. Checked: the record has priority over an author policy.                                                                           |
+| Field                         | Meaning                                                                                                                                               |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Workflow_Definition__c`      | Required. Workflow API name, as in `Workflow_Instance__c.Workflow_Name__c`. Include the namespace and the outer class (for example `ns.Outer.Inner`). |
+| `Step_Name__c`                | Optional. Step name, as in `Workflow_Step_Execution__c.Step_Name__c` (for example `RetryConfigWorkflowExample.PushOrderStep`). Blank: all steps.      |
+| `Initial_Interval_Seconds__c` | Seconds before the first retry.                                                                                                                       |
+| `Backoff_Coefficient__c`      | Multiplier for each next interval. 1.0 gives a fixed interval.                                                                                        |
+| `Maximum_Attempts__c`         | Attempts before the step fails. The lowest valid value is 1: the first failure fails the step.                                                        |
+| `Override_Author_Policy__c`   | For incidents. Checked: the record has priority over an author policy and over a record without override.                                             |
 
 The engine does not use `DeveloperName` to match. For two records with the same
 key, the lowest `DeveloperName` wins.
 
 ## Resolution Rule
 
-1. **Match.** The engine looks for a record at each retry outcome:
-   - a step record for `(workflow, step)`, else
-   - a definition record for `(workflow, blank step)`, else
-   - no record.
+The engine resolves the policy at each retry outcome:
 
-   The match ignores case and outer spaces. For two records with the same
-   key, the lowest `DeveloperName` wins. The step record replaces the
-   definition record fully. It does not merge with it.
+1. **Start.** Use the author policy, else the engine default (5 s, 2.0,
+   5 attempts). The values of a `RetryPolicy.fromConfig()` policy are a start
+   value, not an author policy.
+2. **Record.** If the step has no author policy, put the most specific
+   record over the start value.
+3. **Override.** Put the most specific override record over the result.
 
-2. **Apply.** "No author policy" means `RetryPolicy.fromConfig()` or a null
-   policy.
+"Most specific" is the step record for `(workflow, step)`, else the
+definition record for `(workflow, blank step)`. The step record replaces the
+definition record fully. It does not merge with it. The match ignores case
+and outer spaces. For two records with the same key, the lowest
+`DeveloperName` wins.
 
-   | Author policy | Record | Override | Effective policy                     |
-   | ------------- | ------ | -------- | ------------------------------------ |
-   | none          | none   | -        | engine default: 5 s, 2.0, 5 attempts |
-   | none          | match  | any      | record fields over engine default    |
-   | set           | none   | -        | author policy                        |
-   | set           | match  | clear    | author policy                        |
-   | set           | match  | checked  | record fields over author policy     |
+"Put a record over a value" means: each valid record field replaces the
+value. The engine ignores a blank field, a count below 1 and a backoff below
+1.0. Decimal counts round down.
 
-3. **Blank or bad field.** A blank field, a count below 1, or a backoff
-   below 1.0 keeps the value of the lower layer. The lower layer is the
-   author policy, else the engine default. Decimal counts round down.
+| Author policy | Record without override | Override record | Effective policy                   |
+| ------------- | ----------------------- | --------------- | ---------------------------------- |
+| none          | none                    | none            | engine default                     |
+| none          | match                   | none            | record over engine default         |
+| set           | any                     | none            | author policy                      |
+| none          | any                     | match           | override record over steps 1 and 2 |
+| set           | any                     | match           | override record over author policy |
+
+A definition override record thus caps each step, also a step that has its
+own record without override.
 
 "Author policy" is the policy in `StepResult.retry(policy)`,
 `RetryConfigurable.getRetryPolicy()` or
@@ -79,7 +85,8 @@ Each instance makes up to 6 attempts. Stop the attempts at 3:
    category `RETRIES_EXHAUSTED`.
 
 If the step code gives its own policy, also check
-**Override Author Policy**. Clear it after the incident.
+**Override Author Policy**. Clear it after the incident. To stop all retries,
+set **Maximum Attempts** to `1`. The engine ignores `0`.
 
 The same record as metadata
 (`examples/main/default/customMetadata/Workflow_Retry_Config.PartnerSync.md-meta.xml`).
@@ -123,6 +130,11 @@ and its test `operatorCapsAttemptsInTheMiddleOfAnIncident`.
 - **Next retry outcome.** Each retry outcome runs in a new transaction and reads
   the record again. A retry job that is already scheduled keeps its delay.
   The new delay applies from the next retry outcome.
+- **Apex tests.** Tests ignore org records, so an incident record cannot
+  block a deploy. A test sets `WorkflowRetryConfigResolver.mockRecords`, or
+  sets `readOrgRecordsInTest` to read the org records.
+- **Delay cap.** The engine caps each delay at 86400 s (1 day), also for a
+  very large interval or backoff.
 - **`ctx.isFinalAttempt()`.** An override record shows immediately. A
   record without override shows immediately when `getRetryPolicy()` or
   `getAutoRetryPolicy()` returns null or `fromConfig()`. For other steps,

@@ -75,8 +75,10 @@ public inherited sharing class WorkflowRetryScheduling {
       (Double) policy.backoffCoefficient,
       (Double) (stepExec.Retry_Count__c - 1)
     );
-    Integer delay = (Integer) (policy.initialIntervalSeconds * backoff);
-    delay = Math.min(delay, 86400);
+    // Cap before the cast: a large operator or author value can overflow
+    // Integer (issue #103).
+    Double rawDelay = policy.initialIntervalSeconds * backoff;
+    Integer delay = rawDelay >= 86400 ? 86400 : rawDelay.intValue();
 
     instance.Status__c = 'Suspended';
     instance.Sleep_Until__c = DateTime.now().addSeconds(delay);

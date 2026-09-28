@@ -211,7 +211,7 @@ private class WorkflowRetryConfigResolverTest {
   }
 
   @IsTest
-  static void overrideFlagComesFromWinningRecordOnly() {
+  static void definitionOverrideAppliesOverStepRecordWithoutOverride() {
     System.runAs(runner()) {
       useRecords(
         new List<Workflow_Retry_Config__mdt>{
@@ -220,10 +220,84 @@ private class WorkflowRetryConfigResolverTest {
         }
       );
       Assert.areEqual(
-        '10/3.0/7',
+        '30/1.5/2',
         show(WorkflowRetryConfigResolver.resolve(WF, STEP, author())),
-        'Step record has no override, so author policy wins'
+        'A step tuning record does not hide an incident override'
       );
+    }
+  }
+
+  @IsTest
+  static void overrideRecordGoesOverPlainRecordWithoutAuthorPolicy() {
+    System.runAs(runner()) {
+      useRecords(
+        new List<Workflow_Retry_Config__mdt>{
+          overriding(rec('Def', null, new List<Decimal>{ null, null, 2 })),
+          rec('Step', STEP, new List<Decimal>{ 45, 2.5, 3 })
+        }
+      );
+      Assert.areEqual(
+        '45/2.5/2',
+        show(WorkflowRetryConfigResolver.resolve(WF, STEP, null)),
+        'Step pacing stays. The override caps the attempts.'
+      );
+    }
+  }
+
+  @IsTest
+  static void stepOverrideWinsOverDefinitionOverride() {
+    System.runAs(runner()) {
+      useRecords(
+        new List<Workflow_Retry_Config__mdt>{
+          overriding(rec('Def', null, new List<Decimal>{ null, null, 2 })),
+          overriding(rec('Step', STEP, new List<Decimal>{ null, null, 4 }))
+        }
+      );
+      Assert.areEqual(
+        '10/3.0/4',
+        show(WorkflowRetryConfigResolver.resolve(WF, STEP, author())),
+        'Step override record wins'
+      );
+    }
+  }
+
+  @IsTest
+  static void fromConfigValuesAreTheLowerLayer() {
+    System.runAs(runner()) {
+      RetryPolicy managed = RetryPolicy.fromConfig();
+      managed.initialIntervalSeconds = 20;
+      managed.maximumAttempts = 10;
+      useRecords(new List<Workflow_Retry_Config__mdt>());
+      Assert.areEqual(
+        '20/2.0/10',
+        show(WorkflowRetryConfigResolver.resolve(WF, STEP, managed)),
+        'No record: the fromConfig() values stay'
+      );
+      useRecords(
+        new List<Workflow_Retry_Config__mdt>{
+          rec('Def', null, new List<Decimal>{ null, null, 3 })
+        }
+      );
+      Assert.areEqual(
+        '20/2.0/3',
+        show(WorkflowRetryConfigResolver.resolve(WF, STEP, managed)),
+        'Record goes over the fromConfig() values'
+      );
+    }
+  }
+
+  @IsTest
+  static void orgRecordsAreIgnoredInTestsUnlessOptedIn() {
+    System.runAs(runner()) {
+      useRecords(null);
+      WorkflowRetryConfigResolver.readOrgRecordsInTest = false;
+      Integer before = Limits.getQueries();
+      Assert.areEqual(
+        '5/2.0/5',
+        show(WorkflowRetryConfigResolver.resolve(WF, STEP, null)),
+        'An incident record in the org does not change test results'
+      );
+      Assert.areEqual(before, Limits.getQueries(), 'No SOQL');
     }
   }
 
@@ -432,6 +506,7 @@ private class WorkflowRetryConfigResolverTest {
     System.runAs(runner()) {
       // Real getAll() path: no mock records.
       useRecords(null);
+      WorkflowRetryConfigResolver.readOrgRecordsInTest = true;
       Integer queries = Limits.getQueries();
       Integer dml = Limits.getDmlStatements();
       for (Integer i = 0; i < 50; i++) {

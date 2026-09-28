@@ -3,28 +3,35 @@
  * `Workflow_Retry_Config__mdt` (issue #103). An operator changes the policy in
  * Setup. No deploy is necessary.
  *
- * Match order: step record > definition record (blank step name) > no record.
- * The match ignores case and outer spaces. For two records with the same key,
- * the lowest DeveloperName wins.
+ * Resolution:
+ * 1. Start with the author policy, else the engine default. The values of a
+ *    `RetryPolicy.fromConfig()` policy are a start value, not an author policy.
+ * 2. With no author policy, put the most specific record over it.
+ * 3. Put the most specific override record over the result.
  *
- * The record applies when the step has no author policy (null or
- * `RetryPolicy.fromConfig()`), or when the record has
- * `Override_Author_Policy__c`. A blank or bad record field keeps the value
- * of the lower layer (author policy, else engine default). The resolver
- * always sanitizes the result.
+ * "Most specific" is the step record, else the definition record (blank step
+ * name). The match ignores case and outer spaces. For two records with the
+ * same key, the lowest DeveloperName wins. A blank or bad record field keeps
+ * the value below it. The resolver always sanitizes the result.
  *
- * Reads use `getAll()`, which uses no SOQL. The resolver does no DML.
+ * Reads use `getAll()`, which uses no SOQL. The resolver does no DML. Apex
+ * tests ignore org records unless a test sets `readOrgRecordsInTest`, so an
+ * incident record cannot block a deploy.
  */
 public inherited sharing class WorkflowRetryConfigResolver {
   private static final String KEY_SEPARATOR = '\n';
+  private static final String OVERRIDE_PREFIX = 'override' + KEY_SEPARATOR;
 
   // Test records. When set, they replace getAll() fully and are not cached.
   @TestVisible
   private static List<Workflow_Retry_Config__mdt> mockRecords;
 
-  // Index for one transaction, keyed by workflow and step. A new transaction
-  // reads the metadata cache again, so a record change applies to the next
-  // retry.
+  // True lets a test read the org records through getAll().
+  @TestVisible
+  private static Boolean readOrgRecordsInTest = false;
+
+  // Index for one transaction. A new transaction reads the metadata cache
+  // again, so a record change applies to the next retry outcome.
   private static Map<String, Workflow_Retry_Config__mdt> cachedIndex;
 
   /**
@@ -40,20 +47,13 @@ public inherited sharing class WorkflowRetryConfigResolver {
     String stepName,
     RetryPolicy policy
   ) {
-    RetryPolicy authorPolicy = (policy == null || policy.isFromConfig())
-      ? null
-      : policy;
-    Workflow_Retry_Config__mdt config = findConfig(workflowName, stepName);
-    Boolean useConfig =
-      config != null &&
-      (authorPolicy == null ||
-      config.Override_Author_Policy__c == true);
-    if (!useConfig) {
-      return WorkflowRetryScheduling.sanitizePolicy(authorPolicy);
+    RetryPolicy effective = WorkflowRetryScheduling.sanitizePolicy(policy);
+    Boolean hasAuthorPolicy = policy != null && !policy.isFromConfig();
+    if (!hasAuthorPolicy) {
+      applyConfig(effective, findConfig(workflowName, stepName, ''));
     }
-    RetryPolicy merged = WorkflowRetryScheduling.sanitizePolicy(authorPolicy);
-    applyConfig(merged, config);
-    return merged;
+    applyConfig(effective, findConfig(workflowName, stepName, OVERRIDE_PREFIX));
+    return effective;
   }
 
   /**
@@ -69,21 +69,23 @@ public inherited sharing class WorkflowRetryConfigResolver {
     String stepName,
     Integer current
   ) {
-    Workflow_Retry_Config__mdt config = findConfig(workflowName, stepName);
-    if (
-      config == null ||
-      config.Override_Author_Policy__c != true ||
-      !isValidCount(config.Maximum_Attempts__c)
-    ) {
+    Workflow_Retry_Config__mdt config = findConfig(
+      workflowName,
+      stepName,
+      OVERRIDE_PREFIX
+    );
+    if (config == null || !isValidCount(config.Maximum_Attempts__c)) {
       return current;
     }
     return config.Maximum_Attempts__c.intValue();
   }
 
-  // Step record first, then the definition record.
+  // Step record first, then the definition record. The prefix selects all
+  // records ('') or override records only.
   private static Workflow_Retry_Config__mdt findConfig(
     String workflowName,
-    String stepName
+    String stepName,
+    String prefix
   ) {
     if (String.isBlank(workflowName)) {
       return null;
@@ -94,10 +96,10 @@ public inherited sharing class WorkflowRetryConfigResolver {
     }
     Workflow_Retry_Config__mdt config = null;
     if (String.isNotBlank(stepName)) {
-      config = index.get(key(workflowName, stepName));
+      config = index.get(prefix + key(workflowName, stepName));
     }
     if (config == null) {
-      config = index.get(key(workflowName, null));
+      config = index.get(prefix + key(workflowName, null));
     }
     return config;
   }
@@ -107,6 +109,9 @@ public inherited sharing class WorkflowRetryConfigResolver {
     RetryPolicy base,
     Workflow_Retry_Config__mdt config
   ) {
+    if (config == null) {
+      return;
+    }
     if (isValidCount(config.Initial_Interval_Seconds__c)) {
       base.initialIntervalSeconds = config.Initial_Interval_Seconds__c.intValue();
     }
@@ -138,14 +143,18 @@ public inherited sharing class WorkflowRetryConfigResolver {
     if (mockRecords != null) {
       return buildIndex(mockRecords);
     }
+    if (Test.isRunningTest() && !readOrgRecordsInTest) {
+      return new Map<String, Workflow_Retry_Config__mdt>();
+    }
     if (cachedIndex == null) {
       cachedIndex = buildIndex(Workflow_Retry_Config__mdt.getAll().values());
     }
     return cachedIndex;
   }
 
-  // Keys each record by workflow and step. For a duplicate key, the lowest
-  // DeveloperName wins, so the result does not depend on the read order.
+  // Keys each record by workflow and step. An override record also goes under
+  // OVERRIDE_PREFIX. For a duplicate key, the lowest DeveloperName wins, so
+  // the result does not depend on the read order.
   private static Map<String, Workflow_Retry_Config__mdt> buildIndex(
     List<Workflow_Retry_Config__mdt> records
   ) {
@@ -158,14 +167,25 @@ public inherited sharing class WorkflowRetryConfigResolver {
         record.Workflow_Definition__c,
         record.Step_Name__c
       );
-      Workflow_Retry_Config__mdt existing = index.get(recordKey);
-      if (
-        existing == null ||
-        record.DeveloperName.compareTo(existing.DeveloperName) < 0
-      ) {
-        index.put(recordKey, record);
+      putLowest(index, recordKey, record);
+      if (record.Override_Author_Policy__c == true) {
+        putLowest(index, OVERRIDE_PREFIX + recordKey, record);
       }
     }
     return index;
+  }
+
+  private static void putLowest(
+    Map<String, Workflow_Retry_Config__mdt> index,
+    String recordKey,
+    Workflow_Retry_Config__mdt record
+  ) {
+    Workflow_Retry_Config__mdt existing = index.get(recordKey);
+    if (
+      existing == null ||
+      record.DeveloperName.compareTo(existing.DeveloperName) < 0
+    ) {
+      index.put(recordKey, record);
+    }
   }
 }

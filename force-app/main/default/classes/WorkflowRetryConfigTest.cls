@@ -440,6 +440,33 @@ public class WorkflowRetryConfigTest {
   }
 
   @IsTest
+  static void hugeBackoffCapsDelayAtOneDay() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      reset();
+      // 86400 x 99999 is more than the Integer maximum.
+      useRecords(
+        new List<Workflow_Retry_Config__mdt>{
+          rec('PlainWorkflow', PLAIN, new List<Decimal>{ 86400, 99999, 5 })
+        }
+      );
+      Test.startTest();
+      Id instanceId = start('PlainWorkflow', 'RetryCfg_Huge');
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.disableAutoTimeSkip = true;
+      harness.drive();
+      WorkflowTestHarness.Result second = harness.fireRetry(PLAIN);
+      Long secondDelay = secondsUntil(instanceRow(instanceId).Sleep_Until__c);
+
+      Assert.isTrue(second.isAwaitingRetry, 'Second retry is parked');
+      Assert.isTrue(
+        secondDelay >= 86390 && secondDelay <= 86400,
+        'Delay is capped at one day: ' + secondDelay
+      );
+      Test.stopTest();
+    }
+  }
+
+  @IsTest
   static void recordChangeAppliesToNextAttemptWithoutOldRowChange() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       reset();

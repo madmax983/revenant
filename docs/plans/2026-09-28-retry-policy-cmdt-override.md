@@ -42,7 +42,8 @@ change applies at the next retry outcome. No deploy is necessary.
 | Update old step rows to the new policy     | Audit trail changes                   | Resolver does no DML. A test checks `Limits.getDmlStatements()`.       |
 | Change `StepResult.retry(policy)` behavior | Existing workflows change             | No record, or no override: same result as before.                      |
 | Org with no records behaves differently    | Upgrade risk                          | No record: sanitized author policy, or 5 s, 2.0, 5 attempts. Tested.   |
-| Test depends on org records                | Flaky tests                           | Test mock list replaces `getAll()` fully.                              |
+| Test depends on org records                | Incident record blocks a deploy       | Tests ignore org records unless a test opts in.                        |
+| Large interval or backoff                  | Integer overflow in the delay         | Cap the delay at 86400 s before the cast.                              |
 
 ## 3. Six Thinking Hats
 
@@ -74,13 +75,21 @@ check each row.
 
 "No author policy" means `null` or `RetryPolicy.fromConfig()`.
 
-| Author policy | Record match | Override flag | Effective policy                      |
-| ------------- | ------------ | ------------- | ------------------------------------- |
-| none          | none         | -             | engine default 5 s, 2.0, 5 attempts   |
-| none          | yes          | any           | record fields over the engine default |
-| set           | none         | -             | author policy                         |
-| set           | yes          | `false`       | author policy                         |
-| set           | yes          | `true`        | record fields over the author policy  |
+1. Start with the author policy, else the engine default.
+2. No author policy: put the most specific record over it.
+3. Put the most specific override record over the result.
+
+| Author policy | Record without override | Override record | Effective policy                    |
+| ------------- | ----------------------- | --------------- | ----------------------------------- |
+| none          | none                    | none            | engine default 5 s, 2.0, 5 attempts |
+| none          | match                   | none            | record over engine default          |
+| set           | any                     | none            | author policy                       |
+| none          | any                     | match           | override record over steps 1 and 2  |
+| set           | any                     | match           | override record over author policy  |
+
+Review change: the first design took one record only (most specific). Then a
+step record without override hid a definition override record. The override
+layer fixes this incident gap.
 
 **Invariants:**
 

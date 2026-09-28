@@ -102,4 +102,30 @@ public class RetryConfigWorkflowExampleTest {
       Assert.areEqual(5, MockPartnerApi.calls, 'Engine default: 5 attempts');
     }
   }
+
+  @IsTest
+  static void shippedRecordAppliesOnlyWhenTestOptsIn() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      useRecords(null);
+      WorkflowRetryConfigResolver.readOrgRecordsInTest = false;
+      Assert.areEqual(
+        5,
+        WorkflowRetryConfigResolver.resolve(WF, PUSH, RetryPolicy.fromConfig())
+          .maximumAttempts,
+        'Tests ignore org records by default'
+      );
+
+      WorkflowRetryConfigResolver.readOrgRecordsInTest = true;
+      Workflow_Retry_Config__mdt shipped = Workflow_Retry_Config__mdt.getInstance(
+        'PartnerSync'
+      );
+      Assert.isNotNull(shipped, 'The example ships the PartnerSync record');
+      Assert.areEqual(
+        shipped.Maximum_Attempts__c.intValue(),
+        WorkflowRetryConfigResolver.resolve(WF, PUSH, RetryPolicy.fromConfig())
+          .maximumAttempts,
+        'The shipped record matches the example workflow'
+      );
+    }
+  }
 }
