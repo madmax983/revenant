@@ -9,6 +9,8 @@ public inherited sharing class WorkflowStepContext {
   private class CaptureContext {
     Map<String, Object> capturesMap = new Map<String, Object>();
     Integer maxAttempts = 1;
+    // True when maxAttempts comes from the persisted __maxAttempts.
+    Boolean fromPersisted = false;
   }
 
   /**
@@ -166,15 +168,24 @@ public inherited sharing class WorkflowStepContext {
         .maximumAttempts;
     }
     // With an auto-retry policy, the persisted value is from the policy of the
-    // last retry, so it wins over RetryConfigurable (issue #101). A
-    // fromConfig() auto-retry policy reads the record again, so a persisted
-    // value is stale (issue #103).
-    Boolean configManagedAuto =
-      autoRetryPolicy != null && autoRetryPolicy.isFromConfig();
+    // last retry, so it wins over RetryConfigurable (issue #101).
     Boolean usePersisted =
-      (!(stepInstance instanceof RetryConfigurable) ||
-      autoRetryPolicy != null) && !configManagedAuto;
+      !(stepInstance instanceof RetryConfigurable) || autoRetryPolicy != null;
     applyCapturedValues(cc, usePersisted, ctx.stepExec);
+    // A persisted cap from a fromConfig() auto-retry policy can be stale. Read
+    // the record again (issue #103).
+    if (
+      cc.fromPersisted &&
+      autoRetryPolicy != null &&
+      autoRetryPolicy.isFromConfig()
+    ) {
+      cc.maxAttempts = WorkflowRetryConfigResolver.resolve(
+          workflowName,
+          stepName,
+          autoRetryPolicy
+        )
+        .maximumAttempts;
+    }
     if (!isTimeoutResume) {
       cc.maxAttempts = WorkflowRetryConfigResolver.overrideMaxAttempts(
         workflowName,
@@ -212,6 +223,7 @@ public inherited sharing class WorkflowStepContext {
       );
       if (usePersisted && cc.capturesMap.containsKey('__maxAttempts')) {
         cc.maxAttempts = Integer.valueOf(cc.capturesMap.get('__maxAttempts'));
+        cc.fromPersisted = true;
       }
     } catch (Exception ignored) {
       // Malformed captured values; retain the default maxAttempts.

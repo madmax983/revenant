@@ -13,6 +13,7 @@ public class WorkflowRetryConfigTest {
   private static final String CONFIGURED = PREFIX + 'ConfiguredStep';
   private static final String MANAGED = PREFIX + 'ConfigManagedStep';
   private static final String THROWING = PREFIX + 'ThrowingStep';
+  private static final String DUAL = PREFIX + 'DualPolicyStep';
   private static final String RESERVE = PREFIX + 'ReserveStep';
   private static final String BREAK_STEP = PREFIX + 'BreakStep';
 
@@ -106,6 +107,17 @@ public class WorkflowRetryConfigTest {
      */
     public override List<String> getSteps() {
       return new List<String>{ THROWING };
+    }
+  }
+
+  /** @description One step with an author retry policy and a fromConfig() auto policy. */
+  public class DualWorkflow extends LinearDef {
+    /**
+     * @description Returns the steps.
+     * @return The step names.
+     */
+    public override List<String> getSteps() {
+      return new List<String>{ DUAL };
     }
   }
 
@@ -237,6 +249,36 @@ public class WorkflowRetryConfigTest {
      */
     public StepResult execute(StepContext ctx) {
       bump(THROWING);
+      maxAttemptsSeen.add(ctx.retry().maxAttempts);
+      throw new PartnerDownException('HTTP 503 from partner');
+    }
+  }
+
+  /** @description Author cap 5 for retry(). Operator cap for thrown errors. */
+  public class DualPolicyStep implements WorkflowStep, RetryConfigurable, AutoRetryConfigurable {
+    /**
+     * @description Returns the author policy for a returned retry.
+     * @return A policy with 5 attempts.
+     */
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(1, (Double) 1.0, 5);
+    }
+
+    /**
+     * @description Returns the operator-managed auto-retry policy.
+     * @return RetryPolicy.fromConfig().
+     */
+    public RetryPolicy getAutoRetryPolicy() {
+      return RetryPolicy.fromConfig();
+    }
+
+    /**
+     * @description Records the cap it sees, then throws.
+     * @param ctx The step context.
+     * @return Never returns.
+     */
+    public StepResult execute(StepContext ctx) {
+      bump(DUAL);
       maxAttemptsSeen.add(ctx.retry().maxAttempts);
       throw new PartnerDownException('HTTP 503 from partner');
     }
@@ -506,6 +548,31 @@ public class WorkflowRetryConfigTest {
         new List<Integer>{ 5, 2 },
         maxAttemptsSeen,
         'Context shows the new record value, not the persisted cap'
+      );
+    }
+  }
+
+  @IsTest
+  static void dualPolicyStepSeesOperatorAutoCapAfterThrow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      reset();
+      useRecords(
+        new List<Workflow_Retry_Config__mdt>{
+          rec('DualWorkflow', null, new List<Decimal>{ 1, 1.0, 2 })
+        }
+      );
+      Test.startTest();
+      Id instanceId = start('DualWorkflow', 'RetryCfg_Dual');
+      WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+        .drive();
+      Test.stopTest();
+
+      Assert.areEqual('Failed', result.status, 'Operator auto cap (2) applies');
+      Assert.areEqual(2, runs.get(DUAL), 'Step runs 2 times');
+      Assert.areEqual(
+        new List<Integer>{ 5, 2 },
+        maxAttemptsSeen,
+        'After a throw, the context shows the refreshed auto cap'
       );
     }
   }
