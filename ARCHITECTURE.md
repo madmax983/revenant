@@ -209,6 +209,10 @@ endpoints moved). All of them delegate to `inherited sharing` service classes.
   `WorkflowAsyncCapacityService` → `AsyncCapacityEvaluator` (pure rules). One
   `AsyncApexJob` aggregate and `System.OrgLimits`. The orchestrator does not
   call it. See [docs/async-capacity.md](docs/async-capacity.md).
+- Fleet Health view (#111): `WorkflowFleetHealthController` →
+  `WorkflowFleetHealthService`. It is a separate controller for the same PMD reason.
+  It uses three queries, each with a cap: a count probe, the counts (an aggregate up
+  to 2,000 instances, else a row query) and a duration sample (ADR 0004).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,
