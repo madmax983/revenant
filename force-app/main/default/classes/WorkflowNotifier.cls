@@ -137,6 +137,11 @@ public inherited sharing class WorkflowNotifier {
       return;
     }
     try {
+      if (wokenAtSuspend(outcome.instance.Id)) {
+        // A buffered signal woke the instance in this transaction. The step
+        // runs again. When it suspends again, that suspend notifies.
+        return;
+      }
       if (wouldExceedDmlBudget()) {
         // No DML is left for a log row.
         System.debug(
@@ -179,6 +184,22 @@ public inherited sharing class WorkflowNotifier {
     } catch (Exception ignored) {
       // Fire-and-forget: a notification error never stops the SUSPEND.
     }
+  }
+
+  // True when the instance is no longer Suspended after the SUSPEND DML:
+  // signal redelivery woke it. One SOQL.
+  private static Boolean wokenAtSuspend(Id instanceId) {
+    if (Limits.getQueries() >= Limits.getLimitQueries()) {
+      return false;
+    }
+    List<Workflow_Instance__c> rows = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return !rows.isEmpty() && rows[0].Status__c != 'Suspended';
   }
 
   // True when the request could spend DML that the SUSPEND transaction needs.
@@ -359,6 +380,12 @@ public inherited sharing class WorkflowNotifier {
           laterKeys.add(key);
         }
       }
+      // Publish the overflow before any send. On an error, nothing is sent
+      // yet: ask the platform to deliver the batch again.
+      if (!publishKeys(laterKeys, instanceByKey).isEmpty()) {
+        retryOrGiveUp('Overflow publish failed');
+        return;
+      }
       List<Workflow_Log__c> anchors = openAnchors(passKeys);
       List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
       if (!WorkflowEngine.sendNotifications) {
@@ -366,12 +393,13 @@ public inherited sharing class WorkflowNotifier {
       } else if (!anchors.isEmpty()) {
         deferred = sendAll(skipEndedWaits(anchors));
       }
+      List<String> deferredKeys = new List<String>();
       for (Workflow_Log__c anchor : deferred) {
-        laterKeys.add(anchor.Fire_Key__c);
+        deferredKeys.add(anchor.Fire_Key__c);
       }
       // A request that cannot be published again fails now. Else its row
       // stays Requested with no event.
-      Set<String> lost = publishKeys(laterKeys, instanceByKey);
+      Set<String> lost = publishKeys(deferredKeys, instanceByKey);
       List<Workflow_Log__c> waiting = new List<Workflow_Log__c>();
       for (Workflow_Log__c anchor : deferred) {
         if (lost.contains(anchor.Fire_Key__c)) {
@@ -455,7 +483,8 @@ public inherited sharing class WorkflowNotifier {
   }
 
   // Skips the requests whose wait ended: the step row is not Pending, or the
-  // instance is not Suspended (a signal woke it). One SOQL.
+  // instance is not active. A parallel instance can be Running while one
+  // branch waits, so Running with a Pending row is still a wait. One SOQL.
   private static List<Workflow_Log__c> skipEndedWaits(
     List<Workflow_Log__c> anchors
   ) {
@@ -466,18 +495,21 @@ public inherited sharing class WorkflowNotifier {
         stepIds.add(stepId);
       }
     }
-    Set<Id> waiting = new Map<Id, Workflow_Step_Execution__c>(
-        [
-          SELECT Id
-          FROM Workflow_Step_Execution__c
-          WHERE
-            Id IN :stepIds
-            AND Status__c = 'Pending'
-            AND Workflow_Instance__r.Status__c = 'Suspended'
-          WITH SYSTEM_MODE
-        ]
-      )
-      .keySet();
+    Set<Id> waiting = new Set<Id>();
+    for (Workflow_Step_Execution__c row : [
+      SELECT Id, Workflow_Instance__r.Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id IN :stepIds AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+    ]) {
+      if (
+        WorkflowEngine.ACTIVE_STATUSES.contains(
+          row.Workflow_Instance__r.Status__c
+        )
+      ) {
+        waiting.add(row.Id);
+      }
+    }
     List<Workflow_Log__c> open = new List<Workflow_Log__c>();
     for (Workflow_Log__c anchor : anchors) {
       if (waiting.contains(stepExecIdOf(anchor.Fire_Key__c))) {
@@ -813,7 +845,7 @@ public inherited sharing class WorkflowNotifier {
   // for a later pass and one error row.
   private static Boolean hasResultDml(Integer rowCount) {
     return !forceResultDmlExhausted &&
-      Limits.getDmlStatements() + 3 <= Limits.getLimitDmlStatements() &&
+      Limits.getDmlStatements() + 4 <= Limits.getLimitDmlStatements() &&
       Limits.getDmlRows() + (2 * rowCount) + 1 <= Limits.getLimitDmlRows();
   }
 

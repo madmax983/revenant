@@ -21,7 +21,7 @@ A step that waits for a human signal tells nobody. The author must write a notif
 ## Consequences
 
 - No new object. No new field on `Workflow_Instance__c` or `Workflow_Step_Execution__c`. No change to the Queueable hand-off or the compensation stack.
-- An opted-in SUSPEND uses maximum 3 DML statements and 0 SOQL.
+- An opted-in SUSPEND uses maximum 3 DML statements and 1 SOQL (the instance status after signal redelivery).
 - A step that waits again on the same row with a new notification does not send it. A second notification needs a new step.
 - One `Workflow_Log__c` row for each logical suspend. It is also the audit row. `CleanupWorkflow` does not delete `Workflow_Log__c` rows. When it deletes the instance, the row stays with a blank instance lookup.
 - The Automated Process user sends the notification, unless a `PlatformEventSubscriberConfig` for `WorkflowNotifyTrigger` sets a user.

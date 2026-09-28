@@ -88,7 +88,9 @@ A logical suspend is one `Workflow_Step_Execution__c` row. A resume uses the sam
 | The platform delivers the `NOTIFY` event again | The row is not `Requested`, or the copy is in the same pass. The engine sends nothing. |
 | A user publishes a forged `NOTIFY` event | No `Requested` row has its key. The engine sends nothing. With a real key, the engine sends the content of the row, not of the event. |
 | A new visit of the step (a loop) | A new row. One new notification. |
-| The wait ends before the send (for example, a buffered signal wakes the step) | The step row is not `Pending`, or the instance is not `Suspended`. The row is `Skipped`. The engine sends nothing. |
+| A buffered signal wakes the instance in the SUSPEND transaction | The engine writes no request. When the step waits again, that suspend sends. |
+| The step completes before the send | The step row is not `Pending`. The row is `Skipped`. The engine sends nothing. |
+| A signal wakes the instance, but the step did not run again yet | The step row is `Pending` and the instance is active. The engine sends. A parallel instance is `Running` while a branch waits, so this is also a wait. |
 
 You do not supply a dedup token.
 
@@ -137,7 +139,7 @@ In an Apex test, set `WorkflowEngine.sendNotifications`.
 
 On a SUSPEND with a notification:
 
-- 0 SOQL.
+- 1 SOQL: the instance status after signal redelivery.
 - Maximum 3 DML statements and 3 DML rows: the anchor insert, the publish, and one update or error row only after an error.
 
 A SUSPEND with no notification costs nothing.
@@ -156,6 +158,8 @@ Test context does not call `Messaging.CustomNotification.send()`. In the engine 
 These members are `@TestVisible private`. In your own tests, read `result.directive().notification`.
 
 ## Known limits
+
+- A signal can arrive after the SUSPEND commits and before the send. When the step did not run again yet, the approver still gets the notification. It opens the instance, which shows the new state.
 
 - In rare cases a row stays `Requested` with no event (for example, a platform publish error after the commit). No sweep sends it again yet. See issue #274.
 

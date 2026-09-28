@@ -547,7 +547,7 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
-  static void wokenWaitIsSkipped() {
+  static void unrelatedWakeStillNotifies() {
     seedType();
     Test.startTest();
     Id instanceId = startWorkflow(
@@ -555,14 +555,42 @@ public class WorkflowNotifierTest {
       new Map<String, Object>{ 'recipient' => userId() }
     );
     WorkflowEngine.runStep(instanceId);
-    // A signal wakes the instance (Running). The step row is still Pending.
-    WorkflowEngine.signal('notify-woken-wait', 'Go', '{}');
+    // An unrelated signal wakes the instance (Running). The step row is still
+    // Pending: the step runs again and waits again. Do not lose the send.
+    WorkflowEngine.signal('notify-woken-wait', 'Other', '{}');
     Test.getEventBus().deliver();
-    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
     Assert.areEqual(
-      WorkflowNotifier.OUTCOME_SKIPPED,
+      WorkflowNotifier.OUTCOME_SENT,
       anchors(instanceId)[0].Outcome__c
     );
+  }
+
+  @IsTest
+  static void bufferedSignalAtSuspendDoesNotNotify() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-buffered',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    // The decision arrived before the step waits (a captured signal).
+    insert as system new Workflow_Signal__c(
+      Correlation_Key__c = 'notify-buffered',
+      Signal_Name__c = 'Go',
+      Payload__c = '{}',
+      Status__c = 'Unrouted'
+    );
+    // The SUSPEND redelivers it and wakes the instance in one transaction.
+    WorkflowEngine.runStep(instanceId);
+    Assert.areEqual(
+      0,
+      anchors(instanceId).size(),
+      'No request for a woken wait'
+    );
+    Assert.areEqual(0, WorkflowNotifier.publishedEvents.size());
     Test.stopTest();
   }
 

@@ -63,7 +63,8 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | A matching signal is already buffered. The step resumes at once. | At send time, check that the step row is still `Pending`. Else `Skipped`. (Codex review.) |
 | No SOQL is left in the trigger pass. Valid requests fail with "type not found". (Codex review.) | Check the query budget first. Publish the requests again. |
 | Engine work in the shared trigger transaction uses the notify budget. Many edge cases. (Codex review, rounds 4 to 6.) | Root cause fix: a separate trigger, `WorkflowNotifyTrigger`, with its own transaction. Before a send, a low budget throws `EventBus.RetryableException`. |
-| A signal wakes the instance but the step row is still `Pending`. (Codex review.) | Also require the instance to be `Suspended`. |
+| A buffered signal wakes the instance in the SUSPEND transaction. (Codex review.) | Read the instance status after redelivery. Woken: write no request. The next suspend sends. |
+| A parallel branch waits while the instance is `Running`, or an unrelated signal wakes the instance. Requiring `Suspended` loses the send. (Codex review, round 7.) | At send time, require a `Pending` step row and an active instance. |
 
 ## Six Thinking Hats
 
