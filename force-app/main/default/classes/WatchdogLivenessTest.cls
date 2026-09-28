@@ -156,6 +156,30 @@ private class WatchdogLivenessTest {
   }
 
   @IsTest
+  static void markAlertSentKeepsSweepFields() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      stamp(T0, 10);
+
+      WatchdogLiveness.markAlertSent(T0);
+
+      Watchdog_Liveness__c row = Watchdog_Liveness__c.getOrgDefaults();
+      Assert.areEqual(T0, row.Last_Sweep_At__c);
+      Assert.areEqual(10, row.Cadence_Minutes__c.intValue());
+      Assert.isTrue(WatchdogLiveness.evaluate(T0.addHours(1)).alertSent);
+
+      // A new sweep starts a new stall episode.
+      WatchdogLiveness.recordSweep(T0.addHours(1), 10);
+      Assert.isFalse(WatchdogLiveness.evaluate(T0.addHours(3)).alertSent);
+      Assert.areEqual(
+        T0,
+        Watchdog_Liveness__c.getOrgDefaults().Last_Alert_Sweep_At__c,
+        'The stamp does not change the alert field'
+      );
+    }
+  }
+
+  @IsTest
   static void recordSweepSkipsWhenDmlBudgetIsLow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WatchdogLiveness.forceDmlBudgetExhausted = true;

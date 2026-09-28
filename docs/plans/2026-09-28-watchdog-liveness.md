@@ -12,9 +12,10 @@ watchdog is dead.
   calls `WorkflowHeartbeatService.runWatchdogHeartbeat()`.
 - The heartbeat runs in the orchestrator transaction of the watchdog
   instance. Other workflows do not run it.
-- `WorkflowWatchdog.bootstrap()` runs on start, signal, resume, pause, the
-  "Enqueue Watchdog" command and the optional `WorkflowWatchdog` schedule.
-  It does not run on the orchestrator chain handoff.
+- `WorkflowWatchdog.bootstrap()` runs on each orchestrator enqueue (start,
+  step handoff, signal, resume), on pause, on the "Enqueue Watchdog" command
+  and on the optional `WorkflowWatchdog` schedule. It is not in the watchdog
+  chain, but it is on the orchestrator chain.
 - `WorkflowStallDetector` excludes `WatchdogWorkflow`. Nothing monitors the
   watchdog today.
 - `Workflow_Log__c.Fire_Key__c` is a unique external id. An insert with the
@@ -53,11 +54,12 @@ watchdog is dead.
 
 - **White (facts):** Cadence field is Number(2,0), default 10. Sleep uses the
   raw value. The heartbeat already guards DML for its best-effort publish.
-- **Red (feel):** Operators must trust the signal. False alerts kill trust.
-  Use a full cadence of slack.
-- **Black (risk):** No org in this session. Apex tests cannot run here. The
-  custom setting is new schema. A never-stamped org shows `Unknown`, not
-  `Stale`.
+- **Red (feel):** Operators must trust the signal. False alerts cause
+  operators to ignore alerts. Use a full cadence of slack.
+- **Black (risk):** The detector is on the orchestrator chain: it must cost
+  0 SOQL and 0 DML when not needed. A failed delivery must not keep the
+  claim. The custom setting is new schema. An org with no stamp shows
+  `Unknown`, not `Stale`. A 1 minute cadence can give a false alert.
 - **Yellow (value):** A dead timer plane shows red within 2 cadences. One
   page per stall. No new job slot.
 - **Green (ideas):** Operators with no traffic can schedule the existing
@@ -79,7 +81,11 @@ State machine (computed on read, never stored):
   becomes 1. Blank becomes 10.
 - Invariant: at most one alert per `Last_Sweep_At__c` value.
 - Invariant: the stamp never throws and never spends the last DML statements.
-- Invariant: the detector never writes `Watchdog_Liveness__c`.
+- Invariant: the detector writes only `Last_Alert_Sweep_At__c`. The stamp
+  writes only `Last_Sweep_At__c` and `Cadence_Minutes__c`.
+- Invariant: the detector does no DML when the state is not `STALE` or the
+  stall has its alert. It keeps 10 DML statements free.
+- Invariant: when no channel sends the alert, the claim is deleted.
 
 ## Design
 
@@ -92,6 +98,7 @@ State machine (computed on read, never stored):
   `WorkflowAlertManager.detectAndAlertWatchdogStall()`.
 - `WorkflowHeartbeatService`: stamp after the lifecycle publish.
 - `WorkflowWatchdog.bootstrap()`: call the detector first.
+- System Doctor read: call the detector, for orgs with no traffic.
 - `WorkflowDashboardStatusService.watchdogStatus()`: add a `liveness` key.
 - `workflowDashboard` LWC: liveness row in the Watchdog panel.
 
@@ -104,5 +111,6 @@ State machine (computed on read, never stored):
   run gives none, healthy gives none, no config gives none, resume then a
   new stall gives a second alert, the detector does not change the setting,
   bootstrap runs the detector.
-- `WorkflowWatchdogTest`: heartbeat stamps the setting.
+- `WatchdogLivenessTest`: heartbeat stamps the setting; a later sweep clears
+  `STALE`.
 - Dashboard Apex: `liveness` key present. Jest: badge and text per state.

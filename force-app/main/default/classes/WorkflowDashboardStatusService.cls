@@ -88,10 +88,13 @@ public inherited sharing class WorkflowDashboardStatusService {
     }
   }
 
-  // Watchdog liveness (issue #113). Computed on read, so it shows STALE when
-  // the watchdog is dead. Best-effort: a failure gives UNKNOWN.
+  // Watchdog liveness (issue #113). Each read calculates the state, so a dead
+  // watchdog shows STALE. The read also runs the stall detector, so an org
+  // with no traffic gets the alert when an operator opens System Doctor.
+  // An error returns UNKNOWN.
   private static Map<String, Object> livenessMap() {
     try {
+      WorkflowAlertManager.detectAndAlertWatchdogStall();
       return WatchdogLiveness.evaluateNow().toMap();
     } catch (Exception ignored) {
       return new Map<String, Object>{

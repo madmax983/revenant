@@ -4,8 +4,8 @@
  * deadline, sleep-resume, unrouted-signal, schedule, debounce, concurrency-
  * reconcile, transient-retry-rescue, orphan-reclaim, and stall-detection phases
  * in strict order, then publishes deferred lifecycle events so a best-effort
- * publish can never spend a DML statement a required section needs. The
- * liveness stamp (WatchdogLiveness) runs after the publish.
+ * publish can never spend a DML statement a required section needs. Then it
+ * writes the liveness stamp (WatchdogLiveness).
  *
  * Extracted from WorkflowEngine; the public entry stays on WorkflowEngine as a
  * thin facade so its callers are untouched. All DML and SOQL run in system mode
@@ -90,7 +90,7 @@ public inherited sharing class WorkflowHeartbeatService {
     // 6. Auto-reclaim orphaned instances.
     WorkflowOrphanReclaimSweep.autoReclaimOrphanedInstances(now);
 
-    // Run proactive stall detection and alerting hook
+    // 7. Run proactive stall detection and alerting hook
     try {
       WorkflowAlertManager.detectAndAlertStalls();
     } catch (Exception ignored) {
@@ -102,8 +102,8 @@ public inherited sharing class WorkflowHeartbeatService {
     // runs after it with no risk of starving a required update/enqueue of its DML budget.
     WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
 
-    // 7. Stamp liveness (issue #113). Last, so only a full sweep stamps it.
-    // Best-effort and budget-guarded, so it cannot break the step commit.
+    // 8. Write the liveness stamp (issue #113). Only a complete sweep gets
+    // here. The write keeps DML free for the step commit and does not throw.
     WatchdogLiveness.recordSweep(now, WorkflowEngine.watchdogDelayMinutes);
   }
 }

@@ -263,7 +263,7 @@ private class WatchdogStallDetectorTest {
   }
 
   @IsTest
-  static void detectorDoesNotWriteLiveness() {
+  static void alertKeepsSweepTimeAndMarksAlert() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.watchdogDelayMinutes = 10;
       enableAlerts();
@@ -273,11 +273,116 @@ private class WatchdogStallDetectorTest {
       WatchdogStallDetector.detectAndAlert();
 
       Watchdog_Liveness__c row = [
-        SELECT Last_Sweep_At__c
+        SELECT Last_Sweep_At__c, Last_Alert_Sweep_At__c
         FROM Watchdog_Liveness__c
         LIMIT 1
       ];
-      Assert.areEqual(T0, row.Last_Sweep_At__c);
+      Assert.areEqual(T0, row.Last_Sweep_At__c, 'Sweep time not changed');
+      Assert.areEqual(T0, row.Last_Alert_Sweep_At__c, 'Alert marked');
+    }
+  }
+
+  @IsTest
+  static void sentStallCostsNoDml() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      enableAlerts();
+      stamp(T0);
+      WorkflowEngine.mockNow = T0.addMinutes(45);
+      Assert.isTrue(WatchdogStallDetector.detectAndAlert());
+
+      Integer dmlBefore = Limits.getDmlStatements();
+      Assert.isFalse(WatchdogStallDetector.detectAndAlert());
+
+      Assert.areEqual(
+        dmlBefore,
+        Limits.getDmlStatements(),
+        'No DML on the chain after the alert'
+      );
+    }
+  }
+
+  @IsTest
+  static void healthyCheckCostsNoDmlOrSoql() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      enableAlerts();
+      stamp(T0);
+      WorkflowEngine.mockNow = T0.addMinutes(5);
+
+      Integer dmlBefore = Limits.getDmlStatements();
+      Integer soqlBefore = Limits.getQueries();
+      Assert.isFalse(WatchdogStallDetector.detectAndAlert());
+
+      Assert.areEqual(dmlBefore, Limits.getDmlStatements());
+      Assert.areEqual(soqlBefore, Limits.getQueries());
+    }
+  }
+
+  @IsTest
+  static void failedEmailReleasesClaim() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      WorkflowAlertManager.mockConfigs.put(
+        'WatchdogWorkflow',
+        alertConfig(true, 'ops@test.com', false)
+      );
+      stamp(T0);
+      resetCounters();
+      WorkflowEngine.mockNow = T0.addMinutes(45);
+
+      WorkflowAlertManager.throwTestException = true;
+      Assert.isFalse(WatchdogStallDetector.detectAndAlert());
+      Assert.areEqual(0, stallLogs().size(), 'Claim released');
+      Assert.isFalse(WatchdogLiveness.evaluateNow().alertSent);
+
+      WorkflowAlertManager.throwTestException = false;
+      Assert.isTrue(WatchdogStallDetector.detectAndAlert(), 'Retry sends');
+      Assert.areEqual(1, stallLogs().size());
+      Assert.areEqual(1, WorkflowAlertManager.sentEmailsCount);
+    }
+  }
+
+  @IsTest
+  static void failedEventReleasesClaim() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      WorkflowAlertManager.mockConfigs.put(
+        'WatchdogWorkflow',
+        alertConfig(true, null, true)
+      );
+      stamp(T0);
+      resetCounters();
+      WorkflowEngine.mockNow = T0.addMinutes(45);
+
+      WorkflowAlertManager.forceDmlBudgetExhausted = true;
+      Assert.isFalse(WatchdogStallDetector.detectAndAlert());
+      Assert.areEqual(0, stallLogs().size(), 'Claim released');
+
+      WorkflowAlertManager.forceDmlBudgetExhausted = false;
+      Assert.isTrue(WatchdogStallDetector.detectAndAlert(), 'Retry sends');
+      Assert.areEqual(1, WorkflowAlertManager.publishedEvents.size());
+    }
+  }
+
+  @IsTest
+  static void systemDoctorLoadRaisesAlert() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // No traffic: an operator opens System Doctor.
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      enableAlerts();
+      stamp(T0);
+      resetCounters();
+      WorkflowEngine.mockNow = T0.addMinutes(45);
+
+      Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+
+      Assert.areEqual(
+        'STALE',
+        ((Map<String, Object>) status.get('liveness')).get('state')
+      );
+      Assert.areEqual(1, stallLogs().size());
+      Assert.areEqual(1, WorkflowAlertManager.publishedEvents.size());
     }
   }
 

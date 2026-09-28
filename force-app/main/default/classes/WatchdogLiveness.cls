@@ -1,19 +1,26 @@
 /**
- * @description Watchdog liveness marker (issue #113). Each good sweep writes
- * the time and cadence to the Watchdog_Liveness__c org-default row. Readers
- * compute HEALTHY, STALE or UNKNOWN from that row. The state is not stored,
- * so a new sweep clears STALE. Reads cost 0 SOQL.
+ * @description Watchdog liveness marker (issue #113). Each complete sweep
+ * writes its time and cadence to the Watchdog_Liveness__c org-default row.
+ * Each read calculates HEALTHY, STALE or UNKNOWN from that row. No record
+ * keeps the state, so the next sweep clears STALE. A read costs 0 SOQL.
  */
 public inherited sharing class WatchdogLiveness {
+  /** @description Elapsed time is not more than the threshold. */
   public static final String STATE_HEALTHY = 'HEALTHY';
+  /** @description Elapsed time is more than the threshold. */
   public static final String STATE_STALE = 'STALE';
+  /** @description No sweep is recorded. */
   public static final String STATE_UNKNOWN = 'UNKNOWN';
 
   /** @description Stale threshold = this value × cadence. */
   public static final Integer STALE_MULTIPLIER = 2;
 
-  // DML statements to keep free for the step commit after the heartbeat.
-  private static final Integer DML_RESERVE = 5;
+  /**
+   * @description DML statements to keep free for the caller. Same value as
+   * the checkpoint reserve in WorkflowBreadcrumbs.
+   */
+  public static final Integer DML_RESERVE = 10;
+
   private static final Integer DEFAULT_CADENCE_MINUTES = 10;
 
   @TestVisible
@@ -25,14 +32,16 @@ public inherited sharing class WatchdogLiveness {
   public class Snapshot {
     /** @description HEALTHY, STALE or UNKNOWN. */
     public String state;
-    /** @description Time of the last good sweep, or null. */
+    /** @description Time of the last complete sweep, or null. */
     public Datetime lastSweepAt;
     /** @description Minutes since the last sweep, or null when UNKNOWN. */
     public Integer elapsedMinutes;
     /** @description Larger of the recorded and configured cadence. */
     public Integer cadenceMinutes;
-    /** @description Elapsed time over this value is STALE. */
+    /** @description The state is STALE when elapsed time is more than this. */
     public Integer thresholdMinutes;
+    /** @description True when this stall has sent its alert. */
+    public Boolean alertSent = false;
 
     /**
      * @description Returns the snapshot as a dashboard map.
@@ -50,22 +59,43 @@ public inherited sharing class WatchdogLiveness {
   }
 
   /**
-   * @description Writes the sweep time and cadence. Best-effort: it skips when
-   * the DML budget is low and never throws.
-   * @param sweptAt Time of the good sweep.
+   * @description Writes the sweep time and cadence. Does not write when the
+   * DML budget is low. Does not throw.
+   * @param sweptAt Time of the complete sweep.
    * @param cadenceMinutes Watchdog cadence for this sweep.
    */
   public static void recordSweep(Datetime sweptAt, Integer cadenceMinutes) {
-    if (sweptAt == null || !hasDmlBudget()) {
+    if (sweptAt == null) {
+      return;
+    }
+    write(
+      new Watchdog_Liveness__c(
+        Last_Sweep_At__c = sweptAt,
+        Cadence_Minutes__c = normalizeCadence(cadenceMinutes)
+      )
+    );
+  }
+
+  /**
+   * @description Records that the stall after this sweep sent its alert.
+   * Writes only Last_Alert_Sweep_At__c. Does not throw.
+   * @param sweptAt Last_Sweep_At__c value of the stall.
+   */
+  public static void markAlertSent(Datetime sweptAt) {
+    if (sweptAt == null) {
+      return;
+    }
+    write(new Watchdog_Liveness__c(Last_Alert_Sweep_At__c = sweptAt));
+  }
+
+  // Inserts or updates the org-default row. The row sets only the fields to
+  // change, so two writers do not overwrite each other.
+  private static void write(Watchdog_Liveness__c row) {
+    if (!hasDmlBudget()) {
       return;
     }
     try {
       Watchdog_Liveness__c current = Watchdog_Liveness__c.getOrgDefaults();
-      // Set only the stamp fields, so the write changes nothing else.
-      Watchdog_Liveness__c row = new Watchdog_Liveness__c(
-        Last_Sweep_At__c = sweptAt,
-        Cadence_Minutes__c = normalizeCadence(cadenceMinutes)
-      );
       if (current == null || current.Id == null) {
         row.SetupOwnerId = UserInfo.getOrganizationId();
         insert as system row;
@@ -74,13 +104,13 @@ public inherited sharing class WatchdogLiveness {
         update as system row;
       }
     } catch (Exception ignored) {
-      // Best-effort: a failed stamp must not stop the heartbeat.
+      // A failed write must not stop the caller.
     }
   }
 
   /**
-   * @description Computes the liveness state now. Uses WorkflowEngine.mockNow
-   * when a test sets it.
+   * @description Calculates the state now. Uses WorkflowEngine.mockNow when a
+   * test sets it.
    * @return The snapshot.
    */
   public static Snapshot evaluateNow() {
@@ -90,7 +120,7 @@ public inherited sharing class WatchdogLiveness {
   }
 
   /**
-   * @description Computes the liveness state at the given time.
+   * @description Calculates the state at the given time.
    * @param now Evaluation time.
    * @return The snapshot.
    */
@@ -111,6 +141,7 @@ public inherited sharing class WatchdogLiveness {
     }
 
     snap.lastSweepAt = row.Last_Sweep_At__c;
+    snap.alertSent = row.Last_Alert_Sweep_At__c == row.Last_Sweep_At__c;
     Long elapsedMs = Math.max(0L, now.getTime() - snap.lastSweepAt.getTime());
     snap.elapsedMinutes = (elapsedMs / 60000L).intValue();
     snap.state = elapsedMs > snap.thresholdMinutes * 60000L
@@ -120,7 +151,7 @@ public inherited sharing class WatchdogLiveness {
   }
 
   /**
-   * @description Makes a cadence usable: blank gives 10, less than 1 gives 1.
+   * @description Returns 10 for null and 1 for a value less than 1.
    * @param cadenceMinutes Raw cadence.
    * @return Cadence of 1 minute or more.
    */
@@ -133,8 +164,8 @@ public inherited sharing class WatchdogLiveness {
 
   private static Boolean hasDmlBudget() {
     return !forceDmlBudgetExhausted &&
-      Limits.getDmlStatements() + DML_RESERVE <
+      Limits.getDmlStatements() + 1 + DML_RESERVE <=
       Limits.getLimitDmlStatements() &&
-      Limits.getDmlRows() + DML_RESERVE < Limits.getLimitDmlRows();
+      Limits.getDmlRows() + 1 + DML_RESERVE <= Limits.getLimitDmlRows();
   }
 }

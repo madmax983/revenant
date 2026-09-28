@@ -174,8 +174,45 @@ public inherited sharing class WorkflowAlertEmailBuilder {
   }
 
   /**
-   * @description Builds a watchdog stall email (issue #113). Returns null when
-   * no recipient is valid or the build fails.
+   * @description Sends one email and checks the result (issue #113). Keeps
+   * one email invocation free for the caller. Does not throw.
+   * @param mail The email to send.
+   * @return True when the platform accepted the email.
+   */
+  public static Boolean sendEmail(Messaging.SingleEmailMessage mail) {
+    if (
+      mail == null ||
+      Limits.getEmailInvocations() + 1 >= Limits.getLimitEmailInvocations()
+    ) {
+      return false;
+    }
+    try {
+      if (Test.isRunningTest()) {
+        if (WorkflowAlertManager.throwTestException) {
+          throw new IllegalArgumentException('Simulated email exception');
+        }
+      } else {
+        for (
+          Messaging.SendEmailResult result : Messaging.sendEmail(
+            new List<Messaging.SingleEmailMessage>{ mail },
+            false
+          )
+        ) {
+          if (!result.isSuccess()) {
+            return false;
+          }
+        }
+      }
+      WorkflowAlertManager.sentEmailsCount += 1;
+      return true;
+    } catch (Exception ex) {
+      return false;
+    }
+  }
+
+  /**
+   * @description Builds a watchdog stall email (issue #113). Returns null
+   * when no recipient is valid or the build fails.
    * @param recipients The raw, delimiter-separated recipient address list.
    * @param message The stall message. It contains no user data.
    * @return The email message, or null.
