@@ -184,7 +184,10 @@ public inherited sharing class WorkflowContinueAsNew {
       // the successor's query (>= predecessor start). The tradeoff is
       // bounded overlap near the boundary, which is correct at-least-once
       // behavior — the same contract Temporal/DBOS use for polling cursors.
-      Previous_Run_At__c = instance.CreatedDate
+      Previous_Run_At__c = instance.CreatedDate,
+      // Issue #132: the successor keeps the admission priority of the run.
+      Admission_Priority__c = (Decimal) instance.getPopulatedFieldsAsMap()
+        .get('Admission_Priority__c')
     );
     // The successor starts from the initial step, so it takes the live shape.
     WorkflowDefinitionFingerprint.stamp(nextInstance, successorDef);

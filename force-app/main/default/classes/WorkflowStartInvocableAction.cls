@@ -27,6 +27,12 @@ public inherited sharing class WorkflowStartInvocableAction {
     )
     public String causationId;
 
+    @InvocableVariable(
+      label='Priority'
+      description='Optional admission priority from 0 to 9. A higher value is admitted sooner under a concurrency ceiling. Blank uses the configured priority. Debounced starts use the configured priority.'
+    )
+    public Integer priority;
+
     @InvocableVariable(label='Debounce Seconds')
     public Integer debounceSeconds;
 

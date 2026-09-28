@@ -53,16 +53,7 @@ public inherited sharing class ConcurrencyConfigResolver {
       return ceilingCache.get(workflowName);
     }
 
-    String devName = workflowName.replaceAll('[^a-zA-Z0-9_]', '_');
-    String truncatedDevName = devName.length() > 40
-      ? devName.substring(0, 40)
-      : devName;
-
-    Concurrency_Config__mdt config = resolveConfig(
-      devName,
-      truncatedDevName,
-      mockConfigs
-    );
+    Concurrency_Config__mdt config = lookup(workflowName, mockConfigs);
     Integer ceiling = (config != null &&
       config.Max_Concurrent_Instances__c != null)
       ? (Integer) config.Max_Concurrent_Instances__c
@@ -77,6 +68,38 @@ public inherited sharing class ConcurrencyConfigResolver {
     }
     ceilingCache.put(workflowName, ceiling);
     return ceiling;
+  }
+
+  /**
+   * @description Returns the config record for a workflow (name, then truncated
+   * name, then `Default`), or null. No per-transaction cache, so a test can
+   * change a mock config after an insert. Exempt workflows get null.
+   * @param workflowName The workflow definition name.
+   * @param mockConfigs Test-injected configs (from `ConcurrencyGate.mockConfigs`).
+   * @return The config record, or null.
+   */
+  public static Concurrency_Config__mdt getConfig(
+    String workflowName,
+    Map<String, Concurrency_Config__mdt> mockConfigs
+  ) {
+    if (
+      String.isBlank(workflowName) || EXEMPT_WORKFLOWS.contains(workflowName)
+    ) {
+      return null;
+    }
+    return lookup(workflowName, mockConfigs);
+  }
+
+  // Derives the DeveloperName forms and resolves the record.
+  private static Concurrency_Config__mdt lookup(
+    String workflowName,
+    Map<String, Concurrency_Config__mdt> mockConfigs
+  ) {
+    String devName = workflowName.replaceAll('[^a-zA-Z0-9_]', '_');
+    String truncatedDevName = devName.length() > 40
+      ? devName.substring(0, 40)
+      : devName;
+    return resolveConfig(devName, truncatedDevName, mockConfigs);
   }
 
   // Resolves a config record for the derived DeveloperName forms: test mocks first
@@ -103,8 +126,9 @@ public inherited sharing class ConcurrencyConfigResolver {
     // workflow driven through many steps within a single Apex transaction (e.g. the
     // test harness, or a synchronous re-drive chain) would otherwise let these
     // reads accumulate toward the 100-query limit. getAll() returns every record
-    // keyed by DeveloperName; it omits long-text fields, but the only field we read
-    // (Max_Concurrent_Instances__c, a Number) is included. Exact name wins over the
+    // keyed by DeveloperName; it omits long-text fields, but the fields we read
+    // (Max_Concurrent_Instances__c, Admission_Priority__c, Priority_Aging_Minutes__c,
+    // all Numbers) are included. Exact name wins over the
     // 40-char-truncated form, with the Default record as the final fallback.
     Map<String, Concurrency_Config__mdt> all = getNormalizedConfigs();
     Concurrency_Config__mdt config = all.get(devName.toLowerCase());

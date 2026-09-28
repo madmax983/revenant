@@ -47,6 +47,7 @@ public inherited sharing class WorkflowStartInvocableRequests {
       .withAttributes(attributes);
     startReq.inputJson = req.inputJson;
     startReq.causationId = req.causationId;
+    startReq.priority = req.priority;
     return startReq;
   }
 

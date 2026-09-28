@@ -1773,6 +1773,7 @@ export default class WorkflowDashboard extends LightningElement {
             r.ceiling !== null &&
             r.ceiling !== undefined &&
             r.inFlight >= r.ceiling,
+          ...this.buildWaitingQueue(r),
         }));
       })
       .catch((error) => {
@@ -1836,6 +1837,31 @@ export default class WorkflowDashboard extends LightningElement {
       text += ` Stale after ${live.thresholdMinutes} min.`;
     }
     return text;
+  }
+
+  // Issue #132: wait queue in admission order, and counts per priority class
+  // (highest first). Tolerates rows with no queue fields.
+  buildWaitingQueue(r) {
+    const waiting = (r.waiting || []).map((w) => ({
+      ...w,
+      key: w.instanceId,
+      positionLabel: `#${w.position}`,
+      priorityLabel: `P${w.priority}`,
+      label: w.name || w.instanceId,
+    }));
+    const byPriority = r.waitingByPriority || {};
+    const priorityClasses = Object.keys(byPriority)
+      .map((p) => Number(p))
+      .sort((a, b) => b - a)
+      .map((p) => `P${p}: ${byPriority[p]}`)
+      .join(" · ");
+    const waitingTotal = r.waitingTotal || 0;
+    return {
+      waitingRows: waiting,
+      hasWaitingRows: waiting.length > 0,
+      hasWaitingSummary: waitingTotal > 0,
+      waitingSummary: `${waitingTotal} waiting · ${priorityClasses}`,
+    };
   }
 
   get hasConcurrencyRows() {

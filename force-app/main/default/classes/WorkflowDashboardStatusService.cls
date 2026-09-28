@@ -5,6 +5,11 @@
  * runs WITH SYSTEM_MODE.
  */
 public inherited sharing class WorkflowDashboardStatusService {
+  // Waiting rows shown per governed workflow on the concurrency panel.
+  private static final Integer QUEUE_ROWS_PER_WORKFLOW = 5;
+  // Cap on rows read to build all queue lists.
+  private static final Integer QUEUE_SCAN_LIMIT = 1000;
+
   /**
    * @description Returns the watchdog/scheduler health snapshot for the dashboard: recent
    * watchdog jobs, scheduled-job and sleeping-instance counts, pending timeouts, engine
@@ -257,7 +262,9 @@ public inherited sharing class WorkflowDashboardStatusService {
    * @description Returns the concurrency-limit picture for each governed workflow: current
    * in-flight count vs. its configured ceiling, and the number of parked/throttled
    * instances awaiting admission. One row per durable counter (Concurrency_State__c).
-   * Each entry: { workflowName, ceiling, inFlight, parked }.
+   * Each entry: { workflowName, ceiling, inFlight, parked, waitingTotal,
+   * waitingByPriority, waiting }. `waiting` lists the next instances in admission
+   * order with their priority (issue #132).
    * @return One concurrency-status map per governed workflow, or an empty list.
    */
   public static List<Map<String, Object>> concurrencyStatus() {
@@ -297,8 +304,19 @@ public inherited sharing class WorkflowDashboardStatusService {
         parkedByDef.put((String) ar.get('wf'), (Integer) ar.get('cnt'));
       }
 
+      Map<String, Map<String, Object>> classesByDef = waitingByPriority(
+        workflowNames
+      );
+      Map<String, List<Map<String, Object>>> queueByDef = waitingQueue(
+        workflowNames
+      );
+
       List<Map<String, Object>> result = new List<Map<String, Object>>();
       for (Concurrency_State__c s : states) {
+        String defKey = s.Workflow_Definition__c.toLowerCase();
+        Map<String, Object> classes = classesByDef.containsKey(defKey)
+          ? classesByDef.get(defKey)
+          : new Map<String, Object>();
         result.add(
           new Map<String, Object>{
             'workflowName' => s.Workflow_Definition__c,
@@ -308,7 +326,12 @@ public inherited sharing class WorkflowDashboardStatusService {
               : (Integer) s.In_Flight_Count__c,
             'parked' => parkedByDef.containsKey(s.Workflow_Definition__c)
               ? parkedByDef.get(s.Workflow_Definition__c)
-              : 0
+              : 0,
+            'waitingTotal' => sumCounts(classes),
+            'waitingByPriority' => classes,
+            'waiting' => queueByDef.containsKey(defKey)
+              ? queueByDef.get(defKey)
+              : new List<Map<String, Object>>()
           }
         );
       }
@@ -316,5 +339,94 @@ public inherited sharing class WorkflowDashboardStatusService {
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
+  }
+  // Count of waiting instances per priority class, keyed by lower-cased workflow
+  // name, then by priority as text. A blank priority (a row from before issue
+  // #132) shows as the priority the gate gives it.
+  private static Map<String, Map<String, Object>> waitingByPriority(
+    Set<String> workflowNames
+  ) {
+    Map<String, Map<String, Object>> byDef = new Map<String, Map<String, Object>>();
+    for (AggregateResult ar : [
+      SELECT Workflow_Name__c wf, Admission_Priority__c p, COUNT(Id) cnt
+      FROM Workflow_Instance__c
+      WHERE
+        Workflow_Name__c IN :workflowNames
+        AND Concurrency_Parked__c = TRUE
+        AND Concurrency_Slot_Held__c = FALSE
+        AND Status__c IN :ConcurrencyAdmissionOrder.WAITING_STATUSES
+      WITH SYSTEM_MODE
+      GROUP BY Workflow_Name__c, Admission_Priority__c
+    ]) {
+      String wf = (String) ar.get('wf');
+      String defKey = wf.toLowerCase();
+      if (!byDef.containsKey(defKey)) {
+        byDef.put(defKey, new Map<String, Object>());
+      }
+      Map<String, Object> classes = byDef.get(defKey);
+      String priority = String.valueOf(priorityOf(wf, (Decimal) ar.get('p')));
+      Integer prior = classes.containsKey(priority)
+        ? (Integer) classes.get(priority)
+        : 0;
+      classes.put(priority, prior + (Integer) ar.get('cnt'));
+    }
+    return byDef;
+  }
+
+  // The next waiting instances per workflow, in admission order (the gate
+  // order: key, then Id). Keyed by lower-cased workflow name.
+  private static Map<String, List<Map<String, Object>>> waitingQueue(
+    Set<String> workflowNames
+  ) {
+    Map<String, List<Map<String, Object>>> byDef = new Map<String, List<Map<String, Object>>>();
+    for (Workflow_Instance__c inst : [
+      SELECT Id, Name, Workflow_Name__c, Admission_Priority__c, CreatedDate
+      FROM Workflow_Instance__c
+      WHERE
+        Workflow_Name__c IN :workflowNames
+        AND Concurrency_Parked__c = TRUE
+        AND Concurrency_Slot_Held__c = FALSE
+        AND Status__c IN :ConcurrencyAdmissionOrder.WAITING_STATUSES
+      WITH SYSTEM_MODE
+      ORDER BY Admission_Key__c ASC NULLS FIRST, Id ASC
+      LIMIT :QUEUE_SCAN_LIMIT
+    ]) {
+      String defKey = inst.Workflow_Name__c.toLowerCase();
+      if (!byDef.containsKey(defKey)) {
+        byDef.put(defKey, new List<Map<String, Object>>());
+      }
+      List<Map<String, Object>> queue = byDef.get(defKey);
+      if (queue.size() >= QUEUE_ROWS_PER_WORKFLOW) {
+        continue;
+      }
+      queue.add(
+        new Map<String, Object>{
+          'instanceId' => inst.Id,
+          'name' => inst.Name,
+          'priority' => priorityOf(
+            inst.Workflow_Name__c,
+            inst.Admission_Priority__c
+          ),
+          'position' => queue.size() + 1,
+          'waitingSince' => inst.CreatedDate
+        }
+      );
+    }
+    return byDef;
+  }
+
+  // The stored priority, or the priority the gate gives a blank row.
+  private static Integer priorityOf(String workflowName, Decimal stored) {
+    return stored != null
+      ? stored.intValue()
+      : ConcurrencyAdmissionOrder.resolvePriority(workflowName, null);
+  }
+
+  private static Integer sumCounts(Map<String, Object> classes) {
+    Integer total = 0;
+    for (Object count : classes.values()) {
+      total += (Integer) count;
+    }
+    return total;
   }
 }

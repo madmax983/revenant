@@ -4,7 +4,8 @@
  * a live compensation drive to the resident saga logic, parks an operator-paused
  * instance, and enforces the concurrency ceiling by re-reading the instance
  * `FOR UPDATE` and either acquiring a slot (then re-driving) or parking for a
- * later admission re-attempt. This instance `FOR UPDATE` re-read is the FIRST of
+ * later admission re-attempt. Slots go in admission order: priority, then start
+ * time (issue #132). This instance `FOR UPDATE` re-read is the FIRST of
  * the two ordered locks (admission before execution). All DML and SOQL run in
  * system mode.
  */
@@ -166,7 +167,14 @@ public inherited sharing class WorkflowStepAdmission {
     Workflow_Instance__c instance
   ) {
     Workflow_Instance__c locked = [
-      SELECT Concurrency_Slot_Held__c, Status__c
+      SELECT
+        Id,
+        Workflow_Name__c,
+        CreatedDate,
+        Concurrency_Slot_Held__c,
+        Status__c,
+        Admission_Priority__c,
+        Admission_Key__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
@@ -193,16 +201,26 @@ public inherited sharing class WorkflowStepAdmission {
 
     String resolvedStep = resolveStepForAdmission(instance);
 
+    // Issue #132: a row from before admission priority gets its key now. The
+    // commit or park DML below writes it.
+    if (ConcurrencyAdmissionOrder.backfill(locked)) {
+      instance.Admission_Priority__c = locked.Admission_Priority__c;
+      instance.Admission_Key__c = locked.Admission_Key__c;
+    }
+
     ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
-      instance.Workflow_Name__c
+      instance.Workflow_Name__c,
+      locked
     );
     if (admission.admitted) {
       commitSlotAcquisitionAndRedrive(instance, resolvedStep);
-      return true;
+    } else {
+      // Ceiling full, or higher-ranked rows wait: park and re-attempt admission
+      // through the existing sleep/watchdog resume plumbing.
+      parkForConcurrency(instance, resolvedStep);
     }
-    // Ceiling full: park and re-attempt admission automatically through the
-    // existing sleep/watchdog resume plumbing.
-    parkForConcurrency(instance, resolvedStep);
+    // Wake the rows that rank ahead so the head of the queue visits now.
+    ConcurrencyAdmissionOrder.wake(admission.aheadIds);
     return true;
   }
 

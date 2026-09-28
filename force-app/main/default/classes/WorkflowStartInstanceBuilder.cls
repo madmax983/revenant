@@ -46,6 +46,8 @@ public inherited sharing class WorkflowStartInstanceBuilder {
     instance.Status__c = 'Pending';
     instance.Correlation_Key__c = req.correlationKey;
     instance.Parent_Instance__c = req.parentInstanceId;
+    // The insert trigger clamps it and sets the rank key (issue #132).
+    instance.Admission_Priority__c = req.priority;
     instance.Causation_Id__c = resolveCausationId(req);
 
     validateWorkflowAuthorization(req);

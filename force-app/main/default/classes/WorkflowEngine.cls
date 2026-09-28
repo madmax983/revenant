@@ -488,7 +488,7 @@ public inherited sharing class WorkflowEngine {
    * @description Input DTO for a single get-or-start request in the bulk start
    * and signalOrStart APIs. Carries the definition name, correlation key, start
    * input (as an Object or pre-serialized JSON), and optional parent reference,
-   * searchable attributes and causation id.
+   * searchable attributes, causation id and admission priority.
    */
   public class StartRequest {
     public String workflowName;
@@ -498,6 +498,11 @@ public inherited sharing class WorkflowEngine {
     public Id parentInstanceId;
     public Map<String, String> attributes;
     public String causationId;
+    /**
+     * @description Optional admission priority override (0–9, clamped). Null
+     * uses the `Concurrency_Config__mdt` priority. Higher is admitted sooner.
+     */
+    public Integer priority;
 
     /**
      * @description Builds a minimal start request.
@@ -532,6 +537,18 @@ public inherited sharing class WorkflowEngine {
      */
     public StartRequest withParent(Id parentInstanceIdArg) {
       this.parentInstanceId = parentInstanceIdArg;
+      return this;
+    }
+
+    /**
+     * @description Fluent setter for the admission priority override (issue
+     * #132). Range 0–9; other values are clamped. Controls admission order
+     * under a concurrency ceiling only.
+     * @param priorityArg admission priority, or null for the configured value
+     * @return this request, for call chaining
+     */
+    public StartRequest withPriority(Integer priorityArg) {
+      this.priority = priorityArg;
       return this;
     }
   }

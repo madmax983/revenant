@@ -55,6 +55,9 @@ is the concurrency gate that decides whether a step may run now.
 - `WorkflowStepTimeoutConfig`, `WorkflowTimeoutArming`, `WorkflowTimeoutReArm`
 - `ConcurrencyGate` (facade) + `ConcurrencyConfigResolver`,
   `ConcurrencyReconciler`, `ConcurrencyReleaseProcessor`
+- `ConcurrencyAdmissionOrder` — admission priority (0–9) and rank key with
+  aging. The gate admits in key order and wakes the head of the queue
+  (issue #132)
 - `CircuitBreakerGate` (facade) + `CircuitBreakerConfigResolver`,
   `CircuitBreakerReconciler` — dependency-health fast-fail via the
   `CircuitBreakerGuarded` step marker (issue #128)
