@@ -233,6 +233,20 @@ public inherited sharing class WorkflowPauseGate {
     return false;
   }
 
+  /**
+   * @description Tells if a name is an engine-internal workflow, with or
+   * without a namespace or outer-class prefix. The definition-change gate,
+   * the step-history guard and the instance hold use it. It reads only the
+   * constant name list, not pause state.
+   * @param workflowName The workflow name to check.
+   * @return True when the workflow is an engine workflow.
+   */
+  public static Boolean isEngineWorkflow(String workflowName) {
+    return String.isNotBlank(workflowName) &&
+      (isReserved(workflowName) ||
+      isReserved(workflowName.substringAfterLast('.')));
+  }
+
   private static void loadCache() {
     // Every pause record feeds the transaction cache. Bounded by the SOQL row cap (one
     // row per paused definition plus the '*' sentinel, far below it) so the LIMIT

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Hold_Reason__c</fullName>
+    <description>Operator reason for the hold (issue #119). Blank when not held.</description>
+    <externalId>false</externalId>
+    <label>Hold Reason</label>
+    <length>255</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

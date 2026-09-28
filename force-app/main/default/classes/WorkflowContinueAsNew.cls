@@ -111,12 +111,16 @@ public inherited sharing class WorkflowContinueAsNew {
       result.directive().continuation.newCorrelationKey
     );
 
+    // The successor seed carries the new key and the hold (issue #119).
+    Workflow_Instance__c seed = WorkflowInstanceHold.successorHold(instance);
+    seed.Correlation_Key__c = newKey;
+
     // Mark current instance as ContinuedAsNew
     instance.Status__c = 'ContinuedAsNew';
     instance.Current_Step__c = null;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
-    spawnContinueAsNewSuccessor(instance, result, newKey);
+    spawnContinueAsNewSuccessor(instance, result, seed);
   }
 
   /**
@@ -139,8 +143,9 @@ public inherited sharing class WorkflowContinueAsNew {
   private static void spawnContinueAsNewSuccessor(
     Workflow_Instance__c instance,
     StepResult result,
-    String newKey
+    Workflow_Instance__c seed
   ) {
+    String newKey = seed.Correlation_Key__c;
     // Resolve initial step for successor instance
     String initialStep = null;
     Datetime nextDeadline = null;
@@ -185,6 +190,9 @@ public inherited sharing class WorkflowContinueAsNew {
       // bounded overlap near the boundary, which is correct at-least-once
       // behavior — the same contract Temporal/DBOS use for polling cursors.
       Previous_Run_At__c = instance.CreatedDate,
+      // The successor continues the held run, so it parks at its first gate.
+      Held_At__c = seed.Held_At__c,
+      Hold_Reason__c = seed.Hold_Reason__c,
       // Issue #132: the successor keeps the admission priority of the run. It
       // gets a new rank key from its own start time.
       Admission_Priority__c = ConcurrencyAdmissionOrder.resolvePriority(

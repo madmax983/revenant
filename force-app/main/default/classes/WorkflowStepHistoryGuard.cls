@@ -100,9 +100,7 @@ public inherited sharing class WorkflowStepHistoryGuard {
    * @return True when the workflow is exempt.
    */
   public static Boolean isExempt(String workflowName) {
-    return String.isNotBlank(workflowName) &&
-      (WorkflowPauseGate.isReserved(workflowName) ||
-      WorkflowPauseGate.isReserved(workflowName.substringAfterLast('.')));
+    return WorkflowPauseGate.isEngineWorkflow(workflowName);
   }
 
   /**

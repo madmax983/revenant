@@ -302,6 +302,9 @@
                                                             <template if:true={inst.stalled}>
                                                                 <span class={inst.stalledBadgeClass} style="margin-right: 8px;">STALLED</span>
                                                             </template>
+                                                            <template if:true={inst.isHoldWaiting}>
+                                                                <span class="badge badge-cyan" style="margin-right: 8px;" data-id="held-marker" title="Held. The instance stops at its next step boundary.">HOLD WAITING<span class="slds-assistive-text">: held. The instance stops at its next step boundary.</span></span>
+                                                            </template>
                                                             <template if:true={inst.stepHistoryWarning}>
                                                                 <span class="badge badge-yellow" style="margin-right: 8px;" data-id="step-history-badge" title="Step history is large. Change this workflow to use Continue-As-New.">LONG HISTORY<span class="slds-assistive-text">: step history is large. Change this workflow to use Continue-As-New.</span></span>
                                                             </template>
@@ -462,6 +465,50 @@
                                                 <div class="slds-text-heading_small slds-m-top_xx-small">{doctorData.elasticAsyncValue} / {doctorData.elasticAsyncLimit}</div>
                                                 <div class="slds-text-body_small slds-text-color_weak">Scale-out limit dynamically allowed by Salesforce</div>
                                             </div>
+                                        </div>
+                                    </template>
+                                </div>
+
+                                <!-- Platform Event Allocation (#120) -->
+                                <div class="slds-m-bottom_large">
+                                    <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                        <h3 class="slds-text-heading_small font-outfit">Platform Event Allocation</h3>
+                                        <span class={peView.status.badgeClass} data-id="pe-panel-state">{peView.status.label}</span>
+                                    </div>
+                                    <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_small" data-id="pe-thresholds">{peView.thresholdsLabel}</div>
+                                    <template if:true={peView.atRisk}>
+                                        <div class={peView.consequenceClass} role="status" data-id="pe-consequence">
+                                            <div class="slds-media__figure">
+                                                <lightning-icon icon-name={peView.consequenceIcon} alternative-text={peView.status.label} size="small" variant="inverse"></lightning-icon>
+                                            </div>
+                                            <div class="slds-media__body">
+                                                <p><strong>{peView.status.label}:</strong> {peView.consequenceIntro}</p>
+                                                <template for:each={peView.consequenceLines} for:item="line">
+                                                    <p key={line.key}>{line.text}</p>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <template if:true={peView.hasRows}>
+                                        <div class="slds-grid slds-wrap slds-gutters">
+                                            <template for:each={peView.rows} for:item="row">
+                                                <div key={row.key} class="slds-col slds-size_1-of-2 slds-m-bottom_small" data-id="pe-row">
+                                                    <div class="stat-card">
+                                                        <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
+                                                            <div class="slds-text-title slds-text-color_weak">{row.label}</div>
+                                                            <span class={row.badgeClass} data-id="pe-row-state">{row.stateLabel}</span>
+                                                        </div>
+                                                        <div class="slds-text-heading_small slds-m-top_xx-small">{row.usageLabel}</div>
+                                                        <div class="slds-text-body_small slds-text-color_weak">{row.usedLabel} · {row.remainingLabel}</div>
+                                                        <div class="slds-text-body_small slds-text-color_weak">OrgLimits key: {row.name}</div>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template if:false={peView.hasRows}>
+                                        <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center" data-id="pe-unavailable">
+                                            Not available. The OrgLimits map has no Platform Event limit, or the read failed.
                                         </div>
                                     </template>
                                 </div>
@@ -1497,6 +1544,38 @@
                                                  class="slds-m-right_small brand-button">
                                              </lightning-button>
                                          </template>
+                                         <template if:true={canHold}>
+                                             <lightning-input
+                                                 data-id="hold-reason-input"
+                                                 label="Hold reason"
+                                                 variant="label-hidden"
+                                                 placeholder="Hold reason (optional)"
+                                                 max-length="255"
+                                                 value={holdReasonValue}
+                                                 onchange={handleHoldReasonChange}
+                                                 class="slds-m-right_x-small">
+                                             </lightning-input>
+                                             <lightning-button
+                                                 data-id="hold-btn"
+                                                 label="Hold"
+                                                 icon-name="utility:pause"
+                                                 variant="neutral"
+                                                 onclick={handleHoldInstance}
+                                                 class="slds-m-right_small"
+                                                 title="Stop this instance at its next step boundary. Siblings continue.">
+                                             </lightning-button>
+                                         </template>
+                                         <template if:true={isHeld}>
+                                             <lightning-button
+                                                 data-id="release-hold-btn"
+                                                 label="Release Hold"
+                                                 icon-name="utility:play"
+                                                 variant="brand"
+                                                 onclick={handleReleaseHold}
+                                                 class="slds-m-right_small brand-button"
+                                                 title="Continue this instance from the step where it stopped">
+                                             </lightning-button>
+                                         </template>
                                          <template if:true={isRollbackIncomplete}>
                                              <lightning-button
                                                  label="Resume Rollback"
@@ -1678,6 +1757,26 @@
                                             <div class="slds-text-title text-orange">Long Step History</div>
                                             <div class="slds-text-body_regular">{selectedInst.stepHistoryWarning.message}</div>
                                             <div class="slds-text-body_small slds-text-color_weak" data-id="step-history-warning-date">First seen: {selectedInst.stepHistoryWarning.formattedDate}</div>
+                                        </div>
+                                    </template>
+                                    <template if:true={isHeld}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small" data-id="hold-panel">
+                                            <div class="slds-text-title text-cyan">Held</div>
+                                            <div class="slds-text-body_regular slds-m-bottom_x-small">
+                                                An operator held this instance. No step runs until an operator releases it. Other instances of the definition continue.
+                                            </div>
+                                            <template if:true={isHeldWithOtherPark}>
+                                                <div class="slds-text-body_small slds-m-bottom_x-small" data-id="hold-other-park">
+                                                    This instance is also paused or stopped for a definition change. Release Hold removes only the hold.
+                                                </div>
+                                            </template>
+                                            <template if:true={isHoldWaiting}>
+                                                <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small" data-id="hold-waiting">
+                                                    The instance stops at its next step boundary. If a step runs now, the step finishes.
+                                                </div>
+                                            </template>
+                                            <div class="slds-text-body_small" data-id="hold-reason">Reason: {holdReasonLabel}</div>
+                                            <div class="slds-text-body_small slds-text-color_weak" data-id="hold-since">Held since: {selectedInst.heldSinceFormatted}</div>
                                         </div>
                                     </template>
                                     <template if:true={isDefinitionChanged}>

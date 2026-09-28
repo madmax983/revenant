@@ -58,7 +58,7 @@ The examples in `examples/` run in the package namespace. Some use classes that 
 
 These values are part of the contract. Do not rename them.
 
-- `WorkflowEngine.WorkflowStatus.status` and `WorkflowStatusInvocableAction.StatusResult.status`: `Pending`, `Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `DefinitionChanged`, `CompensationFailed`, `ContinuedAsNew`, `Completed`, `Failed`, `Compensated`, `Cancelled`. `isTerminal` is true for `Completed`, `Failed`, `Compensated`, and `Cancelled`.
+- `WorkflowEngine.WorkflowStatus.status` and `WorkflowStatusInvocableAction.StatusResult.status`: `Pending`, `Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `DefinitionChanged`, `Held`, `CompensationFailed`, `ContinuedAsNew`, `Completed`, `Failed`, `Compensated`, `Cancelled`. `isTerminal` is true for `Completed`, `Failed`, `Compensated`, and `Cancelled`.
 - `StepContext.ChildOutcome.status`: `Completed`, or the status of a child that did not complete: `Failed`, `Cancelled`, `Compensated`, or `CompensationFailed`. Use `isSuccess()` to test for `Completed`.
 
 ## Manifest

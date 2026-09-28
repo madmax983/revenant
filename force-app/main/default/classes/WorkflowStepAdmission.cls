@@ -35,12 +35,17 @@ public inherited sharing class WorkflowStepAdmission {
     return true;
   }
 
-  // A compensation step that SUSPENDed (e.g. waiting on a signal) leaves the
-  // instance Suspended; signal() then flips it to Running before re-enqueueing.
-  // In either state a latest step ending in '_Compensate' whose base name is on
-  // the compensation stack means the instance is still compensating and must
-  // route to runCompensationStep, not the forward path.
-  private static Boolean isLiveCompensation(Workflow_Instance__c instance) {
+  /**
+   * @description Tells if the instance is in a live compensation. A
+   * compensation step that suspends leaves the instance Suspended. A signal
+   * then sets Running. In both states, the latest step ends in '_Compensate'
+   * and its base name is on the compensation stack. Such an instance routes to
+   * runCompensationStep, not the forward path. The instance hold (issue #119)
+   * uses this check to reject a rollback.
+   * @param instance the instance, with Id, Status__c and Compensation_Stack__c
+   * @return true when the instance is in a live compensation
+   */
+  public static Boolean isLiveCompensation(Workflow_Instance__c instance) {
     if (
       instance.Status__c == 'Compensating' ||
       instance.Status__c == 'Cancelling'

@@ -22,7 +22,20 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     'Cancelling',
     'CompensationFailed',
     'Paused',
-    'DefinitionChanged'
+    'DefinitionChanged',
+    'Held'
+  };
+  // Statuses off the forward path. A hold (issue #119) applies only to the
+  // forward path, so the handler clears it when a row enters one of these.
+  private static final Set<String> HOLD_CLEARING_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled',
+    'ContinuedAsNew',
+    'Compensating',
+    'Cancelling',
+    'CompensationFailed'
   };
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -87,7 +100,7 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
   /**
    * @description Applies all before-insert/before-update logic for each record —
    * correlation-key defaulting and reservation, terminal-timestamp stamping,
-   * failure-category clearing — then releases any accumulated concurrency slots.
+   * failure-category clearing, hold clearing — then releases any accumulated concurrency slots.
    */
   public void handleBeforeSave() {
     // Issue #132: stamp admission priority and rank key on insert only.
@@ -100,12 +113,24 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
       Boolean isTerminal = TERMINAL_STATUSES.contains(instance.Status__c);
       Boolean wasTerminal = applyTerminalTimestamp(instance, isTerminal);
       clearFailureCategoryIfResolved(instance);
+      clearHoldOffForwardPath(instance);
       accumulateSlotRelease(instance, isTerminal, wasTerminal);
       // Issue #132: after the slot release, so the flags are final.
       ConcurrencyAdmissionOrder.syncQueueField(instance);
     }
 
     releaseSlots();
+  }
+
+  // A cancelled, finished or compensating row is never held (issue #119).
+  private void clearHoldOffForwardPath(Workflow_Instance__c instance) {
+    if (
+      instance.Held_At__c != null &&
+      HOLD_CLEARING_STATUSES.contains(instance.Status__c)
+    ) {
+      instance.Held_At__c = null;
+      instance.Hold_Reason__c = null;
+    }
   }
 
   private void applyRootCorrelationKeyDefault(Workflow_Instance__c instance) {

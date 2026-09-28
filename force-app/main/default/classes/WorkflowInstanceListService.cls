@@ -63,7 +63,10 @@ public inherited sharing class WorkflowInstanceListService {
     if (String.isNotBlank(workflowName)) {
       whereBody += ' AND Workflow_Name__c = :workflowName';
     }
-    if (String.isNotBlank(status)) {
+    if (status == WorkflowInstanceHoldGate.STATUS) {
+      // Issue #119: the Held filter also finds a hold that waits to park.
+      whereBody += ' AND (Status__c = :status OR Held_At__c != NULL)';
+    } else if (String.isNotBlank(status)) {
       whereBody += ' AND Status__c = :status';
     }
     if (String.isNotBlank(failureCategory)) {
@@ -81,7 +84,7 @@ public inherited sharing class WorkflowInstanceListService {
     }
 
     String query =
-      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c, Failure_Category__c ' +
+      'SELECT Id, Name, Workflow_Name__c, Status__c, Correlation_Key__c, CreatedDate, LastModifiedDate, Error_Message__c, Async_Job_Id__c, Sleep_Until__c, Deadline_At__c, Failure_Category__c, Held__c ' +
       'FROM Workflow_Instance__c';
     if (String.isNotBlank(whereBody)) {
       query += ' WHERE ' + whereBody.substring(5);
@@ -171,6 +174,8 @@ public inherited sharing class WorkflowInstanceListService {
       m.put('Failure_Category__c', inst.Failure_Category__c);
       m.put('waitDescriptor', waitDescriptors.get(inst.Id));
       m.put('stepHistoryWarning', historyWarned.contains(inst.Id));
+      // Issue #119: a hold that waits for the next step boundary shows too.
+      m.put('Held__c', inst.Held__c);
       results.add(m);
     }
     return results;
@@ -209,7 +214,10 @@ public inherited sharing class WorkflowInstanceListService {
     if (String.isNotBlank(workflowName)) {
       whereBody += ' AND Workflow_Name__c = :workflowName';
     }
-    if (String.isNotBlank(status)) {
+    if (status == WorkflowInstanceHoldGate.STATUS) {
+      // Issue #119: the Held filter also finds a hold that waits to park.
+      whereBody += ' AND (Status__c = :status OR Held_At__c != NULL)';
+    } else if (String.isNotBlank(status)) {
       whereBody += ' AND Status__c = :status';
     }
     if (String.isNotBlank(searchTerm)) {

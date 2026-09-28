@@ -83,7 +83,8 @@ public inherited sharing class WorkflowUnroutedSignals {
       'Compensating',
       'Cancelling',
       'Paused',
-      'DefinitionChanged'
+      'DefinitionChanged',
+      'Held'
     };
 
     List<Workflow_Instance__c> instances = new List<Workflow_Instance__c>();
