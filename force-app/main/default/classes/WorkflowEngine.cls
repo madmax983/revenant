@@ -30,6 +30,11 @@ public inherited sharing class WorkflowEngine {
   // when true, a step that makes a different routing decision on a re-run with
   // the same inputs fails. Default: off.
   public static Boolean strictDeterminism = false;
+  // Operator settings (Revenant_Config__mdt, issue #112): step-history warn
+  // threshold and ceiling, in rows per instance. 0 turns a check off.
+  // WorkflowStepHistoryGuard.resolve validates the values.
+  public static Integer stepHistoryWarnThreshold = 5000;
+  public static Integer stepHistoryCeiling = 10000;
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -38,6 +43,7 @@ public inherited sharing class WorkflowEngine {
   public static final String CAT_COMPENSATION_FAILED = 'COMPENSATION_FAILED';
   public static final String CAT_EXPLICIT_FAIL = 'EXPLICIT_FAIL';
   public static final String CAT_STEP_NON_DETERMINISM = 'STEP_NON_DETERMINISM';
+  public static final String CAT_STEP_HISTORY_LIMIT = 'STEP_HISTORY_LIMIT';
   public static final String CAT_UNKNOWN = 'UNKNOWN';
 
   // Get-or-start dedup window in minutes. Redelivered starts whose correlation

@@ -42,6 +42,8 @@ public inherited sharing class WorkflowStepRunner {
     public Exception thrownError;
     // The resolved step. The invoke phase sets it.
     public WorkflowStep stepInstance;
+    // Step-history warning text (issue #112). Null when no warning applies.
+    public String stepHistoryWarning;
   }
 
   /**

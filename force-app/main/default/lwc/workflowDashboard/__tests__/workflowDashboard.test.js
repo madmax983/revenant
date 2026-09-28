@@ -3028,3 +3028,122 @@ describe("c-workflow-dashboard definition changed", () => {
     expect(detail.message).toContain("StepB");
   });
 });
+
+describe("c-workflow-dashboard step-history warning (issue #112)", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function mockLongHistory(stepHistoryWarning, detailWarning) {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000112",
+        Name: "WI-0112",
+        Workflow_Name__c: "PollerWorkflow",
+        Status__c: "Running",
+        stepHistoryWarning,
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000112",
+        Name: "WI-0112",
+        Workflow_Name__c: "PollerWorkflow",
+        Status__c: "Running",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      stepHistoryWarning: detailWarning,
+    });
+  }
+
+  async function openFirst() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  it("shows a LONG HISTORY badge on a flagged list row", async () => {
+    mockLongHistory(true, null);
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+
+    const badge = element.shadowRoot.querySelector(
+      '[data-id="step-history-badge"]',
+    );
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain("LONG HISTORY");
+    expect(badge.title).toContain("Continue-As-New");
+  });
+
+  it("shows no badge on a quiet list row", async () => {
+    mockLongHistory(false, null);
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="step-history-badge"]'),
+    ).toBeNull();
+  });
+
+  it("shows the warning message in the detail pane", async () => {
+    mockLongHistory(true, {
+      message:
+        "Step history reached 5000 rows. Refactor this workflow to use Continue-As-New.",
+      createdDate: "2026-09-28T10:00:00.000Z",
+    });
+    const element = await openFirst();
+
+    const callout = element.shadowRoot.querySelector(
+      '[data-id="step-history-warning"]',
+    );
+    expect(callout).not.toBeNull();
+    expect(callout.textContent).toContain("Step history reached 5000 rows");
+  });
+
+  it("shows no detail warning when the instance has none", async () => {
+    mockLongHistory(false, null);
+    const element = await openFirst();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="step-history-warning"]'),
+    ).toBeNull();
+  });
+
+  it("offers STEP_HISTORY_LIMIT as a failure category filter", async () => {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    const combos = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-combobox"),
+    );
+    const categoryCombo = combos.find((c) =>
+      (c.options || []).some((o) => o.value === "STEP_NON_DETERMINISM"),
+    );
+    const option = categoryCombo.options.find(
+      (o) => o.value === "STEP_HISTORY_LIMIT",
+    );
+    expect(option).toBeDefined();
+    expect(option.label).toBe("Step History Limit");
+  });
+});
