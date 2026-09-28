@@ -246,6 +246,30 @@ public class ConcurrencyAdmissionOrderTest {
     );
   }
 
+  // A rollback does not use admission. A compensation step that suspends
+  // later must not join the queue.
+  @IsTest
+  static void testRollbackClearsMarkerAndLeavesQueue() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Pending',
+      Correlation_Key__c = 'queue-rollback-1',
+      Concurrency_Parked__c = true
+    );
+    insert inst;
+    Test.startTest();
+    update new Workflow_Instance__c(Id = inst.Id, Status__c = 'Cancelling');
+    update new Workflow_Instance__c(Id = inst.Id, Status__c = 'Suspended');
+    Test.stopTest();
+    Workflow_Instance__c r = [
+      SELECT Concurrency_Parked__c, Admission_Queue__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assert(!r.Concurrency_Parked__c, 'Rollback clears the marker');
+    System.assertEquals(null, r.Admission_Queue__c, 'Not in the queue');
+  }
+
   @IsTest
   static void testTerminalRowLeavesQueue() {
     Workflow_Instance__c inst = new Workflow_Instance__c(

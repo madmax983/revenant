@@ -147,10 +147,15 @@ effect. A large window lets low-priority work wait longer.
   gets a slot. If not, the candidate yields.
 - After the decision, the gate wakes the instances ahead (up to the number
   of free slots, max 10) with one admit-only Queueable
-  (`ConcurrencyAdmissionWake`). This job gives each instance a slot or parks
-  it again. It never runs a step. When the Queueable budget of the
-  transaction is spent, the gate does not wake. The instances then use their
-  retry timers.
+  (`ConcurrencyAdmissionWake`). The gate enqueues the wake before the
+  re-drive of the candidate. The job locks its rows in Id order, then gives
+  each instance a slot or parks it again. It never runs a step. When the
+  Queueable budget of the transaction is spent, the gate does not wake, and
+  the instances use their retry timers. The re-drives that the admission
+  starts use the normal engine path: a Queueable, or a Platform Event when
+  the budget is spent.
+- An instance that enters `Compensating` or `Cancelling` loses the
+  awaiting-admission marker. A rollback never waits in the queue.
 - An admit or a park aborts the old retry timer of the candidate. Thus an
   old timer cannot re-drive an admitted instance.
 - When a slot becomes free, the head of the queue gets it within one

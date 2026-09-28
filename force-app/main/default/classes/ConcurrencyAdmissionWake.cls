@@ -1,6 +1,7 @@
 /**
  * @description Admit-only wake for the admission queue (issue #132). The gate
- * enqueues it for the rows that rank ahead of a candidate. For each row that
+ * enqueues it for the rows that rank ahead of a candidate. It locks all rows
+ * first, in Id order. For each row that
  * still waits, it runs the admission gate: the row gets a slot (and a normal
  * re-drive) or parks again. It never runs a step, so a late wake cannot
  * re-run the step of an admitted instance.
@@ -22,8 +23,18 @@ public inherited sharing class ConcurrencyAdmissionWake implements Queueable {
    * @param ctx The Queueable context.
    */
   public void execute(QueueableContext ctx) {
-    for (Id instanceId : instanceIds) {
-      admitOne(instanceId);
+    // Lock all rows first, in Id order. The gate then locks the counter. This
+    // keeps the engine lock order (instance rows, then counter) for each row.
+    List<Workflow_Instance__c> locked = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Id IN :instanceIds
+      WITH SYSTEM_MODE
+      ORDER BY Id ASC
+      FOR UPDATE
+    ];
+    for (Workflow_Instance__c row : locked) {
+      admitOne(row.Id);
     }
   }
 
@@ -33,9 +44,14 @@ public inherited sharing class ConcurrencyAdmissionWake implements Queueable {
     Savepoint sp = Database.setSavepoint();
     try {
       WorkflowStepRunner.admitIfWaiting(instanceId);
-    } catch (Exception ignored) {
+    } catch (Exception e) {
       // Best effort. The row keeps its retry timer and the watchdog.
       Database.rollback(sp);
+      WorkflowLog.warn(
+        'AdmissionWake',
+        'Admit-only wake failed: ' + e.getMessage(),
+        instanceId
+      );
     } finally {
       Database.releaseSavepoint(sp);
     }

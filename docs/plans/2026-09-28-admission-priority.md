@@ -112,4 +112,7 @@ these problems. The fixes replace parts of the decision above.
 | Waiting rows from before the upgrade have no queue field (Codex).     | Heartbeat backfill (200 per sweep) and a one-off script.                  |
 | The wake job keeps one savepoint per row (Codex).                     | Release each savepoint in `finally`.                                      |
 | An admit spends the only async Queueable before the wake (Codex).     | Wake before the commit or park.                                           |
+| The wake job locks the counter, then more instance rows (round 2).    | Lock all wake rows first, in Id order.                                    |
+| A parked row that rolls back can join the queue (round 2).            | The trigger clears the marker on `Compensating`/`Cancelling`.             |
+| The old timer is aborted after the new one is scheduled (round 2).    | Abort first. Log a failed wake. Backfill uses `allOrNone = false`.        |
 | Admin can edit engine fields.                                         | Read-only in both permission sets.                                        |

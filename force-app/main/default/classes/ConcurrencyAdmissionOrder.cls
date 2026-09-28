@@ -30,6 +30,11 @@ public inherited sharing class ConcurrencyAdmissionOrder {
     'Running',
     'Suspended'
   };
+  /** @description Rollback statuses. They clear the awaiting-admission marker. */
+  public static final Set<String> COMPENSATION_STATUSES = new Set<String>{
+    'Compensating',
+    'Cancelling'
+  };
   /** @description The maximum number of rows that one gate visit wakes. */
   public static final Integer MAX_WAKES = 10;
 
@@ -131,12 +136,19 @@ public inherited sharing class ConcurrencyAdmissionOrder {
   /**
    * @description Before-save sync of the indexed queue field. Sets
    * `Admission_Queue__c` to the workflow name while the row waits. Else it
-   * clears the field. Call it after the slot release changes the flags.
+   * clears the field. A row that enters a rollback status loses the
+   * awaiting-admission marker. Call it after the slot release changes the
+   * flags.
    * @param row The Workflow_Instance__c row that is saved.
    */
   public static void syncQueueField(Workflow_Instance__c row) {
     if (skipQueueSync) {
       return;
+    }
+    // A rollback does not use admission. Clear the marker, so that a later
+    // Suspended compensation step does not join the queue.
+    if (COMPENSATION_STATUSES.contains(row.Status__c)) {
+      row.Concurrency_Parked__c = false;
     }
     row.Admission_Queue__c = isWaiting(row) ? row.Workflow_Name__c : null;
   }
@@ -164,10 +176,23 @@ public inherited sharing class ConcurrencyAdmissionOrder {
     for (Workflow_Instance__c row : rows) {
       row.Admission_Queue__c = row.Workflow_Name__c;
     }
-    if (!rows.isEmpty()) {
-      Database.update(rows, true, AccessLevel.SYSTEM_MODE);
+    Integer fixed = 0;
+    if (rows.isEmpty()) {
+      return fixed;
     }
-    return rows.size();
+    // allOrNone = false: one bad row must not block the other rows.
+    for (
+      Database.SaveResult result : Database.update(
+        rows,
+        false,
+        AccessLevel.SYSTEM_MODE
+      )
+    ) {
+      if (result.isSuccess()) {
+        fixed++;
+      }
+    }
+    return fixed;
   }
 
   /**

@@ -207,6 +207,10 @@ public inherited sharing class WorkflowStepAdmission {
     // now. Do it before the re-drive below, which can spend the only Queueable
     // of an async transaction. A rollback also discards this wake.
     ConcurrencyAdmissionOrder.wake(admission.aheadIds);
+    // Issue #132: the admit or the park below replaces the retry timer. Abort
+    // the old timer first, so that it cannot re-drive the instance later and
+    // its scheduled-job slot is free for the new timer.
+    abortStaleJob(locked.Async_Job_Id__c);
     if (admission.admitted) {
       commitSlotAcquisitionAndRedrive(instance, resolvedStep);
     } else {
@@ -214,9 +218,6 @@ public inherited sharing class WorkflowStepAdmission {
       // through the existing sleep/watchdog resume plumbing.
       parkForConcurrency(instance, resolvedStep);
     }
-    // Issue #132: the admit or the park replaced the retry timer. Abort the old
-    // timer, so that it cannot re-drive the instance later.
-    abortStaleJob(locked.Async_Job_Id__c);
     return true;
   }
 
