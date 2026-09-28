@@ -71,6 +71,9 @@
 .text-purple {
   color: var(--slds-g-color-palette-purple-40, hsl(270, 75%, 50%));
 }
+.text-cyan {
+  color: var(--slds-g-color-palette-cloud-blue-30, hsl(200, 90%, 28%));
+}
 
 /* Layout Cards */
 .panel-card {
@@ -176,6 +179,13 @@
 .badge-indigo {
   background-color: var(--slds-g-color-accent-light-2, hsl(240, 100%, 95%));
   color: var(--slds-g-color-palette-indigo-30, hsl(240, 95%, 38%));
+}
+.badge-cyan {
+  background-color: var(
+    --slds-g-color-palette-cloud-blue-90,
+    hsl(195, 90%, 92%)
+  );
+  color: var(--slds-g-color-palette-cloud-blue-30, hsl(200, 90%, 28%));
 }
 .badge-teal {
   background-color: var(--slds-g-color-palette-teal-90, hsl(180, 55%, 92%));

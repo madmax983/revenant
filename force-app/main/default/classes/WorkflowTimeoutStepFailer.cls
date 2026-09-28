@@ -64,8 +64,9 @@ public inherited sharing class WorkflowTimeoutStepFailer {
   }
 
   // Operator pause gate (mirrors WorkflowTimeoutJob): if the definition is
-  // paused while the parent is still Pending/Running (handoff armed the deadline
-  // before the delayed RUN_STEP reached the gate), only hold pre-start Pending
+  // paused, or the parent is held (issue #119), while the parent is still
+  // Pending/Running (handoff armed the deadline before the delayed RUN_STEP
+  // reached the gate), only hold pre-start Pending
   // steps — clear their deadline so a post-resume heartbeat cannot fire
   // instantly; re-armed on park/re-run. Running (stuck) steps are NOT held: the
   // instance stays Running so reArmTimeoutsForResume will not re-arm them on
@@ -78,10 +79,10 @@ public inherited sharing class WorkflowTimeoutStepFailer {
     WorkflowTimeoutSweep.TimedOutStepContext ctx
   ) {
     if (
-      (parent.Status__c == 'Pending' ||
-      parent.Status__c == 'Running') &&
-      WorkflowPauseGate.anyPaused() &&
-      WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)
+      (parent.Status__c == 'Pending' || parent.Status__c == 'Running') &&
+      (parent.Held__c == true ||
+      (WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)))
     ) {
       if (lockedStep.Status__c == 'Pending') {
         lockedStep.Timeout_At__c = null;

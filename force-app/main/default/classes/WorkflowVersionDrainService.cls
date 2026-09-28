@@ -16,7 +16,8 @@ public inherited sharing class WorkflowVersionDrainService {
     'Cancelling',
     'CompensationFailed',
     'Paused',
-    'DefinitionChanged'
+    'DefinitionChanged',
+    'Held'
   };
 
   // Terminal statuses that are nonetheless re-drivable on their original version. Reported

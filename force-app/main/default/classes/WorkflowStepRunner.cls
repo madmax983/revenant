@@ -3,7 +3,7 @@
  * exactly-once heart. Drives one `Workflow_Instance__c` delivery through the
  * mandated admission + lock + invoke sequence and preserves its guarded-return
  * ORDER: load (no lock) → finished-check → compensation route →
- * definition-change park (issue #89) → pause park →
+ * definition-change park (issue #89) → hold park (issue #119) → pause park →
  * concurrency admission (instance `FOR UPDATE`) → in-memory init → stale-parallel
  * guard → step-history guard (issue #112) →
  * step-execution log lock (step-exec `FOR UPDATE`) → validate → resolve
@@ -74,6 +74,10 @@ public inherited sharing class WorkflowStepRunner {
     if (WorkflowDefinitionChangeGate.parkIfChanged(ctx.instance)) {
       return;
     }
+    // Issue #119: an operator hold parks here. It never reads pause state.
+    if (WorkflowInstanceHoldGate.parkIfHeld(ctx.instance)) {
+      return;
+    }
     if (WorkflowStepAdmission.parkIfPaused(ctx.instance)) {
       return;
     }
@@ -106,7 +110,8 @@ public inherited sharing class WorkflowStepRunner {
   }
 
   // §1. Fetch instance state (NO FOR UPDATE lock to allow parallel execution and
-  // direct callouts).
+  // direct callouts). Held__c is a formula field (issue #119). DML ignores it, so
+  // no outcome update can write back a stale hold. Do not load Held_At__c here.
   private static Workflow_Instance__c loadInstanceForRun(Id instanceId) {
     List<Workflow_Instance__c> instances = [
       SELECT
@@ -128,7 +133,8 @@ public inherited sharing class WorkflowStepRunner {
         Concurrency_Parked__c,
         CreatedDate,
         Failure_Category__c,
-        Causation_Id__c
+        Causation_Id__c,
+        Held__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

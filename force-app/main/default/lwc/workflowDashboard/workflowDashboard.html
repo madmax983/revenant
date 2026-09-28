@@ -302,6 +302,9 @@
                                                             <template if:true={inst.stalled}>
                                                                 <span class={inst.stalledBadgeClass} style="margin-right: 8px;">STALLED</span>
                                                             </template>
+                                                            <template if:true={inst.isHoldWaiting}>
+                                                                <span class="badge badge-cyan" style="margin-right: 8px;" data-id="held-marker" title="Held. The instance stops at its next step boundary.">HOLD WAITING<span class="slds-assistive-text">: held. The instance stops at its next step boundary.</span></span>
+                                                            </template>
                                                             <template if:true={inst.stepHistoryWarning}>
                                                                 <span class="badge badge-yellow" style="margin-right: 8px;" data-id="step-history-badge" title="Step history is large. Change this workflow to use Continue-As-New.">LONG HISTORY<span class="slds-assistive-text">: step history is large. Change this workflow to use Continue-As-New.</span></span>
                                                             </template>
@@ -1522,6 +1525,38 @@
                                                  class="slds-m-right_small brand-button">
                                              </lightning-button>
                                          </template>
+                                         <template if:true={canHold}>
+                                             <lightning-input
+                                                 data-id="hold-reason-input"
+                                                 label="Hold reason"
+                                                 variant="label-hidden"
+                                                 placeholder="Hold reason (optional)"
+                                                 max-length="255"
+                                                 value={holdReasonValue}
+                                                 onchange={handleHoldReasonChange}
+                                                 class="slds-m-right_x-small">
+                                             </lightning-input>
+                                             <lightning-button
+                                                 data-id="hold-btn"
+                                                 label="Hold"
+                                                 icon-name="utility:pause"
+                                                 variant="neutral"
+                                                 onclick={handleHoldInstance}
+                                                 class="slds-m-right_small"
+                                                 title="Stop this instance at its next step boundary. Siblings continue.">
+                                             </lightning-button>
+                                         </template>
+                                         <template if:true={isHeld}>
+                                             <lightning-button
+                                                 data-id="release-hold-btn"
+                                                 label="Release Hold"
+                                                 icon-name="utility:play"
+                                                 variant="brand"
+                                                 onclick={handleReleaseHold}
+                                                 class="slds-m-right_small brand-button"
+                                                 title="Continue this instance from the step where it stopped">
+                                             </lightning-button>
+                                         </template>
                                          <template if:true={isRollbackIncomplete}>
                                              <lightning-button
                                                  label="Resume Rollback"
@@ -1703,6 +1738,26 @@
                                             <div class="slds-text-title text-orange">Long Step History</div>
                                             <div class="slds-text-body_regular">{selectedInst.stepHistoryWarning.message}</div>
                                             <div class="slds-text-body_small slds-text-color_weak" data-id="step-history-warning-date">First seen: {selectedInst.stepHistoryWarning.formattedDate}</div>
+                                        </div>
+                                    </template>
+                                    <template if:true={isHeld}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small" data-id="hold-panel">
+                                            <div class="slds-text-title text-cyan">Held</div>
+                                            <div class="slds-text-body_regular slds-m-bottom_x-small">
+                                                An operator held this instance. No step runs until an operator releases it. Other instances of the definition continue.
+                                            </div>
+                                            <template if:true={isHeldWithOtherPark}>
+                                                <div class="slds-text-body_small slds-m-bottom_x-small" data-id="hold-other-park">
+                                                    This instance is also paused or stopped for a definition change. Release Hold removes only the hold.
+                                                </div>
+                                            </template>
+                                            <template if:true={isHoldWaiting}>
+                                                <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small" data-id="hold-waiting">
+                                                    The instance stops at its next step boundary. If a step runs now, the step finishes.
+                                                </div>
+                                            </template>
+                                            <div class="slds-text-body_small" data-id="hold-reason">Reason: {holdReasonLabel}</div>
+                                            <div class="slds-text-body_small slds-text-color_weak" data-id="hold-since">Held since: {selectedInst.heldSinceFormatted}</div>
                                         </div>
                                     </template>
                                     <template if:true={isDefinitionChanged}>

@@ -25,6 +25,8 @@ import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandCo
 import resumeWorkflowInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumeWorkflowInstance";
 import resumeCompensationInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumeCompensationInstance";
 import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
+import holdInstance from "@salesforce/apex/WorkflowDashboardCommandController.holdInstance";
+import releaseHeldInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseHeldInstance";
 import cancelWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.cancelWorkflow";
 import submitApproval from "@salesforce/apex/WorkflowDashboardCommandController.submitApproval";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
@@ -318,6 +320,9 @@ export default class WorkflowDashboard extends LightningElement {
   chainRequestSeq = 0;
   _pendingChainScrollTop = null;
   approvalComments = "";
+  // Issue #119: reason typed before Hold, and the instance it is for.
+  holdReason = "";
+  holdReasonInstanceId = null;
   modalOpen = false;
   searchTerm = "";
   viewingDoctor = false;
@@ -497,6 +502,7 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "ContinuedAsNew", value: "ContinuedAsNew" },
     { label: "Paused", value: "Paused" },
     { label: "Definition Changed", value: "DefinitionChanged" },
+    { label: "Held", value: "Held" },
   ];
 
   failureCategoryOptions = [
@@ -851,6 +857,38 @@ export default class WorkflowDashboard extends LightningElement {
     );
   }
 
+  // Issue #119: a hold is recorded, or the gate parked the instance.
+  get isHeld() {
+    return (
+      !!this.selectedInst &&
+      (this.selectedInst.Held__c === true ||
+        this.selectedInst.Status__c === "Held")
+    );
+  }
+
+  // The hold waits for the next step boundary.
+  get isHoldWaiting() {
+    return this.isHeld && this.selectedInst.Status__c !== "Held";
+  }
+
+  get holdReasonLabel() {
+    return (this.selectedInst && this.selectedInst.Hold_Reason__c) || "None";
+  }
+
+  // A hold on a Paused or DefinitionChanged instance does not end that park.
+  get isHeldWithOtherPark() {
+    return (
+      this.isHeld &&
+      (this.selectedInst.Status__c === "Paused" ||
+        this.selectedInst.Status__c === "DefinitionChanged")
+    );
+  }
+
+  // The engine decides: forward path only, no rollback, no engine workflow.
+  get canHold() {
+    return !!this.selectedInst && !this.isHeld && this.selectedInst.holdable;
+  }
+
   get definitionChange() {
     return this.selectedInst ? this.selectedInst.definitionChange : null;
   }
@@ -907,6 +945,7 @@ export default class WorkflowDashboard extends LightningElement {
       status === "Suspended" ||
       status === "Paused" ||
       status === "DefinitionChanged" ||
+      status === "Held" ||
       status === "CompensationFailed"
     );
   }
@@ -1372,6 +1411,8 @@ export default class WorkflowDashboard extends LightningElement {
             : "badge badge-blue",
       stalledBadgeClass: inst.stalled ? "badge badge-red" : null,
       formattedIdleMinutes: idleLabel,
+      // Issue #119: the hold waits for the next step boundary.
+      isHoldWaiting: inst.Held__c === true && inst.Status__c !== "Held",
     };
   }
 
@@ -1492,6 +1533,8 @@ export default class WorkflowDashboard extends LightningElement {
           pendingCompensations: result.pendingCompensations || [],
           attributes: result.attributes || [],
           definitionChange: this.mapDefinitionChange(result.definitionChange),
+          heldSinceFormatted: this.formatDateTime(inst.Held_At__c),
+          holdable: result.holdable === true,
           // Issue #112: { message, createdDate, formattedDate } or null.
           stepHistoryWarning: result.stepHistoryWarning
             ? {
@@ -3207,6 +3250,78 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
+  handleHoldReasonChange(event) {
+    this.holdReason = event.target.value;
+    this.holdReasonInstanceId = this.selectedInstanceId;
+  }
+
+  // Issue #119: a typed reason belongs to the instance it was typed for.
+  get holdReasonValue() {
+    return this.holdReasonInstanceId === this.selectedInstanceId
+      ? this.holdReason
+      : "";
+  }
+
+  // Issue #119: hold one instance at its next step boundary.
+  handleHoldInstance() {
+    this.loadingDetails = true;
+    holdInstance({
+      instanceId: this.selectedInstanceId,
+      reason: this.holdReasonValue,
+    })
+      .then((result) => {
+        const held = result.outcome === "HELD";
+        this.showToast(
+          held ? "Success" : "Warning",
+          result.message,
+          held ? "success" : "warning",
+        );
+        if (held) {
+          this.holdReason = "";
+        }
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to hold instance: " + this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
+  // Issue #119: release a held instance.
+  handleReleaseHold() {
+    this.loadingDetails = true;
+    releaseHeldInstance({ instanceId: this.selectedInstanceId })
+      .then((result) => {
+        const released = result.outcome === "RELEASED";
+        this.showToast(
+          released ? "Success" : "Warning",
+          result.message,
+          released ? "success" : "warning",
+        );
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to release instance: " + this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
   handleReleaseDefinitionChanged() {
     this.loadingDetails = true;
     releaseDefinitionChangedInstance({ instanceId: this.selectedInstanceId })
@@ -3368,6 +3483,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "badge badge-orange";
       case "DefinitionChanged":
         return "badge badge-purple";
+      case "Held":
+        return "badge badge-cyan";
       default:
         return "badge";
     }
