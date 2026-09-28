@@ -64,6 +64,8 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | No SOQL is left in the trigger pass. Valid requests fail with "type not found". (Codex review.) | Check the query budget first. Publish the requests again. |
 | Engine work in the shared trigger transaction uses the notify budget. Many edge cases. (Codex review, rounds 4 to 6.) | Root cause fix: a separate trigger, `WorkflowNotifyTrigger`, with its own transaction. Before a send, a low budget throws `EventBus.RetryableException`. |
 | A buffered signal wakes the instance in the SUSPEND transaction. (Codex review.) | Read the instance status after redelivery. Woken: write no request. The next suspend sends. |
+| 200 long requests in one pass use too much heap. (Codex review, round 9.) | Read max 10 keys in a pass (the send-call cap). Publish the rest again. |
+| An error before the first send (a lock time-out) consumes the event. (Codex review, round 9.) | Before the first claim, an error asks the platform to deliver the batch again. |
 | A result update fails after a send. The row stays `Requested` and a duplicate event sends again. (Codex review, round 8.) | Claim the row (`Sending`) before the send. Send only claimed rows. Lock the rows `FOR UPDATE`. |
 | A parallel branch waits while the instance is `Running`, or an unrelated signal wakes the instance. Requiring `Suspended` loses the send. (Codex review, round 7.) | At send time, require a `Pending` step row and an active instance. |
 

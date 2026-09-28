@@ -74,7 +74,7 @@ sequenceDiagram
 2. `request` inserts one anchor row in `Workflow_Log__c` (`Log_Type__c = Notification`, `Outcome__c = Requested`). The key is `Notify:<stepExecId>` in the unique `Fire_Key__c`. `Message__c` holds the request. The insert uses `allOrNone = false`.
 3. When the insert succeeds, `request` publishes one `NOTIFY` `Workflow_Event__e`. The event holds only the key (`Idempotency_Key__c`).
 4. `WorkflowNotifyTrigger` calls `WorkflowNotifier.handleEvents`. This trigger is a separate subscriber from the engine trigger (`WorkflowEventTrigger`). It runs in its own transaction with its own limits. The engine trigger ignores `NOTIFY` events.
-5. `handleEvents` reads max 200 keys in a pass. It reads the request from the `Requested` anchor row of each key, not from the event. An event with no such row sends nothing: a replay, a copy or a forged event. It sends only while the step waits. It makes max 10 send calls in a pass. It publishes the other keys again for a later pass. It sets each row to `Sent`, `Failed` or `Skipped`.
+5. `handleEvents` reads max 10 keys in a pass (the send-call cap). It reads the request from the `Requested` anchor row of each key, not from the event. An event with no such row sends nothing: a replay, a copy or a forged event. It sends only while the step waits. It makes max 10 send calls in a pass. It publishes the other keys again for a later pass. It sets each row to `Sent`, `Failed` or `Skipped`.
 
 ## One time for each logical suspend
 
@@ -104,7 +104,7 @@ A step that waits again on the same row with a new notification (for example, a 
 - A publish error sets the anchor row to `Failed` (`Level__c = Error`).
 - In the trigger, each request has its own `try`/`catch`. A failed row update writes one error row.
 - Before a send, the trigger claims the row (`Outcome__c = Sending`) and locks it (`FOR UPDATE`). It sends only the rows whose claim succeeded. A row whose claim failed waits for a later pass.
-- The notify trigger checks its query and DML budget before it sends. When the budget is low, it sends nothing and throws `EventBus.RetryableException`: the platform delivers the batch again (max 5 times). It never throws after a send.
+- The notify trigger checks its query and DML budget before it sends. When the budget is low, or an error occurs before the first send (for example, a row lock time-out), it throws `EventBus.RetryableException`: the platform delivers the batch again (max 5 times). It never throws after a send.
 - When the type or owner queries cannot run, the requests wait for a later pass.
 - When the publish for a later pass fails, the row is `Failed`.
 

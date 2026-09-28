@@ -623,6 +623,28 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
+  static void passReadsMaxKeysAndPublishesTheRest() {
+    seedType();
+    Assert.areEqual(10, WorkflowNotifier.eventsPerPass, 'Default cap');
+    WorkflowNotifier.eventsPerPass = 2;
+    Test.startTest();
+    for (Integer i = 0; i < 3; i++) {
+      WorkflowEngine.runStep(
+        startWorkflow(
+          'notify-cap-' + i,
+          new Map<String, Object>{ 'recipient' => userId() }
+        )
+      );
+    }
+    Test.getEventBus().deliver();
+    Assert.areEqual(2, WorkflowNotifier.sentNotifications.size(), 'Pass 1');
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(3, WorkflowNotifier.sentNotifications.size());
+  }
+
+  @IsTest
   static void failedClaimSendsNothingAndWaits() {
     seedType();
     Test.startTest();

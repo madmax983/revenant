@@ -60,9 +60,13 @@ public inherited sharing class WorkflowNotifier {
   private static Integer dmlRowReserve = 20;
   // Times the platform delivers a batch again before the pass stops.
   private static final Integer MAX_RETRIES = 5;
-  // NOTIFY events that one trigger pass reads. It bounds heap, CPU and DML.
+  // NOTIFY keys that one trigger pass reads. Equal to the send-call cap: a
+  // pass cannot send more requests. It bounds heap: max 10 messages of
+  // 131,000 characters.
   @TestVisible
-  private static Integer eventsPerPass = 200;
+  private static Integer eventsPerPass = 10;
+  // True after the first claim of a pass: then a retry can send again.
+  private static Boolean sendStarted = false;
   // send() calls in one pass. Apex allows max 10 notification calls in one
   // transaction, and that LimitException cannot be caught.
   @TestVisible
@@ -374,6 +378,7 @@ public inherited sharing class WorkflowNotifier {
       return;
     }
     List<String> keys = new List<String>(instanceByKey.keySet());
+    sendStarted = false;
     try {
       if (!hasQueryBudget(3) || !hasResultDml(keys.size())) {
         retryOrGiveUp('No budget before the send');
@@ -426,6 +431,11 @@ public inherited sharing class WorkflowNotifier {
     } catch (EventBus.RetryableException e) {
       throw e;
     } catch (Exception e) {
+      if (!sendStarted) {
+        // Nothing is sent yet (for example, a row lock timed out): ask the
+        // platform to deliver the batch again.
+        retryOrGiveUp('Error before the send: ' + e.getMessage());
+      }
       WorkflowLog.error(LOG_TYPE, 'Notify batch failed: ' + e.getMessage());
     }
   }
@@ -621,6 +631,7 @@ public inherited sharing class WorkflowNotifier {
       }
       return unclaimed;
     }
+    sendStarted = true;
     List<Workflow_Log__c> claims = new List<Workflow_Log__c>();
     for (OpenRequest open : ready) {
       claims.add(
