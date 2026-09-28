@@ -25,6 +25,9 @@ global inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator toggle (Revenant_Config__mdt.Send_Notifications__c, issue #123):
+  // when true the engine sends the Custom Notification of a waiting step.
+  public static Boolean sendNotifications = true;
   // Operator setting (Revenant_Config__mdt.Payload_Codec__c): the PayloadCodec
   // class name. Blank selects the identity codec. See WorkflowPayloadCodecs.
   public static String payloadCodecClass = null;
@@ -138,6 +141,7 @@ global inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
+          Send_Notifications__c,
           Cascade_Cancel_Children_On_Failure__c,
           Dedup_Window_Minutes__c,
           Stale_Threshold_Minutes__c,
@@ -161,6 +165,9 @@ global inherited sharing class WorkflowEngine {
         }
         if (configs[0].Publish_Lifecycle_Events__c != null) {
           publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
+        }
+        if (configs[0].Send_Notifications__c != null) {
+          sendNotifications = configs[0].Send_Notifications__c;
         }
         if (configs[0].Cascade_Cancel_Children_On_Failure__c != null) {
           cascadeCancelChildrenOnFailure = configs[0]
@@ -869,6 +876,20 @@ global inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Cancels a workflow instance (and its active descendants) and aborts
+   * scheduled jobs. With true, it is the same as
+   * `WorkflowCancellation.cancelWithCompensations`: a repeat on a `Cancelling`
+   * instance starts the rollback again. Use the bulk entry
+   * `WorkflowCancellation.cancelWithCompensationsInstances` to skip it.
+   * @param instanceId Id of the target instance to cancel (with its active descendants)
+   * @param runCompensations true to roll back completed steps; null means true,
+   * the same default as the Cancel signal and the Cancel Workflow action
+   */
+  public static void cancel(Id instanceId, Boolean runCompensations) {
+    cancelInstance(instanceId, runCompensations != false);
+  }
+
+  /**
    * @description Cancels a workflow instance, aborts scheduled jobs, and
    * optionally runs saga compensations across the instance and its active
    * descendant tree. Thin dispatcher preserved for the engine's internal cancel
@@ -1095,4 +1116,161 @@ global inherited sharing class WorkflowEngine {
   }
 
   // ─── End Find / List API ─────────────────────────────────────────────────────
+
+  // ─── Chain API (issue #116) ──────────────────────────────────────────────────
+  // Forever-public DTOs for WorkflowChainRead.getChain. Read-only (private setters).
+
+  /**
+   * @description Request for {@link WorkflowChainRead#getChain}. Set
+   * `instanceId` or `correlationKey`, not both.
+   */
+  public class ChainRequest {
+    /** @description Id of a generation. The read gives the chain of that instance. */
+    public Id instanceId;
+    /**
+     * @description Correlation key or root key. The read gives the chain of the
+     * newest instance with that key.
+     */
+    public String correlationKey;
+    /**
+     * @description Page size. Null: {@link WorkflowChainRead#DEFAULT_PAGE_SIZE}.
+     * Above {@link WorkflowChainRead#MAX_PAGE_SIZE}: the read uses the max.
+     * Zero or less: throws a `WorkflowException`.
+     */
+    public Integer pageSize;
+    /**
+     * @description Opaque cursor from `ChainPage.nextCursor`. Null: first page.
+     * Send it back with no change. The read then uses the chain of the first
+     * page. A bad value throws a `WorkflowException`.
+     */
+    public String cursor;
+  }
+
+  /**
+   * @description One generation (one `Workflow_Instance__c`) of a
+   * Continue-As-New chain. Payload-free.
+   */
+  public class ChainGeneration {
+    /** @description Id of the instance. */
+    public Id instanceId { get; private set; }
+    /** @description Auto-number name of the instance. */
+    public String instanceName { get; private set; }
+    /**
+     * @description Position in the chain. 1 is the oldest kept generation.
+     * Null when not known (for example when `ChainPage.isTotalCapped` is true).
+     * A purge changes it. It is not an identifier: use `instanceId`.
+     */
+    public Integer generation { get; private set; }
+    /** @description Developer name of the workflow definition. */
+    public String definitionName { get; private set; }
+    /** @description Correlation key of this generation. */
+    public String correlationKey { get; private set; }
+    /** @description Raw `Status__c`. */
+    public String status { get; private set; }
+    /**
+     * @description True for `Completed`, `Failed`, `Compensated` and
+     * `Cancelled` (the `getStatus` set). `ContinuedAsNew` gives false.
+     */
+    public Boolean isTerminal { get; private set; }
+    /**
+     * @description How this generation ended: a terminal status or
+     * `ContinuedAsNew`. Null while it is not closed.
+     */
+    public String outcome { get; private set; }
+    /** @description When the instance was created (`CreatedDate`). */
+    public Datetime startedAt { get; private set; }
+    /**
+     * @description When the instance closed (`Terminal_At__c`). For outcome
+     * `ContinuedAsNew`, this is the hand-off time. Null while open.
+     */
+    public Datetime endedAt { get; private set; }
+    /** @description `Failure_Category__c`, or null. */
+    public String failureCategory { get; private set; }
+    /** @description `Error_Message__c` (max 255 characters), or null. */
+    public String errorMessage { get; private set; }
+    /** @description Id of the predecessor, or null for a first generation. */
+    public Id previousInstanceId { get; private set; }
+
+    /**
+     * @description Makes a generation from a queried row.
+     * @param inst row with the chain read fields
+     * @param generation position in the chain, or null when unknown
+     */
+    public ChainGeneration(Workflow_Instance__c inst, Integer generation) {
+      this.instanceId = inst.Id;
+      this.instanceName = inst.Name;
+      this.generation = generation;
+      this.definitionName = inst.Workflow_Name__c;
+      this.correlationKey = inst.Correlation_Key__c;
+      this.status = inst.Status__c;
+      this.isTerminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
+        inst.Status__c
+      );
+      Boolean continued = inst.Status__c == 'ContinuedAsNew';
+      this.outcome = this.isTerminal || continued ? inst.Status__c : null;
+      this.startedAt = inst.CreatedDate;
+      this.endedAt = this.outcome == null ? null : inst.Terminal_At__c;
+      this.failureCategory = inst.Failure_Category__c;
+      this.errorMessage = inst.Error_Message__c;
+      this.previousInstanceId = inst.Previous_Instance__c;
+    }
+  }
+
+  /**
+   * @description One page of a Continue-As-New chain, newest first.
+   */
+  public class ChainPage {
+    /** @description Generations of this page, newest first. */
+    public List<ChainGeneration> entries { get; private set; }
+    /**
+     * @description Root correlation key of the chain. Null for an instance with
+     * no correlation key.
+     */
+    public String rootCorrelationKey { get; private set; }
+    /**
+     * @description Number of generations in the chain, for all pages. When
+     * `isTotalCapped` is true, this is a lower bound.
+     */
+    public Integer totalCount { get; private set; }
+    /**
+     * @description True when the chain has more than
+     * {@link WorkflowChainRead#MAX_COUNTED_GENERATIONS} generations.
+     */
+    public Boolean isTotalCapped { get; private set; }
+    /** @description Cursor for the next (older) page. Null on the last page. */
+    public String nextCursor { get; private set; }
+    /** @description True when `nextCursor` is not null. */
+    public Boolean hasMore { get; private set; }
+    /** @description Page size that the read used. */
+    public Integer pageSize { get; private set; }
+
+    /**
+     * @description Makes a page. `hasMore` comes from `nextCursor`. The read API
+     * calls this constructor.
+     * @param entries generations of this page, newest first
+     * @param rootCorrelationKey root key of the chain
+     * @param totalCount counted generations
+     * @param isTotalCapped true when the count stopped at the cap
+     * @param nextCursor cursor for the next page, or null
+     * @param pageSize page size that the read used
+     */
+    public ChainPage(
+      List<ChainGeneration> entries,
+      String rootCorrelationKey,
+      Integer totalCount,
+      Boolean isTotalCapped,
+      String nextCursor,
+      Integer pageSize
+    ) {
+      this.entries = entries;
+      this.rootCorrelationKey = rootCorrelationKey;
+      this.totalCount = totalCount;
+      this.isTotalCapped = isTotalCapped;
+      this.nextCursor = nextCursor;
+      this.hasMore = nextCursor != null;
+      this.pageSize = pageSize;
+    }
+  }
+
+  // ─── End Chain API ───────────────────────────────────────────────────────────
 }

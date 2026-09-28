@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Send_Notifications__c</fullName>
+    <defaultValue>true</defaultValue>
+    <description>If checked (default), the engine sends the Custom Notification that a waiting step requests with StepResult.withNotification (issue #123). Uncheck to stop all engine notifications. The engine then publishes no request and writes no anchor row. A request that is already published is logged as Skipped. Instance status, signals and the audit trail do not change.</description>
+    <externalId>false</externalId>
+    <fieldManageability>SubscriberControlled</fieldManageability>
+    <label>Send Notifications</label>
+    <type>Checkbox</type>
+</CustomField>

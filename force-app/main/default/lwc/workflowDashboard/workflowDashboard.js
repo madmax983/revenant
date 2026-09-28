@@ -13,6 +13,7 @@ import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
+import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.startWorkflow";
@@ -39,6 +40,7 @@ import resumeDefinition from "@salesforce/apex/WorkflowDashboardCommandControlle
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
+import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getDefinitionLatency from "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency";
@@ -89,6 +91,13 @@ const FAILURE_CATEGORY_LABELS = {
   UNKNOWN: "Unknown",
 };
 
+// Rolling windows shared by Definition Health and Fleet Health.
+const ROLLING_WINDOW_OPTIONS = [
+  { label: "Last 1 hour", value: "1h" },
+  { label: "Last 24 hours", value: "24h" },
+  { label: "Last 7 days", value: "7d" },
+];
+
 const ASYNC_LIMITS = {
   CPU: 60000,
   SOQL: 200,
@@ -108,6 +117,19 @@ export default class WorkflowDashboard extends LightningElement {
   childInstances = [];
   loadingDetails = false;
   successor = null;
+
+  // Continue-As-New chain (issue #116). chainAnchorId is the instance that
+  // loaded the first page; older pages use the same anchor.
+  chainActive = false;
+  chainLoading = false;
+  chainError = null;
+  chainGenerations = [];
+  chainTotal = 0;
+  chainTotalCapped = false;
+  chainNextCursor = null;
+  chainAnchorId = null;
+  chainRequestSeq = 0;
+  _pendingChainScrollTop = null;
   approvalComments = "";
   modalOpen = false;
   searchTerm = "";
@@ -199,11 +221,19 @@ export default class WorkflowDashboard extends LightningElement {
   _restoreScroll = false;
   _pendingScrollTop = 0;
   // Stable option array (see note above workflowOptions on why getters are avoided).
-  trendWindowOptions = [
-    { label: "Last 1 hour", value: "1h" },
-    { label: "Last 24 hours", value: "24h" },
-    { label: "Last 7 days", value: "7d" },
-  ];
+  trendWindowOptions = ROLLING_WINDOW_OPTIONS;
+
+  // Fleet Health view state (#111): read-only, one row per definition.
+  viewingHealth = false;
+  loadingHealth = false;
+  healthWindow = "24h";
+  healthThreshold = 95;
+  healthData = null;
+  healthRows = [];
+  healthError = "";
+  // Only the latest request updates the view. The component discards a stale response.
+  _healthRequestId = 0;
+  healthWindowOptions = ROLLING_WINDOW_OPTIONS;
 
   // Catalog view state (read-only deployed-workflow catalog with live health)
   viewingCatalog = false;
@@ -310,6 +340,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   renderedCallback() {
+    this.restoreChainScroll();
     if (!this._restoreScroll) {
       return;
     }
@@ -317,6 +348,17 @@ export default class WorkflowDashboard extends LightningElement {
     const el = this.template.querySelector(".slds-scrollable_y");
     if (el) {
       el.scrollTop = this._pendingScrollTop;
+    }
+  }
+
+  restoreChainScroll() {
+    if (this._pendingChainScrollTop === null) {
+      return;
+    }
+    const list = this.template.querySelector('[data-id="chain-scroll"]');
+    if (list) {
+      list.scrollTop = this._pendingChainScrollTop;
+      this._pendingChainScrollTop = null;
     }
   }
 
@@ -346,6 +388,172 @@ export default class WorkflowDashboard extends LightningElement {
 
   get hasChildren() {
     return this.childInstances && this.childInstances.length > 0;
+  }
+
+  // Generation rows with the selected-row class. shapeGeneration formats
+  // each row once, when it arrives.
+  get chainRows() {
+    return this.chainGenerations.map((g) => {
+      const selected = g.instanceId === this.selectedInstanceId;
+      return {
+        ...g,
+        rowClass: `slds-p-around_small list-item chain-row ${
+          selected ? "item-selected" : ""
+        }`,
+        ariaCurrent: selected ? "true" : null,
+      };
+    });
+  }
+
+  get hasChainRows() {
+    return this.chainGenerations.length > 0;
+  }
+
+  get showChainSpinner() {
+    return this.chainLoading && !this.hasChainRows;
+  }
+
+  get chainCountLabel() {
+    const total = `${this.chainTotal}${this.chainTotalCapped ? "+" : ""}`;
+    return `Showing ${this.chainGenerations.length} of ${total} generations`;
+  }
+
+  get hasOlderGenerations() {
+    return !!this.chainNextCursor;
+  }
+
+  shapeGeneration(g) {
+    return {
+      ...g,
+      generationLabel: `Generation ${g.generation ?? "—"}`,
+      formattedStartedAt: this.formatDateTime(g.startedAt),
+      formattedEndedAt: this.formatDateTime(g.endedAt),
+      statusBadgeClass: this.getStatusBadgeClass(g.status),
+      failureCategoryLabel: g.failureCategory
+        ? FAILURE_CATEGORY_LABELS[g.failureCategory] || g.failureCategory
+        : null,
+    };
+  }
+
+  // Loads the chain only for an instance with a predecessor or a successor.
+  // - Same chain (row in the list, or same anchor): refresh page 1 on each
+  //   load, so a poll shows new generations. Older pages stay. After an error,
+  //   only "Try again" reads again.
+  // - Other instance: load its chain and clear the old rows.
+  syncChain(instanceId, inst, successor) {
+    if (!inst.Previous_Instance__c && !successor) {
+      this.resetChain();
+      return;
+    }
+    const sameChain =
+      instanceId === this.chainAnchorId ||
+      this.chainGenerations.some((g) => g.instanceId === instanceId);
+    if (!sameChain) {
+      this.loadChain(instanceId, null, true);
+    } else if (!this.chainError && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, null, false);
+    }
+  }
+
+  resetChain() {
+    this.chainRequestSeq++;
+    this.chainActive = false;
+    this.chainLoading = false;
+    this.chainError = null;
+    this.chainGenerations = [];
+    this.chainTotal = 0;
+    this.chainTotalCapped = false;
+    this.chainNextCursor = null;
+    this.chainAnchorId = null;
+  }
+
+  // clear: remove the old rows first (a different chain).
+  loadChain(instanceId, cursor, clear) {
+    const seq = ++this.chainRequestSeq;
+    if (!cursor) {
+      this.chainAnchorId = instanceId;
+    }
+    if (clear) {
+      this.chainGenerations = [];
+      this.chainTotal = 0;
+      this.chainTotalCapped = false;
+      this.chainNextCursor = null;
+    }
+    this.chainActive = true;
+    this.chainLoading = true;
+    this.chainError = null;
+    getInstanceChain({ instanceId, cursor })
+      .then((page) => {
+        if (seq !== this.chainRequestSeq) {
+          return;
+        }
+        if (!page) {
+          this.resetChain();
+          return;
+        }
+        const rows = (page.generations || []).map((g) =>
+          this.shapeGeneration(g),
+        );
+        const pageCursor = page.hasMore ? page.nextCursor : null;
+        if (cursor) {
+          this.chainGenerations = [...this.chainGenerations, ...rows];
+          this.chainNextCursor = pageCursor;
+        } else {
+          // A refresh of page 1 keeps the loaded older rows only when the lists
+          // join exactly. Page 1 must contain a cached row. Then each row of
+          // page 1 that is not cached is a new generation, so with no purge
+          // the new total is the old total plus those rows. Else (a purge, or
+          // a capped total) paging starts again from page 1.
+          const pageIds = new Set(rows.map((g) => g.instanceId));
+          const older = this.chainGenerations.filter(
+            (g) => !pageIds.has(g.instanceId),
+          );
+          const cachedOnPage = this.chainGenerations.length - older.length;
+          const added = rows.length - cachedOnPage;
+          const exact =
+            cachedOnPage > 0 &&
+            !page.isTotalCapped &&
+            !this.chainTotalCapped &&
+            page.totalCount === this.chainTotal + added;
+          const keep = exact ? older : [];
+          this.chainGenerations = [...rows, ...keep];
+          this.chainNextCursor = keep.length
+            ? this.chainNextCursor
+            : pageCursor;
+        }
+        this.chainTotal = page.totalCount;
+        this.chainTotalCapped = !!page.isTotalCapped;
+      })
+      .catch((error) => {
+        if (seq === this.chainRequestSeq) {
+          this.chainError = this.reduceErrors(error);
+        }
+      })
+      .finally(() => {
+        if (seq === this.chainRequestSeq) {
+          this.chainLoading = false;
+        }
+      });
+  }
+
+  handleLoadOlderGenerations() {
+    if (this.chainNextCursor && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, this.chainNextCursor, false);
+    }
+  }
+
+  handleRetryChain() {
+    if (this.chainAnchorId && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, null, true);
+    }
+  }
+
+  // Opens the step timeline of a generation. The detail spinner rebuilds the
+  // list, so keep its scroll position.
+  handleSelectGeneration(event) {
+    const list = this.template.querySelector('[data-id="chain-scroll"]');
+    this._pendingChainScrollTop = list ? list.scrollTop : null;
+    this.handleSelectRelatedInstance(event);
   }
 
   get hasBreakdownRows() {
@@ -1009,20 +1217,14 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleSelectInstance(event) {
     this.stopPolling();
-    this.viewingDoctor = false;
-    this.viewingSchedules = false;
-    this.viewingDrain = false;
-    this.viewingUnrouted = false;
-    this.viewingCatalog = false;
-    this.viewingFailureBreakdown = false;
-    this.viewingLatency = false;
+    this.closeViews();
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
   }
 
-  handleSelectRelatedInstance(event) {
-    this.stopPolling();
+  // Closes every view so that the instance detail panel shows.
+  closeViews() {
     this.viewingDoctor = false;
     this.viewingSchedules = false;
     this.viewingDrain = false;
@@ -1030,6 +1232,12 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingCatalog = false;
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
+    this.handleCloseHealth();
+  }
+
+  handleSelectRelatedInstance(event) {
+    this.stopPolling();
+    this.closeViews();
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -1052,12 +1260,14 @@ export default class WorkflowDashboard extends LightningElement {
           this.selectedInst = {};
           this.steps = [];
           this.childInstances = [];
+          this.resetChain();
           return;
         }
         const inst = result.instance;
         const payloadFiles = result.payloadFiles || {};
         const breadcrumbs = result.breadcrumbs || [];
         this.successor = result.successor;
+        this.syncChain(currentInstanceId, inst, result.successor);
         this.selectedInst = {
           ...inst,
           formattedDate: this.formatDateTime(inst.CreatedDate),
@@ -1294,6 +1504,9 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.viewingCatalog) {
       this.loadCatalog();
     }
+    if (this.viewingHealth) {
+      this.fetchHealth();
+    }
     this.fetchTrends();
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
@@ -1307,7 +1520,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadDoctorStatus();
   }
@@ -1323,7 +1538,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
     // hasn't changed, so its onchange won't fire to refresh the table itself.
@@ -1346,7 +1563,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
   }
 
   handleCloseSchedules() {
@@ -1361,7 +1580,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadUnroutedSignals();
   }
@@ -1377,8 +1598,10 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.viewingLatency = false;
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     if (this.selectedWorkflow) {
       this.breakdownWorkflow = this.selectedWorkflow;
@@ -1394,6 +1617,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenCatalog() {
     this.viewingCatalog = true;
+    this.handleCloseHealth();
     this.viewingDoctor = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
@@ -1401,6 +1625,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadCatalog();
   }
@@ -1446,21 +1671,173 @@ export default class WorkflowDashboard extends LightningElement {
     };
   }
 
-  // Deep-links from a catalog row (or one of its status counts) to the instance list,
-  // filtered to that definition and — for a status count — that status. Reuses the existing
-  // selectedWorkflow / selectedStatus filter state rather than a parallel mechanism.
+  // Opens the instance list from a Catalog row or a status count. The list shows that
+  // definition and, for a status count, that status.
   handleCatalogRowClick(event) {
-    const definition = event.currentTarget.dataset.definition;
-    const status = event.currentTarget.dataset.status || "";
+    this.openInstanceList(
+      event.currentTarget.dataset.definition,
+      event.currentTarget.dataset.status || "",
+    );
+  }
+
+  // Opens the instance list for a definition and an optional status. Closes the Catalog
+  // and Fleet Health views. Clears the search and attribute filters, so that the list
+  // shows all instances of the definition.
+  openInstanceList(definition, status) {
     if (!definition) {
       return;
     }
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.showingStalled = false;
     this.selectedWorkflow = definition;
     this.selectedStatus = status;
     this.selectedFailureCategory = "";
+    this.searchTerm = "";
+    this.attributeFilters = {};
     this.fetchInstances(false);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // FLEET HEALTH (#111)
+  // ────────────────────────────────────────────────────────────────────────
+
+  handleOpenHealth() {
+    this.viewingHealth = true;
+    this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.viewingUnrouted = false;
+    this.viewingSchedules = false;
+    this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
+    this.viewingCatalog = false;
+    this.selectedInstanceId = null;
+    this.resetChain();
+    this.filterInstancesList();
+    this.fetchHealth();
+  }
+
+  // Closes the view. A request that is in progress becomes stale, so it cannot show a
+  // toast on a different view.
+  handleCloseHealth() {
+    this.viewingHealth = false;
+    this._healthRequestId++;
+    this.loadingHealth = false;
+  }
+
+  fetchHealth() {
+    const requestId = ++this._healthRequestId;
+    this.loadingHealth = true;
+    return getFleetHealth({ windowKey: this.healthWindow })
+      .then((result) => {
+        if (requestId === this._healthRequestId) {
+          this.healthData = result;
+          this.healthError = "";
+          this.buildHealthRows();
+        }
+      })
+      .catch((error) => {
+        if (requestId !== this._healthRequestId) {
+          return;
+        }
+        const message = this.reduceErrors(error);
+        this.healthData = null;
+        this.healthError = message;
+        this.buildHealthRows();
+        this.showToast(
+          "Error",
+          "Failed to load fleet health: " + message,
+          "error",
+        );
+      })
+      .finally(() => {
+        if (requestId === this._healthRequestId) {
+          this.loadingHealth = false;
+        }
+      });
+  }
+
+  handleHealthWindowChange(event) {
+    this.healthWindow = event.detail ? event.detail.value : event.target.value;
+    this.fetchHealth();
+  }
+
+  // Keeps the last valid threshold when the input is blank, not a number, or out of range.
+  // The view shows the threshold that it uses.
+  handleHealthThresholdChange(event) {
+    const raw = event.detail ? event.detail.value : event.target.value;
+    const value = raw === "" || raw === null ? NaN : Number(raw);
+    if (Number.isFinite(value) && value >= 0 && value <= 100) {
+      this.healthThreshold = value;
+      this.buildHealthRows();
+    }
+  }
+
+  handleHealthRowClick(event) {
+    this.openInstanceList(event.currentTarget.dataset.definition, "");
+  }
+
+  get hasHealthRows() {
+    return this.healthRows.length > 0;
+  }
+
+  // The empty state shows only after a load that has no rows.
+  get showHealthEmpty() {
+    return !this.healthError && this.healthRows.length === 0;
+  }
+
+  get healthIsSampled() {
+    return !!(this.healthData && this.healthData.isSampled);
+  }
+
+  get healthSampleCap() {
+    return this.healthData ? this.healthData.sampleCap : 0;
+  }
+
+  get healthCountsCapped() {
+    return !!(this.healthData && this.healthData.countsCapped);
+  }
+
+  get healthCountCap() {
+    return this.healthData ? this.healthData.countCap : 0;
+  }
+
+  // Builds the display rows. It runs when data arrives or the threshold changes, not on
+  // each render. The flag uses the counts, not the rounded rate, so 94.96% is below 95%.
+  buildHealthRows() {
+    const rows = (this.healthData && this.healthData.rows) || [];
+    this.healthRows = rows.map((row) => {
+      const terminal = (row.completed || 0) + (row.failed || 0);
+      const hasRate = terminal > 0;
+      const belowThreshold =
+        hasRate && (row.completed * 100) / terminal < this.healthThreshold;
+      return {
+        ...row,
+        belowThreshold,
+        rowClass: belowThreshold
+          ? "slds-hint-parent health-row-below"
+          : "slds-hint-parent",
+        rateDisplay: hasRate ? `${row.successRate}%` : "—",
+        rateClass: belowThreshold ? "text-red" : hasRate ? "text-green" : "",
+        failedClass: row.failed > 0 ? "text-red" : "",
+        linkTitle: `View the instances of ${row.workflowName}`,
+        avgApprox: this.isApproxDuration(
+          row.avgDurationMs,
+          row.durationSampled,
+        ),
+        avgDisplay: this.formatDuration(row.avgDurationMs),
+        maxApprox: this.isApproxDuration(
+          row.maxDurationMs,
+          row.durationSampled,
+        ),
+        maxDisplay: this.formatDuration(row.maxDurationMs),
+      };
+    });
+  }
+
+  // A sampled duration shows "≈". A missing value shows only "—".
+  isApproxDuration(ms, sampled) {
+    return !!sampled && ms !== null && ms !== undefined;
   }
 
   handleBreakdownWorkflowChange(event) {
@@ -1511,7 +1888,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     if (this.selectedWorkflow) {
       this.latencyWorkflow = this.selectedWorkflow;
@@ -2301,6 +2680,7 @@ export default class WorkflowDashboard extends LightningElement {
               "Progress is shown in the detail panel below.",
             "success",
           );
+          this.closeViews();
           this.selectedInstanceId = outcome.redriveInstanceId;
           this.refreshInstances();
           this.loadDetails(true);
@@ -2385,6 +2765,7 @@ export default class WorkflowDashboard extends LightningElement {
               "Progress is shown in the detail panel below.",
             "success",
           );
+          this.closeViews();
           this.selectedInstanceId = outcome.cancelInstanceId;
           this.refreshInstances();
           this.loadDetails(true);

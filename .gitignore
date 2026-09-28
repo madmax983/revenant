@@ -15,3 +15,5 @@ node_modules/
 
 # apex-ls download for the global-api test (scripts/global-api/fetch-apex-ls.sh)
 scripts/global-api/.apex-ls
+# Jest coverage output
+coverage/

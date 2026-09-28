@@ -462,6 +462,19 @@ See [docs/strict-determinism.md](docs/strict-determinism.md).
 
 See [docs/step-history-guard.md](docs/step-history-guard.md).
 
+## New (additive): approver notifications
+
+**Issue #123.** No signature changes. Nothing changes until a step calls `withNotification`.
+
+- New author API: `StepResult.withNotification(WorkflowNotification)` and the `WorkflowNotification` builder. New field: `StepResult.StepDirective.notification`.
+- New config field: `Revenant_Config__mdt.Send_Notifications__c` (default on).
+- New metadata: `CustomNotificationType` `Revenant_Workflow_Notification`.
+- `Workflow_Event__e` has a new `Event_Type__c` value: `NOTIFY`, and a new trigger: `WorkflowNotifyTrigger`. A custom subscriber to `Workflow_Event__e` must ignore `NOTIFY`.
+- `Workflow_Log__c` has new rows with `Log_Type__c = Notification`.
+- `ApprovalWorkflowExample` reads the approver from the workflow input key `approverId`. With no approver, it notifies the instance owner.
+
+See [docs/approver-notifications.md](docs/approver-notifications.md).
+
 ---
 
 ## 9. New (additive, non-breaking): `WorkflowInstanceQuery.findInstances`
@@ -493,6 +506,22 @@ sharing` service class (`WorkflowInstanceQuery`), while the forever-public DTOs
 classes of `WorkflowEngine`. It is strictly read-only and payload-free; see the
 README's "List & Page Through Workflow Instances (Apex)" section for the full DTO
 shapes, the keyset-cursor / ContinueAsNew semantics, and the honest SOQL profile.
+
+---
+
+## New (additive, non-breaking): `WorkflowChainRead.getChain`
+
+**Issue #116.** A new read contract. No signature changes. It gives all generations of a Continue-As-New chain, newest first, with a cursor. Before, you walked `Previous_Instance__c` with SOQL. Do not do that now.
+
+```apex
+WorkflowEngine.ChainRequest req = new WorkflowEngine.ChainRequest();
+req.correlationKey = 'nightly-sync'; // or req.instanceId = someId; not both
+req.pageSize = 100;             // null -> 50; above 200 -> 200; 0 or less -> throws
+WorkflowEngine.ChainPage page = WorkflowChainRead.getChain(req);
+req.cursor = page.nextCursor;   // send back with no change; null on the last page
+```
+
+The DTOs (`ChainRequest`, `ChainPage`, `ChainGeneration`) are inner classes of `WorkflowEngine`. New dashboard method: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)`. See [docs/continue-as-new-chain.md](docs/continue-as-new-chain.md).
 
 ---
 
