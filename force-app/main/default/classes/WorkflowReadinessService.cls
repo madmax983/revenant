@@ -15,7 +15,6 @@ public inherited sharing class WorkflowReadinessService {
   private static final String NO_FIRE = 'Inbound signals, approvals, and child-completion resumes will never fire.';
   private static final String NO_ALERT = 'Workflow failures will not alert anyone.';
   private static final String OPERATOR_PATH = 'Setup > Permission Sets > Revenant Operator > Manage Assignments > Add Assignment';
-  private static final String ADMIN_PATH = 'Setup > Permission Sets > Revenant Admin > Manage Assignments > Add Assignment';
 
   // Tests replace the probe to make a broken install.
   @TestVisible
@@ -416,9 +415,7 @@ public inherited sharing class WorkflowReadinessService {
           'This user can read but cannot create: ' +
             String.join(createGaps, ', ') +
             '. The engine writes in system mode, but custom Apex, Flow, or integrations that create these records in user mode fail for this user.',
-          'If this user creates these records in user mode, assign Revenant_Admin: ' +
-            ADMIN_PATH +
-            '. A read-only operator (Revenant_Operator) does not need create access.'
+          'No action for workflow starts or a read-only operator (Revenant_Operator). Only if this user creates these records in user mode, grant create access on the listed items in a small permission set: Setup > Permission Sets > New > Object Settings.'
         );
       }
       return pass(

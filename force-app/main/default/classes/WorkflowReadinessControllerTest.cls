@@ -503,6 +503,10 @@ private class WorkflowReadinessControllerTest {
         access.remediation.contains('Revenant_Operator'),
         access.remediation
       );
+      System.assert(
+        !access.remediation.contains('Revenant_Admin'),
+        'A create gap never asks for the full admin set: ' + access.remediation
+      );
     }
   }
 
