@@ -28,6 +28,7 @@ Give the operator one read-only check list on System Doctor. Each check tells if
 | B9  | Inject a `Probe` so a test can make a broken install.                                                                | Yes. The only seam for metadata and trigger status.                         |
 | B10 | Make `WorkflowAlertManager.isAlertActionable` public and reuse it.                                                   | Yes. Same rule as the alert path.                                           |
 | B11 | One access row per core object (instance, step, signal).                                                             | Yes. Each row names the object and fields.                                  |
+| B14 | Check all custom fields (describe), not a fixed list.                                                                | Yes. A new engine field is covered without an edit (Codex review).          |
 | B12 | Show a "Run Checks" button and the round-trip time on the panel.                                                     | Yes. One click. Shows the < 2 s target.                                     |
 | B13 | Add a button that starts the watchdog on the panel.                                                                  | No. Link to the existing **Enqueue Watchdog** button.                       |
 

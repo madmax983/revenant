@@ -566,6 +566,39 @@ private class WorkflowReadinessControllerTest {
   }
 
   /**
+   * @description Every custom engine field is checked, not a fixed subset.
+   */
+  @IsTest
+  static void testAnyCustomFieldGapIsFound() {
+    FakeProbe fake = new FakeProbe().withAlert(goodAlert());
+    fake.unreadableFields.add(Workflow_Signal__c.Signal_Key__c);
+    fake.uncreatableFields.add(Workflow_Instance__c.Definition_Shape__c);
+    WorkflowReadinessService.probe = fake;
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(userWith('Revenant_Admin')) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessService.ReadinessCheck signal = check(
+      'access.Workflow_Signal__c',
+      checks
+    );
+    System.assertEquals(FAIL, signal.status, 'Signal_Key__c read gap fails');
+    System.assert(
+      signal.finding.contains('Workflow_Signal__c.Signal_Key__c'),
+      signal.finding
+    );
+    WorkflowReadinessService.ReadinessCheck instance = check(
+      'access.Workflow_Instance__c',
+      checks
+    );
+    System.assertEquals(WARN, instance.status, 'A create gap warns');
+    System.assert(
+      instance.finding.contains('Workflow_Instance__c.Definition_Shape__c'),
+      instance.finding
+    );
+  }
+
+  /**
    * @description A read gap and a create gap on one object give one Fail row that
    * names both.
    */

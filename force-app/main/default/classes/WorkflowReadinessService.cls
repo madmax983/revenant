@@ -20,48 +20,13 @@ public inherited sharing class WorkflowReadinessService {
   @TestVisible
   private static Probe probe = new Probe();
 
-  // The core engine objects and the fields the engine writes on them. Built after the
-  // view gate, because each rule runs a describe.
+  // The core engine objects. Each rule checks all custom fields of its object. Built
+  // after the view gate, because each rule runs a describe.
   private static List<AccessRule> accessRules() {
     return new List<AccessRule>{
-      new AccessRule(
-        Workflow_Instance__c.SObjectType,
-        new List<Schema.SObjectField>{
-          Workflow_Instance__c.Workflow_Name__c,
-          Workflow_Instance__c.Status__c,
-          Workflow_Instance__c.Correlation_Key__c,
-          Workflow_Instance__c.Current_Step__c,
-          Workflow_Instance__c.Input__c,
-          Workflow_Instance__c.Output__c,
-          Workflow_Instance__c.Error_Message__c,
-          Workflow_Instance__c.Sleep_Until__c,
-          Workflow_Instance__c.Terminal_At__c,
-          Workflow_Instance__c.Parent_Instance__c
-        }
-      ),
-      new AccessRule(
-        Workflow_Step_Execution__c.SObjectType,
-        new List<Schema.SObjectField>{
-          Workflow_Step_Execution__c.Workflow_Instance__c,
-          Workflow_Step_Execution__c.Step_Name__c,
-          Workflow_Step_Execution__c.Status__c,
-          Workflow_Step_Execution__c.Input__c,
-          Workflow_Step_Execution__c.Output__c,
-          Workflow_Step_Execution__c.Error_Details__c,
-          Workflow_Step_Execution__c.Retry_Count__c,
-          Workflow_Step_Execution__c.Timeout_At__c
-        }
-      ),
-      new AccessRule(
-        Workflow_Signal__c.SObjectType,
-        new List<Schema.SObjectField>{
-          Workflow_Signal__c.Workflow_Instance__c,
-          Workflow_Signal__c.Signal_Name__c,
-          Workflow_Signal__c.Status__c,
-          Workflow_Signal__c.Correlation_Key__c,
-          Workflow_Signal__c.Payload__c
-        }
-      )
+      new AccessRule(Workflow_Instance__c.SObjectType),
+      new AccessRule(Workflow_Step_Execution__c.SObjectType),
+      new AccessRule(Workflow_Signal__c.SObjectType)
     };
   }
 
@@ -340,14 +305,9 @@ public inherited sharing class WorkflowReadinessService {
   // because the engine writes in system mode and a read-only operator needs no create.
   private class AccessRule extends Rule {
     private Schema.SObjectType objectType;
-    private List<Schema.SObjectField> fields;
 
-    public AccessRule(
-      Schema.SObjectType objectType,
-      List<Schema.SObjectField> fields
-    ) {
+    public AccessRule(Schema.SObjectType objectType) {
       this.objectType = objectType;
-      this.fields = fields;
       key = 'access.' + describeObjectName();
       name = 'Access: ' + describeObjectName();
     }
@@ -370,7 +330,7 @@ public inherited sharing class WorkflowReadinessService {
       if (!objectCreatable) {
         createGaps.add(objectName + ' (object)');
       }
-      for (Schema.SObjectField field : fields) {
+      for (Schema.SObjectField field : customFields()) {
         String fieldName =
           objectName +
           '.' +
@@ -383,6 +343,22 @@ public inherited sharing class WorkflowReadinessService {
         }
       }
       return toCheck(objectName, readGaps, createGaps);
+    }
+
+    // All custom fields that hold data (no formula, no auto number), sorted by name.
+    private List<Schema.SObjectField> customFields() {
+      Map<String, Schema.SObjectField> byName = objectType.getDescribe()
+        .fields.getMap();
+      List<String> names = new List<String>(byName.keySet());
+      names.sort();
+      List<Schema.SObjectField> result = new List<Schema.SObjectField>();
+      for (String fieldName : names) {
+        Schema.DescribeFieldResult d = byName.get(fieldName).getDescribe();
+        if (d.isCustom() && !d.isCalculated() && !d.isAutoNumber()) {
+          result.add(byName.get(fieldName));
+        }
+      }
+      return result;
     }
 
     private ReadinessCheck toCheck(
@@ -421,7 +397,7 @@ public inherited sharing class WorkflowReadinessService {
       return pass(
         'This user can read and create ' +
           objectName +
-          ' and its engine fields.'
+          ' and all its custom fields.'
       );
     }
   }
