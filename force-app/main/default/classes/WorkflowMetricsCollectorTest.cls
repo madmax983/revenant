@@ -179,10 +179,60 @@ private class WorkflowMetricsCollectorTest {
   }
 
   @IsTest
+  static void windowGroupCapTruncates() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = System.now();
+      seed('Acme.A', 'Failed');
+      seed('Acme.B', 'Failed');
+      WorkflowMetricsCollector.groupRowCap = 1;
+
+      WorkflowMetricsCollector.Result result = WorkflowMetricsCollector.collect(
+        now.addHours(-1),
+        now.addMinutes(1)
+      );
+
+      Map<String, WorkflowMetricsSnapshot.DefinitionMetrics> m = byName(result);
+      Assert.areEqual(1, m.get('Acme.A').failedInWindow);
+      Assert.isFalse(m.containsKey('Acme.B'), 'Group over the cap dropped');
+      Assert.isTrue(result.truncated);
+      Assert.isTrue(result.notes[0].contains('window'));
+    }
+  }
+
+  @IsTest
+  static void defaultGroupCapFitsTheAggregateLimit() {
+    Assert.isTrue(
+      WorkflowMetricsCollector.groupRowCap + 1 <= 2000,
+      'An aggregate query can return not more than 2,000 rows'
+    );
+  }
+
+  @IsTest
+  static void windowOnlyNameHasNoAgeAndNoTruncation() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = System.now();
+      seed('Acme.A', 'Running');
+      seed('Acme.B', 'Failed');
+
+      WorkflowMetricsCollector.Result result = WorkflowMetricsCollector.collect(
+        now.addHours(-1),
+        now.addMinutes(1)
+      );
+
+      Map<String, WorkflowMetricsSnapshot.DefinitionMetrics> m = byName(result);
+      Assert.isNotNull(m.get('Acme.A').oldestActiveAgeSeconds);
+      Assert.isNull(m.get('Acme.B').oldestActiveAgeSeconds);
+      Assert.isFalse(result.truncated, 'No active row is not a truncation');
+    }
+  }
+
+  @IsTest
   static void queryCountIsConstant() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Datetime now = System.now();
       seed('Acme.A', 'Running');
+      // Load the WorkflowEngine config query before the measure.
+      Assert.isNotNull(WorkflowEngine.ACTIVE_STATUSES);
 
       Integer q0 = Limits.getQueries();
       WorkflowMetricsCollector.collect(now.addHours(-1), now.addMinutes(1));

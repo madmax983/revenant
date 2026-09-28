@@ -70,7 +70,7 @@ public inherited sharing class WorkflowMetricsSnapshot {
   public class ChunkPlan {
     /** @description Metrics_Json__c value of each chunk, in order. */
     public List<String> chunks = new List<String>();
-    /** @description True when a row was dropped. */
+    /** @description True when chunk() dropped a row. */
     public Boolean truncated = false;
     /** @description Number of dropped rows. */
     public Integer droppedRows = 0;
@@ -81,10 +81,10 @@ public inherited sharing class WorkflowMetricsSnapshot {
   }
 
   /**
-   * @description Splits the rows into JSON chunks. Each chunk is at most
-   * charBudget characters. Keeps the row order. Drops a row that is larger
-   * than the budget, and all rows after maxChunks is full. Always gives at
-   * least one chunk.
+   * @description Splits the rows into JSON chunks. Each chunk has not more
+   * than charBudget characters. Keeps the row order. Drops a row that is
+   * larger than the budget. When the chunk count is maxChunks, drops all
+   * remaining rows. Always gives one chunk or more.
    * @param rows Rows in the order to send.
    * @param charBudget Maximum characters in one chunk.
    * @param maxChunks Maximum chunks.

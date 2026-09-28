@@ -169,16 +169,31 @@ private class WorkflowMetricsSnapshotTest {
     Assert.areEqual(11, back.compensatedInWindow);
     Assert.areEqual(12, back.cancelledInWindow);
     Assert.areEqual(3600L, back.oldestActiveAgeSeconds);
-    // The JSON keys are the public contract.
-    for (
-      String key : new List<String>{
-        '"workflowName"',
-        '"failedInWindow"',
-        '"oldestActiveAgeSeconds"'
-      }
-    ) {
-      Assert.isTrue(chunk.contains(key), 'Contract key missing: ' + key);
-    }
+    // The JSON keys are the public contract (schema version 1).
+    Map<String, Object> raw = (Map<String, Object>) ((List<Object>) ((Map<String, Object>) JSON.deserializeUntyped(
+        chunk
+      ))
+      .get('definitions'))[0];
+    Assert.areEqual(
+      new Set<String>{
+        'workflowName',
+        'pending',
+        'running',
+        'suspended',
+        'paused',
+        'definitionChanged',
+        'cancelling',
+        'compensating',
+        'compensationFailed',
+        'completedInWindow',
+        'failedInWindow',
+        'compensatedInWindow',
+        'cancelledInWindow',
+        'oldestActiveAgeSeconds'
+      },
+      raw.keySet(),
+      'A rename breaks subscribers'
+    );
   }
 
   @IsTest

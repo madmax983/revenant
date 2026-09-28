@@ -1,6 +1,6 @@
 /**
- * @description Reads the engine-health snapshot (issue #127) with max three
- * bounded queries, for all fleet sizes:
+ * @description Reads the engine-health snapshot (issue #127) with not more
+ * than three bounded queries, for all fleet sizes:
  *
  * 1. Active counts: `COUNT(Id)` grouped by name and status.
  * 2. Terminal counts in the window (start, end]: same shape.
@@ -8,9 +8,9 @@
  *    a name is its oldest row.
  *
  * `COUNT(field)` with `GROUP BY` uses one query row for each group. The age
- * scan uses max k rows. The collector keeps QUERY_RESERVE queries and
- * QUERY_ROW_RESERVE rows free, because a `LimitException` cannot be caught.
- * All queries run in system mode.
+ * scan uses not more than k rows. The collector keeps QUERY_RESERVE queries
+ * and QUERY_ROW_RESERVE rows free, because Apex cannot catch a
+ * `LimitException`. All queries run in system mode.
  */
 public inherited sharing class WorkflowMetricsCollector {
   /** @description SOQL statements to keep free for the caller. */
@@ -18,6 +18,19 @@ public inherited sharing class WorkflowMetricsCollector {
   /** @description Query rows to keep free for the caller. */
   public static final Integer QUERY_ROW_RESERVE = 5000;
   private static final Integer QUERY_COUNT = 3;
+
+  // Schema version 1 statuses. Do not read WorkflowEngine.ACTIVE_STATUSES:
+  // a new engine status must not change the contract without a new version.
+  private static final Set<String> ACTIVE_STATUSES_V1 = new Set<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Paused',
+    'DefinitionChanged',
+    'Cancelling',
+    'Compensating',
+    'CompensationFailed'
+  };
 
   private static final Set<String> WINDOW_STATUSES = new Set<String>{
     'Completed',
@@ -27,8 +40,8 @@ public inherited sharing class WorkflowMetricsCollector {
   };
 
   // Maximum groups kept from each grouped query. The query reads one more
-  // group to find truncation. An aggregate query can return max 2,000 rows,
-  // so the cap is 1,999.
+  // group to find truncation. An aggregate query can return not more than
+  // 2,000 rows, so the cap is 1,999.
   @TestVisible
   private static Integer groupRowCap = 1999;
   // Maximum rows read by the age scan.
@@ -82,11 +95,7 @@ public inherited sharing class WorkflowMetricsCollector {
     }
 
     if (activeTotal > 0) {
-      Integer missing = applyOldestAges(
-        byName,
-        snapshotAt,
-        Math.min(ageRows, activeTotal)
-      );
+      Integer missing = applyOldestAges(byName, snapshotAt, ageRows);
       if (missing > 0) {
         result.truncated = true;
         result.notes.add(
@@ -108,18 +117,17 @@ public inherited sharing class WorkflowMetricsCollector {
   }
 
   /**
-   * @description Active counts grouped by name and status. Reads max
-   * groupRowCap + 1 groups, so a caller can see that the cap is hit.
+   * @description Active counts grouped by name and status. Reads
+   * groupRowCap + 1 groups. One extra group shows that the query hit the cap.
    * @return Rows with the aliases wf, st and n.
    */
   @TestVisible
   private static List<AggregateResult> queryActiveCounts() {
-    Set<String> activeStatuses = WorkflowEngine.ACTIVE_STATUSES;
     Integer lim = groupRowCap + 1;
     return [
       SELECT Workflow_Name__c wf, Status__c st, COUNT(Id) n
       FROM Workflow_Instance__c
-      WHERE Status__c IN :activeStatuses
+      WHERE Status__c IN :ACTIVE_STATUSES_V1
       WITH SYSTEM_MODE
       GROUP BY Workflow_Name__c, Status__c
       ORDER BY Workflow_Name__c, Status__c
@@ -146,29 +154,36 @@ public inherited sharing class WorkflowMetricsCollector {
     ];
   }
 
-  // Reads the oldest rows first. The first row of a name gives its age. The
-  // loop stops when each active name has an age. Returns the number of
-  // active names with no age.
+  // Reads the oldest rows first. The first row of an active name gives its
+  // age. The loop stops when each active name has an age. Returns the number
+  // of active names with no age because the scan read all scanRows rows. A
+  // name with no age for other reasons (the instance ended between the
+  // queries) is not a truncation.
   private static Integer applyOldestAges(
     Map<String, WorkflowMetricsSnapshot.DefinitionMetrics> byName,
     Datetime snapshotAt,
     Integer scanRows
   ) {
-    Set<String> activeStatuses = WorkflowEngine.ACTIVE_STATUSES;
     Integer remaining = countActiveNames(byName);
+    Integer scanned = 0;
     for (List<Workflow_Instance__c> batch : [
       SELECT Workflow_Name__c, CreatedDate
       FROM Workflow_Instance__c
-      WHERE Status__c IN :activeStatuses
+      WHERE Status__c IN :ACTIVE_STATUSES_V1
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT :scanRows
     ]) {
+      scanned += batch.size();
       for (Workflow_Instance__c inst : batch) {
         WorkflowMetricsSnapshot.DefinitionMetrics m = byName.get(
           key(inst.Workflow_Name__c)
         );
-        if (m != null && m.oldestActiveAgeSeconds == null) {
+        if (
+          m != null &&
+          m.oldestActiveAgeSeconds == null &&
+          activeCount(m) > 0
+        ) {
           m.oldestActiveAgeSeconds = Math.max(
             0L,
             (snapshotAt.getTime() - inst.CreatedDate.getTime()) / 1000
@@ -180,7 +195,7 @@ public inherited sharing class WorkflowMetricsCollector {
         break;
       }
     }
-    return remaining;
+    return scanned >= scanRows ? Math.max(0, remaining) : 0;
   }
 
   // Rows the age scan can read, or null when the budget cannot hold the

@@ -315,17 +315,7 @@
         <readable>true</readable>
     </fieldPermissions>
 
-    <!-- fieldPermissions for Workflow_Metrics__e subscribers -->
-    <fieldPermissions>
-        <editable>false</editable>
-        <field>Workflow_Metrics__e.Chunk_Count__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>false</editable>
-        <field>Workflow_Metrics__e.Chunk_Index__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
+    <!-- fieldPermissions for Workflow_Metrics__e subscribers (excluding required fields) -->
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Metrics__e.Is_Truncated__c</field>
@@ -334,26 +324,6 @@
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Metrics__e.Metrics_Json__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>false</editable>
-        <field>Workflow_Metrics__e.Schema_Version__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>false</editable>
-        <field>Workflow_Metrics__e.Snapshot_At__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>false</editable>
-        <field>Workflow_Metrics__e.Snapshot_Id__c</field>
-        <readable>true</readable>
-    </fieldPermissions>
-    <fieldPermissions>
-        <editable>false</editable>
-        <field>Workflow_Metrics__e.Window_Start__c</field>
         <readable>true</readable>
     </fieldPermissions>
 

@@ -39,6 +39,8 @@ private class WorkflowMetricsDatadogShaperTest {
     return new Workflow_Metrics__e(
       Snapshot_Id__c = 'b2a4e6c8-0000-4000-8000-000000000001',
       Snapshot_At__c = SNAPSHOT_AT,
+      Window_Start__c = SNAPSHOT_AT.addMinutes(-10),
+      Is_Truncated__c = false,
       Chunk_Index__c = 1,
       Chunk_Count__c = 1,
       Schema_Version__c = 1,
@@ -59,7 +61,10 @@ private class WorkflowMetricsDatadogShaperTest {
     for (Object item : series) {
       Map<String, Object> s = (Map<String, Object>) item;
       List<Object> tags = (List<Object>) s.get('tags');
-      if (s.get('metric') == metric && tags.contains(workflowTag)) {
+      Boolean tagMatches = workflowTag == null
+        ? tags.isEmpty()
+        : tags.contains(workflowTag);
+      if (s.get('metric') == metric && tagMatches) {
         return s;
       }
     }
@@ -94,11 +99,23 @@ private class WorkflowMetricsDatadogShaperTest {
       'revenant.workflow.failed_in_window',
       'workflow:Acme.Order'
     );
+    Assert.areEqual(1, failed.get('type'), 'Window value is a count');
+    Assert.areEqual(600, failed.get('interval'), 'Interval = window seconds');
     Assert.areEqual(
       2,
       ((Map<String, Object>) ((List<Object>) failed.get('points'))[0])
         .get('value')
     );
+    for (Object item : series) {
+      for (
+        Object tag : (List<Object>) ((Map<String, Object>) item).get('tags')
+      ) {
+        Assert.isFalse(
+          ((String) tag).startsWith('snapshot_id:'),
+          'No high-cardinality tag'
+        );
+      }
+    }
     Assert.isNotNull(
       findSeries(
         series,
@@ -141,13 +158,71 @@ private class WorkflowMetricsDatadogShaperTest {
   }
 
   @IsTest
-  static void emptySnapshotGivesNoSeries() {
+  static void emptySnapshotSendsOnlyTheTruncationGauge() {
     Workflow_Metrics__e event = snapshot();
     event.Metrics_Json__c = '{"definitions":[]}';
 
+    List<Object> series = (List<Object>) ((Map<String, Object>) JSON.deserializeUntyped(
+        WorkflowMetricsDatadogShaper.toSeriesJson(event)
+      ))
+      .get('series');
+
+    Assert.areEqual(1, series.size(), 'One point for each snapshot');
+    Map<String, Object> only = (Map<String, Object>) series[0];
+    Assert.areEqual('revenant.snapshot.truncated', only.get('metric'));
+    Assert.areEqual(
+      0,
+      ((Map<String, Object>) ((List<Object>) only.get('points'))[0])
+        .get('value')
+    );
+  }
+
+  @IsTest
+  static void truncatedSnapshotSendsOne() {
+    Workflow_Metrics__e event = snapshot();
+    event.Is_Truncated__c = true;
+
+    List<Object> series = (List<Object>) ((Map<String, Object>) JSON.deserializeUntyped(
+        WorkflowMetricsDatadogShaper.toSeriesJson(event)
+      ))
+      .get('series');
+
+    Map<String, Object> gauge = findSeries(
+      series,
+      'revenant.snapshot.truncated',
+      null
+    );
+    Assert.areEqual(
+      1,
+      ((Map<String, Object>) ((List<Object>) gauge.get('points'))[0])
+        .get('value')
+    );
+  }
+
+  @IsTest
+  static void blankNameIsTaggedUnnamed() {
+    Workflow_Metrics__e event = snapshot();
+    event.Metrics_Json__c = '{"definitions":[{"workflowName":null,"running":1}]}';
+
+    List<Object> series = (List<Object>) ((Map<String, Object>) JSON.deserializeUntyped(
+        WorkflowMetricsDatadogShaper.toSeriesJson(event)
+      ))
+      .get('series');
+
+    Assert.isNotNull(
+      findSeries(series, 'revenant.workflow.running', 'workflow:unnamed')
+    );
+  }
+
+  @IsTest
+  static void nullInputGivesNull() {
     Assert.isNull(
-      WorkflowMetricsDatadogShaper.toSeriesJson(event),
-      'Nothing to push'
+      WorkflowMetricsDatadogShaper.toSeriesJson((Workflow_Metrics__e) null)
+    );
+    Assert.isNull(
+      WorkflowMetricsDatadogShaper.toSeriesJson(
+        (List<Workflow_Metrics__e>) null
+      )
     );
   }
 

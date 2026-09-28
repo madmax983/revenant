@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Publish_Metrics_Events__c</fullName>
     <defaultValue>false</defaultValue>
-    <description>When you select this box, each watchdog sweep publishes a Workflow_Metrics__e engine-health snapshot. Cost: max 3 SOQL for each sweep. No new scheduled job. Default: off. When off, the cost is 0.</description>
+    <description>Select this box to publish a Workflow_Metrics__e engine-health snapshot on each watchdog sweep. Cost: not more than 3 SOQL queries and 2 DML statements for each sweep. No new scheduled job. Default: off. When off, the cost is 0.</description>
     <externalId>false</externalId>
     <fieldManageability>SubscriberControlled</fieldManageability>
     <label>Publish Metrics Events</label>

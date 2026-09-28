@@ -16,8 +16,9 @@ watchdog sweep. Add no scheduled job. Default: off.
 - `Terminal_At__c` is set at the first terminal transition.
 - Salesforce: `COUNT(field)` with `GROUP BY` uses one query row for each
   group. `MIN()` uses one query row for each aggregated row.
-- A `LimitException` cannot be caught. A guard must stop it before it
+- Apex cannot catch a `LimitException`. A guard must stop it before it
   occurs.
+- An aggregate query can return not more than 2,000 rows.
 - `EventBus.publish` uses one DML statement and one DML row for each event.
 
 ## Brainstorming (options)
@@ -41,7 +42,7 @@ watchdog sweep. Add no scheduled job. Default: off.
 | How to fail                                                  | Counter                                                                  |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
 | An aggregate uses all 50,000 query rows. `LimitException`.   | No `MIN()`. Group caps. Age scan cap. Check free rows before each query. |
-| Publish uses the last DML. The step commit fails.            | Keep 10 DML statements free. Else skip.                                  |
+| Publish uses the last DML. The step commit fails.            | Keep 11 DML statements free. Else skip.                                  |
 | Publish throws. The sweep stops. Continue-as-new breaks.     | Catch all. The heartbeat also wraps the call.                            |
 | A large fleet makes one event too large.                     | Chunk by a character budget. All chunks share one snapshot id.           |
 | Chunk count grows with no limit.                             | Chunk cap. Set `Is_Truncated__c`. Write a warn log.                      |
@@ -91,12 +92,12 @@ Definition row (JSON keys): `workflowName`, `pending`, `running`,
 Invariants:
 
 - Toggle off: 0 SOQL, 0 DML, 0 events.
-- Toggle on: max 3 SOQL for each sweep, for all fleet sizes.
+- Toggle on: not more than 3 SOQL for each sweep, for all fleet sizes.
 - Each chunk JSON length ≤ the character budget.
 - All chunks of one snapshot have the same `Snapshot_Id__c` and
   `Chunk_Count__c`. `Chunk_Index__c` is 1..n.
 - A dropped row sets `Is_Truncated__c` on all chunks and writes one warn log.
-- The call never throws. It keeps 10 DML statements and 5,000 query rows free.
+- The call never throws. It keeps 11 DML statements and 5,000 query rows free.
 - An empty fleet sends one chunk with an empty list.
 
 ## Design

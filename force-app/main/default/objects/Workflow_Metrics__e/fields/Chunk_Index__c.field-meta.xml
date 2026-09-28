@@ -5,7 +5,7 @@
     <externalId>false</externalId>
     <label>Chunk Index</label>
     <precision>4</precision>
-    <required>false</required>
+    <required>true</required>
     <scale>0</scale>
     <type>Number</type>
     <unique>false</unique>

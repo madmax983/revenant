@@ -11,9 +11,11 @@
  * - Chunks: a large snapshot uses more than one event. All chunks have the
  *   same Snapshot_Id__c.
  * - No silent drop: when a cap drops data, each chunk has Is_Truncated__c
- *   and one Warn row goes to Workflow_Log__c.
+ *   and one Warn row goes to Workflow_Log__c. A skipped snapshot writes one
+ *   Warn row when the DML budget permits.
  * - Fire-and-forget: it never throws. It keeps DML_RESERVE DML statements
- *   and rows free, so the liveness stamp and the step commit can finish.
+ *   and rows free, so the liveness stamp and the step commit can finish. It
+ *   does not start when CPU time or heap is more than PRESSURE_PERCENT.
  */
 public inherited sharing class WorkflowMetricsPublisher {
   /** @description Log_Type__c of the metrics log rows. */
@@ -24,7 +26,8 @@ public inherited sharing class WorkflowMetricsPublisher {
    */
   public static final Integer DML_RESERVE = WatchdogLiveness.DML_RESERVE + 1;
 
-  private static final Integer DEFAULT_CADENCE_MINUTES = 10;
+  /** @description Skip when CPU time or heap is more than this percent. */
+  public static final Integer PRESSURE_PERCENT = 50;
 
   // Maximum characters in one Metrics_Json__c value. The field holds 131,072.
   @TestVisible
@@ -39,6 +42,8 @@ public inherited sharing class WorkflowMetricsPublisher {
   private static Boolean throwTestException = false;
   @TestVisible
   private static Boolean forceDmlBudgetExhausted = false;
+  @TestVisible
+  private static Boolean forceGovernorPressure = false;
 
   /**
    * @description Publishes one snapshot when the toggle is on. Does not
@@ -49,8 +54,19 @@ public inherited sharing class WorkflowMetricsPublisher {
     if (!WorkflowEngine.publishMetricsEvents || snapshotAt == null) {
       return;
     }
-    // Check first, so a low DML budget also saves the queries.
+    // Check first, so a low budget also saves the queries. With no DML
+    // budget, the log row also cannot fit.
     if (!hasDmlBudget(1, 1)) {
+      return;
+    }
+    if (hasGovernorPressure()) {
+      log(
+        false,
+        'Snapshot skipped: CPU time or heap is more than ' +
+          PRESSURE_PERCENT +
+          '% of the limit. Snapshot time: ' +
+          snapshotAt
+      );
       return;
     }
     try {
@@ -79,13 +95,20 @@ public inherited sharing class WorkflowMetricsPublisher {
         snapshotAt,
         truncated
       );
-      if (!hasDmlBudget(truncated ? 2 : 1, events.size() + 1)) {
+      if (!hasDmlBudget(1, events.size())) {
+        log(
+          false,
+          'Snapshot skipped: the DML budget is too low. Snapshot time: ' +
+          snapshotAt
+        );
         return;
       }
+      dispatch(events);
+      // Is_Truncated__c carries the signal. The log row is added when the
+      // DML budget permits.
       if (truncated) {
         log(false, truncationMessage(events[0], collected, plan));
       }
-      dispatch(events);
     } catch (Exception ex) {
       log(true, 'Snapshot publish failed: ' + ex.getMessage());
     }
@@ -104,11 +127,9 @@ public inherited sharing class WorkflowMetricsPublisher {
     if (lastSweep != null && lastSweep < snapshotAt) {
       return lastSweep;
     }
-    Integer cadence = WorkflowEngine.watchdogDelayMinutes;
-    if (cadence == null || cadence < 1) {
-      cadence = DEFAULT_CADENCE_MINUTES;
-    }
-    return snapshotAt.addMinutes(-cadence);
+    return snapshotAt.addMinutes(
+      -WatchdogLiveness.normalizeCadence(WorkflowEngine.watchdogDelayMinutes)
+    );
   }
 
   private static List<Workflow_Metrics__e> buildEvents(
@@ -158,8 +179,19 @@ public inherited sharing class WorkflowMetricsPublisher {
     return String.join(parts, ' ');
   }
 
+  // CPU time and heap have no reserve check in the sweep. Over the limit,
+  // Apex throws a LimitException and cannot catch it. The snapshot uses the
+  // JSON heap and CPU, so it runs only below PRESSURE_PERCENT.
+  private static Boolean hasGovernorPressure() {
+    return forceGovernorPressure ||
+      Limits.getCpuTime() * 100 >
+      Limits.getLimitCpuTime() * PRESSURE_PERCENT ||
+      Limits.getHeapSize() * 100 >
+      Limits.getLimitHeapSize() * PRESSURE_PERCENT;
+  }
+
   // EventBus.publish uses one DML statement and one DML row for each event.
-  // Over the limit it throws a LimitException, which cannot be caught.
+  // Over the limit, Apex throws a LimitException and cannot catch it.
   private static Boolean hasDmlBudget(Integer statements, Integer rows) {
     return !forceDmlBudgetExhausted &&
       Limits.getDmlStatements() + statements + DML_RESERVE <=

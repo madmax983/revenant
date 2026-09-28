@@ -5,7 +5,7 @@
     <externalId>false</externalId>
     <label>Snapshot Id</label>
     <length>36</length>
-    <required>false</required>
+    <required>true</required>
     <type>Text</type>
     <unique>false</unique>
 </CustomField>

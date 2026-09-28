@@ -7,6 +7,11 @@
 private class WorkflowMetricsPublisherTest {
   private static Integer keySeq = 0;
 
+  // DateTime fields drop milliseconds, so compare whole seconds only.
+  private static Datetime wholeSecondNow() {
+    return Datetime.newInstance((System.now().getTime() / 1000) * 1000);
+  }
+
   private static void seed(String workflowName, String status) {
     insert new Workflow_Instance__c(
       Workflow_Name__c = workflowName,
@@ -68,7 +73,7 @@ private class WorkflowMetricsPublisherTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       seed('Acme.A', 'Running');
       seed('Acme.A', 'Suspended');
-      Datetime snapshotAt = System.now().addSeconds(1);
+      Datetime snapshotAt = wholeSecondNow().addSeconds(1);
       Datetime lastSweep = snapshotAt.addMinutes(-5);
       stampLastSweep(lastSweep);
       WorkflowEngine.publishMetricsEvents = true;
@@ -119,7 +124,7 @@ private class WorkflowMetricsPublisherTest {
   @IsTest
   static void windowFallsBackWhenStampIsNotEarlier() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Datetime snapshotAt = System.now();
+      Datetime snapshotAt = wholeSecondNow();
       stampLastSweep(snapshotAt);
       WorkflowEngine.publishMetricsEvents = true;
       WorkflowEngine.watchdogDelayMinutes = 10;
@@ -244,11 +249,13 @@ private class WorkflowMetricsPublisherTest {
   }
 
   @IsTest
-  static void heartbeatPublishesWhenOn() {
+  static void heartbeatPublishesBeforeTheStamp() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       WorkflowEngine.publishMetricsEvents = true;
-      Datetime now = System.now();
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      Datetime now = wholeSecondNow();
+      stampLastSweep(now.addMinutes(-3));
       WorkflowEngine.mockNow = now;
 
       Test.startTest();
@@ -256,15 +263,100 @@ private class WorkflowMetricsPublisherTest {
       Test.stopTest();
 
       Assert.areEqual(1, WorkflowMetricsPublisher.publishedEvents.size());
+      Workflow_Metrics__e event = WorkflowMetricsPublisher.publishedEvents[0];
+      Assert.areEqual(now, event.Snapshot_At__c);
       Assert.areEqual(
-        now,
-        WorkflowMetricsPublisher.publishedEvents[0].Snapshot_At__c
+        now.addMinutes(-3),
+        event.Window_Start__c,
+        'The snapshot reads the previous stamp. The wrong order gives now - 10 min.'
       );
       Assert.areEqual(
         now,
         Watchdog_Liveness__c.getOrgDefaults().Last_Sweep_At__c,
-        'The sweep stamp comes after the snapshot'
+        'The stamp is written after the snapshot'
       );
+    }
+  }
+
+  @IsTest
+  static void twoSweepsChainTheirWindows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.publishMetricsEvents = true;
+      Datetime t1 = wholeSecondNow();
+      Datetime t2 = t1.addMinutes(10);
+
+      Test.startTest();
+      WorkflowEngine.mockNow = t1;
+      WorkflowEngine.processWatchdogHeartbeat();
+      WorkflowEngine.mockNow = t2;
+      WorkflowEngine.processWatchdogHeartbeat();
+      Test.stopTest();
+
+      List<Workflow_Metrics__e> events = WorkflowMetricsPublisher.publishedEvents;
+      Assert.areEqual(2, events.size());
+      Assert.areEqual(
+        events[0].Snapshot_At__c,
+        events[1].Window_Start__c,
+        'No gap and no overlap between two sweeps'
+      );
+    }
+  }
+
+  @IsTest
+  static void lowQueryBudgetSkipsAndLogs() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.publishMetricsEvents = true;
+      WorkflowMetricsCollector.forceQueryBudgetExhausted = true;
+
+      WorkflowMetricsPublisher.publishSnapshot(System.now());
+
+      Assert.isTrue(WorkflowMetricsPublisher.publishedEvents.isEmpty());
+      List<Workflow_Log__c> logs = metricLogs('Warn');
+      Assert.areEqual(1, logs.size(), 'A skipped snapshot is not silent');
+      Assert.isTrue(logs[0].Message__c.contains('query budget'));
+    }
+  }
+
+  @IsTest
+  static void governorPressureSkipsAndLogs() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      seed('Acme.A', 'Running');
+      WorkflowEngine.publishMetricsEvents = true;
+      WorkflowMetricsPublisher.forceGovernorPressure = true;
+
+      Integer q0 = Limits.getQueries();
+      WorkflowMetricsPublisher.publishSnapshot(System.now());
+      Integer queriesUsed = Limits.getQueries() - q0;
+
+      Assert.isTrue(WorkflowMetricsPublisher.publishedEvents.isEmpty());
+      Assert.areEqual(0, queriesUsed, 'No snapshot query under pressure');
+      List<Workflow_Log__c> logs = metricLogs('Warn');
+      Assert.areEqual(1, logs.size());
+      Assert.isTrue(logs[0].Message__c.contains('CPU time or heap'));
+    }
+  }
+
+  @IsTest
+  static void collectorTruncationFlagsAllChunks() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      for (Integer i = 0; i < 6; i++) {
+        seed('Acme.Wf' + i, 'Running');
+      }
+      WorkflowEngine.publishMetricsEvents = true;
+      WorkflowMetricsPublisher.chunkCharBudget = 600;
+      WorkflowMetricsCollector.ageScanRowCap = 1;
+
+      WorkflowMetricsPublisher.publishSnapshot(System.now());
+
+      List<Workflow_Metrics__e> events = WorkflowMetricsPublisher.publishedEvents;
+      Assert.isTrue(events.size() > 1);
+      for (Workflow_Metrics__e event : events) {
+        Assert.isTrue(event.Is_Truncated__c, 'Every chunk has the flag');
+      }
+      List<Workflow_Log__c> logs = metricLogs('Warn');
+      Assert.areEqual(1, logs.size());
+      Assert.isTrue(logs[0].Message__c.contains('age scan'));
     }
   }
 
@@ -288,7 +380,7 @@ private class WorkflowMetricsPublisherTest {
       WorkflowEngine.disableQueueableInTest = true;
       WorkflowEngine.publishMetricsEvents = true;
       WorkflowMetricsPublisher.throwTestException = true;
-      Datetime now = System.now();
+      Datetime now = wholeSecondNow();
       WorkflowEngine.mockNow = now;
 
       Test.startTest();
@@ -296,6 +388,11 @@ private class WorkflowMetricsPublisherTest {
       Test.stopTest();
 
       Assert.isTrue(WorkflowMetricsPublisher.publishedEvents.isEmpty());
+      Assert.areEqual(
+        1,
+        metricLogs('Error').size(),
+        'The heartbeat ran the publish'
+      );
       Assert.areEqual(
         now,
         Watchdog_Liveness__c.getOrgDefaults().Last_Sweep_At__c,
@@ -316,6 +413,11 @@ private class WorkflowMetricsPublisherTest {
         .execute(null);
       Test.stopTest();
 
+      Assert.areEqual(
+        1,
+        metricLogs('Error').size(),
+        'The step ran the failed publish'
+      );
       Assert.areEqual(
         StepResult.ActionType.COMPLETE,
         result.directive().action,

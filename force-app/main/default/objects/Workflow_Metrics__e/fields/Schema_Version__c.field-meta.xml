@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Schema_Version__c</fullName>
-    <description>Version of the Metrics_Json__c contract. Current version: 1.</description>
+    <description>Version of the contract: the event fields and the Metrics_Json__c keys. The current value is 1.</description>
     <externalId>false</externalId>
     <label>Schema Version</label>
     <precision>3</precision>
-    <required>false</required>
+    <required>true</required>
     <scale>0</scale>
     <type>Number</type>
     <unique>false</unique>

@@ -4,6 +4,6 @@
     <description>Time of the snapshot. This is the end of the window (included).</description>
     <externalId>false</externalId>
     <label>Snapshot At</label>
-    <required>false</required>
+    <required>true</required>
     <type>DateTime</type>
 </CustomField>
