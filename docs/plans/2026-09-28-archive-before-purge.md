@@ -85,8 +85,9 @@ found issues. We fixed them:
   query rows.
 - The CSV sink finds files by marked fields, not by title. It uses an
   optional `Revenant_Archive` library for reader access.
-- Reads load one instance or one file at a time. Correlation key match is
-  case-sensitive (`equals`).
+- Reads load one instance or one file at a time.
+- Codex review: correlation key lookup is not case-sensitive, as in
+  `Correlation_Key__c`. The key hash uses the lower-case key.
 - The dropped marker cannot make `Error_Details__c` too long.
 - Error messages do not echo payload text.
 - The Admin permission set has read access only on the Big Objects.

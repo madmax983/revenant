@@ -100,7 +100,7 @@ private class WorkflowArchiveTest {
   }
 
   @IsTest
-  static void hashIsStableAndCaseSensitive() {
+  static void hashIsStableAndIgnoresCase() {
     String h = WorkflowArchive.hashCorrelationKey('Order-1');
     System.assertEquals(64, h.length(), 'SHA-256 hex');
     System.assertEquals(
@@ -108,10 +108,15 @@ private class WorkflowArchiveTest {
       WorkflowArchive.hashCorrelationKey('Order-1'),
       'Stable'
     );
-    System.assertNotEquals(
+    System.assertEquals(
       h,
       WorkflowArchive.hashCorrelationKey('order-1'),
-      'Case matters'
+      'Correlation_Key__c is not case-sensitive'
+    );
+    System.assertNotEquals(
+      h,
+      WorkflowArchive.hashCorrelationKey('order-2'),
+      'Other key'
     );
   }
 

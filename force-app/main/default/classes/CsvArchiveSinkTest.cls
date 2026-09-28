@@ -189,7 +189,7 @@ private class CsvArchiveSinkTest {
   }
 
   @IsTest
-  static void correlationKeyMatchIsCaseSensitive() {
+  static void correlationKeyMatchIgnoresCaseLikePrimary() {
     CsvArchiveSink sink = new CsvArchiveSink();
     sink.write(new List<WorkflowArchiveRecord>{ record('Order-1') });
     System.assertEquals(
@@ -198,9 +198,14 @@ private class CsvArchiveSinkTest {
       'Exact'
     );
     System.assertEquals(
-      0,
+      1,
       sink.readByCorrelationKey('order-1').size(),
-      'Other case'
+      'Correlation_Key__c is not case-sensitive'
+    );
+    System.assertEquals(
+      0,
+      sink.readByCorrelationKey('order-2').size(),
+      'Other key'
     );
   }
 

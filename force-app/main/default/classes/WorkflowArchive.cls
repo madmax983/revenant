@@ -82,7 +82,8 @@ public inherited sharing class WorkflowArchive {
   /**
    * @description Returns the archived histories for a correlation key. One
    * sink read.
-   * @param correlationKey the exact correlation key
+   * @param correlationKey the correlation key. Case does not matter, as in
+   *        `Correlation_Key__c`.
    * @return the records, at most {@link #MAX_READ_RECORDS}
    */
   public static List<WorkflowArchiveRecord> findArchivedHistory(
@@ -105,7 +106,8 @@ public inherited sharing class WorkflowArchive {
 
   /**
    * @description Returns the lookup hash of a correlation key. Sinks use it
-   * where an index cannot hold the full key.
+   * where an index cannot hold the full key. `Correlation_Key__c` is not
+   * case-sensitive, so the hash uses the lower-case key.
    * @param correlationKey the key. Null hashes as blank.
    * @return the SHA-256 hex, 64 characters
    */
@@ -113,7 +115,7 @@ public inherited sharing class WorkflowArchive {
     return EncodingUtil.convertToHex(
       Crypto.generateDigest(
         'SHA-256',
-        Blob.valueOf(correlationKey == null ? '' : correlationKey)
+        Blob.valueOf(correlationKey == null ? '' : correlationKey.toLowerCase())
       )
     );
   }

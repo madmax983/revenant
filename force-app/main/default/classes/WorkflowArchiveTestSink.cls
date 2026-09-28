@@ -68,7 +68,7 @@ public class WorkflowArchiveTestSink implements WorkflowArchiveSink {
   ) {
     List<WorkflowArchiveRecord> out = new List<WorkflowArchiveRecord>();
     for (WorkflowArchiveRecord r : store.values()) {
-      if (correlationKey.equals(r.correlationKey)) {
+      if (correlationKey.equalsIgnoreCase(r.correlationKey)) {
         out.add(r);
       }
     }

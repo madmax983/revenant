@@ -105,7 +105,7 @@ public inherited sharing class CsvArchiveSink implements WorkflowArchiveSink {
   }
 
   /**
-   * @description Reads archive files by exact correlation key.
+   * @description Reads archive files by correlation key. Case does not matter.
    * @param correlationKey the correlation key
    * @return the matching records, at most
    *         {@link WorkflowArchive#MAX_READ_RECORDS}
@@ -128,8 +128,8 @@ public inherited sharing class CsvArchiveSink implements WorkflowArchiveSink {
     ]) {
       WorkflowArchiveRecord r = load(file.Id);
       // The hash can collide. The full key cannot.
-      // Apex `==` ignores case. `equals` does not.
-      if (correlationKey.equals(r.correlationKey)) {
+      // Correlation_Key__c is not case-sensitive. The hash is lower-case.
+      if (correlationKey.equalsIgnoreCase(r.correlationKey)) {
         out.add(r);
       }
     }

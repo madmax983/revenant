@@ -79,7 +79,7 @@ if (r != null) {
   }
 }
 
-// By exact correlation key (case-sensitive): at most 10 records.
+// By correlation key (case does not matter, as in Correlation_Key__c): at most 10 records.
 List<WorkflowArchiveRecord> runs = WorkflowArchive.findArchivedHistory('order-42');
 ```
 
@@ -110,7 +110,8 @@ archival.
   instance. Rows 1 and up are the steps.
 - `Workflow_Archive_Key__b`: index (`Key_Hash__c`, `Instance_Id__c`). A Big
   Object index holds at most 100 text characters, so the key is the SHA-256
-  hex of the correlation key. Reads compare the full key.
+  hex of the lower-case correlation key. Reads compare the full key, and
+  case does not matter, as in `Correlation_Key__c`.
 - `insertImmediate` overwrites a row with the same index. A retry makes no
   duplicate.
 - A read by Id uses 1 SOQL query. A read by key uses 1 query, then 1 query for

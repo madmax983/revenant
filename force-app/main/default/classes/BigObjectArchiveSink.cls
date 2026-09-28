@@ -151,7 +151,8 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
   }
 
   /**
-   * @description Reads archived records by exact correlation key. One SOQL
+   * @description Reads archived records by correlation key (case does not
+   * matter). One SOQL
    * query for the key index, then one for each match.
    * @param correlationKey the correlation key
    * @return the matching records
@@ -166,8 +167,8 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
         WorkflowArchive.MAX_READ_RECORDS
       )
     ) {
-      // Apex `==` ignores case. `equals` does not.
-      if (correlationKey.equals(row.Correlation_Key__c)) {
+      // Correlation_Key__c is not case-sensitive. The hash is lower-case.
+      if (correlationKey.equalsIgnoreCase(row.Correlation_Key__c)) {
         ids.add(Id.valueOf(row.Instance_Id__c));
       }
     }

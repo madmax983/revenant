@@ -32,7 +32,8 @@ public interface WorkflowArchiveSink {
   List<WorkflowArchiveRecord> readByInstanceIds(Set<Id> instanceIds);
 
   /**
-   * @description Reads archived records by exact correlation key.
+   * @description Reads archived records by correlation key. Case does not
+   * matter, as in `Correlation_Key__c`.
    * @param correlationKey the correlation key. Never blank.
    * @return the matching records, at most
    *         {@link WorkflowArchive#MAX_READ_RECORDS}
