@@ -127,7 +127,8 @@ public inherited sharing class WorkflowEngine {
           Dedup_Window_Minutes__c,
           Stale_Threshold_Minutes__c,
           Reclaim_Threshold_Minutes__c,
-          Payload_Codec__c
+          Payload_Codec__c,
+          Strict_Determinism__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -160,6 +161,7 @@ public inherited sharing class WorkflowEngine {
             .Reclaim_Threshold_Minutes__c.intValue();
         }
         payloadCodecClass = configs[0].Payload_Codec__c;
+        strictDeterminism = configs[0].Strict_Determinism__c == true;
       }
     } catch (Exception ignored) {
       // Configuration metadata is optional; fall back to defaults on any read failure.
