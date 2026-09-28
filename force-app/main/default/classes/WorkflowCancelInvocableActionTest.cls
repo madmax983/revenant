@@ -88,222 +88,311 @@ private class WorkflowCancelInvocableActionTest {
 
   @IsTest
   static void testCancelByIdWithoutCompensations() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('NoCompKey');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('NoCompKey');
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      inst.Id,
-      false,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        inst.Id,
+        false,
+        null
+      );
+      Test.stopTest();
 
-    Assert.isTrue(res.found, 'Id must resolve');
-    Assert.areEqual(inst.Id, res.workflowInstanceId);
-    Assert.isTrue(res.cancelled, 'Live instance must cancel');
-    Assert.isFalse(res.isCompensating, 'No rollback requested');
-    Assert.areEqual('Cancelled', res.status);
-    Assert.areEqual('Cancelled', statusOf(inst.Id));
-    Assert.areEqual(0, compensationRows(inst.Id).size(), 'No rollback rows');
+      Assert.isTrue(res.found, 'Id must resolve');
+      Assert.areEqual(
+        inst.Id,
+        res.workflowInstanceId,
+        'res.workflowInstanceId must be inst.Id'
+      );
+      Assert.isTrue(res.cancelled, 'Live instance must cancel');
+      Assert.isFalse(res.isCompensating, 'No rollback requested');
+      Assert.areEqual('Cancelled', res.status, 'res.status must be Cancelled');
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Cancelled'
+      );
+      Assert.areEqual(0, compensationRows(inst.Id).size(), 'No rollback rows');
+    }
   }
 
   @IsTest
   static void testCancelByKeyWithCompensationsRollsBackLifo() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('CompKey');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('CompKey');
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      'CompKey',
-      true,
-      null
-    );
-    Assert.isTrue(res.cancelled);
-    Assert.isTrue(res.isCompensating, 'Rollback must start');
-    Assert.areEqual('Cancelling', res.status);
-    drainRollback(inst.Id);
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'CompKey',
+        true,
+        null
+      );
+      Assert.isTrue(res.cancelled, 'res.cancelled must be true');
+      Assert.isTrue(res.isCompensating, 'Rollback must start');
+      Assert.areEqual(
+        'Cancelling',
+        res.status,
+        'res.status must be Cancelling'
+      );
+      drainRollback(inst.Id);
+      Test.stopTest();
 
-    // Engine contract (ADR 0004): a cancel rollback ends Cancelled.
-    Assert.areEqual('Cancelled', statusOf(inst.Id));
-    List<Workflow_Step_Execution__c> rows = compensationRows(inst.Id);
-    Assert.areEqual(2, rows.size(), 'Each stack entry rolls back once');
-    Assert.areEqual(COMP_STEP + '_Compensate', rows[0].Step_Name__c, 'LIFO');
-    Assert.areEqual(PLAIN_STEP + '_Compensate', rows[1].Step_Name__c, 'LIFO');
-    Assert.areEqual('Compensated', rows[0].Status__c);
-    Assert.areEqual('Compensated', rows[1].Status__c);
+      // Engine contract (ADR 0004): a cancel rollback ends Cancelled.
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Cancelled'
+      );
+      List<Workflow_Step_Execution__c> rows = compensationRows(inst.Id);
+      Assert.areEqual(2, rows.size(), 'Each stack entry rolls back once');
+      Assert.areEqual(COMP_STEP + '_Compensate', rows[0].Step_Name__c, 'LIFO');
+      Assert.areEqual(PLAIN_STEP + '_Compensate', rows[1].Step_Name__c, 'LIFO');
+      Assert.areEqual(
+        'Compensated',
+        rows[0].Status__c,
+        'rows[0].Status__c must be Compensated'
+      );
+      Assert.areEqual(
+        'Compensated',
+        rows[1].Status__c,
+        'rows[1].Status__c must be Compensated'
+      );
+    }
   }
 
   @IsTest
   static void testEmptyRunCompensationsDefaultsToRollback() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('DefaultKey');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('DefaultKey');
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      'DefaultKey',
-      null,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'DefaultKey',
+        null,
+        null
+      );
+      Test.stopTest();
 
-    Assert.isTrue(res.isCompensating, 'Empty flag means rollback');
-    Assert.areEqual('Cancelling', statusOf(inst.Id));
+      Assert.isTrue(res.isCompensating, 'Empty flag means rollback');
+      Assert.areEqual(
+        'Cancelling',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Cancelling'
+      );
+    }
   }
 
   @IsTest
   static void testParentCancelReapsChildren() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c parent = buildInstance('ParentKey', 'Suspended');
-    insert parent;
-    Workflow_Instance__c child = buildInstance('ChildKey', 'Pending');
-    child.Parent_Instance__c = parent.Id;
-    Workflow_Instance__c doneChild = buildInstance('DoneChildKey', 'Completed');
-    doneChild.Parent_Instance__c = parent.Id;
-    insert new List<Workflow_Instance__c>{ child, doneChild };
-    Workflow_Instance__c grandchild = buildInstance('GrandKey', 'Running');
-    grandchild.Parent_Instance__c = child.Id;
-    insert grandchild;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = buildInstance('ParentKey', 'Suspended');
+      insert parent;
+      Workflow_Instance__c child = buildInstance('ChildKey', 'Pending');
+      child.Parent_Instance__c = parent.Id;
+      Workflow_Instance__c doneChild = buildInstance(
+        'DoneChildKey',
+        'Completed'
+      );
+      doneChild.Parent_Instance__c = parent.Id;
+      insert new List<Workflow_Instance__c>{ child, doneChild };
+      Workflow_Instance__c grandchild = buildInstance('GrandKey', 'Running');
+      grandchild.Parent_Instance__c = child.Id;
+      insert grandchild;
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      'ParentKey',
-      false,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'ParentKey',
+        false,
+        null
+      );
+      Test.stopTest();
 
-    Assert.isTrue(res.cancelled);
-    Assert.areEqual('Cancelled', statusOf(parent.Id));
-    Assert.areEqual('Cancelled', statusOf(child.Id), 'Child must cancel');
-    Assert.areEqual('Cancelled', statusOf(grandchild.Id), 'Grandchild too');
-    Assert.areEqual(
-      'Completed',
-      statusOf(doneChild.Id),
-      'Terminal child stays'
-    );
+      Assert.isTrue(res.cancelled, 'res.cancelled must be true');
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(parent.Id),
+        'statusOf(parent.Id) must be Cancelled'
+      );
+      Assert.areEqual('Cancelled', statusOf(child.Id), 'Child must cancel');
+      Assert.areEqual('Cancelled', statusOf(grandchild.Id), 'Grandchild too');
+      Assert.areEqual(
+        'Completed',
+        statusOf(doneChild.Id),
+        'Terminal child stays'
+      );
+    }
   }
 
   @IsTest
   static void testTerminalInstancesAreNoOp() {
-    List<String> statuses = new List<String>{
-      'Completed',
-      'Failed',
-      'Compensated',
-      'Cancelled'
-    };
-    List<Workflow_Instance__c> rows = new List<Workflow_Instance__c>();
-    List<WorkflowCancelInvocableAction.CancelRequest> reqs = new List<WorkflowCancelInvocableAction.CancelRequest>();
-    for (String status : statuses) {
-      rows.add(buildInstance('Terminal' + status, status));
-      reqs.add(req('Terminal' + status, true, 'key-' + status));
-    }
-    insert rows;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<String> statuses = new List<String>{
+        'Completed',
+        'Failed',
+        'Compensated',
+        'Cancelled'
+      };
+      List<Workflow_Instance__c> rows = new List<Workflow_Instance__c>();
+      List<WorkflowCancelInvocableAction.CancelRequest> reqs = new List<WorkflowCancelInvocableAction.CancelRequest>();
+      for (String status : statuses) {
+        rows.add(buildInstance('Terminal' + status, status));
+        reqs.add(req('Terminal' + status, true, 'key-' + status));
+      }
+      insert rows;
 
-    Test.startTest();
-    List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
-      reqs
-    );
-    Test.stopTest();
+      Test.startTest();
+      List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
+        reqs
+      );
+      Test.stopTest();
 
-    Assert.areEqual(statuses.size(), results.size());
-    for (Integer i = 0; i < statuses.size(); i++) {
-      Assert.isTrue(results[i].found, statuses[i] + ' must resolve');
-      Assert.isFalse(results[i].cancelled, statuses[i] + ' is a no-op');
-      Assert.isFalse(results[i].isCompensating);
-      Assert.areEqual(statuses[i], results[i].status);
-      Assert.areEqual(statuses[i], statusOf(rows[i].Id));
+      Assert.areEqual(
+        statuses.size(),
+        results.size(),
+        'results.size() must be statuses.size()'
+      );
+      for (Integer i = 0; i < statuses.size(); i++) {
+        Assert.isTrue(results[i].found, statuses[i] + ' must resolve');
+        Assert.isFalse(results[i].cancelled, statuses[i] + ' is a no-op');
+        Assert.isFalse(
+          results[i].isCompensating,
+          'results[i].isCompensating must be false'
+        );
+        Assert.areEqual(
+          statuses[i],
+          results[i].status,
+          'results[i].status must be statuses[i]'
+        );
+        Assert.areEqual(
+          statuses[i],
+          statusOf(rows[i].Id),
+          'statusOf(rows[i].Id) must be statuses[i]'
+        );
+      }
+      Assert.areEqual(
+        0,
+        [SELECT COUNT() FROM Workflow_Signal__c],
+        'No claim for a terminal instance'
+      );
     }
-    Assert.areEqual(
-      0,
-      [SELECT COUNT() FROM Workflow_Signal__c],
-      'No claim for a terminal instance'
-    );
   }
 
   @IsTest
   static void testUnknownBlankAndNullRowsReturnNotFound() {
-    List<WorkflowCancelInvocableAction.CancelRequest> reqs = new List<WorkflowCancelInvocableAction.CancelRequest>{
-      req('NoSuchKey', true, null),
-      req('', true, null),
-      req(null, false, 'k'),
-      null
-    };
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<WorkflowCancelInvocableAction.CancelRequest> reqs = new List<WorkflowCancelInvocableAction.CancelRequest>{
+        req('NoSuchKey', true, null),
+        req('', true, null),
+        req(null, false, 'k'),
+        null
+      };
 
-    Test.startTest();
-    List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
-      reqs
-    );
-    Test.stopTest();
+      Test.startTest();
+      List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
+        reqs
+      );
+      Test.stopTest();
 
-    Assert.areEqual(4, results.size(), 'One result per row');
-    for (WorkflowCancelInvocableAction.CancelResult res : results) {
-      Assert.isFalse(res.found);
-      Assert.isFalse(res.cancelled);
-      Assert.isFalse(res.isCompensating);
-      Assert.isNull(res.workflowInstanceId);
-      Assert.isNull(res.status);
+      Assert.areEqual(4, results.size(), 'One result per row');
+      for (WorkflowCancelInvocableAction.CancelResult res : results) {
+        Assert.isFalse(res.found, 'res.found must be false');
+        Assert.isFalse(res.cancelled, 'res.cancelled must be false');
+        Assert.isFalse(res.isCompensating, 'res.isCompensating must be false');
+        Assert.isNull(
+          res.workflowInstanceId,
+          'res.workflowInstanceId must be null'
+        );
+        Assert.isNull(res.status, 'res.status must be null');
+      }
     }
   }
 
   @IsTest
   static void testNullOrEmptyInputReturnsEmptyList() {
-    Assert.areEqual(
-      0,
-      WorkflowCancelInvocableAction.cancelWorkflow(null).size()
-    );
-    Assert.areEqual(
-      0,
-      WorkflowCancelInvocableAction.cancelWorkflow(
-          new List<WorkflowCancelInvocableAction.CancelRequest>()
-        )
-        .size()
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Assert.areEqual(
+        0,
+        WorkflowCancelInvocableAction.cancelWorkflow(null).size(),
+        'Null input gives no results'
+      );
+      Assert.areEqual(
+        0,
+        WorkflowCancelInvocableAction.cancelWorkflow(
+            new List<WorkflowCancelInvocableAction.CancelRequest>()
+          )
+          .size(),
+        'Empty input gives no results'
+      );
+    }
   }
 
   @IsTest
   static void testCorrelationKeyFollowsContinuedAsNewChain() {
-    Workflow_Instance__c pred = buildInstance('ChainKey', 'ContinuedAsNew');
-    insert pred;
-    Workflow_Instance__c succ = buildInstance('ChainKey_run2', 'Suspended');
-    succ.Previous_Instance__c = pred.Id;
-    insert succ;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c pred = buildInstance('ChainKey', 'ContinuedAsNew');
+      insert pred;
+      Workflow_Instance__c succ = buildInstance('ChainKey_run2', 'Suspended');
+      succ.Previous_Instance__c = pred.Id;
+      insert succ;
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      'ChainKey',
-      false,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'ChainKey',
+        false,
+        null
+      );
+      Test.stopTest();
 
-    Assert.areEqual(succ.Id, res.workflowInstanceId, 'Live successor wins');
-    Assert.isTrue(res.cancelled);
-    Assert.areEqual('Cancelled', statusOf(succ.Id));
-    Assert.areEqual('ContinuedAsNew', statusOf(pred.Id));
+      Assert.areEqual(succ.Id, res.workflowInstanceId, 'Live successor wins');
+      Assert.isTrue(res.cancelled, 'res.cancelled must be true');
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(succ.Id),
+        'statusOf(succ.Id) must be Cancelled'
+      );
+      Assert.areEqual(
+        'ContinuedAsNew',
+        statusOf(pred.Id),
+        'statusOf(pred.Id) must be ContinuedAsNew'
+      );
+    }
   }
 
   @IsTest
   static void testPredecessorIdIsNoOp() {
-    Workflow_Instance__c pred = buildInstance('ChainIdKey', 'ContinuedAsNew');
-    insert pred;
-    Workflow_Instance__c succ = buildInstance('ChainIdKey_run2', 'Suspended');
-    succ.Previous_Instance__c = pred.Id;
-    insert succ;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c pred = buildInstance('ChainIdKey', 'ContinuedAsNew');
+      insert pred;
+      Workflow_Instance__c succ = buildInstance('ChainIdKey_run2', 'Suspended');
+      succ.Previous_Instance__c = pred.Id;
+      insert succ;
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      pred.Id,
-      false,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        pred.Id,
+        false,
+        null
+      );
+      Test.stopTest();
 
-    // An Id is a precise handle, same as Get Workflow Status.
-    Assert.areEqual(pred.Id, res.workflowInstanceId);
-    Assert.isFalse(res.cancelled);
-    Assert.areEqual('Suspended', statusOf(succ.Id));
+      // An Id is a precise handle, same as Get Workflow Status.
+      Assert.areEqual(
+        pred.Id,
+        res.workflowInstanceId,
+        'res.workflowInstanceId must be pred.Id'
+      );
+      Assert.isFalse(res.cancelled, 'res.cancelled must be false');
+      Assert.areEqual(
+        'Suspended',
+        statusOf(succ.Id),
+        'statusOf(succ.Id) must be Suspended'
+      );
+    }
   }
 
   // Runs one batch of 2 * pairs rows (half with rollback, all keyed) and
@@ -333,208 +422,290 @@ private class WorkflowCancelInvocableActionTest {
 
   @IsTest
   static void testBulkCostDoesNotGrowWithRowCount() {
-    WorkflowEngine.disableQueueableInTest = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
 
-    Test.startTest();
-    List<Integer> small = measureBatch('Small', 1);
-    List<Integer> large = measureBatch('Large', 100);
-    Test.stopTest();
+      Test.startTest();
+      List<Integer> small = measureBatch('Small', 1);
+      List<Integer> large = measureBatch('Large', 100);
+      Test.stopTest();
 
-    Assert.areEqual(small[0], large[0], 'SOQL must not grow with rows');
-    Assert.areEqual(small[1], large[1], 'DML must not grow with rows');
-    Assert.areEqual(
-      101,
-      [SELECT COUNT() FROM Workflow_Instance__c WHERE Status__c = 'Cancelling'],
-      'Each rollback row starts a rollback (1 small + 100 large)'
-    );
+      Assert.areEqual(small[0], large[0], 'SOQL must not grow with rows');
+      Assert.areEqual(small[1], large[1], 'DML must not grow with rows');
+      Assert.areEqual(
+        101,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Status__c = 'Cancelling'
+        ],
+        'Each rollback row starts a rollback (1 small + 100 large)'
+      );
+    }
   }
 
   @IsTest
   static void testDuplicateIdempotencyKeyDoesNotRerunRollback() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('DupKey');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('DupKey');
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult first = callOne(
-      'DupKey',
-      true,
-      'flow-retry-1'
-    );
-    // A redelivery with the same key. Without dedup, false would hard-stop the rollback.
-    WorkflowCancelInvocableAction.CancelResult second = callOne(
-      'DupKey',
-      false,
-      'flow-retry-1'
-    );
-    drainRollback(inst.Id);
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult first = callOne(
+        'DupKey',
+        true,
+        'flow-retry-1'
+      );
+      // A redelivery with the same key. Without dedup, false would hard-stop the rollback.
+      WorkflowCancelInvocableAction.CancelResult second = callOne(
+        'DupKey',
+        false,
+        'flow-retry-1'
+      );
+      drainRollback(inst.Id);
+      Test.stopTest();
 
-    Assert.isTrue(first.cancelled);
-    Assert.isFalse(second.cancelled, 'Duplicate key is a no-op');
-    Assert.areEqual('Cancelling', second.status);
-    Assert.isTrue(second.isCompensating);
-    Assert.areEqual('Cancelled', statusOf(inst.Id));
-    Assert.areEqual(2, compensationRows(inst.Id).size(), 'Rollback runs once');
-    Assert.areEqual(
-      1,
-      [
-        SELECT COUNT()
-        FROM Workflow_Signal__c
-        WHERE Workflow_Instance__c = :inst.Id AND Status__c = 'Consumed'
-      ],
-      'One claim tombstone'
-    );
+      Assert.isTrue(first.cancelled, 'first.cancelled must be true');
+      Assert.isFalse(second.cancelled, 'Duplicate key is a no-op');
+      Assert.areEqual(
+        'Cancelling',
+        second.status,
+        'second.status must be Cancelling'
+      );
+      Assert.isTrue(
+        second.isCompensating,
+        'second.isCompensating must be true'
+      );
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Cancelled'
+      );
+      Assert.areEqual(
+        2,
+        compensationRows(inst.Id).size(),
+        'Rollback runs once'
+      );
+      Assert.areEqual(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :inst.Id AND Status__c = 'Consumed'
+        ],
+        'One claim tombstone'
+      );
+    }
   }
 
   @IsTest
   static void testKeyDedupsAgainstSignalCancel() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('SharedKey');
-    WorkflowEngine.SignalRequest sig = new WorkflowEngine.SignalRequest(
-      'SharedKey',
-      'Cancel',
-      '{"runCompensations": true}'
-    );
-    sig.idempotencyKey = 'shared-1';
-    WorkflowEngine.signal(sig);
-    Assert.areEqual('Cancelling', statusOf(inst.Id));
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('SharedKey');
+      WorkflowEngine.SignalRequest sig = new WorkflowEngine.SignalRequest(
+        'SharedKey',
+        'Cancel',
+        '{"runCompensations": true}'
+      );
+      sig.idempotencyKey = 'shared-1';
+      WorkflowEngine.signal(sig);
+      Assert.areEqual(
+        'Cancelling',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Cancelling'
+      );
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      'SharedKey',
-      false,
-      'shared-1'
-    );
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'SharedKey',
+        false,
+        'shared-1'
+      );
+      Test.stopTest();
 
-    Assert.isFalse(res.cancelled, 'Signal and action share one key space');
-    Assert.areEqual('Cancelling', statusOf(inst.Id));
+      Assert.isFalse(res.cancelled, 'Signal and action share one key space');
+      Assert.areEqual(
+        'Cancelling',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Cancelling'
+      );
+    }
   }
 
   @IsTest
   static void testRepeatUnkeyedRollbackCancelIsNoOp() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('RepeatKey');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('RepeatKey');
 
-    Test.startTest();
-    callOne('RepeatKey', true, null);
-    WorkflowCancelInvocableAction.CancelResult second = callOne(
-      'RepeatKey',
-      true,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      callOne('RepeatKey', true, null);
+      WorkflowCancelInvocableAction.CancelResult second = callOne(
+        'RepeatKey',
+        true,
+        null
+      );
+      Test.stopTest();
 
-    Assert.isFalse(second.cancelled, 'Rollback already runs');
-    Assert.isTrue(second.isCompensating);
-    Assert.areEqual(1, compensationRows(inst.Id).size(), 'No second rollback');
+      Assert.isFalse(second.cancelled, 'Rollback already runs');
+      Assert.isTrue(
+        second.isCompensating,
+        'second.isCompensating must be true'
+      );
+      Assert.areEqual(
+        1,
+        compensationRows(inst.Id).size(),
+        'No second rollback'
+      );
+    }
   }
 
   @IsTest
   static void testRollbackCancelSkipsCompensatingInstance() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = buildSaga('FailingKey');
-    inst.Status__c = 'Compensating';
-    insert inst;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = buildSaga('FailingKey');
+      inst.Status__c = 'Compensating';
+      insert inst;
 
-    Test.startTest();
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      'FailingKey',
-      true,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'FailingKey',
+        true,
+        null
+      );
+      Test.stopTest();
 
-    Assert.isFalse(res.cancelled, 'Rollback already runs');
-    Assert.isTrue(res.isCompensating);
-    Assert.areEqual('Compensating', statusOf(inst.Id));
+      Assert.isFalse(res.cancelled, 'Rollback already runs');
+      Assert.isTrue(res.isCompensating, 'res.isCompensating must be true');
+      Assert.areEqual(
+        'Compensating',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Compensating'
+      );
+    }
   }
 
   @IsTest
   static void testHardStopOfRunningRollback() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('HardStopKey');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('HardStopKey');
 
-    Test.startTest();
-    callOne('HardStopKey', true, null);
-    WorkflowCancelInvocableAction.CancelResult res = callOne(
-      'HardStopKey',
-      false,
-      null
-    );
-    Test.stopTest();
+      Test.startTest();
+      callOne('HardStopKey', true, null);
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'HardStopKey',
+        false,
+        null
+      );
+      Test.stopTest();
 
-    Assert.isTrue(res.cancelled, 'Run Compensations off stops the rollback');
-    Assert.isFalse(res.isCompensating);
-    Assert.areEqual('Cancelled', statusOf(inst.Id));
+      Assert.isTrue(res.cancelled, 'Run Compensations off stops the rollback');
+      Assert.isFalse(res.isCompensating, 'res.isCompensating must be false');
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Cancelled'
+      );
+    }
   }
 
   @IsTest
   static void testInBatchDuplicateRowsFirstRowWins() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = insertSaga('TwinKey');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('TwinKey');
 
-    Test.startTest();
-    List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
-      new List<WorkflowCancelInvocableAction.CancelRequest>{
-        req('TwinKey', false, null),
-        req(inst.Id, true, null)
-      }
-    );
-    Test.stopTest();
+      Test.startTest();
+      List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
+        new List<WorkflowCancelInvocableAction.CancelRequest>{
+          req('TwinKey', false, null),
+          req(inst.Id, true, null)
+        }
+      );
+      Test.stopTest();
 
-    Assert.isTrue(results[0].cancelled, 'First row wins');
-    Assert.isFalse(results[1].cancelled, 'Second row is a duplicate');
-    Assert.areEqual('Cancelled', results[1].status, 'Status is current');
-    Assert.areEqual(0, compensationRows(inst.Id).size(), 'No rollback');
+      Assert.isTrue(results[0].cancelled, 'First row wins');
+      Assert.isFalse(results[1].cancelled, 'Second row is a duplicate');
+      Assert.areEqual('Cancelled', results[1].status, 'Status is current');
+      Assert.areEqual(0, compensationRows(inst.Id).size(), 'No rollback');
+    }
   }
 
   @IsTest
   static void testEngineErrorRollsBackClaims() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c inst = buildInstance('BadStackKey', 'Suspended');
-    inst.Compensation_Stack__c = 'not-json';
-    insert inst;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = buildInstance('BadStackKey', 'Suspended');
+      inst.Compensation_Stack__c = 'not-json';
+      insert inst;
 
-    Boolean threw = false;
-    Test.startTest();
-    try {
-      callOne('BadStackKey', true, 'bad-1');
-    } catch (Exception e) {
-      threw = true;
+      Boolean threw = false;
+      Test.startTest();
+      try {
+        callOne('BadStackKey', true, 'bad-1');
+      } catch (Exception e) {
+        threw = true;
+      }
+      Test.stopTest();
+
+      Assert.isTrue(threw, 'A malformed stack must fault');
+      Assert.areEqual(
+        'Suspended',
+        statusOf(inst.Id),
+        'statusOf(inst.Id) must be Suspended'
+      );
+      Assert.areEqual(
+        0,
+        [SELECT COUNT() FROM Workflow_Signal__c],
+        'Claim rolls back so a retry can run'
+      );
     }
-    Test.stopTest();
-
-    Assert.isTrue(threw, 'A malformed stack must fault');
-    Assert.areEqual('Suspended', statusOf(inst.Id));
-    Assert.areEqual(
-      0,
-      [SELECT COUNT() FROM Workflow_Signal__c],
-      'Claim rolls back so a retry can run'
-    );
   }
 
   @IsTest
   static void testEngineCancelOverload() {
-    WorkflowEngine.disableQueueableInTest = true;
-    Workflow_Instance__c withRollback = insertSaga('OverloadComp');
-    Workflow_Instance__c hardStop = insertSaga('OverloadHard');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c withRollback = insertSaga('OverloadComp');
+      Workflow_Instance__c hardStop = insertSaga('OverloadHard');
 
-    Test.startTest();
-    WorkflowEngine.cancel(withRollback.Id, true);
-    WorkflowEngine.cancel(hardStop.Id, false);
-    Test.stopTest();
+      Test.startTest();
+      WorkflowEngine.cancel(withRollback.Id, true);
+      WorkflowEngine.cancel(hardStop.Id, false);
+      Test.stopTest();
 
-    Assert.areEqual('Cancelling', statusOf(withRollback.Id));
-    Assert.areEqual('Cancelled', statusOf(hardStop.Id));
+      Assert.areEqual(
+        'Cancelling',
+        statusOf(withRollback.Id),
+        'statusOf(withRollback.Id) must be Cancelling'
+      );
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(hardStop.Id),
+        'statusOf(hardStop.Id) must be Cancelled'
+      );
+    }
   }
 
   @IsTest
   static void testBulkEngineEntryIgnoresNullAndEmpty() {
-    Assert.areEqual(0, WorkflowCancellation.cancelInstances(null, true).size());
-    Assert.areEqual(
-      0,
-      WorkflowCancellation.cancelInstances(new List<Id>(), false).size()
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer q0 = Limits.getQueries();
+      Assert.areEqual(
+        0,
+        WorkflowCancellation.cancelInstances(null).size(),
+        'Null roots cancel nothing'
+      );
+      Assert.areEqual(
+        0,
+        WorkflowCancellation.cancelWithCompensationsInstances(new List<Id>())
+          .size(),
+        'Empty roots cancel nothing'
+      );
+      Assert.areEqual(q0, Limits.getQueries(), 'An empty group uses no SOQL');
+    }
   }
 }

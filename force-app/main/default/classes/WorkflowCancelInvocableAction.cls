@@ -9,15 +9,6 @@ public inherited sharing class WorkflowCancelInvocableAction {
   // Signal name on the claim tombstone. Same as the Cancel control signal.
   private static final String CLAIM_SIGNAL_NAME = 'Cancel';
 
-  // Statuses that a cancel skips. Same set as the engine cancel.
-  private static final Set<String> TERMINAL_STATUSES = new Set<String>{
-    'Completed',
-    'Failed',
-    'Compensated',
-    'Cancelled',
-    'ContinuedAsNew'
-  };
-
   // Statuses of an instance whose rollback runs.
   private static final Set<String> ROLLBACK_STATUSES = new Set<String>{
     'Cancelling',
@@ -111,80 +102,76 @@ public inherited sharing class WorkflowCancelInvocableAction {
     if (requests == null || requests.isEmpty()) {
       return new List<CancelResult>();
     }
-    List<String> keysOrIds = new List<String>();
-    for (CancelRequest req : requests) {
-      keysOrIds.add((req == null) ? null : req.workflowKeyOrId);
-    }
-    List<Workflow_Instance__c> resolved = WorkflowStatusInvocableAction.resolveInstances(
-      keysOrIds
-    );
-    Map<Id, Integer> ownerRows = selectOwnerRows(resolved);
-    Set<Id> cancelledIds = cancelOwners(requests, resolved, ownerRows);
-    return assembleResults(resolved, ownerRows, cancelledIds);
+    CancelBatch batch = new CancelBatch(requests);
+    Set<Id> cancelledIds = cancelOwners(batch);
+    return assembleResults(batch, cancelledIds);
   }
 
   /**
-   * @description Picks the first row for each live instance. Skips rows with no
-   * match and rows whose instance is already finished.
-   * @param resolved The resolved instance per row (null where no match).
-   * @return The owner row index for each live instance Id.
+   * @description The rows of one call, their resolved instances, and the owner
+   * row of each live instance. The first row for an instance is its owner.
    */
-  private static Map<Id, Integer> selectOwnerRows(
-    List<Workflow_Instance__c> resolved
-  ) {
-    Map<Id, Integer> ownerRows = new Map<Id, Integer>();
-    for (Integer i = 0; i < resolved.size(); i++) {
-      Workflow_Instance__c inst = resolved[i];
-      if (
-        inst != null &&
-        !TERMINAL_STATUSES.contains(inst.Status__c) &&
-        !ownerRows.containsKey(inst.Id)
-      ) {
-        ownerRows.put(inst.Id, i);
+  private class CancelBatch {
+    final List<CancelRequest> requests;
+    final List<Workflow_Instance__c> resolved;
+    final Map<Id, Integer> ownerRows = new Map<Id, Integer>();
+
+    CancelBatch(List<CancelRequest> requests) {
+      this.requests = requests;
+      List<String> keysOrIds = new List<String>();
+      for (CancelRequest req : requests) {
+        keysOrIds.add((req == null) ? null : req.workflowKeyOrId);
+      }
+      this.resolved = WorkflowStatusInvocableAction.resolveInstances(keysOrIds);
+      for (Integer i = 0; i < resolved.size(); i++) {
+        Workflow_Instance__c inst = resolved[i];
+        if (
+          inst != null &&
+          !WorkflowCancellation.TERMINAL_STATUSES.contains(inst.Status__c) &&
+          !ownerRows.containsKey(inst.Id)
+        ) {
+          ownerRows.put(inst.Id, i);
+        }
       }
     }
-    return ownerRows;
+
+    // True when row i is the owner row of its live instance.
+    Boolean isOwner(Integer i) {
+      Workflow_Instance__c inst = resolved[i];
+      return inst != null && ownerRows.get(inst.Id) == i;
+    }
   }
 
   /**
    * @description Claims the keyed rows, then cancels the owner rows in one engine
    * call for each Run Compensations value. On an error, it rolls back the claims
    * and the cancels, then throws.
-   * @param requests The cancel requests, in order.
-   * @param resolved The resolved instance per row.
-   * @param ownerRows The owner row index for each live instance Id.
+   * @param batch The rows of the call.
    * @return The Ids that the engine cancelled.
    */
-  private static Set<Id> cancelOwners(
-    List<CancelRequest> requests,
-    List<Workflow_Instance__c> resolved,
-    Map<Id, Integer> ownerRows
-  ) {
-    if (ownerRows.isEmpty()) {
+  private static Set<Id> cancelOwners(CancelBatch batch) {
+    if (batch.ownerRows.isEmpty()) {
       return new Set<Id>();
     }
     Savepoint sp = Database.setSavepoint();
-    Set<Id> duplicates = claimKeyedRows(requests, resolved, ownerRows, sp);
-    List<Id> hardStopIds = new List<Id>();
-    List<Id> rollbackIds = new List<Id>();
-    for (Integer i = 0; i < resolved.size(); i++) {
-      Workflow_Instance__c inst = resolved[i];
-      if (!isOwner(inst, i, ownerRows) || duplicates.contains(inst.Id)) {
-        continue;
-      }
-      if (requests[i].runCompensations == false) {
-        hardStopIds.add(inst.Id);
-      } else {
-        rollbackIds.add(inst.Id);
-      }
-    }
+    // A claim error rolls back to sp and throws inside claimKeyedRows.
+    Set<Id> duplicates = claimKeyedRows(batch, sp);
     try {
-      Set<Id> cancelledIds = WorkflowCancellation.cancelInstances(
-        hardStopIds,
-        false
-      );
+      List<Id> hardStopIds = new List<Id>();
+      List<Id> rollbackIds = new List<Id>();
+      for (Integer i = 0; i < batch.resolved.size(); i++) {
+        if (!batch.isOwner(i) || duplicates.contains(batch.resolved[i].Id)) {
+          continue;
+        }
+        if (batch.requests[i].runCompensations == false) {
+          hardStopIds.add(batch.resolved[i].Id);
+        } else {
+          rollbackIds.add(batch.resolved[i].Id);
+        }
+      }
+      Set<Id> cancelledIds = WorkflowCancellation.cancelInstances(hardStopIds);
       cancelledIds.addAll(
-        WorkflowCancellation.cancelInstances(rollbackIds, true)
+        WorkflowCancellation.cancelWithCompensationsInstances(rollbackIds)
       );
       return cancelledIds;
     } catch (Exception e) {
@@ -196,36 +183,28 @@ public inherited sharing class WorkflowCancelInvocableAction {
   /**
    * @description Writes one claim tombstone for each keyed owner row, in one DML.
    * Uses the same row and key as a keyed Cancel signal.
-   * @param requests The cancel requests, in order.
-   * @param resolved The resolved instance per row.
-   * @param ownerRows The owner row index for each live instance Id.
+   * @param batch The rows of the call.
    * @param sp The savepoint to roll back on a claim error.
    * @return The instance Ids whose key was already claimed.
    */
-  private static Set<Id> claimKeyedRows(
-    List<CancelRequest> requests,
-    List<Workflow_Instance__c> resolved,
-    Map<Id, Integer> ownerRows,
-    Savepoint sp
-  ) {
+  private static Set<Id> claimKeyedRows(CancelBatch batch, Savepoint sp) {
     List<Workflow_Signal__c> claims = new List<Workflow_Signal__c>();
     List<Id> claimIds = new List<Id>();
-    for (Integer i = 0; i < resolved.size(); i++) {
-      Workflow_Instance__c inst = resolved[i];
+    for (Integer i = 0; i < batch.resolved.size(); i++) {
       if (
-        !isOwner(inst, i, ownerRows) ||
-        String.isBlank(requests[i].idempotencyKey)
+        !batch.isOwner(i) || String.isBlank(batch.requests[i].idempotencyKey)
       ) {
         continue;
       }
+      Id instanceId = batch.resolved[i].Id;
       claims.add(
         WorkflowSignalBatchCancel.buildCancelClaim(
-          inst.Id,
+          instanceId,
           CLAIM_SIGNAL_NAME,
-          requests[i].idempotencyKey
+          batch.requests[i].idempotencyKey
         )
       );
-      claimIds.add(inst.Id);
+      claimIds.add(instanceId);
     }
     Set<Id> duplicates = new Set<Id>(claimIds);
     if (claims.isEmpty()) {
@@ -240,52 +219,20 @@ public inherited sharing class WorkflowCancelInvocableAction {
   }
 
   /**
-   * @description Tests whether a row is the owner row of its instance.
-   * @param inst The resolved instance of the row (null allowed).
-   * @param row The row index.
-   * @param ownerRows The owner row index for each live instance Id.
-   * @return True when the row owns the cancel of its instance.
-   */
-  private static Boolean isOwner(
-    Workflow_Instance__c inst,
-    Integer row,
-    Map<Id, Integer> ownerRows
-  ) {
-    return inst != null && ownerRows.get(inst.Id) == row;
-  }
-
-  /**
    * @description Builds one result per row. Reads the status again (one query),
    * so each row shows the status after the cancel.
-   * @param resolved The resolved instance per row.
-   * @param ownerRows The owner row index for each live instance Id.
+   * @param batch The rows of the call.
    * @param cancelledIds The Ids that the engine cancelled.
    * @return One result per row, in order.
    */
   private static List<CancelResult> assembleResults(
-    List<Workflow_Instance__c> resolved,
-    Map<Id, Integer> ownerRows,
+    CancelBatch batch,
     Set<Id> cancelledIds
   ) {
-    Set<Id> foundIds = new Set<Id>();
-    for (Workflow_Instance__c inst : resolved) {
-      if (inst != null) {
-        foundIds.add(inst.Id);
-      }
-    }
-    Map<Id, Workflow_Instance__c> current = foundIds.isEmpty()
-      ? new Map<Id, Workflow_Instance__c>()
-      : new Map<Id, Workflow_Instance__c>(
-          [
-            SELECT Id, Status__c
-            FROM Workflow_Instance__c
-            WHERE Id IN :foundIds
-            WITH SYSTEM_MODE
-          ]
-        );
+    Map<Id, Workflow_Instance__c> current = readStatuses(batch.resolved);
     List<CancelResult> results = new List<CancelResult>();
-    for (Integer i = 0; i < resolved.size(); i++) {
-      Workflow_Instance__c inst = resolved[i];
+    for (Integer i = 0; i < batch.resolved.size(); i++) {
+      Workflow_Instance__c inst = batch.resolved[i];
       CancelResult res = new CancelResult();
       if (inst != null) {
         Workflow_Instance__c latest = current.get(inst.Id);
@@ -293,11 +240,37 @@ public inherited sharing class WorkflowCancelInvocableAction {
         res.workflowInstanceId = inst.Id;
         res.status = (latest == null) ? inst.Status__c : latest.Status__c;
         res.isCompensating = ROLLBACK_STATUSES.contains(res.status);
-        res.cancelled =
-          isOwner(inst, i, ownerRows) && cancelledIds.contains(inst.Id);
+        res.cancelled = batch.isOwner(i) && cancelledIds.contains(inst.Id);
       }
       results.add(res);
     }
     return results;
+  }
+
+  /**
+   * @description Reads the current status of each found instance in one query.
+   * @param resolved The resolved instance per row (null where no match).
+   * @return The current instances by Id.
+   */
+  private static Map<Id, Workflow_Instance__c> readStatuses(
+    List<Workflow_Instance__c> resolved
+  ) {
+    Set<Id> foundIds = new Set<Id>();
+    for (Workflow_Instance__c inst : resolved) {
+      if (inst != null) {
+        foundIds.add(inst.Id);
+      }
+    }
+    if (foundIds.isEmpty()) {
+      return new Map<Id, Workflow_Instance__c>();
+    }
+    return new Map<Id, Workflow_Instance__c>(
+      [
+        SELECT Id, Status__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :foundIds
+        WITH SYSTEM_MODE
+      ]
+    );
   }
 }

@@ -15,7 +15,9 @@
  * resident `WorkflowEngine.WorkflowException`, `WorkflowEngine.disableQueueableInTest`,
  * `WorkflowCompensation.preCreateFirstCompensationSteps` and
  * `WorkflowCompensationStepLog.appendCompensationRetrySteps` members are referenced
- * fully qualified. All SOQL/DML executes in system mode.
+ * fully qualified. The Cancel Workflow action (issue #107) uses the bulk
+ * entries {@link cancelInstances} and {@link cancelWithCompensationsInstances}.
+ * All SOQL/DML executes in system mode.
  */
 public inherited sharing class WorkflowCancellation {
   /**
@@ -31,6 +33,17 @@ public inherited sharing class WorkflowCancellation {
     'Paused',
     // A definition-change park (issue #89) is in flight, so a cascade reaches it.
     'DefinitionChanged'
+  };
+
+  /**
+   * @description Statuses that a cancel skips: the instance is already finished.
+   */
+  public static final Set<String> TERMINAL_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled',
+    'ContinuedAsNew'
   };
 
   // Statuses of a node whose rollback already runs.
@@ -89,26 +102,48 @@ public inherited sharing class WorkflowCancellation {
 
   /**
    * @description Bulk cancel entry (issue #107). Cancels the roots and their
-   * active descendants in one set-based pass. Skips missing and terminal nodes.
-   * With compensations, it also skips nodes that already roll back
-   * (`Cancelling`, `Compensating`), so a repeat does not start a second rollback.
-   * @param rootIds the instances to cancel, in order
-   * @param runCompensations true to roll back completed steps
+   * active descendants in one set-based pass, WITHOUT saga compensations. Skips
+   * missing and terminal nodes. A `Cancelling` node stops its rollback.
+   * @param rootIds the instances to cancel, in order; null or empty is a no-op
    * @return the Ids (roots and descendants) that this call cancelled
    */
-  public static Set<Id> cancelInstances(
+  public static Set<Id> cancelInstances(List<Id> rootIds) {
+    return cancelRoots(rootIds, false, new Set<String>());
+  }
+
+  /**
+   * @description Bulk cancel entry (issue #107). Cancels the roots and their
+   * active descendants in one set-based pass and rolls back completed steps.
+   * Skips missing and terminal nodes, and nodes whose rollback already runs
+   * (`Cancelling`, `Compensating`), so a repeat does not start a second rollback.
+   * @param rootIds the instances to cancel, in order; null or empty is a no-op
+   * @return the Ids (roots and descendants) that this call cancelled
+   */
+  public static Set<Id> cancelWithCompensationsInstances(List<Id> rootIds) {
+    return cancelRoots(rootIds, true, ROLLBACK_STATUSES);
+  }
+
+  /**
+   * @description Shared body of the bulk cancel entries.
+   * @param rootIds the instances to cancel, in order
+   * @param runCompensations true to roll back completed steps
+   * @param skipStatuses extra statuses to leave untouched
+   * @return the Ids that this call cancelled
+   */
+  private static Set<Id> cancelRoots(
     List<Id> rootIds,
-    Boolean runCompensations
+    Boolean runCompensations,
+    Set<String> skipStatuses
   ) {
-    if (rootIds == null || rootIds.isEmpty()) {
+    List<Id> roots = rootIds ?? new List<Id>();
+    if (roots.isEmpty()) {
       return new Set<Id>();
     }
-    Boolean withRollback = runCompensations == true;
     return cancelNodes(
-      collectActiveTree(rootIds),
-      withRollback,
+      collectActiveTree(roots),
+      runCompensations,
       null,
-      withRollback ? ROLLBACK_STATUSES : new Set<String>()
+      skipStatuses
     );
   }
 
@@ -244,11 +279,7 @@ public inherited sharing class WorkflowCancellation {
    * @return true when the status is a terminal (non-cancellable) state
    */
   private static Boolean isTerminalForCancel(String status) {
-    return status == 'Completed' ||
-      status == 'Failed' ||
-      status == 'Compensated' ||
-      status == 'Cancelled' ||
-      status == 'ContinuedAsNew';
+    return TERMINAL_STATUSES.contains(status);
   }
 
   /**
