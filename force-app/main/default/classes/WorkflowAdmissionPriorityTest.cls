@@ -129,6 +129,43 @@ public class WorkflowAdmissionPriorityTest {
   }
 
   // ── AC5: the aging bound stops starvation under a high-priority flood ───
+  // Inserts `count` waiting rows at one priority in one DML per object.
+  private static List<Id> newWaitingFlood(
+    String prefix,
+    Integer count,
+    Integer priority
+  ) {
+    List<Workflow_Instance__c> rows = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < count; i++) {
+      rows.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = WF,
+          Status__c = 'Pending',
+          Current_Step__c = STEP,
+          Correlation_Key__c = prefix + i,
+          Concurrency_Parked__c = true,
+          Admission_Priority__c = priority
+        )
+      );
+    }
+    insert rows;
+    List<Workflow_Step_Execution__c> steps = new List<Workflow_Step_Execution__c>();
+    List<Id> ids = new List<Id>();
+    for (Workflow_Instance__c row : rows) {
+      ids.add(row.Id);
+      steps.add(
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = row.Id,
+          Step_Name__c = STEP,
+          Status__c = 'Pending',
+          Retry_Count__c = 0
+        )
+      );
+    }
+    insert steps;
+    return ids;
+  }
+
   @IsTest
   static void testLowAdmitsWithinAgingBound() {
     WorkflowEngine.disableQueueableInTest = true;
@@ -138,13 +175,12 @@ public class WorkflowAdmissionPriorityTest {
 
     WorkflowEngine.mockNow = t0;
     Id low = newWaiting('s-low', 0);
-    // Starts 8 h later: inside the 9 h bound ((9 − 0) × 60 min). Passes low.
+    // Starts 8 h later: inside the 9 h bound ((9 − 0) × 60 min). Goes first.
     WorkflowEngine.mockNow = t0.addHours(8);
     Id earlyHigh = newWaiting('s-high-early', 9);
-    // Starts after the bound. Cannot pass low.
+    // A flood that starts after the bound. It cannot go before low.
     WorkflowEngine.mockNow = t0.addHours(9).addMinutes(1);
-    Id lateHigh1 = newWaiting('s-high-late-1', 9);
-    Id lateHigh2 = newWaiting('s-high-late-2', 9);
+    List<Id> flood = newWaitingFlood('s-flood-', 25, 9);
     WorkflowEngine.mockNow = null;
 
     Test.startTest();
@@ -155,14 +191,21 @@ public class WorkflowAdmissionPriorityTest {
     System.assert(isAdmitted(earlyHigh), 'Early high admits');
 
     finish(earlyHigh);
-    WorkflowEngine.runStep(lateHigh1, null);
-    WorkflowEngine.runStep(lateHigh2, null);
+    WorkflowEngine.runStep(flood[24], null);
+    WorkflowEngine.runStep(flood[0], null);
     WorkflowEngine.runStep(low, null);
     Test.stopTest();
 
-    System.assert(!isAdmitted(lateHigh1), 'Late high cannot pass low');
-    System.assert(!isAdmitted(lateHigh2), 'Late high cannot pass low');
     System.assert(isAdmitted(low), 'Low admits within the bound');
+    System.assertEquals(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Id IN :flood AND Concurrency_Slot_Held__c = TRUE
+      ],
+      'No flood row goes before low'
+    );
   }
 
   // ── Free slots: admit when fewer rows rank ahead than slots are free ────
@@ -215,36 +258,160 @@ public class WorkflowAdmissionPriorityTest {
     );
   }
 
-  // ── Legacy rows: a blank key ranks first and heals on the gate visit ────
-  @IsTest
-  static void testLegacyRowRanksFirstAndIsBackfilled() {
-    WorkflowEngine.disableQueueableInTest = true;
-    configure(1, 60);
-    Id legacy = newWaiting('l-legacy', 0);
+  // ── Legacy rows: a blank key ranks first, in Id order ──────────────────
+  // Makes a row look like it was inserted before this feature.
+  private static Id newLegacyWaiting(String key) {
+    Id legacy = newWaiting(key, 0);
     update new Workflow_Instance__c(
       Id = legacy,
       Admission_Priority__c = null,
       Admission_Key__c = null
     );
+    return legacy;
+  }
+
+  @IsTest
+  static void testLegacyRowRanksFirst() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(1, 60);
+    Id legacy = newLegacyWaiting('l-legacy');
     Id high = newWaiting('l-high', 9);
 
     Test.startTest();
     WorkflowEngine.runStep(high, null);
-    System.assert(!isAdmitted(high), 'A blank-key row ranks first');
-    // The visit writes the key. Now the legacy row ranks by its real key.
     WorkflowEngine.runStep(legacy, null);
-    WorkflowEngine.runStep(high, null);
     Test.stopTest();
 
-    Workflow_Instance__c healed = [
-      SELECT Admission_Key__c, Admission_Priority__c, Concurrency_Slot_Held__c
+    System.assert(!isAdmitted(high), 'A blank-key row ranks first');
+    System.assert(isAdmitted(legacy), 'The legacy row admits');
+    System.assertEquals(
+      null,
+      [SELECT Admission_Key__c FROM Workflow_Instance__c WHERE Id = :legacy]
+      .Admission_Key__c,
+      'The gate does not write a key'
+    );
+  }
+
+  // A backlog of legacy rows drains in Id order. It does not stall.
+  @IsTest
+  static void testLegacyBacklogDrainsInIdOrder() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(1, 60);
+    Id first = newLegacyWaiting('lb-1');
+    Id second = newLegacyWaiting('lb-2');
+    Id third = newLegacyWaiting('lb-3');
+
+    Test.startTest();
+    WorkflowEngine.runStep(third, null);
+    WorkflowEngine.runStep(second, null);
+    WorkflowEngine.runStep(first, null);
+    Test.stopTest();
+
+    System.assert(!isAdmitted(third), 'Later legacy row yields');
+    System.assert(!isAdmitted(second), 'Later legacy row yields');
+    System.assert(isAdmitted(first), 'Oldest legacy row admits');
+  }
+
+  // ── Admission aborts the old retry timer ────────────────────────────────
+  @IsTest
+  static void testAdmissionAbortsOldRetryTimer() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.useDynamicScheduling = true;
+    configure(1, 60);
+    Id holder = fillSlot('a-holder');
+    Id waiting = newWaiting('a-waiting', 0);
+    WorkflowEngine.runStep(waiting, null); // ceiling full: park with a timer
+    String jobId = [
+      SELECT Async_Job_Id__c
       FROM Workflow_Instance__c
-      WHERE Id = :legacy
+      WHERE Id = :waiting
+    ]
+    .Async_Job_Id__c;
+    System.assertNotEquals(null, jobId, 'The park scheduled a retry timer');
+
+    Test.startTest();
+    finish(holder);
+    WorkflowEngine.runStep(waiting, null); // admits
+    Test.stopTest();
+
+    System.assert(isAdmitted(waiting), 'The row admits');
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM CronTrigger WHERE Id = :jobId],
+      'The old retry timer is aborted'
+    );
+  }
+
+  // ── Admit-only wake: admits a waiting head, never runs a step ───────────
+  @IsTest
+  static void testWakeAdmitsWithoutRunningStep() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(1, 60);
+    Id high = newWaiting('w-high', 9);
+
+    Test.startTest();
+    new ConcurrencyAdmissionWake(new List<Id>{ high }).execute(null);
+    Test.stopTest();
+
+    System.assert(isAdmitted(high), 'The wake admits the head');
+    System.assertEquals(
+      'Pending',
+      [
+        SELECT Status__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :high
+      ]
+      .Status__c,
+      'The wake runs no step'
+    );
+  }
+
+  @IsTest
+  static void testWakeIsNoOpForAdmittedRow() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(1, 60);
+    Id holder = fillSlot('n-holder');
+    Workflow_Instance__c before = [
+      SELECT Status__c, LastModifiedDate
+      FROM Workflow_Instance__c
+      WHERE Id = :holder
     ];
-    System.assertNotEquals(null, healed.Admission_Key__c, 'Key backfilled');
-    System.assertEquals(0, healed.Admission_Priority__c, 'Priority backfilled');
-    System.assert(!healed.Concurrency_Slot_Held__c, 'Legacy row yields');
-    System.assert(isAdmitted(high), 'High admits once the key is healed');
+
+    Test.startTest();
+    new ConcurrencyAdmissionWake(new List<Id>{ holder }).execute(null);
+    Test.stopTest();
+
+    Workflow_Instance__c after = [
+      SELECT Status__c, Concurrency_Slot_Held__c
+      FROM Workflow_Instance__c
+      WHERE Id = :holder
+    ];
+    System.assertEquals(before.Status__c, after.Status__c, 'No change');
+    System.assert(after.Concurrency_Slot_Held__c, 'Slot kept');
+    System.assertEquals(
+      1,
+      [SELECT In_Flight_Count__c FROM Concurrency_State__c LIMIT 1]
+      .In_Flight_Count__c,
+      'No second slot'
+    );
+  }
+
+  // ── A yield wakes the rows ahead with one admit-only Queueable ──────────
+  @IsTest
+  static void testYieldEnqueuesOneWake() {
+    WorkflowEngine.disableQueueableInTest = false;
+    WorkflowEngine.useDynamicScheduling = false;
+    configure(1, 60);
+    newWaiting('q-high', 9);
+    Id low = newWaiting('q-low', 0);
+
+    Test.startTest();
+    Integer before = Limits.getQueueableJobs();
+    WorkflowEngine.runStep(low, null);
+    Integer enqueued = Limits.getQueueableJobs() - before;
+    System.assert(!isAdmitted(low), 'Low yields');
+    System.assertEquals(1, enqueued, 'One wake job for the rows ahead');
+    Test.stopTest();
   }
 
   // ── AC6: ordering only — no change to step rows or compensation stack ───
@@ -294,6 +461,7 @@ public class WorkflowAdmissionPriorityTest {
   @IsTest
   static void testYieldAddsNoScheduledJob() {
     WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.useDynamicScheduling = true;
     configure(1, 60);
     Id holder = fillSlot('j-holder');
     Id high = newWaiting('j-high', 9);

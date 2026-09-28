@@ -5,7 +5,7 @@
  * correlation-key defaulting, active-key reservation, terminal-timestamp stamping,
  * failure-category clearing, and the single centralized concurrency-slot release
  * chokepoint (issue #28). On insert it also stamps the admission priority and
- * rank key (issue #132).
+ * rank key. On each save it syncs the indexed admission queue field (issue #132).
  * After update: it requests the cascade cancel of in-flight children for each
  * parent that enters a failure state (issue #94).
  *
@@ -101,6 +101,8 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
       Boolean wasTerminal = applyTerminalTimestamp(instance, isTerminal);
       clearFailureCategoryIfResolved(instance);
       accumulateSlotRelease(instance, isTerminal, wasTerminal);
+      // Issue #132: after the slot release, so the flags are final.
+      ConcurrencyAdmissionOrder.syncQueueField(instance);
     }
 
     releaseSlots();

@@ -7,8 +7,8 @@
 public inherited sharing class WorkflowDashboardStatusService {
   // Waiting rows shown per governed workflow on the concurrency panel.
   private static final Integer QUEUE_ROWS_PER_WORKFLOW = 5;
-  // Cap on rows read to build all queue lists.
-  private static final Integer QUEUE_SCAN_LIMIT = 1000;
+  // SOQL kept free after the queue reads, for the rest of the request.
+  private static final Integer QUEUE_QUERY_HEADROOM = 10;
 
   /**
    * @description Returns the watchdog/scheduler health snapshot for the dashboard: recent
@@ -340,23 +340,22 @@ public inherited sharing class WorkflowDashboardStatusService {
       throw new AuraHandledException(ex.getMessage());
     }
   }
+
   // Count of waiting instances per priority class, keyed by lower-cased workflow
   // name, then by priority as text. A blank priority (a row from before issue
-  // #132) shows as the priority the gate gives it.
+  // #132) shows as the configured priority.
   private static Map<String, Map<String, Object>> waitingByPriority(
     Set<String> workflowNames
   ) {
     Map<String, Map<String, Object>> byDef = new Map<String, Map<String, Object>>();
+    // Admission_Queue__c is set only while a row waits (see
+    // ConcurrencyAdmissionOrder.isWaiting), and it is indexed.
     for (AggregateResult ar : [
-      SELECT Workflow_Name__c wf, Admission_Priority__c p, COUNT(Id) cnt
+      SELECT Admission_Queue__c wf, Admission_Priority__c p, COUNT(Id) cnt
       FROM Workflow_Instance__c
-      WHERE
-        Workflow_Name__c IN :workflowNames
-        AND Concurrency_Parked__c = TRUE
-        AND Concurrency_Slot_Held__c = FALSE
-        AND Status__c IN :ConcurrencyAdmissionOrder.WAITING_STATUSES
+      WHERE Admission_Queue__c IN :workflowNames
       WITH SYSTEM_MODE
-      GROUP BY Workflow_Name__c, Admission_Priority__c
+      GROUP BY Admission_Queue__c, Admission_Priority__c
     ]) {
       String wf = (String) ar.get('wf');
       String defKey = wf.toLowerCase();
@@ -373,46 +372,45 @@ public inherited sharing class WorkflowDashboardStatusService {
     return byDef;
   }
 
-  // The next waiting instances per workflow, in admission order (the gate
-  // order: key, then Id). Keyed by lower-cased workflow name.
+  // The next waiting instances of each workflow, in the gate order (key, then
+  // Id). One query per workflow, so that a deep queue cannot hide another
+  // queue. Stops before the SOQL limit. Keyed by lower-cased workflow name.
   private static Map<String, List<Map<String, Object>>> waitingQueue(
     Set<String> workflowNames
   ) {
     Map<String, List<Map<String, Object>>> byDef = new Map<String, List<Map<String, Object>>>();
+    for (String workflowName : workflowNames) {
+      if (
+        Limits.getQueries() >= Limits.getLimitQueries() - QUEUE_QUERY_HEADROOM
+      ) {
+        break;
+      }
+      byDef.put(workflowName.toLowerCase(), queueHead(workflowName));
+    }
+    return byDef;
+  }
+
+  // The first waiting instances of one workflow, with position and priority.
+  private static List<Map<String, Object>> queueHead(String workflowName) {
+    List<Map<String, Object>> queue = new List<Map<String, Object>>();
     for (Workflow_Instance__c inst : [
-      SELECT Id, Name, Workflow_Name__c, Admission_Priority__c, CreatedDate
+      SELECT Id, Name, Admission_Priority__c
       FROM Workflow_Instance__c
-      WHERE
-        Workflow_Name__c IN :workflowNames
-        AND Concurrency_Parked__c = TRUE
-        AND Concurrency_Slot_Held__c = FALSE
-        AND Status__c IN :ConcurrencyAdmissionOrder.WAITING_STATUSES
+      WHERE Admission_Queue__c = :workflowName
       WITH SYSTEM_MODE
       ORDER BY Admission_Key__c ASC NULLS FIRST, Id ASC
-      LIMIT :QUEUE_SCAN_LIMIT
+      LIMIT :QUEUE_ROWS_PER_WORKFLOW
     ]) {
-      String defKey = inst.Workflow_Name__c.toLowerCase();
-      if (!byDef.containsKey(defKey)) {
-        byDef.put(defKey, new List<Map<String, Object>>());
-      }
-      List<Map<String, Object>> queue = byDef.get(defKey);
-      if (queue.size() >= QUEUE_ROWS_PER_WORKFLOW) {
-        continue;
-      }
       queue.add(
         new Map<String, Object>{
           'instanceId' => inst.Id,
           'name' => inst.Name,
-          'priority' => priorityOf(
-            inst.Workflow_Name__c,
-            inst.Admission_Priority__c
-          ),
-          'position' => queue.size() + 1,
-          'waitingSince' => inst.CreatedDate
+          'priority' => priorityOf(workflowName, inst.Admission_Priority__c),
+          'position' => queue.size() + 1
         }
       );
     }
-    return byDef;
+    return queue;
   }
 
   // The stored priority, or the priority the gate gives a blank row.

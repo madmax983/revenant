@@ -126,6 +126,7 @@ public inherited sharing class ConcurrencyGate {
    * locks the durable counter row and admits (incrementing) only while the live count is
    * below the ceiling.
    * @param workflowName The workflow definition name to admit an instance of.
+   * No order check (the engine uses the overload with a candidate).
    * @return An AdmissionResult indicating whether the instance was admitted and whether a
    * slot was consumed.
    */
@@ -134,13 +135,14 @@ public inherited sharing class ConcurrencyGate {
   }
 
   /**
-   * @description Attempts to acquire a slot in admission order (issue #132). With a
-   * free slot, the candidate is admitted only when fewer waiting instances rank
-   * ahead of it than slots are free. Else it yields. The order query runs under
-   * the counter lock and only when a slot is free.
+   * @description Tries to get a slot in admission order (issue #132). The gate
+   * counts the waiting instances that rank ahead of the candidate. If this count
+   * is less than the number of free slots, the candidate gets a slot. If not,
+   * the candidate yields. The order query runs under the counter lock, and only
+   * when a slot is free.
    * @param workflowName The workflow definition name to admit an instance of.
-   * @param candidate The instance that asks for a slot (Id, Admission_Key__c).
-   * Null skips the order check.
+   * @param candidate The instance that asks for a slot (Id, Workflow_Name__c,
+   * Admission_Key__c). Null skips the order check.
    * @return An AdmissionResult. `aheadIds` names the waiting rows ahead.
    */
   public static AdmissionResult tryAcquire(
@@ -163,7 +165,7 @@ public inherited sharing class ConcurrencyGate {
 
     List<Id> aheadIds = (candidate == null)
       ? new List<Id>()
-      : ConcurrencyAdmissionOrder.findAhead(workflowName, candidate, free);
+      : ConcurrencyAdmissionOrder.findAhead(candidate, free);
     if (aheadIds.size() >= free) {
       return withAhead(rejected(), aheadIds);
     }

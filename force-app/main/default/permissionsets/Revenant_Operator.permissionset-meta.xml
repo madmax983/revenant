@@ -264,6 +264,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>false</editable>
+        <field>Workflow_Instance__c.Admission_Queue__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
         <field>Workflow_Instance__c.Admission_Key__c</field>
         <readable>true</readable>
     </fieldPermissions>

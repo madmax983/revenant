@@ -29,7 +29,7 @@ public inherited sharing class WorkflowStartInvocableAction {
 
     @InvocableVariable(
       label='Priority'
-      description='Optional admission priority from 0 to 9. A higher value is admitted sooner under a concurrency ceiling. Blank uses the configured priority. Debounced starts use the configured priority.'
+      description='Optional admission priority, 0 to 9. The gate admits a higher value sooner under a concurrency ceiling. Blank uses the configured priority. Debounced starts ignore this value.'
     )
     public Integer priority;
 

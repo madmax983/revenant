@@ -164,39 +164,68 @@ public class ConcurrencyAdmissionOrderTest {
   }
 
   @IsTest
-  static void testBackfillUsesCreatedDate() {
+  static void testHugeAgingIsClamped() {
+    ConcurrencyGate.mockConfigs.put(DEV_NAME, cfg(DEV_NAME, 1, 2147483647));
+    Test.startTest();
+    Integer aging = ConcurrencyAdmissionOrder.resolveAgingMinutes(WF);
+    Test.stopTest();
+    System.assertEquals(
+      ConcurrencyAdmissionOrder.MAX_AGING_MINUTES,
+      aging,
+      'Aging above the maximum uses the maximum'
+    );
+  }
+
+  @IsTest
+  static void testQueueFieldIsSetOnlyWhileWaiting() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,
       Status__c = 'Pending',
-      Correlation_Key__c = 'backfill-1'
+      Correlation_Key__c = 'queue-1',
+      Concurrency_Parked__c = true
     );
     insert inst;
-    update new Workflow_Instance__c(
-      Id = inst.Id,
-      Admission_Priority__c = null,
-      Admission_Key__c = null
-    );
-    Workflow_Instance__c legacy = [
-      SELECT
-        Id,
-        Workflow_Name__c,
-        CreatedDate,
-        Admission_Priority__c,
-        Admission_Key__c
+    String waiting = [
+      SELECT Admission_Queue__c
       FROM Workflow_Instance__c
       WHERE Id = :inst.Id
-    ];
+    ]
+    .Admission_Queue__c;
     Test.startTest();
-    Boolean changed = ConcurrencyAdmissionOrder.backfill(legacy);
-    Boolean again = ConcurrencyAdmissionOrder.backfill(legacy);
+    update new Workflow_Instance__c(
+      Id = inst.Id,
+      Status__c = 'Running',
+      Concurrency_Parked__c = false,
+      Concurrency_Slot_Held__c = true
+    );
     Test.stopTest();
-    System.assert(changed, 'A blank key is backfilled');
-    System.assert(!again, 'A set key is not changed');
-    System.assertEquals(0, legacy.Admission_Priority__c, 'Default priority');
+    String admitted = [
+      SELECT Admission_Queue__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ]
+    .Admission_Queue__c;
+    System.assertEquals(WF, waiting, 'A waiting row is in the queue');
+    System.assertEquals(null, admitted, 'An admitted row leaves the queue');
+  }
+
+  @IsTest
+  static void testTerminalRowLeavesQueue() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'queue-2',
+      Concurrency_Parked__c = true
+    );
+    insert inst;
+    Test.startTest();
+    update new Workflow_Instance__c(Id = inst.Id, Status__c = 'Cancelled');
+    Test.stopTest();
     System.assertEquals(
-      legacy.CreatedDate.getTime(),
-      legacy.Admission_Key__c.longValue(),
-      'Backfill key is CreatedDate ms at priority 0'
+      null,
+      [SELECT Admission_Queue__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+      .Admission_Queue__c,
+      'A terminal row leaves the queue'
     );
   }
 
@@ -276,6 +305,26 @@ public class ConcurrencyAdmissionOrderTest {
       6,
       runTwo.Admission_Priority__c,
       'Successor keeps the priority'
+    );
+  }
+
+  @IsTest
+  static void testFlowSignalOrStartPassesPriority() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowSignalOrStartInvocableAction.SignalOrStartRequest req = new WorkflowSignalOrStartInvocableAction.SignalOrStartRequest();
+    req.workflowName = WF;
+    req.correlationKey = 'flow-sos-priority-1';
+    req.signalName = 'Go';
+    req.priority = 8;
+    Test.startTest();
+    List<WorkflowSignalOrStartInvocableAction.SignalOrStartResult> results = WorkflowSignalOrStartInvocableAction.signalOrStartWorkflow(
+      new List<WorkflowSignalOrStartInvocableAction.SignalOrStartRequest>{ req }
+    );
+    Test.stopTest();
+    System.assertEquals(
+      8,
+      reload(results[0].workflowInstanceId).Admission_Priority__c,
+      'Flow signal-or-start priority applies'
     );
   }
 

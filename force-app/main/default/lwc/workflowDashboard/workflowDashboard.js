@@ -1847,6 +1847,7 @@ export default class WorkflowDashboard extends LightningElement {
       key: w.instanceId,
       positionLabel: `#${w.position}`,
       priorityLabel: `P${w.priority}`,
+      priorityTitle: `Admission priority ${w.priority}. The gate admits a higher value sooner.`,
       label: w.name || w.instanceId,
     }));
     const byPriority = r.waitingByPriority || {};
@@ -1857,6 +1858,7 @@ export default class WorkflowDashboard extends LightningElement {
       .join(" · ");
     const waitingTotal = r.waitingTotal || 0;
     return {
+      queueKey: `${r.workflowName}-queue`,
       waitingRows: waiting,
       hasWaitingRows: waiting.length > 0,
       hasWaitingSummary: waitingTotal > 0,

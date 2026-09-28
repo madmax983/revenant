@@ -44,6 +44,12 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
       description='Optional causation or trace identifier linking this instance to the upstream instance/event.'
     )
     public String causationId;
+
+    @InvocableVariable(
+      label='Priority'
+      description='Optional admission priority, 0 to 9, for a new instance. The gate admits a higher value sooner under a concurrency ceiling. Blank uses the configured priority.'
+    )
+    public Integer priority;
   }
 
   /**
@@ -198,6 +204,7 @@ public inherited sharing class WorkflowSignalOrStartInvocableAction {
       .withAttributes(attributes);
     startReq.inputJson = req.inputJson;
     startReq.causationId = req.causationId;
+    startReq.priority = req.priority;
 
     return new WorkflowEngine.SignalOrStartRequest(
         startReq,

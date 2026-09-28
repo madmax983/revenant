@@ -1,11 +1,11 @@
-# Admission Priority For The Concurrency Ceiling (Issue #132)
+# Admission priority for the concurrency ceiling (issue #132)
 
 ## Goal
 
 Under a full ceiling, admit critical instances before the parked backlog.
 Keep FIFO in one priority class. Prevent starvation with a bound.
 
-## Facts About The Engine
+## Facts about the engine
 
 - `WorkflowStepAdmission.admitConfiguredInstance` locks the instance, then
   `ConcurrencyGate.tryAcquire` locks the `Concurrency_State__c` row. The
@@ -37,7 +37,7 @@ Keep FIFO in one priority class. Prevent starvation with a bound.
 | B12 | Priority range 0–9 (like Oban), clamp other values.                                  | Yes. The clamp gives a finite starvation bound. A start never fails.     |
 | B13 | Show the wait queue (priority, position) on the System Doctor concurrency panel.     | Yes. The operator sees why an instance waits.                            |
 
-## Reverse Brainstorming (how to make it fail)
+## Reverse brainstorming (how to make it fail)
 
 | How to fail                                                     | Counter                                                                    |
 | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -52,7 +52,7 @@ Keep FIFO in one priority class. Prevent starvation with a bound.
 | Yield adds scheduled jobs.                                      | A yield is a normal park (one retry timer). Wake uses queue/event path.    |
 | Change breaks existing callers.                                 | New `StartRequest.priority` field and `withPriority()`. Old code compiles. |
 
-## Six Thinking Hats
+## Six thinking hats
 
 - **White (facts):** The gate already holds the counter lock. One extra SOQL
   runs only when a slot is free. Parked rows retry each 30–45 s.
@@ -74,7 +74,8 @@ Keep FIFO in one priority class. Prevent starvation with a bound.
 1. `Concurrency_Config__mdt`: `Admission_Priority__c` (0–9, default 0) and
    `Priority_Aging_Minutes__c` (default 60). Same name and `Default` rules.
 2. `Workflow_Instance__c`: `Admission_Priority__c` and `Admission_Key__c`.
-   The before-insert trigger writes both if blank.
+   The before-insert trigger sets the clamped priority. It sets the key if
+   the key is blank.
 3. `WorkflowEngine.StartRequest.priority` + `withPriority(Integer)`. Flow
    action gets an optional `Priority` input. Continue-As-New keeps priority.
 4. Gate: with a free slot, count waiting rows that rank ahead (`LIMIT free`).
@@ -91,3 +92,21 @@ Keep FIFO in one priority class. Prevent starvation with a bound.
    dashboard.
 3. REFACTOR: format, docs (`concurrency-limits.md`, ADR 0006, README).
 4. Review with agents. Fix findings. AC evidence table.
+
+## Review changes
+
+Four review agents (compile, concurrency, integration, docs) and Codex found
+these problems. The fixes replace parts of the decision above.
+
+| Problem                                                               | Fix                                                                       |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Start paths write the raw override back after insert (null priority). | The builder writes the resolved priority.                                 |
+| Key backfill at the gate stops a legacy backlog.                      | No backfill. Blank keys rank first, in Id order.                          |
+| A plain `RUN_STEP` wake can re-run the step of an admitted instance.  | Admit-only `ConcurrencyAdmissionWake`. Abort the old timer on admit/park. |
+| The ahead query scans the full table under the counter lock.          | Indexed `Admission_Queue__c`, set by the trigger only while waiting.      |
+| Many free slots fill slowly (5 wakes).                                | Wake up to the free slots, max 10, in one Queueable.                      |
+| Wakes fall back to Platform Events and lock the watchdog row.         | No fallback. No wake when the Queueable budget is spent.                  |
+| One deep queue hides other queues on the dashboard (Codex).           | One query per governed workflow, `LIMIT 5`.                               |
+| Flow Signal-or-Start has no priority input.                           | Add the `Priority` input.                                                 |
+| A huge aging value overflows.                                         | Clamp aging to 1–525600.                                                  |
+| Admin can edit engine fields.                                         | Read-only in both permission sets.                                        |

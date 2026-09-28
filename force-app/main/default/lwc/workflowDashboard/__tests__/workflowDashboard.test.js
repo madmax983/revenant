@@ -3382,14 +3382,12 @@ describe("c-workflow-dashboard concurrency queue (#132)", () => {
         name: "WI-0001",
         priority: 9,
         position: 1,
-        waitingSince: "2026-09-28T10:00:00.000Z",
       },
       {
         instanceId: "a01000000000002AAA",
         name: "WI-0002",
         priority: 0,
         position: 2,
-        waitingSince: "2026-09-28T09:00:00.000Z",
       },
     ],
   };
@@ -3439,6 +3437,29 @@ describe("c-workflow-dashboard concurrency queue (#132)", () => {
         '[data-id="concurrency-priority-summary"]',
       ),
     ).toBeNull();
+  });
+
+  it("renders the queue of each governed workflow", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([
+      QUEUE_ROW,
+      {
+        ...QUEUE_ROW,
+        workflowName: "BatchWorkflow",
+        waiting: [
+          { ...QUEUE_ROW.waiting[1], instanceId: "a01000000000003AAA" },
+        ],
+      },
+    ]);
+    const element = await openDoctor();
+
+    const summaries = element.shadowRoot.querySelectorAll(
+      '[data-id="concurrency-priority-summary"]',
+    );
+    expect(summaries.length).toBe(2);
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="concurrency-waiting-row"]')
+        .length,
+    ).toBe(3);
   });
 
   it("tolerates rows from an older server with no queue fields", async () => {

@@ -56,13 +56,26 @@ trail and the `Compensation_Stack__c` LIFO ordering — neither is affected.
 ## Admission priority
 
 Use priority when work of different importance shares one ceiling. When a
-slot frees, the engine admits the highest-priority waiting instance first.
+slot becomes free, the gate admits the waiting instance with the lowest rank
+key. Usually, this instance has the highest priority.
+
+### Terms
+
+- **Waiting instance:** an instance that has `Concurrency_Parked__c = true`,
+  holds no slot, and has the status `Pending`, `Running` or `Suspended`. A new
+  start of a bounded workflow is a waiting instance until it gets a slot.
+- **Candidate:** the waiting instance that is at the gate now.
+- **Yield:** the candidate parks again because other instances rank ahead.
+- **Head of the queue:** the waiting instance with the lowest rank key.
+- **First in, first out (FIFO):** the oldest instance goes first.
+- **Starvation:** a low-priority instance waits with no limit.
 
 ### Set the priority
 
 - **Per definition:** set **Admission Priority** (`Admission_Priority__c`) on
-  the `Concurrency_Config__mdt` record. Range 0–9. Higher is admitted sooner.
-  Blank means 0. The same name and `Default` rules apply.
+  the `Concurrency_Config__mdt` record. The range is 0–9. The gate admits an
+  instance with a higher value sooner. Blank means 0. The name and `Default`
+  rules of the ceiling also apply.
 - **Per start:** set an override. It replaces the configured value.
 
   ```apex
@@ -72,13 +85,23 @@ slot frees, the engine admits the highest-priority waiting instance first.
   );
   ```
 
-  The Flow action **Start Workflow** has an optional **Priority** input.
-  Debounced starts use the configured priority.
-
-- Values out of range are clamped to 0–9. A start never fails because of
-  priority.
-- The engine writes the priority at insert. A later config change does not
-  change instances that already exist. Continue-As-New keeps the priority.
+- These start paths accept an override:
+  - `WorkflowEngine.start` and `startOrGet` with a `StartRequest` (one or a
+    list).
+  - `WorkflowEngine.signalOrStart`.
+  - The Flow actions **Start Workflow** and **Signal or Start Workflow**
+    (input **Priority**).
+- These start paths use the configured priority: the overloads with
+  `(workflowName, correlationKey, input)`, child workflows, schedules, and
+  debounced Flow starts.
+- The engine changes a value below 0 to 0, and a value above 9 to 9. A start
+  never fails because of priority.
+- Any caller that can start a workflow can set an override. Priority is a
+  hint from a trusted caller, not a security control.
+- The engine sets the priority and the key at insert. A later change to
+  priority or aging does not change instances that already exist.
+- Continue-As-New keeps the priority. The successor gets a new key from its
+  own start time, so it goes to the end of its priority class.
 
 ### Order
 
@@ -91,41 +114,59 @@ key = start time (ms) − priority × agingMinutes × 60000
 The gate admits the lowest key first, then the lowest Id.
 
 - **Same priority:** FIFO by start time.
-- **Different priority:** each level gives a credit of one aging window.
+- **Different priority:** each level moves the instance ahead by one aging
+  window.
 - **One class only (no priority set):** FIFO by start time. This is the
   default for existing orgs.
 
 ### Starvation bound
 
 Set **Priority Aging Minutes** (`Priority_Aging_Minutes__c`). Blank or less
-than 1 means 60.
+than 1 means 60. The maximum is 525600 (one year).
 
-An instance at priority `p` is never passed by work that starts more than
-`(q − p) × agingMinutes` after it, where `q` is the priority of that work.
-The worst case is `(9 − p) × agingMinutes`. With the default (60) and
-`p = 0`, work that starts more than 9 hours later cannot pass. After that
-point, the instance admits when the finite work ahead of it drains.
+Let `p` be the priority of an instance, and `q` the priority of other work.
+Work that starts more than `(q − p) × agingMinutes` after the instance cannot
+go before it. The worst case is `(9 − p) × agingMinutes`. With the default
+(60) and `p = 0`, work that starts more than 9 hours later cannot go first.
 
-Select the aging window with care. A small window gives less preemption. A
-large window lets old low-priority work wait longer.
+This bound limits which work can go first. It is not a clock limit. After
+the bound, the gate admits the instance when the work ahead of it is
+complete. The bound uses the aging value at insert of each instance.
+
+Select the aging window carefully. A small window gives priority less
+effect. A large window lets low-priority work wait longer.
 
 ### How the gate uses the order
 
-- A "waiting" instance has `Concurrency_Parked__c = true`, no slot, and the
-  status `Pending`, `Running` or `Suspended`.
-- When a slot is free, the gate reads the waiting rows that rank ahead of
-  the visitor (`LIMIT` free slots, under the counter lock). If fewer rows are
-  ahead than slots are free, the visitor takes a slot. Else it parks again
-  (a "yield").
-- The gate wakes the rows ahead (max 5) through the existing resume path.
-  Thus the head of the queue visits the gate at once.
-- A high-priority instance gets a slot within one admission cycle after the
-  slot frees: the next gate visit (a parked retry timer, 30–45 s, or sooner
-  with a deep backlog) plus one hop. The backlog depth has no effect.
-- Rows from before this feature have no key. They rank first and get a key
-  on their first gate visit.
-- No new scheduled job. A yield is a normal park with one retry timer.
-- Priority controls admission order only. Step rows, the compensation stack
+- The instance trigger keeps the indexed field `Admission_Queue__c` equal to
+  the workflow name while an instance waits. Else the field is blank. The
+  gate reads the queue through this field, not through a table scan.
+- The gate holds the counter lock. When a slot is free, it reads the waiting
+  instances that rank ahead of the candidate, up to the number of free
+  slots. If fewer instances are ahead than slots are free, the candidate
+  gets a slot. If not, the candidate yields.
+- After the decision, the gate wakes the instances ahead (up to the number
+  of free slots, max 10) with one admit-only Queueable
+  (`ConcurrencyAdmissionWake`). This job gives each instance a slot or parks
+  it again. It never runs a step. When the Queueable budget of the
+  transaction is spent, the gate does not wake. The instances then use their
+  retry timers.
+- An admit or a park aborts the old retry timer of the candidate. Thus an
+  old timer cannot re-drive an admitted instance.
+- When a slot becomes free, the head of the queue gets it within one
+  admission cycle. An admission cycle is the next gate visit plus one hop. A
+  gate visit is a new start or a retry timer (30–45 s). Under a large burst,
+  the timers fall back to the watchdog, and the cycle is longer.
+- A row from before this feature has no key. It ranks first. Such rows go in
+  Id order among themselves. The gate does not write a key on them. A row
+  from before this feature gets `Admission_Queue__c` at its next save (for
+  example, its next park).
+- The feature adds no scheduled job class and no Platform Event. A yield is
+  a normal park: it schedules one retry timer, as a park does.
+- With one priority class, a candidate can now yield to an older waiting
+  instance. Before this feature, the first retry timer got the slot. The
+  slot now stays free for one more hop, until the head arrives.
+- Priority sets the admission order only. Step rows, the compensation stack
   and the Queueable chain do not change. A running instance is never stopped
   to free a slot.
 
@@ -133,9 +174,14 @@ large window lets old low-priority work wait longer.
 
 The dashboard's **System Doctor** tab shows a **Concurrency Limits** panel: per governed
 workflow, the current in-flight count vs. its ceiling and the number of parked/throttled
-instances. Under each workflow, the panel shows the wait queue: the count per
-priority class (for example `3 waiting · P9: 1 · P0: 2`) and the next five
-instances in admission order with their position and priority.
+instances. Under each workflow, the panel shows the wait queue:
+
+- The count per priority class, for example `3 waiting · P9: 1 · P0: 2`.
+- Up to five next instances in admission order, with position and priority.
+
+The waiting count includes new starts that have no slot yet. The parked
+count includes only `Suspended` instances. Thus the waiting count can be
+larger.
 
 ## Known limitation — enabling a ceiling on already-running work
 
@@ -151,8 +197,8 @@ config during a quiet window (or let the existing instances finish first).
 
 ## Scope
 
-This slice is a per-workflow-definition ceiling only. Priority orders
-admission inside one definition only. There is no priority across
+This slice is a per-workflow-definition ceiling only. Priority sets the
+admission order in one definition only. There is no priority across
 definitions, and no priority for `RateLimiter`. Per-step/per-branch concurrency and
 concurrency keyed on a business field value (e.g. "max 1 per AccountId") are out of scope.
 `RateLimiter` (rate/throughput) and get-or-start dedup (#10) remain orthogonal primitives.
