@@ -115,7 +115,7 @@ private class WorkflowMetricsCollectorTest {
   @IsTest
   static void oldestAgeForEachDefinition() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Datetime t0 = System.now().addDays(-1);
+      Datetime t0 = Datetime.newInstanceGmt(2026, 1, 1, 10, 0, 0);
       Test.setCreatedDate(seed('Acme.A', 'Running').Id, t0);
       Test.setCreatedDate(seed('Acme.A', 'Suspended').Id, t0.addMinutes(10));
       Test.setCreatedDate(seed('Acme.B', 'Running').Id, t0.addMinutes(30));
@@ -138,7 +138,7 @@ private class WorkflowMetricsCollectorTest {
   @IsTest
   static void ageScanCapTruncates() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Datetime t0 = System.now().addDays(-1);
+      Datetime t0 = Datetime.newInstanceGmt(2026, 1, 1, 10, 0, 0);
       Test.setCreatedDate(seed('Acme.A', 'Running').Id, t0);
       Test.setCreatedDate(seed('Acme.B', 'Running').Id, t0.addMinutes(5));
       WorkflowMetricsCollector.ageScanRowCap = 1;

@@ -133,6 +133,7 @@ public inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
+          Publish_Metrics_Events__c,
           Cascade_Cancel_Children_On_Failure__c,
           Dedup_Window_Minutes__c,
           Stale_Threshold_Minutes__c,
@@ -157,6 +158,7 @@ public inherited sharing class WorkflowEngine {
         if (configs[0].Publish_Lifecycle_Events__c != null) {
           publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
         }
+        publishMetricsEvents = configs[0].Publish_Metrics_Events__c == true;
         if (configs[0].Cascade_Cancel_Children_On_Failure__c != null) {
           cascadeCancelChildrenOnFailure = configs[0]
             .Cascade_Cancel_Children_On_Failure__c;
