@@ -377,10 +377,10 @@
 
                                 <!-- Readiness (#114): install checks, read-only -->
                                 <div data-id="readiness-panel" class="slds-m-bottom_large">
-                                    <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                    <div class="slds-grid slds-wrap slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
                                         <h3 class="slds-text-heading_small font-outfit">
                                             Readiness
-                                            <span data-id="readiness-summary" class={readinessSummaryClass}>{readinessSummary}</span>
+                                            <span data-id="readiness-summary" aria-live="polite" class={readinessSummaryClass}>{readinessSummary}</span>
                                         </h3>
                                         <div class="slds-grid slds-grid_vertical-align-center">
                                             <span data-id="readiness-timing" class="slds-text-body_small slds-text-color_weak slds-m-right_small">{readinessTimingLabel}</span>
@@ -389,6 +389,7 @@
                                                 label="Run Checks"
                                                 icon-name="utility:check"
                                                 variant="neutral"
+                                                disabled={readinessRunning}
                                                 onclick={handleRunReadiness}>
                                             </lightning-button>
                                         </div>
@@ -405,12 +406,12 @@
                                                     <div class="slds-col slds-p-right_small">
                                                         <div class="slds-text-body_regular font-bold">{check.name}</div>
                                                         <div class="slds-text-body_small">{check.finding}</div>
-                                                        <template if:true={check.remediation}>
+                                                        <template if:true={check.showRemediation}>
                                                             <code data-id="readiness-remediation" class="readiness-remediation">{check.remediation}</code>
                                                         </template>
                                                     </div>
                                                     <div class="slds-no-flex slds-text-align_right">
-                                                        <lightning-icon icon-name={check.icon} size="xx-small" alternative-text={check.statusLabel} title={check.statusLabel} class={check.iconClass}></lightning-icon>
+                                                        <lightning-icon icon-name={check.icon} size="xx-small" class={check.iconClass}></lightning-icon>
                                                         <span data-id="readiness-status" class={check.badgeClass}>{check.statusLabel}</span>
                                                     </div>
                                                 </div>

@@ -18,6 +18,7 @@ import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboard
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 import getReadinessChecks from "@salesforce/apex/WorkflowReadinessController.getReadinessChecks";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
+import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardCommandController.enqueueWatchdog";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -151,6 +152,11 @@ jest.mock(
   () => ({
     default: jest.fn(() => Promise.resolve({ asOfMs: 0, rows: [] })),
   }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardCommandController.enqueueWatchdog",
+  () => ({ default: jest.fn(() => Promise.resolve()) }),
   { virtual: true },
 );
 jest.mock(
@@ -3096,7 +3102,7 @@ describe("c-workflow-dashboard readiness panel (#114)", () => {
       name: "Watchdog chain",
       status: "Pass",
       finding: "The watchdog chain is running.",
-      remediation: null,
+      remediation: "Stray text on a Pass row.",
     },
   ];
 
@@ -3138,8 +3144,10 @@ describe("c-workflow-dashboard readiness panel (#114)", () => {
     const failStatus = fail.querySelector('[data-id="readiness-status"]');
     expect(failStatus.textContent).toContain("Fail");
     expect(failStatus.className).toContain("badge-red");
+    // The icon is decorative. The badge word carries the status.
     const failIcon = fail.querySelector("lightning-icon");
-    expect(failIcon.alternativeText).toBe("Fail");
+    expect(failIcon).not.toBeNull();
+    expect(failIcon.alternativeText).toBeFalsy();
     expect(
       fail.querySelector('[data-id="readiness-remediation"]').textContent,
     ).toContain("Custom Metadata Types > Revenant Config");
@@ -3258,8 +3266,9 @@ describe("c-workflow-dashboard readiness panel (#114)", () => {
     expect(readinessRows(element).length).toBe(2);
   });
 
-  it("re-runs the checks on Refresh Status", async () => {
-    getReadinessChecks.mockResolvedValue(ALL_PASS);
+  it("re-runs the checks on Refresh Status and shows the new rows", async () => {
+    getReadinessChecks.mockResolvedValueOnce(BROKEN);
+    getReadinessChecks.mockResolvedValueOnce(ALL_PASS);
     const element = await openDoctor();
     findButton(element, (btn) => btn.label === "Refresh Status").dispatchEvent(
       new CustomEvent("click"),
@@ -3267,6 +3276,148 @@ describe("c-workflow-dashboard readiness panel (#114)", () => {
     await flushPromises();
     await flushPromises();
     expect(getReadinessChecks).toHaveBeenCalledTimes(2);
+    expect(readinessRows(element).length).toBe(2);
+    expect(
+      element.shadowRoot.querySelector('[data-id="readiness-summary"]')
+        .textContent,
+    ).toContain("All checks pass");
+  });
+
+  it("re-runs the checks after Enqueue Watchdog", async () => {
+    getWatchdogStatus.mockResolvedValueOnce({ isRunning: false, config: {} });
+    getReadinessChecks.mockResolvedValueOnce(BROKEN);
+    getReadinessChecks.mockResolvedValueOnce(ALL_PASS);
+    const element = await openDoctor();
+    findButton(
+      element,
+      (btn) => btn.label === "Enqueue Watchdog",
+    ).dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+    expect(enqueueWatchdog).toHaveBeenCalledTimes(1);
+    expect(getReadinessChecks).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables Run Checks and says Running while a run is in flight", async () => {
+    let resolveRun;
+    getReadinessChecks.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+    const element = await openDoctor();
+    const button = element.shadowRoot.querySelector(
+      'lightning-button[data-id="readiness-run"]',
+    );
+    expect(button.disabled).toBe(true);
+    expect(
+      element.shadowRoot.querySelector('[data-id="readiness-timing"]')
+        .textContent,
+    ).toContain("Running");
+
+    resolveRun(ALL_PASS);
+    await flushPromises();
+    expect(button.disabled).toBe(false);
+    expect(
+      element.shadowRoot.querySelector('[data-id="readiness-timing"]')
+        .textContent,
+    ).toMatch(/Checked in \d+ ms/);
+  });
+
+  it("treats an empty list as unavailable, not as all pass", async () => {
+    getReadinessChecks.mockResolvedValueOnce([]);
+    const element = await openDoctor();
+    const error = element.shadowRoot.querySelector(
+      '[data-id="readiness-error"]',
+    );
+    expect(error).not.toBeNull();
+    expect(error.textContent).toContain("No checks were returned.");
+  });
+
+  it("ignores an old failure that arrives after a new success", async () => {
+    let rejectOld;
+    getReadinessChecks.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          rejectOld = reject;
+        }),
+    );
+    const element = await openDoctor();
+    getReadinessChecks.mockResolvedValueOnce(ALL_PASS);
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="readiness-run"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    rejectOld({ body: { message: "Old failure" } });
+    await flushPromises();
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="readiness-error"]'),
+    ).toBeNull();
+    expect(readinessRows(element).length).toBe(2);
+  });
+
+  it("clears the error when a later run succeeds", async () => {
+    getReadinessChecks.mockRejectedValueOnce({ body: { message: "Boom" } });
+    const element = await openDoctor();
+    getReadinessChecks.mockResolvedValueOnce(ALL_PASS);
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="readiness-run"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    expect(
+      element.shadowRoot.querySelector('[data-id="readiness-error"]'),
+    ).toBeNull();
+    expect(readinessRows(element).length).toBe(2);
+  });
+
+  it("clears the rows and the time when a later run fails", async () => {
+    getReadinessChecks.mockResolvedValueOnce(ALL_PASS);
+    const element = await openDoctor();
+    getReadinessChecks.mockRejectedValueOnce({ body: { message: "Boom" } });
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="readiness-run"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    expect(readinessRows(element).length).toBe(0);
+    expect(
+      element.shadowRoot.querySelector('[data-id="readiness-timing"]')
+        .textContent,
+    ).not.toContain("Checked in");
+    expect(
+      element.shadowRoot.querySelector('[data-id="readiness-error"]'),
+    ).not.toBeNull();
+  });
+
+  it("colours the summary red for a fail, orange for warn only, green for all pass", async () => {
+    getReadinessChecks.mockResolvedValueOnce(BROKEN);
+    const element = await openDoctor();
+    const summary = () =>
+      element.shadowRoot.querySelector('[data-id="readiness-summary"]');
+    expect(summary().className).toContain("text-red");
+    expect(summary().getAttribute("aria-live")).toBe("polite");
+
+    getReadinessChecks.mockResolvedValueOnce(BROKEN.slice(1));
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="readiness-run"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    expect(summary().className).toContain("text-orange");
+
+    getReadinessChecks.mockResolvedValueOnce(ALL_PASS);
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="readiness-run"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    expect(summary().className).toContain("text-green");
   });
 
   it("ignores an old response that arrives after a new one", async () => {

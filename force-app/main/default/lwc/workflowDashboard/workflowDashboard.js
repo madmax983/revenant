@@ -147,6 +147,7 @@ export default class WorkflowDashboard extends LightningElement {
   readinessError = null;
   readinessLoaded = false;
   readinessElapsedMs = null;
+  readinessRunning = false;
   readinessRequestSeq = 0;
 
   // Rate Limits panel state (System Doctor, #61).
@@ -1812,19 +1813,21 @@ export default class WorkflowDashboard extends LightningElement {
   loadReadiness() {
     const requestId = ++this.readinessRequestSeq;
     const startedMs = Date.now();
+    this.readinessRunning = true;
     getReadinessChecks()
       .then((rows) => {
         if (requestId !== this.readinessRequestSeq) {
           return;
         }
-        if (!Array.isArray(rows)) {
-          this.setReadinessError("No data was returned.");
+        if (!Array.isArray(rows) || rows.length === 0) {
+          this.setReadinessError("No checks were returned.");
           return;
         }
         this.readinessError = null;
         this.readinessRows = rows.map((row) => this.shapeReadinessRow(row));
         this.readinessElapsedMs = Date.now() - startedMs;
         this.readinessLoaded = true;
+        this.readinessRunning = false;
       })
       .catch((error) => {
         if (requestId !== this.readinessRequestSeq) {
@@ -1845,9 +1848,11 @@ export default class WorkflowDashboard extends LightningElement {
     this.readinessElapsedMs = null;
     this.readinessError = reason;
     this.readinessLoaded = true;
+    this.readinessRunning = false;
   }
 
   // Adds display labels to one row. Apex sets the status and the text.
+  // A Pass row shows no fix.
   shapeReadinessRow(row) {
     const status = READINESS_STATUS[row.status] || READINESS_UNKNOWN;
     return {
@@ -1856,6 +1861,7 @@ export default class WorkflowDashboard extends LightningElement {
       badgeClass: status.badgeClass,
       icon: status.icon,
       iconClass: status.iconClass,
+      showRemediation: status !== READINESS_STATUS.Pass && !!row.remediation,
     };
   }
 
@@ -1890,13 +1896,22 @@ export default class WorkflowDashboard extends LightningElement {
     return parts.length ? `· ${parts.join(" · ")}` : "· All checks pass";
   }
 
+  // Red for a Fail, orange for Warn or Unknown, green for all Pass.
   get readinessSummaryClass() {
-    return this.readinessRows.some((r) => r.statusLabel !== "Pass")
-      ? "slds-m-left_x-small text-orange"
-      : "slds-m-left_x-small text-green";
+    const labels = this.readinessRows.map((r) => r.statusLabel);
+    let colour = "text-green";
+    if (labels.includes("Fail")) {
+      colour = "text-red";
+    } else if (labels.some((label) => label !== "Pass")) {
+      colour = "text-orange";
+    }
+    return `slds-m-left_x-small ${colour}`;
   }
 
   get readinessTimingLabel() {
+    if (this.readinessRunning) {
+      return "Running…";
+    }
     return this.readinessElapsedMs === null
       ? ""
       : `Checked in ${this.readinessElapsedMs} ms`;
