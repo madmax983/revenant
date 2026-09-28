@@ -415,7 +415,7 @@ public class WorkflowNotifierTest {
       )
     };
     Test.startTest();
-    new WorkflowEventTriggerHandler(events).handleAfterInsert();
+    WorkflowNotifier.handleEvents(events);
     Test.stopTest();
 
     Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
@@ -544,6 +544,26 @@ public class WorkflowNotifierTest {
     Workflow_Log__c log = anchors(instanceId)[0];
     Assert.areEqual(WorkflowNotifier.OUTCOME_SKIPPED, log.Outcome__c);
     Assert.isTrue(log.Message__c.contains('wait ended'), log.Message__c);
+  }
+
+  @IsTest
+  static void wokenWaitIsSkipped() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-woken-wait',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(instanceId);
+    // A signal wakes the instance (Running). The step row is still Pending.
+    WorkflowEngine.signal('notify-woken-wait', 'Go', '{}');
+    Test.getEventBus().deliver();
+    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SKIPPED,
+      anchors(instanceId)[0].Outcome__c
+    );
+    Test.stopTest();
   }
 
   @IsTest
@@ -961,6 +981,7 @@ public class WorkflowNotifierTest {
     };
     Test.startTest();
     new WorkflowEventTriggerHandler(events).handleAfterInsert();
+    WorkflowNotifier.handleEvents(events);
     Test.stopTest();
     Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
     Assert.areEqual(

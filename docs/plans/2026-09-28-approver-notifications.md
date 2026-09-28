@@ -62,6 +62,8 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | A test depends on the real send. | Test context captures the request and does not call `send()`. Tests can set the type Id. |
 | A matching signal is already buffered. The step resumes at once. | At send time, check that the step row is still `Pending`. Else `Skipped`. (Codex review.) |
 | No SOQL is left in the trigger pass. Valid requests fail with "type not found". (Codex review.) | Check the query budget first. Publish the requests again. |
+| Engine work in the shared trigger transaction uses the notify budget. Many edge cases. (Codex review, rounds 4 to 6.) | Root cause fix: a separate trigger, `WorkflowNotifyTrigger`, with its own transaction. Before a send, a low budget throws `EventBus.RetryableException`. |
+| A signal wakes the instance but the step row is still `Pending`. (Codex review.) | Also require the instance to be `Suspended`. |
 
 ## Six Thinking Hats
 

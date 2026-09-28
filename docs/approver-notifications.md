@@ -64,7 +64,7 @@ sequenceDiagram
         Engine->>Engine: Do nothing (the request exists)
     end
     Engine-->>Bus: The commit delivers the event
-    Bus->>Notifier: New transaction (WorkflowEventTrigger)
+    Bus->>Notifier: Own transaction (WorkflowNotifyTrigger)
     Notifier->>Log: Read the Requested anchor rows of the keys
     Notifier->>Notifier: Resolve type and owners, send in chunks of 500 (max 10 calls)
     Notifier->>Log: Upsert on Fire_Key__c: Sent, Failed or Skipped
@@ -73,8 +73,8 @@ sequenceDiagram
 1. The SUSPEND handler writes the step row and the instance. Then, last, it calls `WorkflowNotifier.request`.
 2. `request` inserts one anchor row in `Workflow_Log__c` (`Log_Type__c = Notification`, `Outcome__c = Requested`). The key is `Notify:<stepExecId>` in the unique `Fire_Key__c`. `Message__c` holds the request. The insert uses `allOrNone = false`.
 3. When the insert succeeds, `request` publishes one `NOTIFY` `Workflow_Event__e`. The event holds only the key (`Idempotency_Key__c`).
-4. `WorkflowEventTriggerHandler` gives max 200 `NOTIFY` events to `WorkflowNotifier.handleEvents` in a new transaction. It publishes the other `NOTIFY` events again for a later pass.
-5. `handleEvents` runs last in the trigger, after all steps that can throw. It reads the request from the `Requested` anchor row of each key, not from the event. An event with no such row sends nothing: a replay, a copy or a forged event. It makes max 10 send calls in a pass and publishes the other requests again. It sets each row to `Sent`, `Failed` or `Skipped`.
+4. `WorkflowNotifyTrigger` calls `WorkflowNotifier.handleEvents`. This trigger is a separate subscriber from the engine trigger (`WorkflowEventTrigger`). It runs in its own transaction with its own limits. The engine trigger ignores `NOTIFY` events.
+5. `handleEvents` reads max 200 keys in a pass. It reads the request from the `Requested` anchor row of each key, not from the event. An event with no such row sends nothing: a replay, a copy or a forged event. It sends only while the step waits. It makes max 10 send calls in a pass. It publishes the other keys again for a later pass. It sets each row to `Sent`, `Failed` or `Skipped`.
 
 ## One time for each logical suspend
 
@@ -88,7 +88,7 @@ A logical suspend is one `Workflow_Step_Execution__c` row. A resume uses the sam
 | The platform delivers the `NOTIFY` event again | The row is not `Requested`, or the copy is in the same pass. The engine sends nothing. |
 | A user publishes a forged `NOTIFY` event | No `Requested` row has its key. The engine sends nothing. With a real key, the engine sends the content of the row, not of the event. |
 | A new visit of the step (a loop) | A new row. One new notification. |
-| The wait ends before the send (for example, a buffered signal resumes the step) | The step row is not `Pending`. The row is `Skipped`. The engine sends nothing. |
+| The wait ends before the send (for example, a buffered signal wakes the step) | The step row is not `Pending`, or the instance is not `Suspended`. The row is `Skipped`. The engine sends nothing. |
 
 You do not supply a dedup token.
 
@@ -96,12 +96,13 @@ A step that waits again on the same row with a new notification (for example, a 
 
 ## Fire-and-forget
 
-- No notification code throws. A notification error never stops the SUSPEND, the signal wake or the trigger batch.
+- A notification error never stops the SUSPEND or the engine trigger. The notify trigger has its own transaction.
 - Before its DML, `request` checks the DML budget. It keeps a reserve for later DML (10 statements, 20 rows). When the budget is low, `request` publishes no request and writes no row.
 - When the anchor insert fails for a reason other than a duplicate key, `request` writes a `Notification` error row.
 - A publish error sets the anchor row to `Failed` (`Level__c = Error`).
 - In the trigger, each request has its own `try`/`catch`. A failed row update writes one error row.
-- The trigger sends only when it can save the result rows and run its queries. Else it publishes the requests again for a later pass.
+- The notify trigger checks its query and DML budget before it sends. When the budget is low, it sends nothing and throws `EventBus.RetryableException`: the platform delivers the batch again (max 5 times). It never throws after a send.
+- When the type or owner queries cannot run, the requests wait for a later pass.
 - When the publish for a later pass fails, the row is `Failed`.
 
 `Outcome__c` values:
@@ -130,7 +131,7 @@ In an Apex test, set `WorkflowEngine.sendNotifications`.
 
 - The recipient must have access to the target record to open the deep link. For the default target, give the recipient read access to `Workflow_Instance__c` (for example, the `Revenant_Operator` permission set).
 - Mobile push needs the Salesforce mobile app with notifications on.
-- The `WorkflowEventTrigger` runs as the Automated Process user. That user sends the notification. A `PlatformEventSubscriberConfig` with a `userId` changes this user. It also changes the user for all `Workflow_Event__e` processing, not only for notifications.
+- `WorkflowNotifyTrigger` runs as the Automated Process user. That user sends the notification. A `PlatformEventSubscriberConfig` for `WorkflowNotifyTrigger` with a `userId` changes this user. It does not change the engine trigger.
 
 ## Cost
 
@@ -141,7 +142,7 @@ On a SUSPEND with a notification:
 
 A SUSPEND with no notification costs nothing.
 
-In the trigger, for each pass: one SOQL for the anchor rows, one SOQL for the step rows that still wait, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, one update, max 10 send calls, and one publish for the requests that wait for a later pass.
+In `WorkflowNotifyTrigger`, for each pass: one SOQL for the anchor rows, one SOQL for the step rows that still wait, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, one update, max 10 send calls, and one publish for the keys that wait for a later pass. The trigger also runs for engine events. It ignores them.
 
 ## Data
 

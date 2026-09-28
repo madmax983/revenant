@@ -7,15 +7,15 @@
  *    `NOTIFY` `Workflow_Event__e` with the key in `Idempotency_Key__c`. The
  *    event is `PublishAfterCommit`: a rolled-back SUSPEND sends nothing. A
  *    second insert for the same step row fails: a re-suspend sends nothing.
- * 2. `WorkflowEventTriggerHandler` gives max {@link maxEventsPerPass} NOTIFY
- *    events to {@link handleEvents}, last in the trigger transaction.
- *    `handleEvents` reads the request from each `Requested` anchor row, not
- *    from the event. An event with no such row sends nothing. It sends max
- *    {@link maxSendCallsPerPass} send calls and publishes the rest again. It
- *    sets each row to `Sent`, `Failed` or `Skipped`.
+ * 2. `WorkflowNotifyTrigger` calls {@link handleEvents} in its own
+ *    transaction, apart from the engine trigger. It reads the request from
+ *    each `Requested` anchor row, not from the event. It sends only while the
+ *    step waits, with max {@link maxSendCallsPerPass} send calls, and
+ *    publishes the rest again. It sets each row to `Sent`, `Failed` or
+ *    `Skipped`.
  *
- * Fire-and-forget: no method throws. A notification error never stops the
- * SUSPEND or the trigger batch. See docs/approver-notifications.md.
+ * Fire-and-forget: a notification error never stops the SUSPEND or the
+ * engine. See docs/approver-notifications.md.
  */
 public inherited sharing class WorkflowNotifier {
   /** @description Workflow_Event__e.Event_Type__c of a notify request. */
@@ -56,6 +56,8 @@ public inherited sharing class WorkflowNotifier {
   private static Integer dmlStatementReserve = 10;
   @TestVisible
   private static Integer dmlRowReserve = 20;
+  // Times the platform delivers a batch again before the pass stops.
+  private static final Integer MAX_RETRIES = 5;
   // NOTIFY events that one trigger pass reads. It bounds heap, CPU and DML.
   @TestVisible
   private static Integer eventsPerPass = 200;
@@ -105,14 +107,6 @@ public inherited sharing class WorkflowNotifier {
    */
   public static String fireKey(Id stepExecId) {
     return FIRE_KEY_PREFIX + String.valueOf(stepExecId);
-  }
-
-  /**
-   * @description Returns the maximum NOTIFY events for one trigger pass.
-   * @return The maximum.
-   */
-  public static Integer maxEventsPerPass() {
-    return eventsPerPass;
   }
 
   /**
@@ -294,7 +288,10 @@ public inherited sharing class WorkflowNotifier {
           'Simulated EventBus.publish failure'
         );
       }
-      Workflow_Event__e evt = notifyEvent(anchor.Fire_Key__c, instanceId);
+      Workflow_Event__e evt = notifyEvent(
+        anchor.Fire_Key__c,
+        String.valueOf(instanceId)
+      );
       Database.SaveResult sr = EventBus.publish(evt);
       if (!sr.isSuccess()) {
         throw new WorkflowEngine.WorkflowException(errorText(sr.getErrors()));
@@ -313,10 +310,10 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
-  private static Workflow_Event__e notifyEvent(String key, Id instanceId) {
+  private static Workflow_Event__e notifyEvent(String key, String instanceId) {
     return new Workflow_Event__e(
       Event_Type__c = EVENT_TYPE,
-      Workflow_Instance_Id__c = String.valueOf(instanceId),
+      Workflow_Instance_Id__c = instanceId,
       Idempotency_Key__c = key
     );
   }
@@ -334,72 +331,110 @@ public inherited sharing class WorkflowNotifier {
   }
 
   /**
-   * @description Sends the notifications of NOTIFY events. Reads each request
-   * from its `Requested` anchor row, so an event with no such row (a replay,
-   * a copy or a forged event) sends nothing. Sets each row to Sent, Failed or
-   * Skipped. Never throws.
-   * @param events NOTIFY events from WorkflowEventTriggerHandler.
+   * @description Sends the notifications of the NOTIFY events in a batch.
+   * `WorkflowNotifyTrigger` calls it in its own transaction. It ignores other
+   * event types. It reads each request from its `Requested` anchor row, so an
+   * event with no such row (a replay, a copy or a forged event) sends nothing.
+   * It sets each row to Sent, Failed or Skipped. It throws only
+   * EventBus.RetryableException, and only before it sends.
+   * @param events Workflow_Event__e records of one trigger batch.
    */
   public static void handleEvents(List<Workflow_Event__e> events) {
-    if (events == null || events.isEmpty()) {
+    Map<String, String> instanceByKey = notifyKeys(events);
+    if (instanceByKey.isEmpty()) {
       return;
     }
+    List<String> keys = new List<String>(instanceByKey.keySet());
     try {
-      List<Workflow_Log__c> anchors = openAnchors(events);
-      if (anchors.isEmpty()) {
+      if (!hasQueryBudget(3) || !hasResultDml(keys.size())) {
+        retryOrGiveUp('No budget before the send');
         return;
       }
-      if (!hasResultDml(anchors.size())) {
-        // A send cannot be undone. Send only when the result rows can be saved.
-        publishAgain(anchors);
-        return;
+      List<String> passKeys = new List<String>();
+      List<String> laterKeys = new List<String>();
+      for (String key : keys) {
+        if (passKeys.size() < eventsPerPass) {
+          passKeys.add(key);
+        } else {
+          laterKeys.add(key);
+        }
       }
+      List<Workflow_Log__c> anchors = openAnchors(passKeys);
       List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
       if (!WorkflowEngine.sendNotifications) {
         skipAll(anchors, 'Send_Notifications__c is off');
-      } else if (!hasQueryBudget(1)) {
-        deferred = anchors;
-      } else {
+      } else if (!anchors.isEmpty()) {
         deferred = sendAll(skipEndedWaits(anchors));
       }
-      // A deferred request that cannot be published again fails now. Else its
-      // row stays Requested with no event.
-      List<Workflow_Log__c> lost = publishAgain(deferred);
-      for (Workflow_Log__c anchor : lost) {
-        setResult(
-          anchor,
-          null,
-          OUTCOME_FAILED,
-          LEVEL_ERROR,
-          'Publish for a later pass failed'
-        );
+      for (Workflow_Log__c anchor : deferred) {
+        laterKeys.add(anchor.Fire_Key__c);
       }
-      Set<Id> lostIds = new Map<Id, Workflow_Log__c>(lost).keySet();
+      // A request that cannot be published again fails now. Else its row
+      // stays Requested with no event.
+      Set<String> lost = publishKeys(laterKeys, instanceByKey);
       List<Workflow_Log__c> waiting = new List<Workflow_Log__c>();
       for (Workflow_Log__c anchor : deferred) {
-        if (!lostIds.contains(anchor.Id)) {
+        if (lost.contains(anchor.Fire_Key__c)) {
+          setResult(
+            anchor,
+            null,
+            OUTCOME_FAILED,
+            LEVEL_ERROR,
+            'Publish for a later pass failed'
+          );
+        } else {
           waiting.add(anchor);
         }
       }
       saveRows(anchors, waiting);
+    } catch (EventBus.RetryableException e) {
+      throw e;
     } catch (Exception e) {
       WorkflowLog.error(LOG_TYPE, 'Notify batch failed: ' + e.getMessage());
     }
   }
 
-  // Reads the Requested anchor rows of the event keys. One SOQL. One row for
-  // each key, so copies of one event in the batch give one request.
-  private static List<Workflow_Log__c> openAnchors(
+  // Returns the NOTIFY keys of the batch, in order, one time each, with the
+  // instance Id of the event.
+  private static Map<String, String> notifyKeys(
     List<Workflow_Event__e> events
   ) {
-    Set<String> keys = new Set<String>();
+    Map<String, String> instanceByKey = new Map<String, String>();
+    if (events == null) {
+      return instanceByKey;
+    }
     for (Workflow_Event__e evt : events) {
       String key = evt.Idempotency_Key__c;
-      if (String.isNotBlank(key) && key.startsWith(FIRE_KEY_PREFIX)) {
-        keys.add(key);
+      if (
+        evt.Event_Type__c == EVENT_TYPE &&
+        String.isNotBlank(key) &&
+        key.startsWith(FIRE_KEY_PREFIX) &&
+        !instanceByKey.containsKey(key)
+      ) {
+        instanceByKey.put(key, evt.Workflow_Instance_Id__c);
       }
     }
-    if (keys.isEmpty() || Limits.getQueries() >= Limits.getLimitQueries()) {
+    return instanceByKey;
+  }
+
+  // Nothing is sent yet: ask the platform to deliver the batch again. After
+  // MAX_RETRIES, stop: the rows stay Requested (see issue #274).
+  private static void retryOrGiveUp(String reason) {
+    Integer retries;
+    try {
+      retries = EventBus.TriggerContext.currentContext().retries;
+    } catch (Exception e) {
+      retries = null;
+    }
+    if (retries != null && retries < MAX_RETRIES) {
+      throw new EventBus.RetryableException(reason);
+    }
+    System.debug(LoggingLevel.WARN, 'WorkflowNotifier: ' + reason);
+  }
+
+  // Reads the Requested anchor rows of the keys. One SOQL.
+  private static List<Workflow_Log__c> openAnchors(List<String> keys) {
+    if (keys.isEmpty()) {
       return new List<Workflow_Log__c>();
     }
     return [
@@ -419,8 +454,8 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
-  // Skips the requests whose step row no longer waits (Pending). For example,
-  // a buffered signal resumed the step before this pass. One SOQL.
+  // Skips the requests whose wait ended: the step row is not Pending, or the
+  // instance is not Suspended (a signal woke it). One SOQL.
   private static List<Workflow_Log__c> skipEndedWaits(
     List<Workflow_Log__c> anchors
   ) {
@@ -435,7 +470,10 @@ public inherited sharing class WorkflowNotifier {
         [
           SELECT Id
           FROM Workflow_Step_Execution__c
-          WHERE Id IN :stepIds AND Status__c = 'Pending'
+          WHERE
+            Id IN :stepIds
+            AND Status__c = 'Pending'
+            AND Workflow_Instance__r.Status__c = 'Suspended'
           WITH SYSTEM_MODE
         ]
       )
@@ -735,7 +773,7 @@ public inherited sharing class WorkflowNotifier {
   // ─── Result rows ──────────────────────────────────────────────────────────
 
   // Updates the rows that have a result and logs the rows that fail. A
-  // deferred row stays Requested.
+  // deferred row stays Requested. handleEvents checked the DML budget.
   private static void saveRows(
     List<Workflow_Log__c> anchors,
     List<Workflow_Log__c> deferred
@@ -747,13 +785,8 @@ public inherited sharing class WorkflowNotifier {
         rows.add(anchor);
       }
     }
-    if (
-      rows.isEmpty() ||
-      Limits.getDmlStatements() + 3 > Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + rows.size() + deferred.size() + 1 >
-      Limits.getLimitDmlRows()
-    ) {
-      return; // The rows stay Requested.
+    if (rows.isEmpty()) {
+      return;
     }
     List<String> errors = new List<String>();
     List<Database.SaveResult> results = Database.update(
@@ -784,22 +817,19 @@ public inherited sharing class WorkflowNotifier {
       Limits.getDmlRows() + (2 * rowCount) + 1 <= Limits.getLimitDmlRows();
   }
 
-  // Publishes the deferred requests again for a later pass. Returns the rows
-  // whose publish failed.
-  private static List<Workflow_Log__c> publishAgain(
-    List<Workflow_Log__c> deferred
+  // Publishes the keys again for a later pass. Returns the keys whose
+  // publish failed.
+  private static Set<String> publishKeys(
+    List<String> keys,
+    Map<String, String> instanceByKey
   ) {
-    List<Workflow_Log__c> lost = new List<Workflow_Log__c>();
-    if (
-      deferred.isEmpty() ||
-      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + deferred.size() > Limits.getLimitDmlRows()
-    ) {
-      return deferred.isEmpty() ? lost : deferred;
+    Set<String> lost = new Set<String>();
+    if (keys.isEmpty()) {
+      return lost;
     }
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
-    for (Workflow_Log__c anchor : deferred) {
-      events.add(notifyEvent(anchor.Fire_Key__c, anchor.Workflow_Instance__c));
+    for (String key : keys) {
+      events.add(notifyEvent(key, instanceByKey.get(key)));
     }
     try {
       if (Test.isRunningTest() && throwPublishException) {
@@ -810,11 +840,11 @@ public inherited sharing class WorkflowNotifier {
       List<Database.SaveResult> results = EventBus.publish(events);
       for (Integer i = 0; i < results.size(); i++) {
         if (!results[i].isSuccess()) {
-          lost.add(deferred[i]);
+          lost.add(keys[i]);
         }
       }
     } catch (Exception e) {
-      return deferred;
+      lost.addAll(keys);
     }
     return lost;
   }

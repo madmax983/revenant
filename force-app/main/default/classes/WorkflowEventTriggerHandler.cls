@@ -3,8 +3,8 @@
  * here so the trigger itself stays a thin delegate (AvoidLogicInTrigger). Events are
  * classified in-order, resume/signal requests are executed in bulk, and any throttled
  * overflow is republished in a single EventBus.publish call. `CASCADE_CANCEL` events
- * go to WorkflowCascadeCancel (issue #94). `NOTIFY` events go to WorkflowNotifier
- * (issue #123).
+ * go to WorkflowCascadeCancel (issue #94). This handler ignores `NOTIFY` events:
+ * `WorkflowNotifyTrigger` handles them in its own transaction (issue #123).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and
@@ -21,7 +21,6 @@ public inherited sharing class WorkflowEventTriggerHandler {
   private final List<WorkflowEngine.SignalRequest> signalRequests = new List<WorkflowEngine.SignalRequest>();
   private final List<Workflow_Event__e> throttledEvents = new List<Workflow_Event__e>();
   private final List<Workflow_Event__e> cascadeEvents = new List<Workflow_Event__e>();
-  private final List<Workflow_Event__e> notifyEvents = new List<Workflow_Event__e>();
   private Integer processedResumeSignals = 0;
 
   /**
@@ -51,10 +50,6 @@ public inherited sharing class WorkflowEventTriggerHandler {
 
     // 3. Publish throttled events in a single bulk DML statement
     publishThrottledEvents();
-
-    // 4. Send approver notifications last (never throws). A send cannot be
-    // undone: no later step may throw and roll back its Sent row.
-    WorkflowNotifier.handleEvents(notifyEvents);
   }
 
   private void routeEvent(Workflow_Event__e event) {
@@ -71,26 +66,7 @@ public inherited sharing class WorkflowEventTriggerHandler {
       routeStepExecution(event);
     } else if (event.Event_Type__c == WorkflowCascadeCancel.EVENT_TYPE) {
       cascadeEvents.add(event);
-    } else if (event.Event_Type__c == WorkflowNotifier.EVENT_TYPE) {
-      routeNotify(event);
     }
-  }
-
-  // One pass sends max WorkflowNotifier.maxEventsPerPass() notifications.
-  // The other NOTIFY events are published again for a later pass.
-  private void routeNotify(Workflow_Event__e event) {
-    if (notifyEvents.size() < WorkflowNotifier.maxEventsPerPass()) {
-      notifyEvents.add(event);
-      return;
-    }
-    throttledEvents.add(
-      new Workflow_Event__e(
-        Workflow_Instance_Id__c = event.Workflow_Instance_Id__c,
-        Event_Type__c = event.Event_Type__c,
-        Payload__c = event.Payload__c,
-        Idempotency_Key__c = event.Idempotency_Key__c
-      )
-    );
   }
 
   private void routeResume(Workflow_Event__e event) {

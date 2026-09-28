@@ -469,7 +469,7 @@ See [docs/step-history-guard.md](docs/step-history-guard.md).
 - New author API: `StepResult.withNotification(WorkflowNotification)` and the `WorkflowNotification` builder. New field: `StepResult.StepDirective.notification`.
 - New config field: `Revenant_Config__mdt.Send_Notifications__c` (default on).
 - New metadata: `CustomNotificationType` `Revenant_Workflow_Notification`.
-- `Workflow_Event__e` has a new `Event_Type__c` value: `NOTIFY`. A custom subscriber to `Workflow_Event__e` must ignore it.
+- `Workflow_Event__e` has a new `Event_Type__c` value: `NOTIFY`, and a new trigger: `WorkflowNotifyTrigger`. A custom subscriber to `Workflow_Event__e` must ignore `NOTIFY`.
 - `Workflow_Log__c` has new rows with `Log_Type__c = Notification`.
 - `ApprovalWorkflowExample` reads the approver from the workflow input key `approverId`. With no approver, it notifies the instance owner.
 
