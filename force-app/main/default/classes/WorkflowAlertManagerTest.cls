@@ -1165,4 +1165,40 @@ public class WorkflowAlertManagerTest {
       WorkflowAlertManager.forceDmlBudgetExhausted = false;
     }
   }
+
+  @IsTest
+  static void publishEachEventReturnsOneResultForEachEvent() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Alert__e> events = new List<Workflow_Alert__e>{
+        new Workflow_Alert__e(Alert_Reason__c = 'One'),
+        new Workflow_Alert__e(Alert_Reason__c = 'Two')
+      };
+
+      List<Boolean> results = WorkflowAlertManager.publishEachEvent(events);
+
+      Assert.areEqual(new List<Boolean>{ true, true }, results);
+      Assert.isTrue(
+        WorkflowAlertManager.publishEachEvent(new List<Workflow_Alert__e>())
+          .isEmpty()
+      );
+      Assert.isTrue(WorkflowAlertManager.publishEachEvent(null).isEmpty());
+    }
+  }
+
+  @IsTest
+  static void publishEachEventReturnsFalseForEachEventWhenBlocked() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowAlertManager.forceDmlBudgetExhausted = true;
+      List<Workflow_Alert__e> events = new List<Workflow_Alert__e>{
+        new Workflow_Alert__e(Alert_Reason__c = 'One'),
+        new Workflow_Alert__e(Alert_Reason__c = 'Two')
+      };
+
+      Assert.areEqual(
+        new List<Boolean>{ false, false },
+        WorkflowAlertManager.publishEachEvent(events)
+      );
+      Assert.isFalse(WorkflowAlertManager.publishEvents(events));
+    }
+  }
 }

@@ -5666,6 +5666,197 @@ describe("c-workflow-dashboard readiness panel (#114)", () => {
   });
 });
 
+describe("c-workflow-dashboard schedule health (#126)", () => {
+  beforeEach(() => {
+    getDefinitionTrends.mockResolvedValue({
+      windowKey: "24h",
+      windowHours: 24,
+      rows: [],
+    });
+  });
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  // Mounts the dashboard with a given schedule health and opens System Doctor.
+  async function openDoctorWith(scheduleHealth) {
+    getWatchdogStatus.mockResolvedValueOnce({
+      isRunning: true,
+      scheduledJobsCount: 0,
+      sleepingInstances: 0,
+      pendingTimeouts: 0,
+      dailyAsyncValue: 0,
+      dailyAsyncLimit: 250000,
+      config: {},
+      liveness: { state: "HEALTHY" },
+      scheduleHealth,
+    });
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  function query(element, id) {
+    return element.shadowRoot.querySelector(`[data-id="${id}"]`);
+  }
+
+  function queryAll(element, id) {
+    return Array.from(element.shadowRoot.querySelectorAll(`[data-id="${id}"]`));
+  }
+
+  it("shows the empty state when all schedules fire on time", async () => {
+    const element = await openDoctorWith({
+      overdueCount: 0,
+      failedCount: 0,
+      graceMinutes: 10,
+      truncated: false,
+      rows: [],
+    });
+
+    expect(query(element, "schedule-health-empty")).not.toBeNull();
+    expect(queryAll(element, "schedule-health-row")).toHaveLength(0);
+    expect(query(element, "schedule-health-summary").textContent).toContain(
+      "0 overdue",
+    );
+  });
+
+  it("shows overdue and failed rows with distinct badges", async () => {
+    const element = await openDoctorWith({
+      overdueCount: 1,
+      failedCount: 2,
+      graceMinutes: 10,
+      truncated: false,
+      rows: [
+        {
+          id: "a01",
+          name: "Nightly",
+          workflowName: "NightlyRecon",
+          overdue: true,
+          lastFireFailed: false,
+          nextFireWindow: "2026-09-28T02:00:00.000Z",
+          lapsedMinutes: 42,
+          lastOutcome: "Started",
+        },
+        {
+          id: "a02",
+          name: "Sync",
+          workflowName: "SyncFlow",
+          overdue: false,
+          lastFireFailed: true,
+          lastOutcome: "Error",
+        },
+        {
+          id: "a03",
+          name: "Both",
+          workflowName: "BothFlow",
+          overdue: true,
+          lastFireFailed: true,
+          nextFireWindow: "2026-09-28T03:00:00.000Z",
+          lapsedMinutes: 15,
+          lastOutcome: "Invalid cron",
+        },
+      ],
+    });
+
+    expect(query(element, "schedule-health-empty")).toBeNull();
+    const rows = queryAll(element, "schedule-health-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[0].textContent).toContain("Nightly");
+    expect(rows[0].textContent).toContain("42 min late");
+
+    const overdueBadges = queryAll(element, "schedule-overdue-badge");
+    const failedBadges = queryAll(element, "schedule-failed-badge");
+    expect(overdueBadges).toHaveLength(2);
+    expect(failedBadges).toHaveLength(2);
+    expect(overdueBadges[0].textContent).toContain("Overdue");
+    expect(overdueBadges[0].className).toContain("badge-red");
+    expect(failedBadges[0].textContent).toContain("Last fire failed");
+    expect(failedBadges[0].className).toContain("badge-orange");
+    expect(rows[1].textContent).toContain("Last outcome: Error");
+
+    const summary = query(element, "schedule-health-summary").textContent;
+    expect(summary).toContain("1 overdue");
+    expect(summary).toContain("2 last fire failed");
+  });
+
+  it("tells the operator when the list is cut", async () => {
+    const element = await openDoctorWith({
+      overdueCount: 200,
+      failedCount: 0,
+      graceMinutes: 10,
+      truncated: true,
+      rows: [
+        {
+          id: "a01",
+          name: "One",
+          workflowName: "W",
+          overdue: true,
+          lastFireFailed: false,
+          lapsedMinutes: 20,
+        },
+      ],
+    });
+
+    expect(query(element, "schedule-health-truncated")).not.toBeNull();
+  });
+
+  it("shows unavailable, not healthy, when the server sends no schedule health", async () => {
+    const element = await openDoctorWith(undefined);
+
+    expect(query(element, "schedule-health-unavailable")).not.toBeNull();
+    expect(query(element, "schedule-health-empty")).toBeNull();
+    expect(query(element, "schedule-health-summary").textContent).toBe("");
+  });
+
+  it("shows unavailable, not healthy, for an empty map", async () => {
+    const element = await openDoctorWith({});
+
+    expect(query(element, "schedule-health-unavailable")).not.toBeNull();
+    expect(query(element, "schedule-health-empty")).toBeNull();
+  });
+
+  it("shows unavailable, not healthy, when the server read fails", async () => {
+    const element = await openDoctorWith({ error: true });
+
+    expect(query(element, "schedule-health-unavailable")).not.toBeNull();
+    expect(query(element, "schedule-health-empty")).toBeNull();
+  });
+
+  it("leaves out the expected time when the cursor is blank", async () => {
+    const element = await openDoctorWith({
+      overdueCount: 1,
+      failedCount: 0,
+      rows: [
+        {
+          id: "a09",
+          name: "NoCursor",
+          workflowName: "W",
+          overdue: true,
+          lastFireFailed: false,
+          nextFireWindow: null,
+          lapsedMinutes: 12,
+        },
+      ],
+    });
+
+    const text = query(element, "schedule-health-row").textContent;
+    expect(text).toContain("12 min late.");
+    expect(text).not.toContain("Expected");
+  });
+});
+
 describe("c-workflow-dashboard async capacity panel (#129)", () => {
   beforeEach(() => {
     getDefinitionTrends.mockResolvedValue({

@@ -53,6 +53,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Async Apex Capacity Headroom**: System Doctor shows how much async Apex capacity the org has left: daily executions and pending executions. Each metric is Healthy, Degraded, Critical or Unknown. A Critical metric shows **Chain handoff at risk** before the Queueable chain stops. Read-only. 1 SOQL for the read. No new object. See [docs/async-capacity.md](docs/async-capacity.md).
 - **Watchdog Liveness**: Each complete watchdog sweep writes its time. System Doctor shows Healthy, Stale or Unknown. A stall sends one alert. The check runs outside the watchdog. It can find a dead watchdog. See [docs/watchdog-liveness.md](docs/watchdog-liveness.md).
 - **Declarative Recurring Schedules (0-slot)**: Create a `Workflow_Schedule__c` record to run any workflow on a cron cadence — no Apex, and **zero additional scheduled-job slots** beyond the existing watchdog. See [docs/recurring-schedules.md](docs/recurring-schedules.md).
+- **Schedule Health**: An enabled 0-slot schedule that does not fire within one sweep interval of its window shows as **Overdue**. A schedule whose last fire failed shows as **Last fire failed**. System Doctor and the Schedule Manager show both. Each problem sends one alert. No new job slot. See [docs/schedule-health.md](docs/schedule-health.md).
 
 ---
 
@@ -788,12 +789,16 @@ For modern ops routing (e.g., paging Slack, PagerDuty, Microsoft Teams, or mobil
 -   **Workflow Instance Id** (`Workflow_Instance_Id__c`): The ID of the `Workflow_Instance__c` record.
 -   **Correlation Key** (`Correlation_Key__c`): The external correlation key.
 -   **Error Message** (`Error_Message__c`): The failure error message, stall details, or stack trace (truncated to 20k characters for safe heap handling).
--   **Alert Reason** (`Alert_Reason__c`): The trigger reason: `'Consecutive Failures'`, `'Sliding Window'`, `'Immediate'`, `'Stall'`, or `'Watchdog Stall'`.
+-   **Alert Reason** (`Alert_Reason__c`): The trigger reason: `'Consecutive Failures'`, `'Sliding Window'`, `'Immediate'`, `'Stall'`, `'Watchdog Stall'`, `'Schedule Overdue'`, or `'Schedule Fire Failed'`.
 -   **Threshold Values**: Carries the triggering policy limits: `Consecutive_Failures_Limit__c`, `Failure_Count_Limit__c`, `Time_Window_Minutes__c`, and `Stall_Threshold_Minutes__c`.
 
 #### Watchdog Stall Alert
 
 When the watchdog heartbeat stops, the engine sends one `'Watchdog Stall'` alert. It uses the `WatchdogWorkflow` config, then `Default`. If no config exists, it sends no alert. The watchdog is stale when the time since its last complete sweep is more than 2 × the larger of the recorded and configured cadence (`Watchdog_Delay_Minutes__c`). The check runs outside the watchdog. It can find a dead watchdog. See [docs/watchdog-liveness.md](docs/watchdog-liveness.md).
+
+#### Schedule Health Alert
+
+When an enabled 0-slot schedule misses its window by more than one sweep interval, the engine sends one `'Schedule Overdue'` alert. When the last fire of an enabled schedule failed, it sends one `'Schedule Fire Failed'` alert for the failure streak. It uses the config for the schedule's workflow, then `Default`. If no config exists, it sends no alert. The engine never reports a disabled schedule. See [docs/schedule-health.md](docs/schedule-health.md).
 
 #### Subscribing via Flow (No-Code Integration)
 
@@ -907,6 +912,7 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
 - **Readiness**: A read-only install check list at the top of the tab. It checks the `Default` engine config, the `Default` alert config, the `WorkflowEventTrigger` status, the watchdog chain, and the access of your user to the engine objects and fields. Each `Warn` and `Fail` names the missing item and the fix. See [docs/readiness.md](docs/readiness.md).
 - **Watchdog Health**: `Running` means an active watchdog record exists; `Stopped` means none exists. Use **Watchdog Liveness** to see if sweeps occur.
 - **Watchdog Liveness**: Shows the last complete sweep, the minutes since it, and a state: **Healthy** (green), **Stale** (red, more than 2 × the cadence since the last sweep) or **Unknown** (no sweep recorded). Each read calculates the state. A dead watchdog shows red. The next sweep shows green. The read also sends the stall alert if no other call sent it. See [docs/watchdog-liveness.md](docs/watchdog-liveness.md).
+- **Schedule Health**: Lists each enabled schedule that is **Overdue** (red) or whose **Last fire failed** (orange), with the counts. Each read calculates the state. The panel shows a maximum of 50 schedules. See [docs/schedule-health.md](docs/schedule-health.md).
 - **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
 - **Async Apex Capacity**: The panel is read-only. It shows two metrics as percent used:
   - Daily async Apex executions (`System.OrgLimits` `DailyAsyncApexExecutions`, or the elastic limit when the org has one).

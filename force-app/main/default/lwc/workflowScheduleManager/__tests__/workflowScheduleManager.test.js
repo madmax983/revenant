@@ -202,3 +202,74 @@ describe("c-workflow-schedule-manager time zone selector", () => {
     expect(findSave().disabled).toBe(true);
   });
 });
+
+describe("c-workflow-schedule-manager health column (#126)", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function row(id, fields) {
+    return {
+      Id: id,
+      Name: id,
+      Workflow_Name__c: "MyWorkflow",
+      Cron_Expression__c: "0 2 * * *",
+      Enabled__c: true,
+      ...fields,
+    };
+  }
+
+  async function mountWith(rows) {
+    const element = createComponent();
+    getSchedules.emit(rows);
+    getWorkflowDefinitions.emit([]);
+    getTimeZones.emit(ZONES);
+    await flushPromises();
+    return element;
+  }
+
+  function tableData(element) {
+    return element.shadowRoot.querySelector("lightning-datatable").data;
+  }
+
+  it("adds a Health column", async () => {
+    const element = await mountWith([row("a", { healthStatus: "OK" })]);
+
+    const columns = element.shadowRoot.querySelector(
+      "lightning-datatable",
+    ).columns;
+    const health = columns.find((c) => c.fieldName === "healthLabel");
+    expect(health).toBeDefined();
+    expect(health.label).toBe("Health");
+  });
+
+  it("labels each health state", async () => {
+    const element = await mountWith([
+      row("ok", { healthStatus: "OK" }),
+      row("disabled", { healthStatus: "DISABLED", Enabled__c: false }),
+      row("late", { healthStatus: "OVERDUE", overdue: true }),
+      row("failed", { healthStatus: "FAILED", lastFireFailed: true }),
+      row("both", {
+        healthStatus: "OVERDUE",
+        overdue: true,
+        lastFireFailed: true,
+      }),
+      row("none", {}),
+    ]);
+
+    const labels = Object.fromEntries(
+      tableData(element).map((r) => [r.Id, r.healthLabel]),
+    );
+    expect(labels).toEqual({
+      ok: "OK",
+      disabled: "Disabled",
+      late: "Overdue",
+      failed: "Last fire failed",
+      both: "Overdue; last fire failed",
+      none: "—",
+    });
+  });
+});
