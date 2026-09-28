@@ -422,11 +422,15 @@ The action is **strictly read-only** (no transition, enqueue, signal, schedule, 
 
 **Cancelling a workflow.** _Cancel Workflow_ takes the same **Correlation Key or Workflow Instance ID** input as _Get Workflow Status_ and finds the instance the same way (a key follows the `ContinuedAsNew` chain; an Id does not).
 
-- **Run Compensations** — `true` (or empty) rolls back completed compensatable steps in LIFO order. The status goes `Cancelling`, then `Cancelled`. Each rolled-back step row is `Compensated`. `false` stops at once: status `Cancelled`, no rollback. See [ADR 0004](docs/adr/0004-cancel-workflow-invocable-action.md).
-- **Idempotency Key** — optional. A repeat with the same key for the same instance does nothing. It shares the key space of a keyed `Cancel` signal.
-- Outputs: `found` (`false` instead of a fault), `workflowInstanceId`, `cancelled` (`false` when the instance was already finished or a duplicate did the cancel), `isCompensating`, and `status`.
+- **Run Compensations** — `true` (or empty) rolls back the completed steps that can roll back, last step first. The status goes `Cancelling`, then `Cancelled`. Each rolled-back step row is `Compensated`. `false` stops at once: status `Cancelled`, no rollback. `false` on a `Cancelling` instance stops its rollback. See [ADR 0004](docs/adr/0004-cancel-workflow-invocable-action.md).
+- **Idempotency Key** — optional. A repeat with the same key for the same instance does nothing. All keyed signals (Signal Workflow) use the same keys, so do not reuse the key of a different signal.
+- Outputs: `found` (`false` instead of a fault), `workflowInstanceId`, `cancelled`, `isCompensating`, and `status`. `cancelled` is `false` when the instance is already finished, when a rollback is requested and a rollback already runs, when the key was already used, or when another row did the cancel.
 
-The action cancels active children through the engine cascade. It never faults on a finished instance. SOQL and DML do not grow with the Flow batch size. A repeat cancel with rollback does not start a second rollback. When two rows in one batch find the same instance, the first row wins.
+The action cancels active children through the engine cascade. It never faults on a finished instance. SOQL and DML **statements** do not grow with the Flow batch size. A repeat cancel with rollback does not start a second rollback. When two rows in one batch find the same instance, the first row that can act wins. A parent row with Run Compensations `false` also stops a child that another row asked to roll back.
+
+> Limits: each rollback row writes about 5 DML rows (claim, step cancel, compensation step, instance update, orchestrator event). Keep a batch under about 1,500 rollback rows (the limit is 10,000 DML rows). A key follows at most 50 `ContinuedAsNew` generations, the same as _Get Workflow Status_.
+>
+> Access: like _Signal Workflow_, the action runs in system mode and has no custom-permission check. Give access to the Apex class only to trusted users, and do not expose it in a guest screen flow.
 
 **Reference recipe** — start a workflow, then later branch on its outcome:
 

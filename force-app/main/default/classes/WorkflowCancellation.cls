@@ -46,8 +46,10 @@ public inherited sharing class WorkflowCancellation {
     'ContinuedAsNew'
   };
 
-  // Statuses of a node whose rollback already runs.
-  private static final Set<String> ROLLBACK_STATUSES = new Set<String>{
+  /**
+   * @description Statuses of a node whose rollback already runs.
+   */
+  public static final Set<String> ROLLBACK_STATUSES = new Set<String>{
     'Cancelling',
     'Compensating'
   };

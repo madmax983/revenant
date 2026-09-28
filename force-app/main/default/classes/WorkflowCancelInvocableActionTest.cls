@@ -671,11 +671,19 @@ private class WorkflowCancelInvocableActionTest {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c withRollback = insertSaga('OverloadComp');
       Workflow_Instance__c hardStop = insertSaga('OverloadHard');
+      Workflow_Instance__c empty = insertSaga('OverloadNull');
 
       Test.startTest();
       WorkflowEngine.cancel(withRollback.Id, true);
       WorkflowEngine.cancel(hardStop.Id, false);
+      WorkflowEngine.cancel(empty.Id, null);
       Test.stopTest();
+
+      Assert.areEqual(
+        'Cancelling',
+        statusOf(empty.Id),
+        'Null means rollback, same as the action'
+      );
 
       Assert.areEqual(
         'Cancelling',
@@ -686,6 +694,136 @@ private class WorkflowCancelInvocableActionTest {
         'Cancelled',
         statusOf(hardStop.Id),
         'statusOf(hardStop.Id) must be Cancelled'
+      );
+    }
+  }
+
+  // Writes a claim tombstone, as an earlier keyed signal or cancel does.
+  private static void useKey(Id instanceId, String key) {
+    insert WorkflowSignalBatchCancel.buildCancelClaim(
+      instanceId,
+      'Cancel',
+      key
+    );
+  }
+
+  @IsTest
+  static void testLaterRowRunsWhenFirstRowKeyIsUsed() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertSaga('UsedKey');
+      useKey(inst.Id, 'k-used');
+
+      Test.startTest();
+      List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
+        new List<WorkflowCancelInvocableAction.CancelRequest>{
+          req('UsedKey', false, 'k-used'),
+          req('UsedKey', false, 'k-new')
+        }
+      );
+      Test.stopTest();
+
+      Assert.isFalse(results[0].cancelled, 'A used key is a duplicate');
+      Assert.isTrue(results[1].cancelled, 'The next row with a new key acts');
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(inst.Id),
+        'The instance must not keep running'
+      );
+    }
+  }
+
+  @IsTest
+  static void testDuplicateDescendantRowIsNotCancelled() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = buildInstance('DupParent', 'Suspended');
+      insert parent;
+      Workflow_Instance__c child = buildInstance('DupChild', 'Pending');
+      child.Parent_Instance__c = parent.Id;
+      insert child;
+      useKey(child.Id, 'child-used');
+
+      Test.startTest();
+      List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
+        new List<WorkflowCancelInvocableAction.CancelRequest>{
+          req('DupParent', false, 'parent-new'),
+          req('DupChild', false, 'child-used')
+        }
+      );
+      Test.stopTest();
+
+      Assert.isTrue(results[0].cancelled, 'The parent row acts');
+      Assert.isFalse(
+        results[1].cancelled,
+        'A duplicate row is false, also when the parent cancels its instance'
+      );
+      Assert.areEqual('Cancelled', results[1].status, 'The status is current');
+    }
+  }
+
+  @IsTest
+  static void testParentHardStopWinsOverChildRollbackRow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = buildInstance('MixParent', 'Suspended');
+      insert parent;
+      Workflow_Instance__c child = buildSaga('MixChild');
+      child.Parent_Instance__c = parent.Id;
+      insert child;
+
+      Test.startTest();
+      List<WorkflowCancelInvocableAction.CancelResult> results = WorkflowCancelInvocableAction.cancelWorkflow(
+        new List<WorkflowCancelInvocableAction.CancelRequest>{
+          req('MixChild', true, null),
+          req('MixParent', false, null)
+        }
+      );
+      Test.stopTest();
+
+      Assert.isFalse(
+        results[0].cancelled,
+        'The child rollback did not run, so the row must be false'
+      );
+      Assert.isTrue(results[1].cancelled, 'The parent hard stop acts');
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(child.Id),
+        'The parent hard stop reaches the child'
+      );
+      Assert.areEqual(
+        0,
+        compensationRows(child.Id).size(),
+        'No rollback for the child'
+      );
+    }
+  }
+
+  @IsTest
+  static void testRollbackRowOnRollingBackParentLeavesChildren() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = buildSaga('BusyParent');
+      parent.Status__c = 'Cancelling';
+      insert parent;
+      Workflow_Instance__c child = buildSaga('StalledChild');
+      child.Status__c = 'CompensationFailed';
+      child.Parent_Instance__c = parent.Id;
+      insert child;
+
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'BusyParent',
+        true,
+        null
+      );
+      Test.stopTest();
+
+      Assert.isFalse(res.cancelled, 'The parent rollback already runs');
+      Assert.areEqual(
+        'CompensationFailed',
+        statusOf(child.Id),
+        'A no-op row must not change a child'
       );
     }
   }

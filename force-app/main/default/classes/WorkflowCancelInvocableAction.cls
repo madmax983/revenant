@@ -9,12 +9,6 @@ public inherited sharing class WorkflowCancelInvocableAction {
   // Signal name on the claim tombstone. Same as the Cancel control signal.
   private static final String CLAIM_SIGNAL_NAME = 'Cancel';
 
-  // Statuses of an instance whose rollback runs.
-  private static final Set<String> ROLLBACK_STATUSES = new Set<String>{
-    'Cancelling',
-    'Compensating'
-  };
-
   /**
    * @description One cancel request from Flow.
    */
@@ -28,13 +22,13 @@ public inherited sharing class WorkflowCancelInvocableAction {
 
     @InvocableVariable(
       label='Run Compensations'
-      description='True rolls back completed compensatable steps (LIFO). False stops at once with no rollback. Empty means true.'
+      description='True rolls back the completed steps that can roll back, last step first. False stops at once with no rollback. Empty means true.'
     )
     public Boolean runCompensations;
 
     @InvocableVariable(
       label='Idempotency Key'
-      description='Optional. A repeat with the same key for the same instance does nothing. Same key space as Signal Workflow.'
+      description='Optional. A repeat with the same key for the same instance does nothing. Signal Workflow uses the same keys, so do not use a key of a different signal.'
     )
     public String idempotencyKey;
   }
@@ -56,8 +50,8 @@ public inherited sharing class WorkflowCancelInvocableAction {
     public Id workflowInstanceId;
 
     @InvocableVariable(
-      label='Cancelled'
-      description='True when this request cancelled the instance. False when the instance was not found, was already finished, or a duplicate request did it.'
+      label='Cancelled By This Request'
+      description='True when this request cancelled the instance. False when the instance was not found, was already finished or rolling back, or another request did it.'
     )
     public Boolean cancelled;
 
@@ -103,17 +97,32 @@ public inherited sharing class WorkflowCancelInvocableAction {
       return new List<CancelResult>();
     }
     CancelBatch batch = new CancelBatch(requests);
-    Set<Id> cancelledIds = cancelOwners(batch);
-    return assembleResults(batch, cancelledIds);
+    Set<Id> cancelledRoots = new Set<Id>();
+    if (batch.hasCandidates()) {
+      Savepoint sp = Database.setSavepoint();
+      // A claim error rolls back to sp and throws inside claimKeyedRows.
+      batch.selectOwners(claimKeyedRows(batch, sp));
+      try {
+        cancelledRoots = cancelOwners(batch);
+      } catch (Exception e) {
+        Database.rollback(sp);
+        throw e;
+      }
+    }
+    return assembleResults(batch, cancelledRoots);
   }
 
   /**
-   * @description The rows of one call, their resolved instances, and the owner
-   * row of each live instance. The first row for an instance is its owner.
+   * @description The rows of one call and their resolved instances. A row is a
+   * candidate when its instance is live and, for a rollback row, not already
+   * rolling back. The first candidate row per instance whose key is not a
+   * duplicate is the owner. Only an owner row cancels.
    */
   private class CancelBatch {
     final List<CancelRequest> requests;
     final List<Workflow_Instance__c> resolved;
+    // Claim key per row (null when the row has no claim).
+    final List<String> claimKeys = new List<String>();
     final Map<Id, Integer> ownerRows = new Map<Id, Integer>();
 
     CancelBatch(List<CancelRequest> requests) {
@@ -123,19 +132,45 @@ public inherited sharing class WorkflowCancelInvocableAction {
         keysOrIds.add((req == null) ? null : req.workflowKeyOrId);
       }
       this.resolved = WorkflowStatusInvocableAction.resolveInstances(keysOrIds);
+    }
+
+    // True when row i asks for a rollback. Empty means true.
+    Boolean wantsRollback(Integer i) {
+      return requests[i].runCompensations != false;
+    }
+
+    // True when row i can cancel its instance.
+    Boolean isCandidate(Integer i) {
+      Workflow_Instance__c inst = resolved[i];
+      return inst != null &&
+        !WorkflowCancellation.TERMINAL_STATUSES.contains(inst.Status__c) &&
+        !(wantsRollback(i) &&
+        WorkflowCancellation.ROLLBACK_STATUSES.contains(inst.Status__c));
+    }
+
+    Boolean hasCandidates() {
       for (Integer i = 0; i < resolved.size(); i++) {
-        Workflow_Instance__c inst = resolved[i];
+        if (isCandidate(i)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Picks the owner rows. A row whose claim key lost is a duplicate.
+    void selectOwners(Set<String> lostKeys) {
+      for (Integer i = 0; i < resolved.size(); i++) {
         if (
-          inst != null &&
-          !WorkflowCancellation.TERMINAL_STATUSES.contains(inst.Status__c) &&
-          !ownerRows.containsKey(inst.Id)
+          isCandidate(i) &&
+          !lostKeys.contains(claimKeys[i]) &&
+          !ownerRows.containsKey(resolved[i].Id)
         ) {
-          ownerRows.put(inst.Id, i);
+          ownerRows.put(resolved[i].Id, i);
         }
       }
     }
 
-    // True when row i is the owner row of its live instance.
+    // True when row i is the owner row of its instance.
     Boolean isOwner(Integer i) {
       Workflow_Instance__c inst = resolved[i];
       return inst != null && ownerRows.get(inst.Id) == i;
@@ -143,91 +178,86 @@ public inherited sharing class WorkflowCancelInvocableAction {
   }
 
   /**
-   * @description Claims the keyed rows, then cancels the owner rows in one engine
-   * call for each Run Compensations value. On an error, it rolls back the claims
-   * and the cancels, then throws.
-   * @param batch The rows of the call.
-   * @return The Ids that the engine cancelled.
-   */
-  private static Set<Id> cancelOwners(CancelBatch batch) {
-    if (batch.ownerRows.isEmpty()) {
-      return new Set<Id>();
-    }
-    Savepoint sp = Database.setSavepoint();
-    // A claim error rolls back to sp and throws inside claimKeyedRows.
-    Set<Id> duplicates = claimKeyedRows(batch, sp);
-    try {
-      List<Id> hardStopIds = new List<Id>();
-      List<Id> rollbackIds = new List<Id>();
-      for (Integer i = 0; i < batch.resolved.size(); i++) {
-        if (!batch.isOwner(i) || duplicates.contains(batch.resolved[i].Id)) {
-          continue;
-        }
-        if (batch.requests[i].runCompensations == false) {
-          hardStopIds.add(batch.resolved[i].Id);
-        } else {
-          rollbackIds.add(batch.resolved[i].Id);
-        }
-      }
-      Set<Id> cancelledIds = WorkflowCancellation.cancelInstances(hardStopIds);
-      cancelledIds.addAll(
-        WorkflowCancellation.cancelWithCompensationsInstances(rollbackIds)
-      );
-      return cancelledIds;
-    } catch (Exception e) {
-      Database.rollback(sp);
-      throw e;
-    }
-  }
-
-  /**
-   * @description Writes one claim tombstone for each keyed owner row, in one DML.
-   * Uses the same row and key as a keyed Cancel signal.
+   * @description Writes one claim tombstone for each distinct (instance, key)
+   * pair of the keyed candidate rows, in one DML. Uses the same row and key as a
+   * keyed Cancel signal. Sets the claim key of each keyed candidate row.
    * @param batch The rows of the call.
    * @param sp The savepoint to roll back on a claim error.
-   * @return The instance Ids whose key was already claimed.
+   * @return The claim keys that were already claimed (duplicates).
    */
-  private static Set<Id> claimKeyedRows(CancelBatch batch, Savepoint sp) {
+  private static Set<String> claimKeyedRows(CancelBatch batch, Savepoint sp) {
     List<Workflow_Signal__c> claims = new List<Workflow_Signal__c>();
-    List<Id> claimIds = new List<Id>();
+    Set<String> seen = new Set<String>();
     for (Integer i = 0; i < batch.resolved.size(); i++) {
-      if (
-        !batch.isOwner(i) || String.isBlank(batch.requests[i].idempotencyKey)
-      ) {
+      String key = batch.isCandidate(i)
+        ? batch.requests[i].idempotencyKey
+        : null;
+      if (String.isBlank(key)) {
+        batch.claimKeys.add(null);
         continue;
       }
-      Id instanceId = batch.resolved[i].Id;
-      claims.add(
-        WorkflowSignalBatchCancel.buildCancelClaim(
-          instanceId,
-          CLAIM_SIGNAL_NAME,
-          batch.requests[i].idempotencyKey
-        )
+      Workflow_Signal__c claim = WorkflowSignalBatchCancel.buildCancelClaim(
+        batch.resolved[i].Id,
+        CLAIM_SIGNAL_NAME,
+        key
       );
-      claimIds.add(instanceId);
+      batch.claimKeys.add(claim.Signal_Key__c);
+      if (seen.add(claim.Signal_Key__c)) {
+        claims.add(claim);
+      }
     }
-    Set<Id> duplicates = new Set<Id>(claimIds);
+    Set<String> lostKeys = new Set<String>(seen);
     if (claims.isEmpty()) {
-      return duplicates;
+      return lostKeys;
     }
     for (
       Integer won : WorkflowSignalBatchCancel.insertCancelClaims(claims, sp)
     ) {
-      duplicates.remove(claimIds[won]);
+      lostKeys.remove(claims[won].Signal_Key__c);
     }
-    return duplicates;
+    return lostKeys;
+  }
+
+  /**
+   * @description Cancels the owner rows in one engine call for each Run
+   * Compensations value. The hard-stop call runs first. A parent hard stop
+   * therefore also stops a child that another row asked to roll back.
+   * @param batch The rows of the call, with owners selected.
+   * @return The root Ids that their own row cancelled.
+   */
+  private static Set<Id> cancelOwners(CancelBatch batch) {
+    List<Id> hardStopIds = new List<Id>();
+    List<Id> rollbackIds = new List<Id>();
+    for (Integer i = 0; i < batch.resolved.size(); i++) {
+      if (!batch.isOwner(i)) {
+        continue;
+      }
+      if (batch.wantsRollback(i)) {
+        rollbackIds.add(batch.resolved[i].Id);
+      } else {
+        hardStopIds.add(batch.resolved[i].Id);
+      }
+    }
+    Set<Id> cancelledRoots = new Set<Id>(hardStopIds);
+    cancelledRoots.retainAll(WorkflowCancellation.cancelInstances(hardStopIds));
+    Set<Id> rolledBack = new Set<Id>(rollbackIds);
+    rolledBack.retainAll(
+      WorkflowCancellation.cancelWithCompensationsInstances(rollbackIds)
+    );
+    cancelledRoots.addAll(rolledBack);
+    return cancelledRoots;
   }
 
   /**
    * @description Builds one result per row. Reads the status again (one query),
    * so each row shows the status after the cancel.
    * @param batch The rows of the call.
-   * @param cancelledIds The Ids that the engine cancelled.
+   * @param cancelledRoots The root Ids that their own row cancelled.
    * @return One result per row, in order.
    */
   private static List<CancelResult> assembleResults(
     CancelBatch batch,
-    Set<Id> cancelledIds
+    Set<Id> cancelledRoots
   ) {
     Map<Id, Workflow_Instance__c> current = readStatuses(batch.resolved);
     List<CancelResult> results = new List<CancelResult>();
@@ -239,8 +269,10 @@ public inherited sharing class WorkflowCancelInvocableAction {
         res.found = true;
         res.workflowInstanceId = inst.Id;
         res.status = (latest == null) ? inst.Status__c : latest.Status__c;
-        res.isCompensating = ROLLBACK_STATUSES.contains(res.status);
-        res.cancelled = batch.isOwner(i) && cancelledIds.contains(inst.Id);
+        res.isCompensating = WorkflowCancellation.ROLLBACK_STATUSES.contains(
+          res.status
+        );
+        res.cancelled = batch.isOwner(i) && cancelledRoots.contains(inst.Id);
       }
       results.add(res);
     }

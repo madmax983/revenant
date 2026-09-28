@@ -33,16 +33,30 @@ the cancel phase through a resumed rollback.
 5. Keep the engine terminal state. A cancel with rollback goes `Cancelling`,
    then `Cancelled`. Each rolled-back step row is `Compensated`. The action
    returns `isCompensating` so that a Flow can see that the rollback runs.
-6. Add the public overload `WorkflowEngine.cancel(Id, Boolean)`.
+6. Add the public overload `WorkflowEngine.cancel(Id, Boolean)`. Null means
+   `true`, the same as the action and the Cancel signal.
+7. A row is a candidate when its instance is live and, for a rollback row, not
+   already rolling back. The action writes the claims first. The first
+   candidate row per instance whose key is not a duplicate is the owner.
+8. The hard-stop call runs before the rollback call. `cancelled` is true only
+   when the row's own group call cancelled its root.
 
 ## Consequences
 
 - One declarative action. No internal signal name. No JSON.
-- SOQL and DML do not grow with the row count.
+- SOQL and DML statements do not grow with the row count. DML rows do: about
+  5 per rollback row. The limit is 10,000 rows.
 - A repeat with rollback does not run the rollback two times, with or without
   a key.
 - A repeat without rollback on a `Cancelling` instance stops the rollback.
   This is the "hard stop" of the engine cancel.
+- Idempotency keys are shared with all keyed signals, not only Cancel.
+- A key follows at most 50 `ContinuedAsNew` generations (shared resolver).
+- If the instance continues as new between the read and the lock, the row
+  returns `cancelled=false` and status `ContinuedAsNew`. A retry finds the
+  successor.
+- The action runs in system mode with no custom-permission check, the same as
+  Signal Workflow. Apex class access controls use.
 - The invocable contract is permanent. Change it only by adding fields.
 - The AC text "terminal state `Compensated`" is not met as written. The owner
   accepted this deviation.
