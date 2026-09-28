@@ -2,23 +2,32 @@
  * @description Flow- and Process-Builder-invocable entry point for delivering signals to
  * running workflow instances, adapting invocable request rows into engine signal requests.
  */
-public inherited sharing class WorkflowSignalInvocableAction {
+global inherited sharing class WorkflowSignalInvocableAction {
+  /**
+   * @description Keeps construction in the package namespace. Without an
+   * explicit constructor, a global class gets a global default
+   * constructor (issue #122).
+   */
+  private WorkflowSignalInvocableAction() {
+    // No state to set.
+  }
+
   /**
    * @description Invocable request describing a single signal to deliver to a workflow
    * instance, addressed by correlation key or instance Id.
    */
-  public class SignalRequest {
+  global class SignalRequest {
     @InvocableVariable(label='Correlation Key / Instance ID' required=true)
-    public String targetKey;
+    global String targetKey;
 
     @InvocableVariable(label='Signal Name' required=true)
-    public String signalName;
+    global String signalName;
 
     @InvocableVariable(label='Payload JSON')
-    public String payloadJson;
+    global String payloadJson;
 
     @InvocableVariable(label='Idempotency Key')
-    public String idempotencyKey;
+    global String idempotencyKey;
   }
 
   @InvocableMethod(
@@ -31,7 +40,7 @@ public inherited sharing class WorkflowSignalInvocableAction {
    * dispatches the batch to the workflow engine, skipping null rows.
    * @param requests The invocable signal requests to deliver; null or empty is a no-op.
    */
-  public static void signalWorkflow(List<SignalRequest> requests) {
+  global static void signalWorkflow(List<SignalRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return;
     }

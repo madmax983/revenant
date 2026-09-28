@@ -15,7 +15,7 @@
  * The hottest author reads (identity/input fields, `attempt`, `isFinalAttempt()`,
  * `idempotencyKey`, `shouldYield()`) stay directly on the context.
  */
-public inherited sharing class StepContext {
+global inherited sharing class StepContext {
   /** Log_Type__c value stamped on persisted step breadcrumbs. */
   public static final String LOG_TYPE_BREADCRUMB = 'StepBreadcrumb';
 
@@ -46,7 +46,7 @@ public inherited sharing class StepContext {
   /**
    * Logging severity levels for step breadcrumbs.
    */
-  public enum Level {
+  global enum Level {
     INFO,
     WARN,
     ERROR
@@ -77,30 +77,30 @@ public inherited sharing class StepContext {
   }
 
   /** The Id of the Workflow_Instance__c this step is executing for. */
-  public Id workflowInstanceId { get; private set; }
+  global Id workflowInstanceId { get; private set; }
   /** The developer name of the workflow definition being executed. */
-  public String workflowName { get; private set; }
+  global String workflowName { get; private set; }
   /** The name of the step currently executing. */
-  public String stepName { get; private set; }
+  global String stepName { get; private set; }
   /** JSON input passed to this step by the transition that scheduled it. */
-  public String inputJson { get; private set; }
+  global String inputJson { get; private set; }
   /** JSON output produced by the immediately preceding step, if any. */
-  public String previousStepOutput { get; private set; }
+  global String previousStepOutput { get; private set; }
   /** JSON durable state persisted for this step across re-executions. */
-  public String stepStateJson { get; private set; }
+  global String stepStateJson { get; private set; }
   /** JSON input the workflow instance was originally started with. */
-  public String workflowInputJson { get; private set; }
+  global String workflowInputJson { get; private set; }
   /** The version of the workflow definition this instance is pinned to. */
-  public Integer workflowVersion { get; private set; }
+  global Integer workflowVersion { get; private set; }
   /** The 1-based attempt number of the current step execution. */
-  public Integer attempt { get; private set; }
+  global Integer attempt { get; private set; }
 
   /**
    * @description True when the current attempt is the last one permitted, so a
    * step can branch to a terminal fallback instead of requesting another retry.
    * @return True if this attempt has reached the retry maxAttempts.
    */
-  public Boolean isFinalAttempt() {
+  global Boolean isFinalAttempt() {
     return this.attempt >= this.stepRetry.maxAttempts;
   }
 
@@ -129,7 +129,7 @@ public inherited sharing class StepContext {
    * step did using that step's recorded input/output, never a re-scan since
    * previousRunAt (which can drift to records the forward run never touched).
    */
-  public Datetime previousRunAt { get; private set; }
+  global Datetime previousRunAt { get; private set; }
 
   /**
    * A stable, read-only idempotency key for this logical step execution.
@@ -159,7 +159,7 @@ public inherited sharing class StepContext {
    *   "<step>_Compensate", so the compensation key is automatically stable for a
    *   given forward step yet distinct from that step's own forward key.
    */
-  public String idempotencyKey {
+  global String idempotencyKey {
     get {
       return deriveIdempotencyKey(
         this.workflowInstanceId,
@@ -173,7 +173,7 @@ public inherited sharing class StepContext {
    * @description Breadcrumb logging accessor for this step execution.
    * @return The StepLog owning this context's buffered breadcrumbs.
    */
-  public StepLog logger() {
+  global StepLog logger() {
     return this.stepLog;
   }
 
@@ -181,7 +181,7 @@ public inherited sharing class StepContext {
    * @description Progress-snapshot accessor for this step execution.
    * @return The StepProgress owning this context's buffered progress snapshot.
    */
-  public StepProgress progress() {
+  global StepProgress progress() {
     return this.stepProgress;
   }
 
@@ -189,7 +189,7 @@ public inherited sharing class StepContext {
    * @description Outbound event accessor for this step execution.
    * @return The StepEmitter owning this context's buffered outbound events.
    */
-  public StepEmitter events() {
+  global StepEmitter events() {
     return this.stepEmitter;
   }
 
@@ -198,7 +198,7 @@ public inherited sharing class StepContext {
    * execution.
    * @return The StepSignals owning this context's signal reads and claim state.
    */
-  public StepSignals signals() {
+  global StepSignals signals() {
     return this.stepSignals;
   }
 
@@ -207,7 +207,7 @@ public inherited sharing class StepContext {
    * step execution.
    * @return The StepCaptures owning this context's captured values and patches.
    */
-  public StepCaptures captures() {
+  global StepCaptures captures() {
     return this.stepCaptures;
   }
 
@@ -215,7 +215,7 @@ public inherited sharing class StepContext {
    * @description Attempt/retry/error metadata accessor for this step execution.
    * @return The StepRetryInfo owning this context's retry and error fields.
    */
-  public StepRetryInfo retry() {
+  global StepRetryInfo retry() {
     return this.stepRetry;
   }
 
@@ -224,13 +224,13 @@ public inherited sharing class StepContext {
    * Carries the author-interpreted name and payload string; the internal record
    * id is exposed so the engine can tie consumption to the step's transition.
    */
-  public class Signal implements Comparable {
+  global class Signal implements Comparable {
     /** The Id of the underlying Workflow_Signal__c record. */
     public Id signalId { get; private set; }
     /** The author-interpreted signal name this row was delivered under. */
-    public String name { get; private set; }
+    global String name { get; private set; }
     /** The signal's payload string, or null for the empty sentinel. */
-    public String payload { get; private set; }
+    global String payload { get; private set; }
     // Arrival timestamp (Workflow_Signal__c.CreatedDate). Used to keep merged
     // signal lists in deterministic arrival order even when a row was already
     // claimed out of a later re-query. Null for the empty sentinel and for
@@ -297,7 +297,7 @@ public inherited sharing class StepContext {
      * empty result sentinel).
      * @return True if a matching signal is present.
      */
-    public Boolean isPresent() {
+    global Boolean isPresent() {
       return present;
     }
 
@@ -656,7 +656,7 @@ public inherited sharing class StepContext {
    * @return True if the transaction is nearing a governor limit and the step
    * should yield.
    */
-  public Boolean shouldYield() {
+  global Boolean shouldYield() {
     return StepGovernor.isNearingLimit();
   }
 
@@ -689,13 +689,13 @@ public inherited sharing class StepContext {
    * @description Read-only result of a child (sub-workflow) execution, resolved
    * from the ChildCompleted/ChildFailed signals a parent step observes.
    */
-  public class ChildOutcome {
+  global class ChildOutcome {
     /** The child's terminal status, e.g. 'Completed' or 'Failed'. */
-    public String status { get; private set; }
+    global String status { get; private set; }
     /** The child's error message when it failed, else null. */
-    public String errorMessage { get; private set; }
+    global String errorMessage { get; private set; }
     /** The child's output payload, resolved from its completion signal. */
-    public String output { get; private set; }
+    global String output { get; private set; }
     private Boolean present = false;
 
     /**
@@ -724,7 +724,7 @@ public inherited sharing class StepContext {
      * empty sentinel).
      * @return True if this outcome represents a real child result.
      */
-    public Boolean isPresent() {
+    global Boolean isPresent() {
       return this.present;
     }
 
@@ -732,7 +732,7 @@ public inherited sharing class StepContext {
      * @description True when the child completed successfully.
      * @return True if the child's status is 'Completed'.
      */
-    public Boolean isSuccess() {
+    global Boolean isSuccess() {
       return this.status == 'Completed';
     }
   }

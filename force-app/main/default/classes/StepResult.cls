@@ -1,7 +1,16 @@
 /**
- * @description Immutable directive a WorkflowStep returns to tell the engine what to do next — complete, yield, suspend, retry, sleep, split, start children, wait for approval, continue-as-new, or fail — built through the static factory methods on this class. The engine reads the resulting transition data through the grouped value object returned by directive(); step authors keep constructing results through the ergonomic factories and fluent chaining and never touch directive() (it is read-only).
+ * @description Immutable directive a WorkflowStep returns to tell the engine what to do next — complete, yield, suspend, retry, sleep, split, start children, wait for approval, continue-as-new, or fail — built through the static factory methods on this class. The engine reads the resulting transition data through the grouped value object returned by directive(); step authors build results through the factories and fluent chaining. A definition can read directive().nextStepName and directive().outputJson in getNextStep. These two are global and read-only outside the package (issue #122).
  */
-public inherited sharing class StepResult {
+global inherited sharing class StepResult {
+  /**
+   * @description Keeps construction in the package namespace. Without an
+   * explicit constructor, a global class gets a global default
+   * constructor (issue #122).
+   */
+  public StepResult() {
+    // No state to set.
+  }
+
   /** @description The grouped, engine-facing transition data this result carries. */
   private StepDirective directiveData = new StepDirective();
 
@@ -25,7 +34,16 @@ public inherited sharing class StepResult {
   /**
    * @description Grouped, engine-facing read model of a step transition. Every datum the engine inspects to enact a StepResult lives here — scalars directly, and the retry/timeout/continue-as-new fields behind small grouped sub-objects so this type stays within the public-member limit. The enclosing StepResult exposes exactly one accessor, directive(), so this whole surface stays off StepResult's own public member count. Populated only by StepResult's own factory and fluent methods — authors never construct or mutate it directly.
    */
-  public class StepDirective {
+  global class StepDirective {
+    /**
+     * @description Keeps construction in the package namespace. Without an
+     * explicit constructor, a global class gets a global default
+     * constructor (issue #122).
+     */
+    public StepDirective() {
+      // No state to set.
+    }
+
     /** @description Retry backoff/attempt data, for RETRY. Never null. */
     public RetryDirective retry = new RetryDirective();
     /** @description Durable-wait timeout data (issue #35). Never null. */
@@ -36,9 +54,9 @@ public inherited sharing class StepResult {
     /** @description The kind of transition this result requests. */
     public ActionType action { get; set; }
     /** @description The name of the next step to run, when applicable. */
-    public String nextStepName { get; set; }
+    global String nextStepName { get; public set; }
     /** @description The step's serialized output payload, or null. */
-    public String outputJson { get; set; }
+    global String outputJson { get; public set; }
     /** @description Opaque durable step state persisted across a yield/suspend/sleep. */
     public String stepStateJson { get; set; }
     /** @description Duration in seconds the engine should sleep before resuming. */
@@ -112,10 +130,10 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Returns the grouped, read-only transition data the engine inspects to enact this result (e.g. result.directive().action, result.directive().outputJson, result.directive().retry.policy, result.directive().timeout.step). Step authors do not call this — they build results through the static factories and fluent methods.
+   * @description Returns the grouped, read-only transition data the engine inspects to enact this result (e.g. result.directive().action, result.directive().outputJson, result.directive().retry.policy, result.directive().timeout.step). Subscribers can read only nextStepName and outputJson (issue #122).
    * @return The StepDirective carrying this result's transition data.
    */
-  public StepDirective directive() {
+  global StepDirective directive() {
     return this.directiveData;
   }
 
@@ -125,7 +143,7 @@ public inherited sharing class StepResult {
    * @param output The step output to serialize, or null for no output.
    * @return A COMPLETE result carrying the next step and serialized output.
    */
-  public static StepResult complete(String nextStepName, Object output) {
+  global static StepResult complete(String nextStepName, Object output) {
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.COMPLETE;
     r.directiveData.nextStepName = nextStepName;
@@ -140,7 +158,7 @@ public inherited sharing class StepResult {
    * @param stepStateJson Opaque durable state carried into the next re-drive.
    * @return A YIELD result carrying the persisted step state.
    */
-  public static StepResult yield(String stepStateJson) {
+  global static StepResult yield(String stepStateJson) {
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.YIELD;
     r.directiveData.stepStateJson = stepStateJson;
@@ -151,7 +169,7 @@ public inherited sharing class StepResult {
    * @description Suspends the step indefinitely to await an external signal or approval. To persist durable state while suspended, chain withStepState(json).
    * @return A SUSPEND result with no persisted state or timeout.
    */
-  public static StepResult suspend() {
+  global static StepResult suspend() {
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.SUSPEND;
     return r;
@@ -163,7 +181,7 @@ public inherited sharing class StepResult {
    * @param timeoutStep The non-blank step to route to on timeout.
    * @return A SUSPEND result armed with the timeout and timeout step.
    */
-  public static StepResult suspend(Integer timeoutSeconds, String timeoutStep) {
+  global static StepResult suspend(Integer timeoutSeconds, String timeoutStep) {
     StepResultValidator.requirePositiveTimeout(
       timeoutSeconds,
       timeoutStep,
@@ -181,7 +199,7 @@ public inherited sharing class StepResult {
    * @param policy The non-null retry policy controlling delay and max attempts.
    * @return A RETRY result carrying the retry policy.
    */
-  public static StepResult retry(RetryPolicy policy) {
+  global static StepResult retry(RetryPolicy policy) {
     StepResultValidator.requireNonNull(
       policy,
       'StepResult.retry: policy must not be null'
@@ -197,7 +215,7 @@ public inherited sharing class StepResult {
    * @param seconds The non-negative number of seconds to sleep.
    * @return A SLEEP result carrying the sleep duration.
    */
-  public static StepResult sleep(Integer seconds) {
+  global static StepResult sleep(Integer seconds) {
     StepResultValidator.requireNonNegativeSeconds(
       seconds,
       'StepResult.sleep: seconds must be a non-negative integer'
@@ -215,7 +233,7 @@ public inherited sharing class StepResult {
    * @param businessHoursName The name of the BusinessHours calendar to resolve against.
    * @return A SLEEP result whose duration reflects the business-hours-adjusted wake time.
    */
-  public static StepResult sleep(
+  global static StepResult sleep(
     Integer amount,
     String unit,
     String businessHoursName
@@ -235,7 +253,7 @@ public inherited sharing class StepResult {
    * @param stepStateJson The opaque durable state to persist across the wait.
    * @return This StepResult, for fluent chaining.
    */
-  public StepResult withStepState(String stepStateJson) {
+  global StepResult withStepState(String stepStateJson) {
     this.directiveData.stepStateJson = stepStateJson;
     return this;
   }
@@ -247,7 +265,7 @@ public inherited sharing class StepResult {
    * @param input The child input, serialized if needed.
    * @return A START_CHILD result describing the child to start.
    */
-  public static StepResult startChild(
+  global static StepResult startChild(
     String childWorkflowName,
     String childCorrelationKey,
     Object input
@@ -267,13 +285,13 @@ public inherited sharing class StepResult {
   /**
    * @description One child workflow to start when a step fans out to multiple children via startChildren.
    */
-  public class ChildRequest {
+  global class ChildRequest {
     /** @description Name of the child workflow to start. */
-    public String workflowName { get; set; }
+    global String workflowName { get; public set; }
     /** @description Correlation key identifying the child instance. */
-    public String correlationKey { get; set; }
+    global String correlationKey { get; public set; }
     /** @description Serialized input passed to the child workflow. */
-    public String inputJson { get; set; }
+    global String inputJson { get; public set; }
 
     /**
      * @description Constructs a child request, validating the workflow name and serializing the input as needed.
@@ -281,7 +299,7 @@ public inherited sharing class StepResult {
      * @param correlationKey The correlation key identifying the child instance.
      * @param input The child input, serialized if needed.
      */
-    public ChildRequest(
+    global ChildRequest(
       String workflowName,
       String correlationKey,
       Object input
@@ -301,7 +319,7 @@ public inherited sharing class StepResult {
    * @param children The non-empty list of child requests to start.
    * @return A START_CHILDREN result carrying the child requests.
    */
-  public static StepResult startChildren(List<ChildRequest> children) {
+  global static StepResult startChildren(List<ChildRequest> children) {
     StepResultValidator.requireValidChildren(children);
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.START_CHILDREN;
@@ -315,7 +333,7 @@ public inherited sharing class StepResult {
    * @param role The role authorized to approve, or null for any.
    * @return A WAIT_FOR_APPROVAL result carrying the approval key and role.
    */
-  public static StepResult waitForApproval(String key, String role) {
+  global static StepResult waitForApproval(String key, String role) {
     StepResultValidator.requireNonBlank(
       key,
       'StepResult.waitForApproval: key must not be blank'
@@ -333,7 +351,7 @@ public inherited sharing class StepResult {
    * @param timeoutStep The non-blank step to route to on timeout.
    * @return This StepResult, for fluent chaining.
    */
-  public StepResult withApprovalTimeout(
+  global StepResult withApprovalTimeout(
     Integer timeoutSeconds,
     String timeoutStep
   ) {
@@ -352,7 +370,7 @@ public inherited sharing class StepResult {
    * @param stepNames The non-empty list of step names to run in parallel.
    * @return A SPLIT result carrying the parallel step names.
    */
-  public static StepResult split(List<String> stepNames) {
+  global static StepResult split(List<String> stepNames) {
     StepResultValidator.requireValidStepNames(stepNames);
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.SPLIT;
@@ -366,7 +384,7 @@ public inherited sharing class StepResult {
    * @param input The shared branch input, serialized if needed.
    * @return A SPLIT result carrying the parallel step names and shared input.
    */
-  public static StepResult split(List<String> stepNames, Object input) {
+  global static StepResult split(List<String> stepNames, Object input) {
     StepResultValidator.requireValidStepNames(stepNames);
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.SPLIT;
@@ -380,7 +398,7 @@ public inherited sharing class StepResult {
    * @param nextInput The input seeding the continued instance, serialized if needed.
    * @return A CONTINUE_AS_NEW result carrying the next input.
    */
-  public static StepResult continueAsNew(Object nextInput) {
+  global static StepResult continueAsNew(Object nextInput) {
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.CONTINUE_AS_NEW;
     r.directiveData.continuation.nextInputJson = StepResultJson.serialize(
@@ -396,7 +414,7 @@ public inherited sharing class StepResult {
    * @param customKey The correlation key to assign to the continued instance.
    * @return A CONTINUE_AS_NEW result carrying the next input and correlation key.
    */
-  public static StepResult continueAsNew(Object nextInput, String customKey) {
+  global static StepResult continueAsNew(Object nextInput, String customKey) {
     StepResult r = new StepResult();
     r.directiveData.action = ActionType.CONTINUE_AS_NEW;
     r.directiveData.continuation.nextInputJson = StepResultJson.serialize(
@@ -411,7 +429,7 @@ public inherited sharing class StepResult {
    * @param reason The non-blank operator-readable failure reason.
    * @return A FAIL result carrying the failure reason.
    */
-  public static StepResult fail(String reason) {
+  global static StepResult fail(String reason) {
     return fail(reason, null);
   }
 
@@ -421,7 +439,7 @@ public inherited sharing class StepResult {
    * @param failureData Structured failure data to serialize, or null.
    * @return A FAIL result carrying the reason and serialized failure data.
    */
-  public static StepResult fail(String reason, Object failureData) {
+  global static StepResult fail(String reason, Object failureData) {
     StepResultValidator.requireNonBlank(
       reason,
       'StepResult.fail: reason must not be blank'

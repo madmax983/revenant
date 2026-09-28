@@ -3,7 +3,7 @@
  * its full step inventory, entry point, and the transition function the engine
  * consults to route from one completed step to the next.
  */
-public interface WorkflowDefinition {
+global interface WorkflowDefinition {
   /**
    * @description Declares the complete set of step class names involved in this workflow.
    * Each entry is a fully-qualified Apex class name that must resolve via

@@ -774,6 +774,7 @@ Admins can subscribe to `Workflow_Alert__e` via a standard record-triggered Flow
 ```bash
 sf project deploy start          # deploy to default scratch org
 sf apex run test -w 10           # run the full test suite
+npm run test:global-api          # check the frozen global API (docs/global-api.md)
 ```
 
 For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.
@@ -881,6 +882,9 @@ By default, Salesforce Platform Event triggers (like `WorkflowEventTrigger`) exe
 ## Packaging Revenant
 
 Revenant supports being packaged inside a Managed Package (1GP or 2GP) and installed in subscriber orgs. The engine resolves workflow and step classes dynamically across the namespace boundary.
+
+### Global API (What Subscribers Can See)
+A subscriber sees only `global` Apex. Revenant makes a small, frozen set `global`: the step and definition interfaces, `StepContext` and its accessors, `StepResult`, `RetryPolicy`, `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`), `WorkflowStatusRead.getStatus`, and the Start, Signal, and Get Workflow Status Flow actions. All other engine code is namespace-private. See [docs/global-api.md](docs/global-api.md) for each member and the stability policy, and [ADR 0006](docs/adr/0006-frozen-global-api.md).
 
 ### Class Resolution Model
 - **Engine Namespace**: When Revenant is installed as a package, the engine executes in the package namespace (e.g. `revenant`).
