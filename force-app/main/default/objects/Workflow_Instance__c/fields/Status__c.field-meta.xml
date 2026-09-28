@@ -76,6 +76,11 @@
                 <default>false</default>
                 <label>Definition Changed</label>
             </value>
+            <value>
+                <fullName>Held</fullName>
+                <default>false</default>
+                <label>Held</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

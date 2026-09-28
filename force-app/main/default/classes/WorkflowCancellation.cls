@@ -30,7 +30,9 @@ public inherited sharing class WorkflowCancellation {
     'CompensationFailed',
     'Paused',
     // A definition-change park (issue #89) is in flight, so a cascade reaches it.
-    'DefinitionChanged'
+    'DefinitionChanged',
+    // An operator hold (issue #119) is in flight, so a cancel reaches it.
+    'Held'
   };
 
   private static final String CANCELLED_MESSAGE = 'Cancelled by user.';

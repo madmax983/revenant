@@ -10,7 +10,7 @@ An operator can cancel one instance or pause one definition. Cancel is destructi
 
 ## Decision
 
-1. API: `WorkflowEngine.hold(instanceId, reason)` and `WorkflowEngine.release(instanceId)`. Each returns a `HoldResult` with an outcome. Expected states do not throw.
+1. API: `WorkflowInstanceHold.hold(instanceId, reason)` and `WorkflowInstanceHold.release(instanceId)`. Each returns a `HoldResult` with an `Outcome`. Expected states do not throw. `WorkflowEngine` is at the PMD `ExcessivePublicCount` limit (19 of 20). The definition pause API is also outside `WorkflowEngine`, on `WorkflowPauseGate`.
 2. Schema on `Workflow_Instance__c`: `Held_At__c` (DateTime), `Hold_Reason__c` (Text 255), formula checkbox `Held__c` (`Held_At__c` is set), and the status value `Held`.
 3. Hold writes only `Held_At__c` and `Hold_Reason__c`. It does not change the status.
 4. `WorkflowInstanceHoldGate.parkIfHeld` runs in `WorkflowStepRunner` after the definition-change gate and before the pause gate. On a held instance it locks the row, aborts the scheduled jobs, and sets status `Held`. It writes no step row.
@@ -36,4 +36,5 @@ An operator can cancel one instance or pause one definition. Cancel is destructi
 - Fields only, no status: a parked `Running` row looks like an orphan to the watchdog.
 - A separate hold object: one more SOQL on each hop.
 - An instance key in `WorkflowPauseGate`: the issue forbids it.
+- `hold` and `release` on `WorkflowEngine`: the class then has 21 public members (PMD `ExcessivePublicCount`).
 - Release of the concurrency slot at park: a new mid-flow admission path. Other parks keep the slot.

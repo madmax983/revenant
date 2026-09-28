@@ -153,7 +153,10 @@ public inherited sharing class WorkflowInstanceDetailService {
         Failure_Category__c,
         Progress__c,
         Definition_Fingerprint__c,
-        Definition_Shape__c
+        Definition_Shape__c,
+        Held__c,
+        Held_At__c,
+        Hold_Reason__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

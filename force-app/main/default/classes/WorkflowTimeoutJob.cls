@@ -79,7 +79,8 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
         Compensation_Stack__c,
         Workflow_Name__c,
         Concurrency_Slot_Held__c,
-        Concurrency_Parked__c
+        Concurrency_Parked__c,
+        Held__c
       FROM Workflow_Instance__c
       WHERE Id = :this.instanceId
       WITH SYSTEM_MODE
@@ -96,10 +97,11 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   }
 
   /**
-   * Operator pause gate: if the definition is paused, this instance is parked (or about
-   * to be, once its pending RUN_STEP reaches the gate). A timeout job armed by the
-   * pre-pause handoff must NOT fail the step during that window — the step is held and
-   * re-armed on resume via reArmTimeoutsForResume. Compensating/Cancelling bypass the
+   * Operator pause gate: if the definition is paused or the instance is held (issue
+   * #119), this instance is parked (or about to be, once its pending RUN_STEP reaches
+   * the gate). A timeout job armed by the pre-pause handoff must NOT fail the step
+   * during that window — the step is held and re-armed on resume via
+   * reArmTimeoutsForResume. Compensating/Cancelling bypass the
    * pause gate elsewhere, so let those time out normally rather than stalling an
    * in-progress rollback.
    *
@@ -111,11 +113,12 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   private Boolean shouldHoldForPause(Workflow_Instance__c instance) {
     Boolean pauseCandidate = (instance.Status__c == 'Pending' ||
     instance.Status__c == 'Running');
-    if (
-      !pauseCandidate ||
-      !WorkflowPauseGate.anyPaused() ||
-      !WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c)
-    ) {
+    // An operator hold (issue #119) that waits for the gate gets the same rule.
+    Boolean parkPending =
+      instance.Held__c ||
+      (WorkflowPauseGate.anyPaused() &&
+      WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c));
+    if (!pauseCandidate || !parkPending) {
       return false;
     }
 

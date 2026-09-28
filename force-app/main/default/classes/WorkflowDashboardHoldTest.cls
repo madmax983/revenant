@@ -1,5 +1,5 @@
 /**
- * Dashboard tests for per-instance hold and release (issue #119). They cover
+ * @description Dashboard tests for per-instance hold and release (issue #119). They cover
  * the hold fields in the list and detail reads, the Hold and Release actions,
  * and the operator-action gate.
  */
@@ -49,7 +49,7 @@ private class WorkflowDashboardHoldTest {
       Id instId = startAndRunFirstHop(
         'DashHoldList-' + Datetime.now().getTime()
       );
-      WorkflowEngine.hold(instId, 'x');
+      WorkflowInstanceHold.hold(instId, 'x');
       WorkflowDashboardController.InstanceQuery query = new WorkflowDashboardController.InstanceQuery();
       query.workflowName = WF;
       List<Map<String, Object>> page = WorkflowDashboardController.getFilteredInstances(

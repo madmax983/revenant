@@ -40,7 +40,7 @@ public inherited sharing class WorkflowTimeoutSweep {
 
   /**
    * @description §1. Process Timed-out Steps. Exclude steps whose parent is
-   * Paused or DefinitionChanged (both are parks): a parked parent is not
+   * Paused, DefinitionChanged or Held (all are parks): a parked parent is not
    * runnable, so its step rows (e.g. parallel
    * branch rows the SPLIT path stamped with Timeout_At__c before their RUN_STEP
    * reached the gate, or a parked initial step) would otherwise be selected and
@@ -62,7 +62,8 @@ public inherited sharing class WorkflowTimeoutSweep {
         AND Timeout_At__c <= :now
         AND Workflow_Instance__r.Status__c NOT IN (
           'Paused',
-          'DefinitionChanged'
+          'DefinitionChanged',
+          'Held'
         )
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC, Id ASC
@@ -95,7 +96,8 @@ public inherited sharing class WorkflowTimeoutSweep {
           Root_Correlation_Key__c,
           Failure_Category__c,
           Concurrency_Parked__c,
-          Concurrency_Slot_Held__c
+          Concurrency_Slot_Held__c,
+          Held__c
         FROM Workflow_Instance__c
         WHERE Id IN :instanceIds
         WITH SYSTEM_MODE

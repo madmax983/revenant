@@ -30,6 +30,7 @@ Let an operator stop one workflow instance at its next step boundary, then let i
 | B8 | Park: lock `FOR UPDATE`, check the hold again, abort scheduled jobs, set `Held`, clear sleep markers, write one log row. No step row. | Yes. Same as the #89 park, without the marker row. |
 | B9 | Release of a parked instance: clear the hold, set `Running`, re-arm timeouts, enqueue. Release of a hold that did not park yet: clear the hold only. | Yes. No second driver. |
 | B10 | Outcome enum, no exception for expected states. | Yes. AC 6 and AC 7. |
+| B18 | API on `WorkflowEngine`. | No. PMD `ExcessivePublicCount`: 21 of 20. Use `WorkflowInstanceHold`, the same as `WorkflowPauseGate` for pause. |
 | B11 | Reject a hold on an engine workflow. | Yes. A held watchdog stops the engine. |
 | B12 | Reject a hold on `Compensating`, `Cancelling`, `CompensationFailed`. | Yes. The gate is on the forward path only. The hold would have no effect. |
 | B13 | Trigger clears the hold when the status leaves the forward path. | Yes. A cancelled or failed row never shows as held. |
@@ -46,7 +47,7 @@ Let an operator stop one workflow instance at its next step boundary, then let i
 | Release enqueues a second driver while the chain is live. | Release enqueues only from status `Held`. |
 | The gate and release race. | Both lock the instance. The gate checks `Held_At__c` again under the lock. |
 | The watchdog re-drives a held row as an orphan. | Status `Held` is not `Running`. |
-| A stall alert fires for a held row. | `Held` is not a stall status. The scan skips `Held__c` rows. |
+| A stall alert fires for a parked row. | `Held` is not a stall status. |
 | A signal is lost while held. | `Held` is in the signal lookup lists. The signal stays `Received`. |
 | A timeout fails a held step. | Park aborts scheduled jobs. The sweep skips `Held` parents. The timeout job and sweep keep a `Pending` step while the hold waits for the gate. Release re-arms. |
 | The hold escapes through Continue-As-New. | Copy the hold to the successor. |
@@ -70,7 +71,7 @@ Let an operator stop one workflow instance at its next step boundary, then let i
 
 ## Spec
 
-`hold(instanceId, reason)`:
+`WorkflowInstanceHold.hold(instanceId, reason)`:
 
 | Instance state | Outcome | Writes |
 |----------------|---------|--------|
@@ -81,7 +82,7 @@ Let an operator stop one workflow instance at its next step boundary, then let i
 | engine workflow | `REJECTED_ENGINE_WORKFLOW` | none |
 | other | `HELD` | `Held_At__c`, `Hold_Reason__c`, one log row |
 
-`release(instanceId)`:
+`WorkflowInstanceHold.release(instanceId)`:
 
 | Instance state | Outcome | Writes |
 |----------------|---------|--------|

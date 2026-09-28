@@ -77,7 +77,9 @@ public inherited sharing class WorkflowEngine {
     // returns the live paused instance rather than a stale terminal row in the window.
     'Paused',
     // A definition-change park (issue #89) is in-flight and resumes on release.
-    'DefinitionChanged'
+    'DefinitionChanged',
+    // An operator hold (issue #119) is in flight and resumes on release.
+    'Held'
   };
 
   // Upper bound on rows read by a single dedup lookup, so a hot correlation key

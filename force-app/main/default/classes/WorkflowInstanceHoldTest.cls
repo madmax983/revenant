@@ -1,5 +1,5 @@
 /**
- * Engine tests for per-instance hold and release (issue #119).
+ * @description Engine tests for per-instance hold and release (issue #119).
  * Written first (RED). They fail on code that has no hold gate.
  *
  * Scenarios:
@@ -238,7 +238,7 @@ public class WorkflowInstanceHoldTest {
      * @return A COMPLETE result.
      */
     public StepResult execute(StepContext ctx) {
-      WorkflowEngine.hold(ctx.workflowInstanceId, 'held during step');
+      WorkflowInstanceHold.hold(ctx.workflowInstanceId, 'held during step');
       return StepResult.complete(null, 'OutSelf');
     }
   }
@@ -254,7 +254,7 @@ public class WorkflowInstanceHoldTest {
      */
     public StepResult execute(StepContext ctx) {
       loopRuns++;
-      WorkflowEngine.hold(ctx.workflowInstanceId, 'loop hold');
+      WorkflowInstanceHold.hold(ctx.workflowInstanceId, 'loop hold');
       return StepResult.continueAsNew(null);
     }
   }
@@ -341,7 +341,7 @@ public class WorkflowInstanceHoldTest {
       Workflow_Instance__c before = load(instId);
       Map<Id, Workflow_Step_Execution__c> rowsBefore = rows(instId);
 
-      WorkflowEngine.HoldResult held = WorkflowEngine.hold(
+      WorkflowInstanceHold.HoldResult held = WorkflowInstanceHold.hold(
         instId,
         'investigate'
       );
@@ -354,7 +354,7 @@ public class WorkflowInstanceHoldTest {
 
       Workflow_Instance__c after = load(instId);
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.HELD,
+        WorkflowInstanceHold.Outcome.HELD,
         held.outcome,
         'Hold must report HELD'
       );
@@ -394,7 +394,7 @@ public class WorkflowInstanceHoldTest {
       WorkflowEngine.disableQueueableInTest = true;
       Test.startTest();
       Id instId = WorkflowEngine.start(WF, key('Fresh'), null);
-      WorkflowEngine.hold(instId, null);
+      WorkflowInstanceHold.hold(instId, null);
       WorkflowEngine.runStep(instId);
       Test.stopTest();
       System.assertEquals('Held', load(instId).Status__c, 'Parks at start');
@@ -411,18 +411,20 @@ public class WorkflowInstanceHoldTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRunFirstHop(key('Release'));
-      WorkflowEngine.hold(instId, 'investigate');
+      WorkflowInstanceHold.hold(instId, 'investigate');
       WorkflowEngine.runStep(instId);
       Map<Id, Workflow_Step_Execution__c> parkedRows = rows(instId);
 
-      WorkflowEngine.HoldResult released = WorkflowEngine.release(instId);
+      WorkflowInstanceHold.HoldResult released = WorkflowInstanceHold.release(
+        instId
+      );
       Workflow_Instance__c afterRelease = load(instId);
       WorkflowEngine.runStep(instId); // StepB
       WorkflowEngine.runStep(instId); // StepC
       Test.stopTest();
 
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.RELEASED,
+        WorkflowInstanceHold.Outcome.RELEASED,
         released.outcome,
         'Release must report RELEASED'
       );
@@ -459,14 +461,16 @@ public class WorkflowInstanceHoldTest {
       Test.startTest();
       Id instId = startAndRunFirstHop(key('Early'));
       String statusBefore = load(instId).Status__c;
-      WorkflowEngine.hold(instId, 'x');
-      WorkflowEngine.HoldResult released = WorkflowEngine.release(instId);
+      WorkflowInstanceHold.hold(instId, 'x');
+      WorkflowInstanceHold.HoldResult released = WorkflowInstanceHold.release(
+        instId
+      );
       Workflow_Instance__c afterRelease = load(instId);
       WorkflowEngine.runStep(instId);
       Test.stopTest();
 
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.RELEASED,
+        WorkflowInstanceHold.Outcome.RELEASED,
         released.outcome,
         'A waiting hold is released'
       );
@@ -486,13 +490,13 @@ public class WorkflowInstanceHoldTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRunFirstHop(key('Race'));
-      WorkflowEngine.hold(instId, 'x');
+      WorkflowInstanceHold.hold(instId, 'x');
       Workflow_Instance__c stale = [
         SELECT Id, Status__c, Workflow_Name__c, Held__c
         FROM Workflow_Instance__c
         WHERE Id = :instId
       ];
-      WorkflowEngine.release(instId);
+      WorkflowInstanceHold.release(instId);
       Boolean stopped = WorkflowInstanceHoldGate.parkIfHeld(stale);
       Test.stopTest();
       System.assertEquals(false, stopped, 'The released delivery continues');
@@ -509,11 +513,13 @@ public class WorkflowInstanceHoldTest {
         'Held',
         STEP_B + ',' + STEP_C
       );
-      Test.startTest();
-      WorkflowEngine.HoldResult released = WorkflowEngine.release(inst.Id);
-      Test.stopTest();
+      // No Test.stopTest(): the branch events would run the branches. This
+      // test checks the release itself.
+      WorkflowInstanceHold.HoldResult released = WorkflowInstanceHold.release(
+        inst.Id
+      );
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.RELEASED,
+        WorkflowInstanceHold.Outcome.RELEASED,
         released.outcome,
         'A parked parallel instance is released'
       );
@@ -562,7 +568,7 @@ public class WorkflowInstanceHoldTest {
       Test.startTest();
       Id heldId = startAndRunFirstHop(key('Held'));
       Id siblingId = startAndRunFirstHop(key('Sibling'));
-      WorkflowEngine.hold(heldId, 'one only');
+      WorkflowInstanceHold.hold(heldId, 'one only');
       WorkflowEngine.runStep(heldId);
       WorkflowEngine.runStep(siblingId);
       WorkflowEngine.runStep(siblingId);
@@ -597,20 +603,26 @@ public class WorkflowInstanceHoldTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRunFirstHop(key('Twice'));
-      WorkflowEngine.hold(instId, 'first');
+      WorkflowInstanceHold.hold(instId, 'first');
       Workflow_Instance__c first = load(instId);
-      WorkflowEngine.HoldResult second = WorkflowEngine.hold(instId, 'second');
+      WorkflowInstanceHold.HoldResult second = WorkflowInstanceHold.hold(
+        instId,
+        'second'
+      );
       WorkflowEngine.runStep(instId);
-      WorkflowEngine.HoldResult third = WorkflowEngine.hold(instId, 'third');
+      WorkflowInstanceHold.HoldResult third = WorkflowInstanceHold.hold(
+        instId,
+        'third'
+      );
       Test.stopTest();
 
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.ALREADY_HELD,
+        WorkflowInstanceHold.Outcome.ALREADY_HELD,
         second.outcome,
         'A second hold is a no-op'
       );
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.ALREADY_HELD,
+        WorkflowInstanceHold.Outcome.ALREADY_HELD,
         third.outcome,
         'A hold on a parked instance is a no-op'
       );
@@ -625,20 +637,24 @@ public class WorkflowInstanceHoldTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRunFirstHop(key('NotHeld'));
-      WorkflowEngine.HoldResult never = WorkflowEngine.release(instId);
-      WorkflowEngine.hold(instId, 'x');
+      WorkflowInstanceHold.HoldResult never = WorkflowInstanceHold.release(
+        instId
+      );
+      WorkflowInstanceHold.hold(instId, 'x');
       WorkflowEngine.runStep(instId);
-      WorkflowEngine.release(instId);
-      WorkflowEngine.HoldResult again = WorkflowEngine.release(instId);
+      WorkflowInstanceHold.release(instId);
+      WorkflowInstanceHold.HoldResult again = WorkflowInstanceHold.release(
+        instId
+      );
       Test.stopTest();
 
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.NOT_HELD,
+        WorkflowInstanceHold.Outcome.NOT_HELD,
         never.outcome,
         'Release of a run that was never held is a no-op'
       );
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.NOT_HELD,
+        WorkflowInstanceHold.Outcome.NOT_HELD,
         again.outcome,
         'A second release is a no-op'
       );
@@ -653,16 +669,21 @@ public class WorkflowInstanceHoldTest {
       Id goneId = inst.Id;
       delete inst;
       Test.startTest();
-      WorkflowEngine.HoldResult held = WorkflowEngine.hold(goneId, 'x');
-      WorkflowEngine.HoldResult released = WorkflowEngine.release(goneId);
+      WorkflowInstanceHold.HoldResult held = WorkflowInstanceHold.hold(
+        goneId,
+        'x'
+      );
+      WorkflowInstanceHold.HoldResult released = WorkflowInstanceHold.release(
+        goneId
+      );
       Test.stopTest();
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.NOT_FOUND,
+        WorkflowInstanceHold.Outcome.NOT_FOUND,
         held.outcome,
         'Hold reports NOT_FOUND'
       );
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.NOT_FOUND,
+        WorkflowInstanceHold.Outcome.NOT_FOUND,
         released.outcome,
         'Release reports NOT_FOUND'
       );
@@ -671,13 +692,15 @@ public class WorkflowInstanceHoldTest {
 
   @IsTest
   static void testNullInstanceIdThrows() {
-    Boolean threw = false;
-    try {
-      WorkflowEngine.hold(null, 'x');
-    } catch (WorkflowEngine.WorkflowException ex) {
-      threw = true;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Boolean threw = false;
+      try {
+        WorkflowInstanceHold.hold(null, 'x');
+      } catch (WorkflowEngine.WorkflowException ex) {
+        threw = true;
+      }
+      System.assert(threw, 'A null id is a caller error');
     }
-    System.assert(threw, 'A null id is a caller error');
   }
 
   @IsTest
@@ -685,7 +708,7 @@ public class WorkflowInstanceHoldTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = insertInstance(WF, 'Running', STEP_B);
       Test.startTest();
-      WorkflowEngine.hold(inst.Id, 'r'.repeat(400));
+      WorkflowInstanceHold.hold(inst.Id, 'r'.repeat(400));
       Test.stopTest();
       System.assertEquals(
         255,
@@ -722,9 +745,12 @@ public class WorkflowInstanceHoldTest {
       );
       Test.startTest();
       for (Workflow_Instance__c inst : insts) {
-        WorkflowEngine.HoldResult result = WorkflowEngine.hold(inst.Id, 'x');
+        WorkflowInstanceHold.HoldResult result = WorkflowInstanceHold.hold(
+          inst.Id,
+          'x'
+        );
         System.assertEquals(
-          WorkflowEngine.HoldOutcome.REJECTED_TERMINAL,
+          WorkflowInstanceHold.Outcome.REJECTED_TERMINAL,
           result.outcome,
           'Hold rejects ' + inst.Status__c
         );
@@ -733,8 +759,8 @@ public class WorkflowInstanceHoldTest {
           'The rejection has a message'
         );
         System.assertEquals(
-          WorkflowEngine.HoldOutcome.NOT_HELD,
-          WorkflowEngine.release(inst.Id).outcome,
+          WorkflowInstanceHold.Outcome.NOT_HELD,
+          WorkflowInstanceHold.release(inst.Id).outcome,
           'Release of a terminal run is a no-op'
         );
       }
@@ -770,14 +796,14 @@ public class WorkflowInstanceHoldTest {
       Test.startTest();
       for (Workflow_Instance__c inst : comp) {
         System.assertEquals(
-          WorkflowEngine.HoldOutcome.REJECTED_COMPENSATING,
-          WorkflowEngine.hold(inst.Id, 'x').outcome,
+          WorkflowInstanceHold.Outcome.REJECTED_COMPENSATING,
+          WorkflowInstanceHold.hold(inst.Id, 'x').outcome,
           'Hold rejects ' + inst.Status__c
         );
       }
       System.assertEquals(
-        WorkflowEngine.HoldOutcome.REJECTED_ENGINE_WORKFLOW,
-        WorkflowEngine.hold(watchdog.Id, 'x').outcome,
+        WorkflowInstanceHold.Outcome.REJECTED_ENGINE_WORKFLOW,
+        WorkflowInstanceHold.hold(watchdog.Id, 'x').outcome,
         'Hold rejects an engine workflow'
       );
       Test.stopTest();
@@ -795,9 +821,9 @@ public class WorkflowInstanceHoldTest {
       Test.startTest();
       Id instId = startAndRunFirstHop(key('Jobs'));
       Integer jobsBefore = [SELECT COUNT() FROM CronTrigger];
-      WorkflowEngine.hold(instId, 'x');
+      WorkflowInstanceHold.hold(instId, 'x');
       WorkflowEngine.runStep(instId);
-      WorkflowEngine.release(instId);
+      WorkflowInstanceHold.release(instId);
       Integer jobsAfter = [SELECT COUNT() FROM CronTrigger];
       Test.stopTest();
       System.assertEquals(jobsBefore, jobsAfter, 'No scheduled job is added');
@@ -817,7 +843,7 @@ public class WorkflowInstanceHoldTest {
       Id instId = WorkflowEngine.start(SIGNAL_WF, correlationKey, null);
       WorkflowEngine.runStep(instId); // WaitStep suspends.
       System.assertEquals('Suspended', load(instId).Status__c, 'Waits');
-      WorkflowEngine.hold(instId, 'x');
+      WorkflowInstanceHold.hold(instId, 'x');
       System.assertEquals('Suspended', load(instId).Status__c, 'Still waits');
       WorkflowEngine.signal(correlationKey, 'Go', '"payload"');
       WorkflowEngine.runStep(instId); // The wake reaches the gate.
@@ -827,7 +853,7 @@ public class WorkflowInstanceHoldTest {
         FROM Workflow_Signal__c
         WHERE Workflow_Instance__c = :instId
       ];
-      WorkflowEngine.release(instId);
+      WorkflowInstanceHold.release(instId);
       WorkflowEngine.runStep(instId); // WaitStep reads Go.
       WorkflowEngine.runStep(instId); // StepC.
       Test.stopTest();
@@ -874,7 +900,7 @@ public class WorkflowInstanceHoldTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRunFirstHop(key('Cancel'));
-      WorkflowEngine.hold(instId, 'x');
+      WorkflowInstanceHold.hold(instId, 'x');
       WorkflowEngine.runStep(instId);
       WorkflowEngine.cancel(instId);
       Test.stopTest();
@@ -891,7 +917,7 @@ public class WorkflowInstanceHoldTest {
       String correlationKey = key('Key');
       Test.startTest();
       Id instId = startAndRunFirstHop(correlationKey);
-      WorkflowEngine.hold(instId, 'x');
+      WorkflowInstanceHold.hold(instId, 'x');
       WorkflowEngine.runStep(instId);
       WorkflowEngine.StartResult dup = WorkflowEngine.startOrGet(
         WF,
