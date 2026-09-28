@@ -21,16 +21,8 @@ public inherited sharing class WorkflowChainCursor {
   private WorkflowChainCursor(Map<String, Object> payload) {
     this.anchorId = toInstanceId(payload.get('a'));
     this.rowId = toInstanceId(payload.get('i'));
-    Long millis = Long.valueOf(String.valueOf(payload.get('c')));
-    if (millis <= 0 || millis > MAX_MILLIS) {
-      throw new StringException('bad time');
-    }
-    this.createdAt = Datetime.newInstance(millis);
-    Object gen = payload.get('g');
-    this.generation = gen == null ? null : Integer.valueOf(String.valueOf(gen));
-    if (this.generation != null && this.generation < 1) {
-      throw new StringException('bad generation');
-    }
+    this.createdAt = Datetime.newInstance(toMillis(payload.get('c')));
+    this.generation = toGeneration(payload.get('g'));
   }
 
   /**
@@ -92,6 +84,29 @@ public inherited sharing class WorkflowChainCursor {
     binds.put('cursorAt', createdAt);
     binds.put('cursorId', rowId);
     return WorkflowChainWindow.olderThan('cursorAt', 'cursorId');
+  }
+
+  private static Long toMillis(Object value) {
+    if (!(value instanceof Long || value instanceof Integer)) {
+      throw new StringException('bad time');
+    }
+    Long millis = Long.valueOf(String.valueOf(value));
+    if (millis <= 0 || millis > MAX_MILLIS) {
+      throw new StringException('bad time');
+    }
+    return millis;
+  }
+
+  // Null is valid: the generation is not known.
+  private static Integer toGeneration(Object value) {
+    if (value == null) {
+      return null;
+    }
+    Integer generation = Integer.valueOf(String.valueOf(value));
+    if (generation < 1) {
+      throw new StringException('bad generation');
+    }
+    return generation;
   }
 
   private static Id toInstanceId(Object value) {

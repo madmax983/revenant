@@ -336,6 +336,42 @@ private class WorkflowChainReadTest {
   }
 
   @IsTest
+  static void lateCompensationStaysWithItsChainAfterKeyReuse() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> closed = chain('late', 2, 'Completed');
+      List<Workflow_Instance__c> reuse = chain('late', 3, 'Running');
+      // compensate() on the closed chain, after the key was used again.
+      Workflow_Instance__c undo = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'Compensating',
+        Correlation_Key__c = 'late_run2',
+        Root_Correlation_Key__c = 'late',
+        Previous_Instance__c = closed[1].Id
+      );
+      Database.insert(undo, AccessLevel.SYSTEM_MODE);
+      Test.setCreatedDate(undo.Id, Datetime.now());
+
+      List<Id> closedChain = new List<Id>{
+        undo.Id,
+        closed[1].Id,
+        closed[0].Id
+      };
+      for (Id handle : new List<Id>{ closed[0].Id, closed[1].Id, undo.Id }) {
+        Assert.areEqual(
+          closedChain,
+          ids(WorkflowChainRead.getChain(handle)),
+          'Same chain from ' + handle
+        );
+      }
+      for (Workflow_Instance__c row : reuse) {
+        WorkflowEngine.ChainPage page = WorkflowChainRead.getChain(row.Id);
+        Assert.areEqual(newestFirst(reuse), ids(page), 'No late row');
+        Assert.areEqual(3, page.totalCount);
+      }
+    }
+  }
+
+  @IsTest
   static void legacyBlankRootPredecessorIsInChain() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       List<Workflow_Instance__c> gens = chain('legacy', 2);
@@ -523,12 +559,12 @@ private class WorkflowChainReadTest {
       );
       Assert.areEqual(shortMiddle, longMiddle, 'Constant SOQL');
       Assert.areEqual(
-        4,
+        5,
         queriesFor(byId(longChain[29].Id, 2, null)),
-        'Live: no end query'
+        'Live: anchor, start, end, count, page'
       );
       Assert.areEqual(
-        4,
+        5,
         queriesFor(byKey('long', 2, null)),
         'Key gives the live row'
       );

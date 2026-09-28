@@ -61,15 +61,15 @@ A chain is the rows with:
 
 1. The same `Workflow_Name__c`.
 2. The same root key: `Root_Correlation_Key__c`, or `Correlation_Key__c` for a legacy row with a blank root.
-3. A position from the nearest first generation (`Previous_Instance__c` is null) at or before the anchor, to the next first generation after it.
+3. A link into the range. The pivot is the predecessor of the anchor, or the anchor when it has no predecessor. The range starts at the nearest first generation (`Previous_Instance__c` is null) at or before the pivot. It stops before the next first generation after the pivot. A row is a member when it is that first generation, or when its predecessor is in the range.
 
 Rule 3 makes a later independent run with the same key a separate chain. The Id of each member of a chain gives the same list. A key gives the chain of the newest row with that key or root key. With a cursor, the read uses the chain of the first page, also when the key is used again between two calls.
 
-A `compensate()` instance links to the instance that it compensates. Thus it is a generation of that chain.
+A `compensate()` instance links to the instance that it compensates. Thus it is a generation of that chain. It stays in that chain also when a newer run used the key before the compensation.
 
 ## Cost
 
-- Max 5 SOQL for each call, for all chain lengths: anchor, window start, window end, count, page. The live generation has no window end query. The first generation has no window start query.
+- Max 5 SOQL for each call, for all chain lengths: anchor, range start, range end, count, page. The first generation has no range start query.
 - A single generation costs one SOQL.
 - The count is `SELECT COUNT() ... LIMIT`, one query row.
 - The page query reads max page size + 1 rows. No long text field. No DML, no enqueue, no event.
@@ -83,13 +83,13 @@ Open an instance that has a previous or a next run. The detail pane shows **Cont
 - "X of N generations". `N+` when the total is capped.
 - Click the generation name (or press Enter on it) to open the step timeline of that generation. The list stays.
 - **Show older generations** gets the next page. **Try again** reads the chain again after an error.
-- A poll reloads the first page only when the selected row changed (status or new successor).
+- A poll refreshes the first page when the selected row changed (status or new successor), or when the newest generation is not closed. Older pages that you loaded stay.
 
 An instance with no previous and no next run shows no section and makes no extra call.
 
 ## Known Limits
 
-- Do not use the root key for an independent run while the chain is not closed. The new first generation then splits the chain: later generations of the old chain show in the new chain. `getStatus` has a related limit.
+- Do not use the root key for an independent run while the chain is not closed. The first generation of the old chain after that run stays in the old chain. Generations after it show in the list of the new run. `getStatus` has a related limit.
 - A purge of old generations changes the numbers. `generation` counts from the oldest kept row. A purge in the middle of a chain splits it.
 - A first generation with no correlation key is a chain of one row. Its successors use the key of the second generation as root.
 - A legacy successor with a blank root uses its own key as root. It does not join its first generation.

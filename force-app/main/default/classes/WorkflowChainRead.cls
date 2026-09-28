@@ -8,7 +8,8 @@
  * generation. No DML, no enqueue, no event. No long text field.</p>
  *
  * <p>Limit: an independent run that uses the root key while the chain is not
- * closed splits the chain. `getStatus` has a related limit.</p>
+ * closed can move later generations to its own list. `getStatus` has a related
+ * limit.</p>
  */
 public inherited sharing class WorkflowChainRead {
   /** @description Page size when `ChainRequest.pageSize` is null. */
@@ -168,6 +169,7 @@ public inherited sharing class WorkflowChainRead {
         Failure_Category__c,
         Error_Message__c,
         Previous_Instance__c,
+        Previous_Instance__r.CreatedDate,
         (SELECT Id FROM Next_Runs__r LIMIT 1)
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
@@ -196,6 +198,7 @@ public inherited sharing class WorkflowChainRead {
         Failure_Category__c,
         Error_Message__c,
         Previous_Instance__c,
+        Previous_Instance__r.CreatedDate,
         (SELECT Id FROM Next_Runs__r LIMIT 1)
       FROM Workflow_Instance__c
       WHERE Correlation_Key__c = :key OR Root_Correlation_Key__c = :key
@@ -234,8 +237,8 @@ public inherited sharing class WorkflowChainRead {
   }
 
   /**
-   * @description Counts the window, then reads one page of it. Max 4 SOQL
-   * (max 2 for the window, 1 count, 1 page).
+   * @description Counts the chain, then reads one page of it. Max 4 SOQL
+   * (max 2 for the range, 1 count, 1 page).
    * @param anchor the anchor
    * @param chain the read state; this method sets the total
    * @return the page

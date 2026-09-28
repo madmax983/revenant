@@ -1,14 +1,19 @@
 /**
- * @description Chain window of {@link WorkflowChainRead} (issue #116).
+ * @description Chain membership of {@link WorkflowChainRead} (issue #116).
  *
  * <p>Scope: same `Workflow_Name__c` and same root key. A legacy row with a
  * blank `Root_Correlation_Key__c` matches on its `Correlation_Key__c`.</p>
  *
- * <p>Window: from the nearest first generation (`Previous_Instance__c` = null)
- * at or before the anchor, to the next first generation after the anchor. A
- * later independent run with the same key is not in the window. An anchor with
- * no successor is the end of the window. `Id` breaks `CreatedDate` ties. Max 2
- * SOQL.</p>
+ * <p>Pivot: the predecessor of the anchor, or the anchor when it has no
+ * predecessor. Range: from the nearest first generation
+ * (`Previous_Instance__c` = null) at or before the pivot, to the next first
+ * generation after the pivot. A row is a member when it is that first
+ * generation, or when its predecessor is in the range.</p>
+ *
+ * <p>Thus a later independent run with the same key is not a member. A late
+ * successor (for example a `compensate()` instance) stays with the chain of
+ * its predecessor, also after a newer run used the key. `Id` breaks
+ * `CreatedDate` ties. Max 2 SOQL.</p>
  */
 public inherited sharing class WorkflowChainWindow {
   private static final String SCOPE =
@@ -16,9 +21,9 @@ public inherited sharing class WorkflowChainWindow {
     '(Root_Correlation_Key__c = null AND Correlation_Key__c = :root))';
 
   /**
-   * @description WHERE clause of the chain window of the anchor. Adds its
-   * binds to the map.
-   * @param anchor the anchor row, with its `Next_Runs__r` subquery
+   * @description WHERE clause of the chain of the anchor. Adds its binds to
+   * the map.
+   * @param anchor the anchor row, with `Previous_Instance__r.CreatedDate`
    * @param root the root key of the anchor (not blank)
    * @param binds bind map
    * @return the clause
@@ -30,34 +35,45 @@ public inherited sharing class WorkflowChainWindow {
   ) {
     binds.put('name', anchor.Workflow_Name__c);
     binds.put('root', root);
-    List<String> parts = new List<String>{ SCOPE };
+    Boolean hasPrevious = anchor.Previous_Instance__c != null;
+    Map<String, Object> pivot = new Map<String, Object>{
+      'name' => anchor.Workflow_Name__c,
+      'root' => root,
+      'pivotAt' => hasPrevious
+        ? anchor.Previous_Instance__r.CreatedDate
+        : anchor.CreatedDate,
+      'pivotId' => hasPrevious ? anchor.Previous_Instance__c : anchor.Id
+    };
 
-    Workflow_Instance__c start = anchor.Previous_Instance__c == null
-      ? anchor
-      : previousStart(anchor, root);
+    Workflow_Instance__c start = hasPrevious
+      ? firstGeneration(pivot, true)
+      : anchor;
+    Workflow_Instance__c next = firstGeneration(pivot, false);
+
+    // Successors: the predecessor is in [start, next).
+    List<String> successor = new List<String>{ 'Previous_Instance__c != null' };
+    List<String> member = new List<String>();
     if (start != null) {
       binds.put('startAt', start.CreatedDate);
       binds.put('startId', start.Id);
-      parts.add(
-        '(CreatedDate > :startAt OR (CreatedDate = :startAt AND Id >= :startId))'
+      member.add('Id = :startId');
+      successor.add(
+        '(Previous_Instance__r.CreatedDate > :startAt OR ' +
+          '(Previous_Instance__r.CreatedDate = :startAt AND ' +
+          'Previous_Instance__r.Id >= :startId))'
       );
     }
-    if (anchor.Next_Runs__r.isEmpty()) {
-      // No successor: no later row is in the chain.
-      binds.put('endAt', anchor.CreatedDate);
-      binds.put('endId', anchor.Id);
-      parts.add(
-        '(CreatedDate < :endAt OR (CreatedDate = :endAt AND Id <= :endId))'
+    if (next != null) {
+      binds.put('nextAt', next.CreatedDate);
+      binds.put('nextId', next.Id);
+      successor.add(
+        '(Previous_Instance__r.CreatedDate < :nextAt OR ' +
+          '(Previous_Instance__r.CreatedDate = :nextAt AND ' +
+          'Previous_Instance__r.Id < :nextId))'
       );
-    } else {
-      Workflow_Instance__c next = nextStart(anchor, root);
-      if (next != null) {
-        binds.put('nextAt', next.CreatedDate);
-        binds.put('nextId', next.Id);
-        parts.add(olderThan('nextAt', 'nextId'));
-      }
     }
-    return String.join(parts, ' AND ');
+    member.add('(' + String.join(successor, ' AND ') + ')');
+    return SCOPE + ' AND (' + String.join(member, ' OR ') + ')';
   }
 
   /**
@@ -76,57 +92,26 @@ public inherited sharing class WorkflowChainWindow {
       '))';
   }
 
-  // Newest first generation in scope before the anchor, or null.
-  private static Workflow_Instance__c previousStart(
-    Workflow_Instance__c anchor,
-    String root
+  // First generation in scope next to the pivot: the newest at or before it
+  // (atOrBefore = true), or the oldest after it. Null when none.
+  private static Workflow_Instance__c firstGeneration(
+    Map<String, Object> pivot,
+    Boolean atOrBefore
   ) {
-    String name = anchor.Workflow_Name__c;
-    Datetime anchorAt = anchor.CreatedDate;
-    Id anchorId = anchor.Id;
-    List<Workflow_Instance__c> rows = [
-      SELECT Id, CreatedDate
-      FROM Workflow_Instance__c
-      WHERE
-        Workflow_Name__c = :name
-        AND (Root_Correlation_Key__c = :root
-        OR (Root_Correlation_Key__c = NULL
-        AND Correlation_Key__c = :root))
-        AND Previous_Instance__c = NULL
-        AND (CreatedDate < :anchorAt
-        OR (CreatedDate = :anchorAt
-        AND Id < :anchorId))
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ];
-    return rows.isEmpty() ? null : rows[0];
-  }
-
-  // Oldest first generation in scope after the anchor, or null.
-  private static Workflow_Instance__c nextStart(
-    Workflow_Instance__c anchor,
-    String root
-  ) {
-    String name = anchor.Workflow_Name__c;
-    Datetime anchorAt = anchor.CreatedDate;
-    Id anchorId = anchor.Id;
-    List<Workflow_Instance__c> rows = [
-      SELECT Id, CreatedDate
-      FROM Workflow_Instance__c
-      WHERE
-        Workflow_Name__c = :name
-        AND (Root_Correlation_Key__c = :root
-        OR (Root_Correlation_Key__c = NULL
-        AND Correlation_Key__c = :root))
-        AND Previous_Instance__c = NULL
-        AND (CreatedDate > :anchorAt
-        OR (CreatedDate = :anchorAt
-        AND Id > :anchorId))
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate ASC, Id ASC
-      LIMIT 1
-    ];
+    String position = atOrBefore
+      ? '(CreatedDate < :pivotAt OR (CreatedDate = :pivotAt AND Id <= :pivotId))' +
+        ' ORDER BY CreatedDate DESC, Id DESC'
+      : '(CreatedDate > :pivotAt OR (CreatedDate = :pivotAt AND Id > :pivotId))' +
+        ' ORDER BY CreatedDate ASC, Id ASC';
+    List<Workflow_Instance__c> rows = Database.queryWithBinds(
+      'SELECT Id, CreatedDate FROM Workflow_Instance__c WHERE ' +
+        SCOPE +
+        ' AND Previous_Instance__c = null AND ' +
+        position +
+        ' LIMIT 1',
+      pivot,
+      AccessLevel.SYSTEM_MODE
+    );
     return rows.isEmpty() ? null : rows[0];
   }
 }

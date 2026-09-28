@@ -3609,8 +3609,14 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(getInstanceDetails).toHaveBeenLastCalledWith({
       instanceId: PREV_ID,
     });
-    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+    // The head is open, so page 1 refreshes with the same anchor.
+    expect(getInstanceChain).toHaveBeenCalledTimes(2);
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: null,
+    });
     const rows = chainRows(element);
+    expect(rows).toHaveLength(2);
     expect(rows[1].className).toContain("item-selected");
     expect(rows[0].className).not.toContain("item-selected");
   });
@@ -3721,6 +3727,84 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     const rows = chainRows(element);
     expect(rows).toHaveLength(1);
     expect(rows[0].dataset.id).toBe(OTHER_ID);
+  });
+
+  it("refreshes an open head on a poll and keeps older pages", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    getInstanceChain.mockResolvedValue(PAGE_2);
+    chainButton(element, "chain-load-more").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    expect(chainRows(element)).toHaveLength(3);
+
+    const NEW_ID = "a0G000000000010";
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      totalCount: 6,
+      nextCursor: "CURSOR-NEW",
+      generations: [
+        {
+          instanceId: NEW_ID,
+          instanceName: "WI-0010",
+          generation: 6,
+          status: "Running",
+          startedAt: "2026-09-01T10:05:00.000Z",
+        },
+        {
+          ...PAGE_1.generations[0],
+          status: "ContinuedAsNew",
+          outcome: "ContinuedAsNew",
+        },
+      ],
+    });
+    await selectListItem(element, 0);
+
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: null,
+    });
+    const rows = chainRows(element);
+    expect(rows.map((r) => r.dataset.id)).toEqual([
+      NEW_ID,
+      LIVE_ID,
+      PREV_ID,
+      OLDER_ID,
+    ]);
+    expect(chainCount(element)).toBe("4 of 6 generations");
+    // All rows were loaded before, so there is no older page.
+    expect(chainButton(element, "chain-load-more")).toBeNull();
+  });
+
+  it("does not refresh a closed chain when the selected row is current", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: LIVE_ID, Name: "WI-0003", Status__c: "Completed" },
+    ]);
+    getInstanceDetails.mockResolvedValue(
+      details(LIVE_ID, {
+        Status__c: "Completed",
+        Previous_Instance__c: PREV_ID,
+        Previous_Instance__r: { Name: "WI-0002" },
+      }),
+    );
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      generations: [
+        {
+          ...PAGE_1.generations[0],
+          status: "Completed",
+          outcome: "Completed",
+        },
+        PAGE_1.generations[1],
+      ],
+    });
+    const element = await mountAndSelect();
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+
+    await selectListItem(element, 0);
+
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
   });
 
   it("reloads the first page when the selected row is stale", async () => {

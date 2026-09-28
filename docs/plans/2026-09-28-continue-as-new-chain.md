@@ -74,10 +74,9 @@ Steps:
 1. Check the page size and decode the cursor.
 2. Anchor: the cursor anchor, else the Id, else the newest row with `Correlation_Key__c = key OR Root_Correlation_Key__c = key`.
 3. No predecessor and no successor, or no root: return one entry.
-4. Start: the anchor when it has no predecessor. Else the newest first generation in scope before the anchor.
-5. End: the anchor when it has no successor. Else the oldest first generation in scope after the anchor.
-6. Total: `COUNT()` in the window, `LIMIT` 50,000.
-7. Page: rows in the window (and after the cursor), `LIMIT pageSize + 1`.
+4. Range: pivot = predecessor of the anchor, or the anchor. Start = newest first generation at or before the pivot. End = oldest first generation after the pivot. Members: the start row, and rows whose predecessor is in the range.
+5. Total: `COUNT()` in the window, `LIMIT` 50,000.
+6. Page: rows in the window (and after the cursor), `LIMIT pageSize + 1`.
 
 Dashboard: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)` maps the page to a `Map`. The LWC shows a "Continue-As-New Generations" section, "X of N generations", and "Show older generations".
 
@@ -88,5 +87,5 @@ Five review agents (correctness, governor and security, tests, LWC, API and docs
 - Typed input: `getChain(Id)` and `getChain(String)`. No shape guess, no fallback query. Max 5 SOQL.
 - `continuedAt` removed: same value as `endedAt`.
 - The cursor keeps the anchor. A range check on each cursor field. No internal text in the error.
-- An anchor with no successor ends the window: one query less for the live generation.
-- LWC: no reload on each poll, reload when the selected row is stale, clear the old chain at once, "Try again", reset when a panel hides the pane, buttons for keyboard access, scroll position kept.
+- Codex review: membership by link, not by position. A row is a member when its predecessor is in the range. A late `compensate()` after key reuse stays with its chain.
+- LWC: no reload on each poll, refresh page 1 when the selected row is stale or the head is open (older pages stay), clear the old chain at once, "Try again", reset when a panel hides the pane, buttons for keyboard access, scroll position kept.

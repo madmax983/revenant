@@ -420,8 +420,8 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   // Loads the chain only for an instance with a predecessor or a successor.
-  // - Row in the list and current: no call (the list and its older pages stay).
-  // - Row in the list but stale (status or successor changed): reload page 1.
+  // - Row in the list: refresh page 1 when the row is stale (status or
+  //   successor changed) or the head is open. Older pages stay. Else no call.
   // - Row not in the list: load the chain of this instance, once. A poll of
   //   the same instance does not call again, also after an error.
   syncChain(instanceId, inst, successor) {
@@ -434,7 +434,9 @@ export default class WorkflowDashboard extends LightningElement {
     if (row) {
       const successorMissing =
         !!successor && !list.some((g) => g.instanceId === successor.Id);
-      if (row.status !== inst.Status__c || successorMissing) {
+      const headOpen = !list[0].outcome;
+      const stale = row.status !== inst.Status__c || successorMissing;
+      if ((stale || headOpen) && !this.chainLoading) {
         this.loadChain(this.chainAnchorId, null, false);
       }
       return;
@@ -483,12 +485,24 @@ export default class WorkflowDashboard extends LightningElement {
         const rows = (page.generations || []).map((g) =>
           this.shapeGeneration(g),
         );
-        this.chainGenerations = cursor
-          ? [...this.chainGenerations, ...rows]
-          : rows;
+        const pageCursor = page.hasMore ? page.nextCursor : null;
+        if (cursor) {
+          this.chainGenerations = [...this.chainGenerations, ...rows];
+          this.chainNextCursor = pageCursor;
+        } else {
+          // A refresh of page 1 keeps the older rows that are loaded. They
+          // are older than the last row of page 1, so the old cursor is valid.
+          const pageIds = new Set(rows.map((g) => g.instanceId));
+          const older = this.chainGenerations.filter(
+            (g) => !pageIds.has(g.instanceId),
+          );
+          this.chainGenerations = [...rows, ...older];
+          this.chainNextCursor = older.length
+            ? this.chainNextCursor
+            : pageCursor;
+        }
         this.chainTotal = page.totalCount;
         this.chainTotalCapped = !!page.isTotalCapped;
-        this.chainNextCursor = page.hasMore ? page.nextCursor : null;
       })
       .catch((error) => {
         if (seq === this.chainRequestSeq) {
