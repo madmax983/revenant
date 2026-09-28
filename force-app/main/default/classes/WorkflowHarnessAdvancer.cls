@@ -17,7 +17,8 @@ public inherited sharing class WorkflowHarnessAdvancer {
   // Parked statuses. Only an operator release or resume moves them.
   private static final Set<String> PARKED_STATUSES = new Set<String>{
     'DefinitionChanged',
-    'Paused'
+    'Paused',
+    'Held'
   };
 
   /**
@@ -35,7 +36,7 @@ public inherited sharing class WorkflowHarnessAdvancer {
     if (ACTIVE_STATUSES.contains(inst.Status__c)) {
       return true;
     }
-    // A parked instance (issue #89 DefinitionChanged, or Paused) is stable: runStep
+    // A parked instance (DefinitionChanged, Paused or Held) is stable: runStep
     // does nothing until release or resume, even with unrun sibling branches.
     if (PARKED_STATUSES.contains(inst.Status__c)) {
       return false;

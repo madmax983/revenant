@@ -123,6 +123,28 @@ public inherited sharing class WorkflowDashboardCommandController {
   }
 
   /**
+   * @description Operator action to hold one instance at its next step
+   * boundary (issue #119).
+   * @param instanceId The instance to hold.
+   * @param reason The operator reason, or blank.
+   * @return The outcome name ('outcome', for example HELD) and the text ('message').
+   */
+  @AuraEnabled
+  public static Map<String, String> holdInstance(Id instanceId, String reason) {
+    return WorkflowHoldCommandService.holdInstance(instanceId, reason);
+  }
+
+  /**
+   * @description Operator action to release a held instance (issue #119).
+   * @param instanceId The instance to release.
+   * @return The outcome name ('outcome', for example RELEASED) and the text ('message').
+   */
+  @AuraEnabled
+  public static Map<String, String> releaseHeldInstance(Id instanceId) {
+    return WorkflowHoldCommandService.releaseHeldInstance(instanceId);
+  }
+
+  /**
    * @description Operator action to resume a stalled saga rollback (status
    * CompensationFailed) from exactly the failed compensation point.
    * @param instanceId The CompensationFailed instance whose rollback to resume.

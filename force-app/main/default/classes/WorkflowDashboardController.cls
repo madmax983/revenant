@@ -161,6 +161,21 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
+   * @description Loads one page of the Continue-As-New chain of an instance,
+   * newest first (issue #116). Read-only.
+   * @param instanceId any generation of the chain
+   * @param cursor `nextCursor` of the previous page, or null for the first page
+   * @return the page as a map, or null when the instance is unknown
+   */
+  @AuraEnabled
+  public static Map<String, Object> getInstanceChain(
+    Id instanceId,
+    String cursor
+  ) {
+    return WorkflowDashboardChainService.loadChain(instanceId, cursor);
+  }
+
+  /**
    * @description Returns the discoverable WorkflowDefinition class names for the dashboard,
    * after enforcing the Workflow_Admin authorization gate.
    * @return The sorted list of concrete WorkflowDefinition class names.

@@ -8,8 +8,8 @@ public inherited sharing class WorkflowDashboardStatusService {
   /**
    * @description Returns the watchdog/scheduler health snapshot for the dashboard: recent
    * watchdog jobs, scheduled-job and sleeping-instance counts, pending timeouts, engine
-   * config, paused definitions, async-apex limit usage, watchdog liveness, and
-   * schedule health.
+   * config, paused definitions, async-apex limit usage, Platform Event headroom,
+   * watchdog liveness, and schedule health.
    * @return A map of the watchdog status fields consumed by the status panel.
    */
   public static Map<String, Object> watchdogStatus() {
@@ -83,7 +83,9 @@ public inherited sharing class WorkflowDashboardStatusService {
         'liveness' => livenessMap(),
         'scheduleHealth' => scheduleHealthMap()
       };
-      result.putAll(readAsyncLimits());
+      Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
+      result.putAll(readAsyncLimits(limitsMap));
+      result.putAll(readPlatformEventHeadroom(limitsMap));
       return result;
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
@@ -127,8 +129,9 @@ public inherited sharing class WorkflowDashboardStatusService {
 
   // Reads the async-apex org limits into the dashboard's status keys. Missing limits
   // (e.g. no elastic-executions limit on this org) leave their defaults in place.
-  private static Map<String, Object> readAsyncLimits() {
-    Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
+  private static Map<String, Object> readAsyncLimits(
+    Map<String, System.OrgLimit> limitsMap
+  ) {
     Map<String, Object> result = new Map<String, Object>{
       'dailyAsyncValue' => 0,
       'dailyAsyncLimit' => 0,
@@ -150,6 +153,18 @@ public inherited sharing class WorkflowDashboardStatusService {
       result.put('elasticAsyncLimit', limitObj.getLimit());
     }
     return result;
+  }
+
+  // Platform Event allocation (issue #120). Reads only the map. If the read
+  // fails, it returns the UNAVAILABLE payload. System Doctor continues to load.
+  private static Map<String, Object> readPlatformEventHeadroom(
+    Map<String, System.OrgLimit> limitsMap
+  ) {
+    try {
+      return PlatformEventHeadroom.fromOrgLimits(limitsMap);
+    } catch (Exception ignored) {
+      return PlatformEventHeadroom.unavailable();
+    }
   }
 
   /**

@@ -15,7 +15,9 @@
  * resident `WorkflowEngine.WorkflowException`, `WorkflowEngine.disableQueueableInTest`,
  * `WorkflowCompensation.preCreateFirstCompensationSteps` and
  * `WorkflowCompensationStepLog.appendCompensationRetrySteps` members are referenced
- * fully qualified. All SOQL/DML executes in system mode.
+ * fully qualified. The Cancel Workflow action (issue #107) uses the bulk
+ * entries {@link cancelInstances} and {@link cancelWithCompensationsInstances}.
+ * All SOQL/DML executes in system mode.
  */
 public inherited sharing class WorkflowCancellation {
   /**
@@ -30,7 +32,24 @@ public inherited sharing class WorkflowCancellation {
     'CompensationFailed',
     'Paused',
     // A definition-change park (issue #89) is in flight, so a cascade reaches it.
-    'DefinitionChanged'
+    'DefinitionChanged',
+    // An operator hold (issue #119) is in flight, so a cancel reaches it.
+    'Held'
+  };
+
+  // Statuses that a cancel skips: the instance is already finished.
+  private static final Set<String> TERMINAL_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled',
+    'ContinuedAsNew'
+  };
+
+  // Statuses of a node whose rollback already runs.
+  private static final Set<String> ROLLBACK_STATUSES = new Set<String>{
+    'Cancelling',
+    'Compensating'
   };
 
   private static final String CANCELLED_MESSAGE = 'Cancelled by user.';
@@ -79,6 +98,53 @@ public inherited sharing class WorkflowCancellation {
    */
   public static void cascadeCancelNodes(List<Id> orderedIds) {
     cancelNodes(orderedIds, true, null, new Set<String>{ 'Cancelling' });
+  }
+
+  /**
+   * @description Bulk cancel entry (issue #107). Cancels the roots and their
+   * active descendants in one set-based pass, WITHOUT saga compensations. Skips
+   * missing and terminal nodes. A `Cancelling` node stops its rollback.
+   * @param rootIds the instances to cancel, in order; null or empty is a no-op
+   * @return the Ids (roots and descendants) that this call cancelled
+   */
+  public static Set<Id> cancelInstances(List<Id> rootIds) {
+    return cancelRoots(rootIds, false, new Set<String>());
+  }
+
+  /**
+   * @description Bulk cancel entry (issue #107). Cancels the roots and their
+   * active descendants in one set-based pass and rolls back completed steps.
+   * Skips missing and terminal nodes, and nodes whose rollback already runs
+   * (`Cancelling`, `Compensating`), so a repeat does not start a second rollback.
+   * @param rootIds the instances to cancel, in order; null or empty is a no-op
+   * @return the Ids (roots and descendants) that this call cancelled
+   */
+  public static Set<Id> cancelWithCompensationsInstances(List<Id> rootIds) {
+    return cancelRoots(rootIds, true, ROLLBACK_STATUSES);
+  }
+
+  /**
+   * @description Shared body of the bulk cancel entries.
+   * @param rootIds the instances to cancel, in order
+   * @param runCompensations true to roll back completed steps
+   * @param skipStatuses extra statuses to leave untouched
+   * @return the Ids that this call cancelled
+   */
+  private static Set<Id> cancelRoots(
+    List<Id> rootIds,
+    Boolean runCompensations,
+    Set<String> skipStatuses
+  ) {
+    List<Id> roots = rootIds ?? new List<Id>();
+    if (roots.isEmpty()) {
+      return new Set<Id>();
+    }
+    return cancelNodes(
+      collectActiveTree(roots),
+      runCompensations,
+      null,
+      skipStatuses
+    );
   }
 
   /**
@@ -212,12 +278,18 @@ public inherited sharing class WorkflowCancellation {
    * @param status the instance status to test
    * @return true when the status is a terminal (non-cancellable) state
    */
-  private static Boolean isTerminalForCancel(String status) {
-    return status == 'Completed' ||
-      status == 'Failed' ||
-      status == 'Compensated' ||
-      status == 'Cancelled' ||
-      status == 'ContinuedAsNew';
+  public static Boolean isTerminalForCancel(String status) {
+    return TERMINAL_STATUSES.contains(status);
+  }
+
+  /**
+   * @description Tests whether a status shows a running rollback
+   * (`Cancelling` or `Compensating`).
+   * @param status the instance status to test
+   * @return true when the rollback of the instance already runs
+   */
+  public static Boolean isRollingBack(String status) {
+    return ROLLBACK_STATUSES.contains(status);
   }
 
   /**
@@ -254,8 +326,9 @@ public inherited sharing class WorkflowCancellation {
    * @param runCompensations true to roll back completed steps via saga compensation
    * @param requiredId a node that must exist (else not-found exception), or null
    * @param skipStatuses extra statuses to leave untouched
+   * @return the Ids of the nodes that this call cancelled
    */
-  private static void cancelNodes(
+  private static Set<Id> cancelNodes(
     List<Id> orderedIds,
     Boolean runCompensations,
     Id requiredId,
@@ -285,8 +358,9 @@ public inherited sharing class WorkflowCancellation {
         targets.add(instance);
       }
     }
+    Set<Id> targetIds = new Map<Id, Workflow_Instance__c>(targets).keySet();
     if (targets.isEmpty()) {
-      return;
+      return targetIds;
     }
 
     // Plan first: it changes records in memory only, so a malformed stack throws
@@ -296,9 +370,7 @@ public inherited sharing class WorkflowCancellation {
     cancelActiveStepExecs(targets);
 
     // Abort all scheduled jobs for these nodes (sleeps, retries, timeouts)
-    WorkflowOrchestratorEnqueue.abortScheduledJobs(
-      new Map<Id, Workflow_Instance__c>(targets).keySet()
-    );
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(targetIds);
 
     WorkflowCompensation.preCreateFirstCompensationSteps(plan.compensating);
     Database.update(targets, true, AccessLevel.SYSTEM_MODE);
@@ -315,6 +387,7 @@ public inherited sharing class WorkflowCancellation {
     // publish never spends DML that a node write still needs.
     WorkflowParentNotifier.notifyParentCompletion(plan.terminal);
     WorkflowLifecyclePublisher.publish(plan.terminal);
+    return targetIds;
   }
 
   /**

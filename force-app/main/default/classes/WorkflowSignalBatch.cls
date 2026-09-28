@@ -129,7 +129,8 @@ public inherited sharing class WorkflowSignalBatch {
           'Cancelling',
           'CompensationFailed',
           'Paused',
-          'DefinitionChanged'
+          'DefinitionChanged',
+          'Held'
         )
       WITH SYSTEM_MODE
       FOR UPDATE

@@ -9,6 +9,10 @@
         <enabled>true</enabled>
     </classAccesses>
     <classAccesses>
+        <apexClass>WorkflowFleetHealthController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
         <apexClass>WorkflowRateLimitController</apexClass>
         <enabled>true</enabled>
     </classAccesses>
@@ -79,6 +83,21 @@
     <fieldPermissions>
         <editable>true</editable>
         <field>Workflow_Instance__c.Definition_Shape__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Instance__c.Held_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Instance__c.Hold_Reason__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Held__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>
@@ -315,6 +334,18 @@
         <readable>true</readable>
     </fieldPermissions>
 
+    <!-- fieldPermissions for Workflow_Metrics__e subscribers (excluding required fields) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Is_Truncated__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Metrics_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
     <!-- Workflow_Schedule__c field permissions (required fields omitted; Salesforce manages them) -->
     <fieldPermissions>
         <editable>true</editable>
@@ -512,6 +543,17 @@
         <allowRead>true</allowRead>
         <modifyAllRecords>false</modifyAllRecords>
         <object>Workflow_Lifecycle__e</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Publish (create) and subscribe (read) access for the metrics event -->
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Metrics__e</object>
         <viewAllRecords>false</viewAllRecords>
     </objectPermissions>
 

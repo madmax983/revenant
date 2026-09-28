@@ -1,4 +1,4 @@
-# ADR 0006: Schedule miss and fail alert
+# ADR 0008: Schedule miss and fail alert
 
 - **Status:** Accepted
 - **Date:** 2026-09-28

@@ -8,7 +8,16 @@
  * observe, and it follows ContinuedAsNew chains so a lookup by correlation key
  * reports the live/terminal successor rather than a stale predecessor.
  */
-public inherited sharing class WorkflowStatusInvocableAction {
+global inherited sharing class WorkflowStatusInvocableAction {
+  /**
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
+   */
+  private WorkflowStatusInvocableAction() {
+    // No state to set.
+  }
+
   // Statuses that represent a finished workflow. ContinuedAsNew is deliberately
   // excluded: it is a hand-off, not a terminal outcome, so the action resolves it
   // forward to a successor rather than reporting it as terminal.
@@ -23,73 +32,73 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * @description Invocable request identifying the workflow instance to read, by either its
    * record Id or its correlation key.
    */
-  public class StatusRequest {
+  global class StatusRequest {
     @InvocableVariable(
       label='Correlation Key or Workflow Instance ID'
       description='Either a Workflow Instance record Id or a Correlation Key identifying the workflow to read.'
       required=true
     )
-    public String workflowKeyOrId;
+    global String workflowKeyOrId;
   }
 
   /**
    * @description Invocable response reporting a workflow instance's resolved status, output,
    * progress, and failure detail, with payloads rehydrated from offloaded storage.
    */
-  public class StatusResult {
+  global class StatusResult {
     @InvocableVariable(
       label='Found'
       description='False when no workflow instance matched the supplied key or Id.'
     )
-    public Boolean found;
+    global Boolean found;
 
     @InvocableVariable(
       label='Workflow Instance ID'
       description='The resolved current instance Id, following any ContinuedAsNew chain.'
     )
-    public Id workflowInstanceId;
+    global Id workflowInstanceId;
 
     @InvocableVariable(
       label='Status'
       description='The workflow instance Status value (e.g. Running, Completed, Failed).'
     )
-    public String status;
+    global String status;
 
     @InvocableVariable(
       label='Is Terminal'
       description='True when the workflow has finished (Completed, Failed, Compensated, or Cancelled).'
     )
-    public Boolean isTerminal;
+    global Boolean isTerminal;
 
     @InvocableVariable(
       label='Is Success'
       description='True only when the workflow finished successfully (Completed).'
     )
-    public Boolean isSuccess;
+    global Boolean isSuccess;
 
     @InvocableVariable(
       label='Output JSON'
       description='The workflow output, fully rehydrated from offloaded storage when applicable.'
     )
-    public String outputJson;
+    global String outputJson;
 
     @InvocableVariable(
       label='Error Message'
       description='Failure detail sourced from the workflow Error Message field.'
     )
-    public String errorMessage;
+    global String errorMessage;
 
     @InvocableVariable(
       label='Progress JSON'
       description='The workflow progress snapshot, fully rehydrated from offloaded storage when applicable.'
     )
-    public String progressJson;
+    global String progressJson;
 
     @InvocableVariable(
       label='Causation ID'
       description='Causation or trace identifier linking this instance to the upstream instance/event.'
     )
-    public String causationId;
+    global String causationId;
 
     /**
      * @description Initializes the result to a not-found, non-terminal, non-success state.
@@ -122,22 +131,19 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * @param requests The status requests to resolve; null or empty yields an empty list.
    * @return A StatusResult per input request, in the same order.
    */
-  public static List<StatusResult> getStatus(List<StatusRequest> requests) {
+  global static List<StatusResult> getStatus(List<StatusRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return new List<StatusResult>();
     }
 
-    // 1. Bucket each raw input into an Id lookup and/or a Correlation Key lookup.
-    LookupBuckets buckets = bucketRequests(requests);
+    List<String> keysOrIds = new List<String>();
+    for (StatusRequest req : requests) {
+      keysOrIds.add((req == null) ? null : req.workflowKeyOrId);
+    }
 
-    // 2. One bulk query for all direct matches, in any status (terminal included).
-    WorkflowStatusChainResolver.MatchIndex index = loadDirectMatches(buckets);
-
-    // 3. Resolve a starting instance per request, then forward-walk ContinuedAsNew.
-    List<Workflow_Instance__c> resolved = WorkflowStatusChainResolver.resolveStartingInstances(
-      buckets.reqIds,
-      buckets.reqKeys,
-      index
+    // 1-3. Resolve each request to its current instance (identity fields only).
+    List<Workflow_Instance__c> resolved = loadPayloadFields(
+      resolveInstances(keysOrIds)
     );
 
     // 4. Bulk-resolve offloaded output/progress payloads.
@@ -150,14 +156,43 @@ public inherited sharing class WorkflowStatusInvocableAction {
   }
 
   /**
+   * @description Resolves each value (instance Id or correlation key) to its current
+   * instance. An Id reads that exact instance. A key selects the live, then the
+   * latest, instance and follows the ContinuedAsNew chain. Read-only and bulk-safe.
+   * Shared with the Cancel Workflow action (issue #107). Loads identity fields only
+   * (Id, Status__c, Correlation_Key__c, Previous_Instance__c), not the payloads.
+   * @param keysOrIds The instance Ids or correlation keys, in order (null items allowed).
+   * @return One instance per value, in the same order (null where no match); empty for null input.
+   */
+  public static List<Workflow_Instance__c> resolveInstances(
+    List<String> keysOrIds
+  ) {
+    if (keysOrIds == null || keysOrIds.isEmpty()) {
+      return new List<Workflow_Instance__c>();
+    }
+    // 1. Bucket each raw input into an Id lookup and/or a Correlation Key lookup.
+    LookupBuckets buckets = bucketRequests(keysOrIds);
+
+    // 2. One bulk query for all direct matches, in any status (terminal included).
+    WorkflowStatusChainResolver.MatchIndex index = loadDirectMatches(buckets);
+
+    // 3. Resolve a starting instance per request, then forward-walk ContinuedAsNew.
+    return WorkflowStatusChainResolver.resolveStartingInstances(
+      buckets.reqIds,
+      buckets.reqKeys,
+      index
+    );
+  }
+
+  /**
    * Buckets each raw input into an Id lookup and/or a Correlation Key lookup, kept in
    * request order. An id-shaped value is also retained as a key fallback in case a
    * caller used a correlation key that happens to look like an Id.
    *
-   * @param requests The raw status requests to bucket, kept in order.
+   * @param keysOrIds The raw instance Ids or correlation keys to bucket, kept in order.
    * @return The populated lookup buckets holding per-request and de-duplicated Ids and keys.
    */
-  private static LookupBuckets bucketRequests(List<StatusRequest> requests) {
+  private static LookupBuckets bucketRequests(List<String> keysOrIds) {
     String wflowPrefix = Workflow_Instance__c.SObjectType.getDescribe(
         SObjectDescribeOptions.DEFERRED
       )
@@ -165,15 +200,15 @@ public inherited sharing class WorkflowStatusInvocableAction {
     Pattern idPattern = Pattern.compile('^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$');
 
     LookupBuckets buckets = new LookupBuckets();
-    for (StatusRequest req : requests) {
-      String raw = (req == null) ? null : req.workflowKeyOrId;
+    for (String raw : keysOrIds) {
       Id parsedId = parseInstanceId(raw, wflowPrefix, idPattern);
       buckets.reqIds.add(parsedId);
       if (parsedId != null) {
         buckets.lookupIds.add(parsedId);
       }
       if (String.isNotBlank(raw)) {
-        buckets.reqKeys.add(raw);
+        // Correlation_Key__c matches case-insensitively; Apex maps do not.
+        buckets.reqKeys.add(WorkflowKeys.normalizeKey(raw));
         buckets.lookupKeys.add(raw);
       } else {
         buckets.reqKeys.add(null);
@@ -213,6 +248,47 @@ public inherited sharing class WorkflowStatusInvocableAction {
   }
 
   /**
+   * @description Replaces each resolved instance with a copy that holds the payload
+   * and failure fields, in one query. The lookup loads identity fields only, so a
+   * key with many past runs does not load their payloads.
+   * @param resolved The resolved instance per request (null where unmatched).
+   * @return The same list, with payload fields loaded.
+   */
+  private static List<Workflow_Instance__c> loadPayloadFields(
+    List<Workflow_Instance__c> resolved
+  ) {
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Instance__c inst : resolved) {
+      if (inst != null) {
+        ids.add(inst.Id);
+      }
+    }
+    if (ids.isEmpty()) {
+      return resolved;
+    }
+    Map<Id, Workflow_Instance__c> full = new Map<Id, Workflow_Instance__c>(
+      [
+        SELECT
+          Id,
+          Status__c,
+          Output__c,
+          Error_Message__c,
+          Progress__c,
+          Causation_Id__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :ids
+        WITH SYSTEM_MODE
+      ]
+    );
+    for (Integer i = 0; i < resolved.size(); i++) {
+      if (resolved[i] != null && full.containsKey(resolved[i].Id)) {
+        resolved[i] = full.get(resolved[i].Id);
+      }
+    }
+    return resolved;
+  }
+
+  /**
    * @description Runs a single bulk query for all direct matches, in any status (terminal
    * included), and indexes them by Id and by preferred correlation key.
    * @param buckets The lookup buckets supplying the de-duplicated Id and key sets to query.
@@ -229,13 +305,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
       SELECT
         Id,
         Status__c,
-        Output__c,
-        Error_Message__c,
         Correlation_Key__c,
         Previous_Instance__c,
-        CreatedDate,
-        Progress__c,
-        Causation_Id__c
+        CreatedDate
       FROM Workflow_Instance__c
       WHERE
         Id IN :buckets.lookupIds
@@ -264,12 +336,13 @@ public inherited sharing class WorkflowStatusInvocableAction {
     if (String.isBlank(inst.Correlation_Key__c)) {
       return;
     }
-    Workflow_Instance__c existing = byKey.get(inst.Correlation_Key__c);
+    String key = WorkflowKeys.normalizeKey(inst.Correlation_Key__c);
+    Workflow_Instance__c existing = byKey.get(key);
     if (
       existing == null ||
       WorkflowStatusChainResolver.isPreferredCandidate(inst, existing)
     ) {
-      byKey.put(inst.Correlation_Key__c, inst);
+      byKey.put(key, inst);
     }
   }
 

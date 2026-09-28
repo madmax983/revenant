@@ -6,9 +6,14 @@
          signals but cannot reach any state-mutating recovery endpoint. Class-level security
          is enforced only at the LWC entry point, so the controller's downstream service
          classes need no entry. WorkflowRateLimitController is the endpoint of the
-         Rate Limits panel. It only reads data and uses the same view gate. -->
+         Rate Limits panel. WorkflowFleetHealthController is the endpoint of the Fleet
+         Health view. Both only read data and use the same view gate. -->
     <classAccesses>
         <apexClass>WorkflowDashboardController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>WorkflowFleetHealthController</apexClass>
         <enabled>true</enabled>
     </classAccesses>
     <classAccesses>
@@ -151,6 +156,16 @@
         <viewAllRecords>false</viewAllRecords>
     </objectPermissions>
 
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Metrics__e</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+
     <!-- ===== Field permissions: READ ONLY (editable=false) for every field Revenant_Admin
          exposes. Critically Workflow_Instance__c.Compensation_Stack__c (LIFO integrity) and
          all Workflow_Step_Execution__c.* fields (append-only audit) are readable but NOT
@@ -200,6 +215,21 @@
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Instance__c.Definition_Shape__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Held_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Hold_Reason__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Held__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>
@@ -433,6 +463,18 @@
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Lifecycle__e.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Metrics__e (subscribe; required fields omitted) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Is_Truncated__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Metrics_Json__c</field>
         <readable>true</readable>
     </fieldPermissions>
 

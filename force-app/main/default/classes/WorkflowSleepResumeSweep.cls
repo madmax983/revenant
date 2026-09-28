@@ -42,7 +42,9 @@ public inherited sharing class WorkflowSleepResumeSweep {
    * rows from other workflows (they would be re-selected and skipped every
    * heartbeat). An org-wide '*' pause means nothing is resumable, so the phase is
    * skipped entirely. The latest-step subquery skips the definition-change
-   * marker row (issue #89), because the marker is not a step.
+   * marker row (issue #89), because the marker is not a step. A held instance
+   * (issue #119) is also excluded. Its timed wait does not route to the
+   * fallback step until release. Then the next heartbeat routes it.
    * @param now the heartbeat evaluation instant
    */
   public static void processSleepResumptions(Datetime now) {
@@ -72,6 +74,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
           Status__c = 'Suspended'
           AND Sleep_Until__c <= :now
           AND Workflow_Name__c NOT IN :pausedDefNames
+          AND Held_At__c = NULL
         WITH SYSTEM_MODE
         LIMIT :watchdogResumeBatchSize
         FOR UPDATE

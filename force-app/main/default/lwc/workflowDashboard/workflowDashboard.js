@@ -8,11 +8,12 @@
 //    changes the Workflow_Lifecycle__e (terminal-only, config-toggleable) and Workflow_Event__e (internal
 //    control-plane) platform events do not emit. An empApi migration would change behavior and needs a live org.
 // The requestAnimationFrame scroll-restore that this disable also covered was replaced by renderedCallback.
-import { LightningElement, wire } from "lwc";
+import { LightningElement, api, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
+import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.startWorkflow";
@@ -24,6 +25,8 @@ import cancelMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandCo
 import resumeWorkflowInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumeWorkflowInstance";
 import resumeCompensationInstance from "@salesforce/apex/WorkflowDashboardCommandController.resumeCompensationInstance";
 import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
+import holdInstance from "@salesforce/apex/WorkflowDashboardCommandController.holdInstance";
+import releaseHeldInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseHeldInstance";
 import cancelWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.cancelWorkflow";
 import submitApproval from "@salesforce/apex/WorkflowDashboardCommandController.submitApproval";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
@@ -39,6 +42,7 @@ import resumeDefinition from "@salesforce/apex/WorkflowDashboardCommandControlle
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
+import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
 import getWorkflowFailureBreakdown from "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown";
 import getDefinitionLatency from "@salesforce/apex/WorkflowDashboardController.getDefinitionLatency";
@@ -78,6 +82,169 @@ const LIVENESS_STATUS = {
 };
 const LIVENESS_UNKNOWN = { label: "Unknown", badgeClass: "badge badge-grey" };
 
+// Platform Event allocation (#120). Defaults match PlatformEventHeadroom.cls.
+const PE_DEFAULT_WARNING_PERCENT = 80;
+const PE_DEFAULT_CRITICAL_PERCENT = 95;
+const PE_STATUS = {
+  HEALTHY: { label: "Healthy", badgeClass: "badge badge-green", rank: 1 },
+  WARNING: { label: "Warning", badgeClass: "badge badge-orange", rank: 2 },
+  CRITICAL: { label: "Critical", badgeClass: "badge badge-red", rank: 3 },
+};
+const PE_UNAVAILABLE = {
+  label: "Not available",
+  badgeClass: "badge badge-grey",
+  rank: 0,
+};
+const PE_INTRO =
+  "The Platform Event allocation of the org is almost full. All apps in the org share this allocation.";
+// Consequence for each impact, in display order. A key with no known impact
+// uses PUBLISH, the most severe text.
+const PE_IMPACT_TEXT = [
+  {
+    key: "PUBLISH",
+    text:
+      "Suspended workflows can stay suspended. Child-to-parent resumes and parallel fan-in can stop. " +
+      "The engine can fail to publish lifecycle events.",
+  },
+  {
+    key: "DELIVERY",
+    text:
+      "External subscribers (CometD, Pub/Sub API, empApi) can stop receiving events, for example Workflow_Lifecycle__e. " +
+      "Delivery to Apex triggers does not use this allocation.",
+  },
+  {
+    key: "STANDARD_VOLUME",
+    text:
+      "Standard-volume events of other apps can fail. " +
+      "Revenant events are high-volume and do not use this allocation.",
+  },
+];
+const PE_IGNORED_TEXT =
+  "Page settings ignored: Warning must be more than 0 and less than Critical. Critical must be 100 or less.";
+
+// Same rule as PlatformEventHeadroom.classify: exact ratio, no rounding.
+function classifyHeadroom(value, limit, warningPercent, criticalPercent) {
+  if (!(limit > 0) || value === null || value === undefined) {
+    return "UNAVAILABLE";
+  }
+  const scaledUsed = value * 100;
+  if (scaledUsed >= criticalPercent * limit) {
+    return "CRITICAL";
+  }
+  if (scaledUsed >= warningPercent * limit) {
+    return "WARNING";
+  }
+  return "HEALTHY";
+}
+
+function isThresholdSet(value) {
+  return value !== undefined && value !== null && value !== "";
+}
+
+// Resolves the thresholds. Valid App Builder values replace the server
+// values. If the App Builder values are not valid, the server values apply.
+function resolvePeThresholds(data, warningSetting, criticalSetting) {
+  const base = {
+    warning: isThresholdSet(data.platformEventWarningPercent)
+      ? Number(data.platformEventWarningPercent)
+      : PE_DEFAULT_WARNING_PERCENT,
+    critical: isThresholdSet(data.platformEventCriticalPercent)
+      ? Number(data.platformEventCriticalPercent)
+      : PE_DEFAULT_CRITICAL_PERCENT,
+    overridden: false,
+    ignored: false,
+  };
+  const warnSet = isThresholdSet(warningSetting);
+  const critSet = isThresholdSet(criticalSetting);
+  if (!warnSet && !critSet) {
+    return base;
+  }
+  const warning = warnSet ? Number(warningSetting) : base.warning;
+  const critical = critSet ? Number(criticalSetting) : base.critical;
+  const valid =
+    Number.isFinite(warning) &&
+    Number.isFinite(critical) &&
+    warning > 0 &&
+    warning < critical &&
+    critical <= 100;
+  return valid
+    ? { warning, critical, overridden: true, ignored: false }
+    : { ...base, ignored: true };
+}
+
+function formatCount(value) {
+  return Number(value).toLocaleString();
+}
+
+// Builds the panel model one time for each data or setting change.
+function buildPeView(data, warningSetting, criticalSetting) {
+  const source = data || {};
+  const thresholds = resolvePeThresholds(
+    source,
+    warningSetting,
+    criticalSetting,
+  );
+  const rows = (source.platformEventLimits || [])
+    .map((row) => {
+      const state = thresholds.overridden
+        ? classifyHeadroom(
+            row.value,
+            row.limit,
+            thresholds.warning,
+            thresholds.critical,
+          )
+        : row.state;
+      const status = PE_STATUS[state] || PE_UNAVAILABLE;
+      return {
+        ...row,
+        key: row.name,
+        state,
+        rank: status.rank,
+        stateLabel: status.label,
+        badgeClass: status.badgeClass,
+        usageLabel: `${formatCount(row.value)} / ${formatCount(row.limit)}`,
+        usedLabel: `${row.percentUsed}% used`,
+        remainingLabel: `${formatCount(row.remaining)} remaining (${row.percentRemaining}%)`,
+      };
+    })
+    .filter((row) => row.rank > PE_UNAVAILABLE.rank);
+  const status = rows.reduce(
+    (worst, row) =>
+      row.rank > worst.rank ? PE_STATUS[row.state] || worst : worst,
+    PE_UNAVAILABLE,
+  );
+  const atRiskImpacts = new Set(
+    rows
+      .filter((row) => row.rank >= PE_STATUS.WARNING.rank)
+      .map((row) =>
+        PE_IMPACT_TEXT.some((i) => i.key === row.impact)
+          ? row.impact
+          : "PUBLISH",
+      ),
+  );
+  const critical = status.rank >= PE_STATUS.CRITICAL.rank;
+  let thresholdsLabel = `Warning at ${thresholds.warning}% · Critical at ${thresholds.critical}%`;
+  if (thresholds.overridden) {
+    thresholdsLabel += " (page setting)";
+  }
+  if (thresholds.ignored) {
+    thresholdsLabel += `. ${PE_IGNORED_TEXT}`;
+  }
+  return {
+    rows,
+    hasRows: rows.length > 0,
+    status,
+    atRisk: status.rank >= PE_STATUS.WARNING.rank,
+    consequenceClass: `slds-scoped-notification slds-media slds-media_center slds-m-bottom_small ${
+      critical ? "slds-theme_error" : "slds-theme_warning"
+    }`,
+    consequenceIcon: critical ? "utility:error" : "utility:warning",
+    consequenceIntro: PE_INTRO,
+    consequenceLines: PE_IMPACT_TEXT.filter((i) => atRiskImpacts.has(i.key)),
+    thresholdsLabel,
+  };
+}
+
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
   RETRIES_EXHAUSTED: "Retries Exhausted",
@@ -89,6 +256,13 @@ const FAILURE_CATEGORY_LABELS = {
   UNKNOWN: "Unknown",
 };
 
+// Rolling windows shared by Definition Health and Fleet Health.
+const ROLLING_WINDOW_OPTIONS = [
+  { label: "Last 1 hour", value: "1h" },
+  { label: "Last 24 hours", value: "24h" },
+  { label: "Last 7 days", value: "7d" },
+];
+
 const ASYNC_LIMITS = {
   CPU: 60000,
   SOQL: 200,
@@ -96,6 +270,30 @@ const ASYNC_LIMITS = {
 };
 
 export default class WorkflowDashboard extends LightningElement {
+  // App Builder settings for the Platform Event thresholds (#120). If a value
+  // is blank or not valid, the component uses the server values.
+  @api
+  get platformEventWarningPercent() {
+    return this._peWarningSetting;
+  }
+  set platformEventWarningPercent(value) {
+    this._peWarningSetting = value;
+    this.refreshPeView();
+  }
+
+  @api
+  get platformEventCriticalPercent() {
+    return this._peCriticalSetting;
+  }
+  set platformEventCriticalPercent(value) {
+    this._peCriticalSetting = value;
+    this.refreshPeView();
+  }
+
+  _peWarningSetting;
+  _peCriticalSetting;
+  peView = buildPeView(null);
+
   instances = [];
   filteredInstances = [];
   definitions = [];
@@ -108,7 +306,23 @@ export default class WorkflowDashboard extends LightningElement {
   childInstances = [];
   loadingDetails = false;
   successor = null;
+
+  // Continue-As-New chain (issue #116). chainAnchorId is the instance that
+  // loaded the first page; older pages use the same anchor.
+  chainActive = false;
+  chainLoading = false;
+  chainError = null;
+  chainGenerations = [];
+  chainTotal = 0;
+  chainTotalCapped = false;
+  chainNextCursor = null;
+  chainAnchorId = null;
+  chainRequestSeq = 0;
+  _pendingChainScrollTop = null;
   approvalComments = "";
+  // Issue #119: reason typed before Hold, and the instance it is for.
+  holdReason = "";
+  holdReasonInstanceId = null;
   modalOpen = false;
   searchTerm = "";
   viewingDoctor = false;
@@ -199,11 +413,19 @@ export default class WorkflowDashboard extends LightningElement {
   _restoreScroll = false;
   _pendingScrollTop = 0;
   // Stable option array (see note above workflowOptions on why getters are avoided).
-  trendWindowOptions = [
-    { label: "Last 1 hour", value: "1h" },
-    { label: "Last 24 hours", value: "24h" },
-    { label: "Last 7 days", value: "7d" },
-  ];
+  trendWindowOptions = ROLLING_WINDOW_OPTIONS;
+
+  // Fleet Health view state (#111): read-only, one row per definition.
+  viewingHealth = false;
+  loadingHealth = false;
+  healthWindow = "24h";
+  healthThreshold = 95;
+  healthData = null;
+  healthRows = [];
+  healthError = "";
+  // Only the latest request updates the view. The component discards a stale response.
+  _healthRequestId = 0;
+  healthWindowOptions = ROLLING_WINDOW_OPTIONS;
 
   // Catalog view state (read-only deployed-workflow catalog with live health)
   viewingCatalog = false;
@@ -280,6 +502,7 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "ContinuedAsNew", value: "ContinuedAsNew" },
     { label: "Paused", value: "Paused" },
     { label: "Definition Changed", value: "DefinitionChanged" },
+    { label: "Held", value: "Held" },
   ];
 
   failureCategoryOptions = [
@@ -310,6 +533,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   renderedCallback() {
+    this.restoreChainScroll();
     if (!this._restoreScroll) {
       return;
     }
@@ -317,6 +541,17 @@ export default class WorkflowDashboard extends LightningElement {
     const el = this.template.querySelector(".slds-scrollable_y");
     if (el) {
       el.scrollTop = this._pendingScrollTop;
+    }
+  }
+
+  restoreChainScroll() {
+    if (this._pendingChainScrollTop === null) {
+      return;
+    }
+    const list = this.template.querySelector('[data-id="chain-scroll"]');
+    if (list) {
+      list.scrollTop = this._pendingChainScrollTop;
+      this._pendingChainScrollTop = null;
     }
   }
 
@@ -346,6 +581,172 @@ export default class WorkflowDashboard extends LightningElement {
 
   get hasChildren() {
     return this.childInstances && this.childInstances.length > 0;
+  }
+
+  // Generation rows with the selected-row class. shapeGeneration formats
+  // each row once, when it arrives.
+  get chainRows() {
+    return this.chainGenerations.map((g) => {
+      const selected = g.instanceId === this.selectedInstanceId;
+      return {
+        ...g,
+        rowClass: `slds-p-around_small list-item chain-row ${
+          selected ? "item-selected" : ""
+        }`,
+        ariaCurrent: selected ? "true" : null,
+      };
+    });
+  }
+
+  get hasChainRows() {
+    return this.chainGenerations.length > 0;
+  }
+
+  get showChainSpinner() {
+    return this.chainLoading && !this.hasChainRows;
+  }
+
+  get chainCountLabel() {
+    const total = `${this.chainTotal}${this.chainTotalCapped ? "+" : ""}`;
+    return `Showing ${this.chainGenerations.length} of ${total} generations`;
+  }
+
+  get hasOlderGenerations() {
+    return !!this.chainNextCursor;
+  }
+
+  shapeGeneration(g) {
+    return {
+      ...g,
+      generationLabel: `Generation ${g.generation ?? "—"}`,
+      formattedStartedAt: this.formatDateTime(g.startedAt),
+      formattedEndedAt: this.formatDateTime(g.endedAt),
+      statusBadgeClass: this.getStatusBadgeClass(g.status),
+      failureCategoryLabel: g.failureCategory
+        ? FAILURE_CATEGORY_LABELS[g.failureCategory] || g.failureCategory
+        : null,
+    };
+  }
+
+  // Loads the chain only for an instance with a predecessor or a successor.
+  // - Same chain (row in the list, or same anchor): refresh page 1 on each
+  //   load, so a poll shows new generations. Older pages stay. After an error,
+  //   only "Try again" reads again.
+  // - Other instance: load its chain and clear the old rows.
+  syncChain(instanceId, inst, successor) {
+    if (!inst.Previous_Instance__c && !successor) {
+      this.resetChain();
+      return;
+    }
+    const sameChain =
+      instanceId === this.chainAnchorId ||
+      this.chainGenerations.some((g) => g.instanceId === instanceId);
+    if (!sameChain) {
+      this.loadChain(instanceId, null, true);
+    } else if (!this.chainError && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, null, false);
+    }
+  }
+
+  resetChain() {
+    this.chainRequestSeq++;
+    this.chainActive = false;
+    this.chainLoading = false;
+    this.chainError = null;
+    this.chainGenerations = [];
+    this.chainTotal = 0;
+    this.chainTotalCapped = false;
+    this.chainNextCursor = null;
+    this.chainAnchorId = null;
+  }
+
+  // clear: remove the old rows first (a different chain).
+  loadChain(instanceId, cursor, clear) {
+    const seq = ++this.chainRequestSeq;
+    if (!cursor) {
+      this.chainAnchorId = instanceId;
+    }
+    if (clear) {
+      this.chainGenerations = [];
+      this.chainTotal = 0;
+      this.chainTotalCapped = false;
+      this.chainNextCursor = null;
+    }
+    this.chainActive = true;
+    this.chainLoading = true;
+    this.chainError = null;
+    getInstanceChain({ instanceId, cursor })
+      .then((page) => {
+        if (seq !== this.chainRequestSeq) {
+          return;
+        }
+        if (!page) {
+          this.resetChain();
+          return;
+        }
+        const rows = (page.generations || []).map((g) =>
+          this.shapeGeneration(g),
+        );
+        const pageCursor = page.hasMore ? page.nextCursor : null;
+        if (cursor) {
+          this.chainGenerations = [...this.chainGenerations, ...rows];
+          this.chainNextCursor = pageCursor;
+        } else {
+          // A refresh of page 1 keeps the loaded older rows only when the lists
+          // join exactly. Page 1 must contain a cached row. Then each row of
+          // page 1 that is not cached is a new generation, so with no purge
+          // the new total is the old total plus those rows. Else (a purge, or
+          // a capped total) paging starts again from page 1.
+          const pageIds = new Set(rows.map((g) => g.instanceId));
+          const older = this.chainGenerations.filter(
+            (g) => !pageIds.has(g.instanceId),
+          );
+          const cachedOnPage = this.chainGenerations.length - older.length;
+          const added = rows.length - cachedOnPage;
+          const exact =
+            cachedOnPage > 0 &&
+            !page.isTotalCapped &&
+            !this.chainTotalCapped &&
+            page.totalCount === this.chainTotal + added;
+          const keep = exact ? older : [];
+          this.chainGenerations = [...rows, ...keep];
+          this.chainNextCursor = keep.length
+            ? this.chainNextCursor
+            : pageCursor;
+        }
+        this.chainTotal = page.totalCount;
+        this.chainTotalCapped = !!page.isTotalCapped;
+      })
+      .catch((error) => {
+        if (seq === this.chainRequestSeq) {
+          this.chainError = this.reduceErrors(error);
+        }
+      })
+      .finally(() => {
+        if (seq === this.chainRequestSeq) {
+          this.chainLoading = false;
+        }
+      });
+  }
+
+  handleLoadOlderGenerations() {
+    if (this.chainNextCursor && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, this.chainNextCursor, false);
+    }
+  }
+
+  handleRetryChain() {
+    if (this.chainAnchorId && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, null, true);
+    }
+  }
+
+  // Opens the step timeline of a generation. The detail spinner rebuilds the
+  // list, so keep its scroll position.
+  handleSelectGeneration(event) {
+    const list = this.template.querySelector('[data-id="chain-scroll"]');
+    this._pendingChainScrollTop = list ? list.scrollTop : null;
+    this.handleSelectRelatedInstance(event);
   }
 
   get hasBreakdownRows() {
@@ -456,6 +857,38 @@ export default class WorkflowDashboard extends LightningElement {
     );
   }
 
+  // Issue #119: a hold is recorded, or the gate parked the instance.
+  get isHeld() {
+    return (
+      !!this.selectedInst &&
+      (this.selectedInst.Held__c === true ||
+        this.selectedInst.Status__c === "Held")
+    );
+  }
+
+  // The hold waits for the next step boundary.
+  get isHoldWaiting() {
+    return this.isHeld && this.selectedInst.Status__c !== "Held";
+  }
+
+  get holdReasonLabel() {
+    return (this.selectedInst && this.selectedInst.Hold_Reason__c) || "None";
+  }
+
+  // A hold on a Paused or DefinitionChanged instance does not end that park.
+  get isHeldWithOtherPark() {
+    return (
+      this.isHeld &&
+      (this.selectedInst.Status__c === "Paused" ||
+        this.selectedInst.Status__c === "DefinitionChanged")
+    );
+  }
+
+  // The engine decides: forward path only, no rollback, no engine workflow.
+  get canHold() {
+    return !!this.selectedInst && !this.isHeld && this.selectedInst.holdable;
+  }
+
   get definitionChange() {
     return this.selectedInst ? this.selectedInst.definitionChange : null;
   }
@@ -512,6 +945,7 @@ export default class WorkflowDashboard extends LightningElement {
       status === "Suspended" ||
       status === "Paused" ||
       status === "DefinitionChanged" ||
+      status === "Held" ||
       status === "CompensationFailed"
     );
   }
@@ -977,6 +1411,8 @@ export default class WorkflowDashboard extends LightningElement {
             : "badge badge-blue",
       stalledBadgeClass: inst.stalled ? "badge badge-red" : null,
       formattedIdleMinutes: idleLabel,
+      // Issue #119: the hold waits for the next step boundary.
+      isHoldWaiting: inst.Held__c === true && inst.Status__c !== "Held",
     };
   }
 
@@ -1009,20 +1445,14 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleSelectInstance(event) {
     this.stopPolling();
-    this.viewingDoctor = false;
-    this.viewingSchedules = false;
-    this.viewingDrain = false;
-    this.viewingUnrouted = false;
-    this.viewingCatalog = false;
-    this.viewingFailureBreakdown = false;
-    this.viewingLatency = false;
+    this.closeViews();
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
   }
 
-  handleSelectRelatedInstance(event) {
-    this.stopPolling();
+  // Closes every view so that the instance detail panel shows.
+  closeViews() {
     this.viewingDoctor = false;
     this.viewingSchedules = false;
     this.viewingDrain = false;
@@ -1030,6 +1460,12 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingCatalog = false;
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
+    this.handleCloseHealth();
+  }
+
+  handleSelectRelatedInstance(event) {
+    this.stopPolling();
+    this.closeViews();
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -1052,12 +1488,14 @@ export default class WorkflowDashboard extends LightningElement {
           this.selectedInst = {};
           this.steps = [];
           this.childInstances = [];
+          this.resetChain();
           return;
         }
         const inst = result.instance;
         const payloadFiles = result.payloadFiles || {};
         const breadcrumbs = result.breadcrumbs || [];
         this.successor = result.successor;
+        this.syncChain(currentInstanceId, inst, result.successor);
         this.selectedInst = {
           ...inst,
           formattedDate: this.formatDateTime(inst.CreatedDate),
@@ -1095,6 +1533,8 @@ export default class WorkflowDashboard extends LightningElement {
           pendingCompensations: result.pendingCompensations || [],
           attributes: result.attributes || [],
           definitionChange: this.mapDefinitionChange(result.definitionChange),
+          heldSinceFormatted: this.formatDateTime(inst.Held_At__c),
+          holdable: result.holdable === true,
           // Issue #112: { message, createdDate, formattedDate } or null.
           stepHistoryWarning: result.stepHistoryWarning
             ? {
@@ -1294,6 +1734,9 @@ export default class WorkflowDashboard extends LightningElement {
     if (this.viewingCatalog) {
       this.loadCatalog();
     }
+    if (this.viewingHealth) {
+      this.fetchHealth();
+    }
     this.fetchTrends();
     this.refreshInstances().then(() => {
       this.showToast("Success", "Workflow dashboard refreshed", "success");
@@ -1307,7 +1750,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadDoctorStatus();
   }
@@ -1323,7 +1768,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
     // hasn't changed, so its onchange won't fire to refresh the table itself.
@@ -1346,7 +1793,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
   }
 
   handleCloseSchedules() {
@@ -1361,7 +1810,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadUnroutedSignals();
   }
@@ -1377,8 +1828,10 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.viewingLatency = false;
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     if (this.selectedWorkflow) {
       this.breakdownWorkflow = this.selectedWorkflow;
@@ -1394,6 +1847,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenCatalog() {
     this.viewingCatalog = true;
+    this.handleCloseHealth();
     this.viewingDoctor = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
@@ -1401,6 +1855,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadCatalog();
   }
@@ -1446,21 +1901,173 @@ export default class WorkflowDashboard extends LightningElement {
     };
   }
 
-  // Deep-links from a catalog row (or one of its status counts) to the instance list,
-  // filtered to that definition and — for a status count — that status. Reuses the existing
-  // selectedWorkflow / selectedStatus filter state rather than a parallel mechanism.
+  // Opens the instance list from a Catalog row or a status count. The list shows that
+  // definition and, for a status count, that status.
   handleCatalogRowClick(event) {
-    const definition = event.currentTarget.dataset.definition;
-    const status = event.currentTarget.dataset.status || "";
+    this.openInstanceList(
+      event.currentTarget.dataset.definition,
+      event.currentTarget.dataset.status || "",
+    );
+  }
+
+  // Opens the instance list for a definition and an optional status. Closes the Catalog
+  // and Fleet Health views. Clears the search and attribute filters, so that the list
+  // shows all instances of the definition.
+  openInstanceList(definition, status) {
     if (!definition) {
       return;
     }
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.showingStalled = false;
     this.selectedWorkflow = definition;
     this.selectedStatus = status;
     this.selectedFailureCategory = "";
+    this.searchTerm = "";
+    this.attributeFilters = {};
     this.fetchInstances(false);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // FLEET HEALTH (#111)
+  // ────────────────────────────────────────────────────────────────────────
+
+  handleOpenHealth() {
+    this.viewingHealth = true;
+    this.viewingDoctor = false;
+    this.viewingDrain = false;
+    this.viewingUnrouted = false;
+    this.viewingSchedules = false;
+    this.viewingFailureBreakdown = false;
+    this.viewingLatency = false;
+    this.viewingCatalog = false;
+    this.selectedInstanceId = null;
+    this.resetChain();
+    this.filterInstancesList();
+    this.fetchHealth();
+  }
+
+  // Closes the view. A request that is in progress becomes stale, so it cannot show a
+  // toast on a different view.
+  handleCloseHealth() {
+    this.viewingHealth = false;
+    this._healthRequestId++;
+    this.loadingHealth = false;
+  }
+
+  fetchHealth() {
+    const requestId = ++this._healthRequestId;
+    this.loadingHealth = true;
+    return getFleetHealth({ windowKey: this.healthWindow })
+      .then((result) => {
+        if (requestId === this._healthRequestId) {
+          this.healthData = result;
+          this.healthError = "";
+          this.buildHealthRows();
+        }
+      })
+      .catch((error) => {
+        if (requestId !== this._healthRequestId) {
+          return;
+        }
+        const message = this.reduceErrors(error);
+        this.healthData = null;
+        this.healthError = message;
+        this.buildHealthRows();
+        this.showToast(
+          "Error",
+          "Failed to load fleet health: " + message,
+          "error",
+        );
+      })
+      .finally(() => {
+        if (requestId === this._healthRequestId) {
+          this.loadingHealth = false;
+        }
+      });
+  }
+
+  handleHealthWindowChange(event) {
+    this.healthWindow = event.detail ? event.detail.value : event.target.value;
+    this.fetchHealth();
+  }
+
+  // Keeps the last valid threshold when the input is blank, not a number, or out of range.
+  // The view shows the threshold that it uses.
+  handleHealthThresholdChange(event) {
+    const raw = event.detail ? event.detail.value : event.target.value;
+    const value = raw === "" || raw === null ? NaN : Number(raw);
+    if (Number.isFinite(value) && value >= 0 && value <= 100) {
+      this.healthThreshold = value;
+      this.buildHealthRows();
+    }
+  }
+
+  handleHealthRowClick(event) {
+    this.openInstanceList(event.currentTarget.dataset.definition, "");
+  }
+
+  get hasHealthRows() {
+    return this.healthRows.length > 0;
+  }
+
+  // The empty state shows only after a load that has no rows.
+  get showHealthEmpty() {
+    return !this.healthError && this.healthRows.length === 0;
+  }
+
+  get healthIsSampled() {
+    return !!(this.healthData && this.healthData.isSampled);
+  }
+
+  get healthSampleCap() {
+    return this.healthData ? this.healthData.sampleCap : 0;
+  }
+
+  get healthCountsCapped() {
+    return !!(this.healthData && this.healthData.countsCapped);
+  }
+
+  get healthCountCap() {
+    return this.healthData ? this.healthData.countCap : 0;
+  }
+
+  // Builds the display rows. It runs when data arrives or the threshold changes, not on
+  // each render. The flag uses the counts, not the rounded rate, so 94.96% is below 95%.
+  buildHealthRows() {
+    const rows = (this.healthData && this.healthData.rows) || [];
+    this.healthRows = rows.map((row) => {
+      const terminal = (row.completed || 0) + (row.failed || 0);
+      const hasRate = terminal > 0;
+      const belowThreshold =
+        hasRate && (row.completed * 100) / terminal < this.healthThreshold;
+      return {
+        ...row,
+        belowThreshold,
+        rowClass: belowThreshold
+          ? "slds-hint-parent health-row-below"
+          : "slds-hint-parent",
+        rateDisplay: hasRate ? `${row.successRate}%` : "—",
+        rateClass: belowThreshold ? "text-red" : hasRate ? "text-green" : "",
+        failedClass: row.failed > 0 ? "text-red" : "",
+        linkTitle: `View the instances of ${row.workflowName}`,
+        avgApprox: this.isApproxDuration(
+          row.avgDurationMs,
+          row.durationSampled,
+        ),
+        avgDisplay: this.formatDuration(row.avgDurationMs),
+        maxApprox: this.isApproxDuration(
+          row.maxDurationMs,
+          row.durationSampled,
+        ),
+        maxDisplay: this.formatDuration(row.maxDurationMs),
+      };
+    });
+  }
+
+  // A sampled duration shows "≈". A missing value shows only "—".
+  isApproxDuration(ms, sampled) {
+    return !!sampled && ms !== null && ms !== undefined;
   }
 
   handleBreakdownWorkflowChange(event) {
@@ -1511,7 +2118,9 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
     this.viewingCatalog = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     if (this.selectedWorkflow) {
       this.latencyWorkflow = this.selectedWorkflow;
@@ -1751,6 +2360,7 @@ export default class WorkflowDashboard extends LightningElement {
                 : null,
             }
           : { config: {} };
+        this.refreshPeView();
       })
       .catch((error) => {
         this.showToast(
@@ -1786,6 +2396,14 @@ export default class WorkflowDashboard extends LightningElement {
 
     this.loadStorageFootprint();
     this.loadRateLimitStatus();
+  }
+
+  refreshPeView() {
+    this.peView = buildPeView(
+      this.doctorData,
+      this._peWarningSetting,
+      this._peCriticalSetting,
+    );
   }
 
   // Watchdog liveness (#113). The server calculates the state on each read.
@@ -2364,6 +2982,7 @@ export default class WorkflowDashboard extends LightningElement {
               "Progress is shown in the detail panel below.",
             "success",
           );
+          this.closeViews();
           this.selectedInstanceId = outcome.redriveInstanceId;
           this.refreshInstances();
           this.loadDetails(true);
@@ -2448,6 +3067,7 @@ export default class WorkflowDashboard extends LightningElement {
               "Progress is shown in the detail panel below.",
             "success",
           );
+          this.closeViews();
           this.selectedInstanceId = outcome.cancelInstanceId;
           this.refreshInstances();
           this.loadDetails(true);
@@ -2693,6 +3313,78 @@ export default class WorkflowDashboard extends LightningElement {
       });
   }
 
+  handleHoldReasonChange(event) {
+    this.holdReason = event.target.value;
+    this.holdReasonInstanceId = this.selectedInstanceId;
+  }
+
+  // Issue #119: a typed reason belongs to the instance it was typed for.
+  get holdReasonValue() {
+    return this.holdReasonInstanceId === this.selectedInstanceId
+      ? this.holdReason
+      : "";
+  }
+
+  // Issue #119: hold one instance at its next step boundary.
+  handleHoldInstance() {
+    this.loadingDetails = true;
+    holdInstance({
+      instanceId: this.selectedInstanceId,
+      reason: this.holdReasonValue,
+    })
+      .then((result) => {
+        const held = result.outcome === "HELD";
+        this.showToast(
+          held ? "Success" : "Warning",
+          result.message,
+          held ? "success" : "warning",
+        );
+        if (held) {
+          this.holdReason = "";
+        }
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to hold instance: " + this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
+  // Issue #119: release a held instance.
+  handleReleaseHold() {
+    this.loadingDetails = true;
+    releaseHeldInstance({ instanceId: this.selectedInstanceId })
+      .then((result) => {
+        const released = result.outcome === "RELEASED";
+        this.showToast(
+          released ? "Success" : "Warning",
+          result.message,
+          released ? "success" : "warning",
+        );
+        this.refreshInstances();
+        this.loadDetails(true);
+        this.startPolling();
+      })
+      .catch((error) => {
+        this.showToast(
+          "Error",
+          "Failed to release instance: " + this.reduceErrors(error),
+          "error",
+        );
+      })
+      .finally(() => {
+        this.loadingDetails = false;
+      });
+  }
+
   handleReleaseDefinitionChanged() {
     this.loadingDetails = true;
     releaseDefinitionChangedInstance({ instanceId: this.selectedInstanceId })
@@ -2854,6 +3546,8 @@ export default class WorkflowDashboard extends LightningElement {
         return "badge badge-orange";
       case "DefinitionChanged":
         return "badge badge-purple";
+      case "Held":
+        return "badge badge-cyan";
       default:
         return "badge";
     }

@@ -120,6 +120,8 @@ public inherited sharing class WorkflowInstanceDetailService {
       'breadcrumbs' => breadcrumbs,
       // Stored-versus-live steps for a DefinitionChanged park (issue #89), else null.
       'definitionChange' => WorkflowDefinitionChangeService.describe(instance),
+      // Issue #119: true when hold accepts this instance.
+      'holdable' => WorkflowInstanceHold.isHoldable(instance),
       // Step-history warning (issue #112), else null.
       'stepHistoryWarning' => WorkflowStepHistoryGuard.describeWarning(
         instanceId
@@ -153,7 +155,10 @@ public inherited sharing class WorkflowInstanceDetailService {
         Failure_Category__c,
         Progress__c,
         Definition_Fingerprint__c,
-        Definition_Shape__c
+        Definition_Shape__c,
+        Held__c,
+        Held_At__c,
+        Hold_Reason__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

@@ -15,12 +15,14 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Resumable Execution (Yielding)**: Long-running processing loops or query pagination steps can call `shouldYield()` to monitor governor limits. If limits are exceeded, the step checkpoints its state to custom objects and resumes execution transparently in a fresh asynchronous transaction.
 - **Scatter-Gather (Parallel Processing)**: Split execution flow across multiple parallel branches and rejoin their output payloads before moving to subsequent steps. See [ParallelSagaFanoutWorkflowExample](examples/main/default/classes/ParallelSagaFanoutWorkflowExample.cls).
 - **Continue-As-New (Perpetual Loops)**: Execute perpetual poller tasks or long-lived daemons. A step can request a transition to a new successor run linked via `Previous_Instance__c` to prevent storage footprint explosion and clear heap and debug log limits. The successor's `StepContext.previousRunAt` carries the engine-set timestamp of when the predecessor completed, so incremental polling workflows can query only records modified since the last run without any manual timestamp bookkeeping. See [docs/incremental-polling.md](docs/incremental-polling.md) and [IncrementalSyncWorkflowExample](examples/main/default/classes/IncrementalSyncWorkflowExample.cls).
+- **Continue-As-New Chain View**: `WorkflowChainRead.getChain(instanceId)` or `getChain(correlationKey)` gives all generations of a chain, newest first. Each row has the generation number, status, start and end time, and outcome. It uses a cursor for the next page. It gives the total count. Max 5 SOQL, no DML. The dashboard shows the list in the detail pane. Click a row to open the step timeline of that generation. See [docs/continue-as-new-chain.md](docs/continue-as-new-chain.md).
 
 ### Fault Tolerance & Safety
 
 - **Distributed Transaction Rollbacks (Sagas)**: Steps implementing [CompensatableStep](force-app/main/default/classes/CompensatableStep.cls) register on a LIFO rollback stack upon successful forward completion. If a forward step fails permanently, the engine automatically executes their `compensate` methods in reverse order.
 - **Recoverable Rollbacks (Rollback Incomplete)**: If a `compensate()` step itself exhausts its `RetryPolicy` or throws mid-rollback, the engine preserves the remaining LIFO stack intact and parks the saga in a distinguishable, operator-visible **`CompensationFailed`** ("Rollback Incomplete") state instead of silently abandoning the deeper compensations. The dashboard surfaces exactly how many forward effects are still un-reversed and offers a **Resume Rollback** action that replays the remaining stack from the stalled point — idempotently, append-only, and without ever re-running a successful compensation or a forward step. See [SagaStalledRollbackExample](examples/main/default/classes/SagaStalledRollbackExample.cls).
 - **Definition Change Detection**: At start, the engine records a fingerprint of the definition `getSteps()` list. Before each forward hop, it compares that fingerprint with the live definition. When the step list of a plain `WorkflowDefinition` changes, the engine parks the instance in `DefinitionChanged` and runs no step against the new list. The dashboard shows the stored and live step lists and a **Release** action. The engine does not park `VersionedWorkflow` instances. See [docs/definition-change-detection.md](docs/definition-change-detection.md).
+- **Per-Instance Hold**: An operator can hold one instance with `WorkflowInstanceHold.hold(instanceId, reason)`. The instance stops at its next step boundary in the `Held` status. If a step runs when you hold the instance, the step finishes. Other instances of the definition continue. `WorkflowInstanceHold.release(instanceId)` continues the instance from the same step. The dashboard shows the reason and the held-since time. It has **Hold** and **Release Hold** actions. See [docs/instance-hold.md](docs/instance-hold.md) and [ADR 0007](docs/adr/0007-per-instance-hold.md).
 - **Auto-Retry Thrown Exceptions (`AutoRetryConfigurable`)**: Opt-in. A step or a definition implements [AutoRetryConfigurable](force-app/main/default/classes/AutoRetryConfigurable.cls) and returns a `RetryPolicy`. When `execute()` throws a catchable exception, the engine undoes the step DML and retries the step with backoff. The saga compensates only when all attempts fail. A returned `fail()` or `retry()` has priority. A row-lock error, `LimitException` and a timeout fallback run keep their current behavior. A `CalloutStep` keeps its DML, so make it safe to run again. The policy does not apply to `compensate()`. See [AutoRetryWorkflowExample](examples/main/default/classes/AutoRetryWorkflowExample.cls) and [ADR 0001](docs/adr/0001-auto-retry-thrown-step-errors.md).
 - **Watchdog Step Timeouts**: Steps can declare custom execution timeouts. A single global watchdog poller ([WorkflowWatchdog](force-app/main/default/classes/WorkflowWatchdog.cls)) sweeps the database for any timed-out steps or suspended instances, failing or resuming them cleanly without hitting Salesforce's 100 concurrent scheduled jobs limit.
 - **Large Payload Offloading**: When input, output, or state serialization strings exceed 100,000 characters (approaching the 131,072-character long text area limit), the engine transparently offloads the payload to `ContentVersion` files and links them to the parent instance.
@@ -40,11 +42,14 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 
 - **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events. The resuming step reads the inbound signal name and payload directly from `StepContext` via the signals accessor (e.g. `ctx.signals().getSignal('Approve:Order')`), and the engine marks observed signals consumed at the step's `COMPLETE` transition so at-least-once redelivered duplicates are never double-processed.
 - **Effectively-Once Outbound Emit (`ctx.events().emit()`)**: A step can hand the engine one or more author-owned domain Platform Events to publish mid-workflow — `ctx.events().emit(new Order_Shipped__e(...))` — instead of calling `EventBus.publish()` itself. The engine buffers them and publishes them in the **same transaction that writes the step's append-only `COMPLETE`/`SPLIT` record**, before the next step begins, so retries, yields, suspends, operator re-drives, and at-least-once resumes that re-run `execute()` before that commit publish **nothing**, and a step already durably `COMPLETE` never re-executes and so never re-emits — producer-side effectively-once with no hand-rolled dedup token. Authors keep their own `__e` (use `publishBehavior=PublishAfterCommit`); the engine imposes no envelope. Delivery to subscribers stays at-least-once, so subscribers remain idempotent. This is the mid-flight outbound complement to inbound signals and the terminal lifecycle event. See [OrderChoreographyWorkflowExample](examples/main/default/classes/OrderChoreographyWorkflowExample.cls) (workflow A emits an event that starts workflow B).
+- **Approver Notifications**: A step that waits for a human adds `.withNotification(WorkflowNotification.create(title, body).toInputKey('approverId'))` to its `waitForApproval(...)` or `suspend()` result. The engine sends one native Custom Notification (bell and mobile push) for each logical suspend, after the SUSPEND commits. A rollback or a re-suspend sends nothing. A notification error never stops the SUSPEND. Toggle: `Revenant_Config__mdt.Send_Notifications__c`. See [docs/approver-notifications.md](docs/approver-notifications.md).
 - **Outbound Lifecycle Events**: The engine publishes a `Workflow_Lifecycle__e` platform event (outcome metadata only) each time an instance reaches a terminal state (`Completed`/`Failed`/`Compensated`/`Cancelled`), so a Flow **Pause** element or an external subscriber can react event-driven instead of polling — exactly one event per logical workflow (one per `ContinuedAsNew` chain). Fire-and-forget and operator-toggleable via `Revenant_Config__mdt.Publish_Lifecycle_Events__c`. See [docs/workflow-lifecycle-event.md](docs/workflow-lifecycle-event.md).
 - **Salesforce Flow Interoperability**: Launches or signals workflows using Invocable Actions from Salesforce Flow, or executes standard Autolaunched Flows as steps within a workflow using the generic `WorkflowFlowStep` wrapper.
 - **Custom Metadata Alerts**: Supports operator-configurable failure notification thresholds (consecutive failures, sliding rate counts) using `Workflow_Alert_Config__mdt` custom metadata records.
 - **Concurrency Limits (In-Flight Ceiling)**: Declare a maximum number of simultaneously in-flight instances per workflow definition via a `Concurrency_Config__mdt` record (same DeveloperName + `Default`-fallback convention as alerts). A bursty start is throttled to a safe ceiling — instances beyond the limit park in a throttled state and re-attempt admission automatically through the existing sleep/watchdog plumbing, with the slot released on every terminal transition and leaked slots reclaimed by the watchdog. Distinct from `RateLimiter` (rate/throughput) and get-or-start dedup. See [docs/concurrency-limits.md](docs/concurrency-limits.md).
 - **Circuit Breaker (Dependency Health)**: A step opts in with `CircuitBreakerGuarded` and names the shared dependency it calls; declare the breaker thresholds via a `Circuit_Breaker_Config__mdt` record (same DeveloperName + `Default`-fallback convention as concurrency). When failures across the fleet trip the breaker Open, guarded steps **fast-fail (park) before calling the down dependency** instead of stampeding it, then auto-recover through a half-open trial probe once it heals — with recovery landing within one watchdog cadence even for a quiet dependency. Distinct from `RateLimiter` (rate), `Concurrency_Config__mdt` (in-flight count), and `RetryPolicy` (per-step backoff). See [docs/circuit-breaker.md](docs/circuit-breaker.md).
+- **Engine-Health Metrics Event**: When the toggle is on, each watchdog sweep publishes a `Workflow_Metrics__e` snapshot. For each definition, it holds the active counts for each status, the terminal counts in the last window and the oldest active age. An external pipeline sends it to Datadog, Grafana or Splunk. It adds 0 scheduled-job slots and not more than 3 SOQL for each sweep. A large snapshot uses chunks with one snapshot id. Default: off (`Revenant_Config__mdt.Publish_Metrics_Events__c`). See [docs/workflow-metrics-event.md](docs/workflow-metrics-event.md).
+- **Platform Event Allocation**: System Doctor shows the used and the remaining Platform Event allocation of the org, as a number and as a percent. The panel shows a state: **Healthy**, **Warning** (80% or more) or **Critical** (95% or more). At Warning or Critical, the panel tells you what can stop, for example signal wake-ups and child-to-parent resumes. The read uses no SOQL query, DML statement, async job or Platform Event. See [docs/platform-event-headroom.md](docs/platform-event-headroom.md).
 - **Watchdog Liveness**: Each complete watchdog sweep writes its time. System Doctor shows Healthy, Stale or Unknown. A stall sends one alert. The check runs outside the watchdog. It can find a dead watchdog. See [docs/watchdog-liveness.md](docs/watchdog-liveness.md).
 - **Declarative Recurring Schedules (0-slot)**: Create a `Workflow_Schedule__c` record to run any workflow on a cron cadence — no Apex, and **zero additional scheduled-job slots** beyond the existing watchdog. See [docs/recurring-schedules.md](docs/recurring-schedules.md).
 - **Schedule Health**: An enabled 0-slot schedule that does not fire within one sweep interval of its window shows as **Overdue**. A schedule whose last fire failed shows as **Last fire failed**. System Doctor and the Schedule Manager show both. Each problem sends one alert. No new job slot. See [docs/schedule-health.md](docs/schedule-health.md).
@@ -268,7 +273,13 @@ public StepResult execute(StepContext ctx) {
         // The second argument is an optional Custom Permission API name the dashboard
         // requires an approver to hold; null leaves the gate unrestricted (pass e.g.
         // 'Workflow_Admin' to restrict who may decide).
-        return StepResult.waitForApproval('PurchaseApproval', null);
+        // withNotification sends one bell and mobile notification to the approver
+        // in the workflow input when the wait commits (see docs/approver-notifications.md).
+        return StepResult.waitForApproval('PurchaseApproval', null)
+            .withNotification(
+                WorkflowNotification.create('Purchase approval needed', 'Approve or reject the purchase.')
+                    .toInputKey('approverId')   // or .toRecipient(userId), .toRecordOwner(recordId)
+            );
         // Need a deadline? Chain the fluent timeout instead of a longer arg list:
         //   return StepResult.waitForApproval('PurchaseApproval', null)
         //       .withApprovalTimeout(86400, 'PurchaseApprovalTimedOut');
@@ -279,6 +290,8 @@ public StepResult execute(StepContext ctx) {
     return StepResult.complete(null, payload);
 }
 ```
+
+The gate notifies the approver one time for each wait. A re-suspend of the same wait sends nothing. You do not write `Messaging.*` code.
 
 **3. DAG-level approve/reject routing** in `getNextStep()`:
 
@@ -353,7 +366,7 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 | **Child output**      | The child's final outcome (status, error message, and output) can be read with `ctx.signals().getChildOutcome(childKey)`. This is the preferred way to distinguish a successful child from a failed, compensated, or cancelled one without hand-rolled SOQL. For backward compatibility, the successful child's final output still arrives as the payload of the `ChildCompleted:<childKey>` signal (read with `ctx.signals().getSignal("ChildCompleted:" + childKey).payload`). |
 | **Idempotent resume** | The step that launched the child also handles the resume: check for the child outcome first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate completion or failure event cannot double-advance the parent.                                                                                                    |
 | **Idempotent launch** | The engine automatically dedupes child launches against the deterministic `(Parent_Instance__c, Correlation_Key__c)` pair. If `startChild()` is called again during a re-entrant hop or watchdog re-check, and the active child already exists, the engine resolves to an idempotent re-suspend without starting a duplicate or failing the parent.                                                                                                          |
-| **Cancellation**      | `WorkflowEngine.cancel(parentId)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. (Use `WorkflowCancellation.cancelWithCompensations(parentId)` — the compensating-cancel entry point lives on `WorkflowCancellation`, not the engine — to also run each cancelled instance's compensation stack.) A parent that **fails** also cancels its in-flight children (see below). |
+| **Cancellation**      | `WorkflowEngine.cancel(parentId)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. (Use `WorkflowEngine.cancel(parentId, true)` to also run each cancelled instance's compensation stack.) A parent that **fails** also cancels its in-flight children (see below). |
 
 **Parent failure cascades to children (issue #94).** When a parent becomes `Failed`, `Compensated` or `CompensationFailed`, the engine cancels its in-flight descendants.
 
@@ -396,15 +409,16 @@ public class RequestCreditCheckStep implements WorkflowStep {
 
 The correlation key format `'<prefix>_' + ctx.workflowInstanceId` guarantees uniqueness across concurrent parent instances while remaining stable across retries of the same step.
 
-### 7. Flow Interoperability (Start, Signal, Read)
+### 7. Flow Interoperability (Start, Signal, Read, Cancel)
 
 Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
 
-| Action                  | Apex Class                      | Purpose                                                        |
-| ----------------------- | ------------------------------- | -------------------------------------------------------------- |
-| **Start Workflow**      | `WorkflowStartInvocableAction`  | Launch a durable workflow, returning its Instance Id.          |
-| **Signal Workflow**     | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance. |
-| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only).         |
+| Action                  | Apex Class                      | Purpose                                                               |
+| ----------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| **Start Workflow**      | `WorkflowStartInvocableAction`  | Launch a durable workflow, returning its Instance Id.                 |
+| **Signal Workflow**     | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance.        |
+| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only).                |
+| **Cancel Workflow**     | `WorkflowCancelInvocableAction` | Cancel an instance and its active children, with or without rollback. |
 
 **Reading a workflow's outcome.** _Get Workflow Status_ accepts **either** a `Workflow_Instance__c` Id **or** a Correlation Key and returns typed outputs a Decision element can branch on:
 
@@ -421,6 +435,18 @@ The action is **strictly read-only** (no transition, enqueue, signal, schedule, 
 - **By Instance Id** — reads _that exact instance_ and deliberately does **not** follow the chain (an Id is a precise handle). The Id returned by _Start Workflow_ points at the original generation, so polling that saved Id on a continue-as-new workflow would keep reading the predecessor and miss the successor's outcome.
 
 > Note: a single read returns the full rehydrated `outputJson` even for offloaded (>100k) payloads. A Flow batch that polls _many_ instances whose outputs are _all_ large/offloaded materializes them all at once and can approach the Apex heap limit; use smaller batch sizes for that case.
+
+**Cancelling a workflow.** _Cancel Workflow_ takes the same **Correlation Key or Workflow Instance ID** input as _Get Workflow Status_ and finds the instance the same way (a key follows the `ContinuedAsNew` chain; an Id does not).
+
+- **Run Compensations** — `true` (or empty) rolls back the completed steps that can roll back, last step first. The status goes `Cancelling`, then `Cancelled`. Each rolled-back step row is `Compensated`. `false` stops at once: status `Cancelled`, no rollback. `false` on a `Cancelling` instance stops its rollback. See [ADR 0004](docs/adr/0004-cancel-workflow-invocable-action.md).
+- **Idempotency Key** — optional. A repeat with the same key for the same instance does nothing. All keyed signals (Signal Workflow) use the same keys, so do not reuse the key of a different signal.
+- Outputs: `found` (`false` instead of a fault), `workflowInstanceId`, `cancelled`, `isCompensating`, and `status`. `cancelled` is `false` when the instance is already finished, when a rollback is requested and a rollback already runs, when the key was already used, or when another row did the cancel.
+
+The action cancels active children through the engine cascade. It never faults on a finished instance. SOQL and DML **statements** do not grow with the Flow batch size. A repeat cancel with rollback does not start a second rollback. When two rows in one batch find the same instance, the first row that can act wins. A parent row with Run Compensations `false` also stops a child that another row asked to roll back.
+
+> Limits: each rollback row writes about 5 DML rows (claim, step cancel, compensation step, instance update, orchestrator event). Keep a batch under about 1,500 rollback rows (the limit is 10,000 DML rows). A key follows at most 50 `ContinuedAsNew` generations, the same as _Get Workflow Status_.
+>
+> Access: like _Signal Workflow_, the action runs in system mode and has no custom-permission check. Give access to the Apex class only to trusted users, and do not expose it in a guest screen flow.
 
 **Reference recipe** — start a workflow, then later branch on its outcome:
 
@@ -692,6 +718,25 @@ do {
 - **ContinueAsNew is consistent with `getStatus`.** `findInstances` is a raw row enumeration, **not** a chain resolution: it returns each matching row on its own and does **not** collapse a continue-as-new chain to a single winner the way `getStatus(correlationKey)` does. A `ContinuedAsNew` predecessor generation is its own row, returned only when the `statuses` filter admits it (unset/empty, or explicitly includes `ContinuedAsNew`); and — matching `getStatus` — `ContinuedAsNew` is a non-terminal hand-off, so its summary's `isTerminal` is `false`. To resolve a chain to its live/final successor, take a matching row's `correlationKey` and call `getStatus(correlationKey)`.
 - **Honest SOQL profile:** exactly **one** SOQL query per call and zero DML, no matter how many filters are set, the page size, or the total number of matching instances. Safe to call from any Apex context.
 
+### 11. Navigate a Continue-As-New Chain (Apex)
+
+`getStatus` gives the last outcome of a chain. `WorkflowChainRead.getChain` gives each generation, newest first. An Id gives the chain of that instance. A key gives the chain of the newest instance with that key.
+
+```apex
+WorkflowEngine.ChainPage page = WorkflowChainRead.getChain('nightly-sync');
+for (WorkflowEngine.ChainGeneration g : page.entries) {
+  System.debug(g.generation + ' ' + g.status + ' ' + g.outcome + ' ' + g.endedAt);
+}
+// page.totalCount = all generations; page.nextCursor = next (older) page, or null.
+```
+
+- Read-only. Max 5 SOQL for all chain lengths. One SOQL for a single generation. No DML.
+- Page size 50 by default, max 200. Send `nextCursor` back in `WorkflowEngine.ChainRequest.cursor` with no change. Later pages stay on the chain of the first page.
+- Unknown or blank input gives `null`.
+- A later independent run with the same key is a separate chain.
+
+See [docs/continue-as-new-chain.md](docs/continue-as-new-chain.md) for the fields, membership rules and limits.
+
 ---
 
 ## Operations & Alerting Configuration
@@ -713,6 +758,7 @@ How the gates map to permissions:
 - **Dashboard visibility** is gated by `WorkflowDashboardSupport.checkAuthorization()`, which passes for holders of the `Workflow_Dashboard_View` custom permission (granted by `Revenant_Operator`), the `Workflow_Admin` custom permission (granted by `Revenant_Admin`), or the "Modify All Data" system permission.
 - **State-mutating recovery actions** are separately gated by `WorkflowDashboardSupport.checkOperatorAction()`, which passes only for holders of the `Workflow_Operator_Action` custom permission, `Workflow_Admin`, or "Modify All Data". Because the read-only tier holds `Workflow_Dashboard_View` (not `Workflow_Admin`), **granting dashboard visibility never implicitly grants the ability to re-drive, cancel, or delete.**
 - **Rate Limits panel** Apex access: the panel calls `WorkflowRateLimitController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
+- **Fleet Health view** Apex access: the view calls `WorkflowFleetHealthController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
 
 ### Mapping Workflow Definitions to Alert Configurations
@@ -779,6 +825,7 @@ Admins can subscribe to `Workflow_Alert__e` via a standard record-triggered Flow
 ```bash
 sf project deploy start          # deploy to default scratch org
 sf apex run test -w 10           # run the full test suite
+npm run test:global-api          # check the frozen global API (docs/global-api.md)
 ```
 
 For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.
@@ -835,6 +882,12 @@ Revenant settings can be configured without code modifications by editing the **
 12. **Step History Ceiling** (`Step_History_Ceiling__c` - Number, default `10000`):
    - The engine fails the instance at this number of step rows with `STEP_HISTORY_LIMIT`. Use Continue-As-New to start a new count. `0`: no ceiling. Max `10000`.
    - Cost: when one of the two checks is on, one SOQL (`COUNT()` with `LIMIT`) for each hop.
+13. **Send Notifications** (`Send_Notifications__c` - Checkbox, default `true`):
+   - **`true`**: The engine sends the Custom Notification that a waiting step requests with `StepResult.withNotification(...)`.
+   - **`false`**: The engine sends no notification and writes no anchor row. A request that is already published is logged as `Skipped`. See [docs/approver-notifications.md](docs/approver-notifications.md).
+14. **Publish Metrics Events** (`Publish_Metrics_Events__c` - Checkbox, default `false`):
+   - **`true`**: Each watchdog sweep publishes a `Workflow_Metrics__e` engine-health snapshot. Cost: not more than 3 SOQL and 2 DML statements for each sweep. No new scheduled job. See [docs/workflow-metrics-event.md](docs/workflow-metrics-event.md).
+   - **`false`**: No event and no cost.
 
 ### Architectural Trade-offs
 
@@ -857,6 +910,7 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
 - **Schedule Health**: Lists each enabled schedule that is **Overdue** (red) or whose **Last fire failed** (orange), with the counts. Each read calculates the state. The panel shows a maximum of 50 schedules. See [docs/schedule-health.md](docs/schedule-health.md).
 - **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
 - **Limits Auditing**: Displays active `CronTrigger` utilization (against the 100-job limit) and pending database sweeps (sleeping instances and step timeouts).
+- **Platform Event Allocation**: One card for each Platform Event limit in the org `OrgLimits` map (`HourlyPublishedPlatformEvents`, `DailyDeliveredPlatformEvents`, `MonthlyPlatformEventsUsageEntitlement` and the standard-volume keys). Each card shows `used / limit` and the used percent. It also shows the remaining number, the remaining percent and a state: **Healthy** (green), **Warning** (orange, 80% or more) or **Critical** (red, 95% or more). The panel badge shows the worst state. At Warning or Critical, the panel shows the risk for each key type. A publish key can stop wake-ups. A delivery key affects only external subscribers. If the org has no key, the panel shows **Not available**. To change the thresholds, set **Platform Event Warning %** and **Platform Event Critical %** on the dashboard in App Builder. See [docs/platform-event-headroom.md](docs/platform-event-headroom.md).
 - **Storage Footprint**: A strictly read-only, aggregate-only view of how much of the org's hard, billable data-storage allowance Revenant consumes and how fast it is growing. For each of the seven Revenant data objects (`Workflow_Instance__c`, `Workflow_Step_Execution__c`, `Workflow_Signal__c`, `Workflow_Log__c`, `Rate_Limit_State__c`, `Workflow_Pause_State__c`, `Workflow_Schedule__c`) it shows a live record count, an **estimated** storage size (record count × a standard ~2 KB/record estimate — labeled as an estimate), and **7-day and 30-day growth deltas** so operators can see acceleration, not just a static total. Offloaded large payloads are accounted separately as the summed byte volume of engine-owned `ContentVersion` files (real storage the record-count estimate misses). The combined estimate is expressed as a **percentage of the org's data-storage allowance** (via `System.OrgLimits` `DataStorageMB`) and flips the panel to a warning state once it crosses the operator-configurable `Storage_Warning_Threshold_Percent__c` threshold (default 75%). It writes no records, publishes no events, and enqueues no jobs.
   - **Measure → decide → purge:** this panel _measures_ the footprint and warns _before_ the org hits its storage wall. To _act_ on that signal, reclaim storage with `CleanupWorkflow` (purge of terminal instances and their offloaded documents) or `ArchiveWorkflow` (archive before purge, see [docs/archive.md](docs/archive.md)). The panel is early-warning only; remediation stays with those workflows.
 - **Rate Limits**: A read-only view of each `Rate_Limit_Config__mdt` key. It shows the capacity, the refill rate and the live token count. The count uses the same refill formula as `RateLimiter.acquire()`. The panel does not show the stored `Tokens_Remaining__c`.
@@ -865,6 +919,17 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
   - **Available**: 1 token or more.
   - **Invalid config**: `acquire()` rejects the config (capacity less than 1, or refill rate 0 or less). A key with an invalid config shows Invalid config, also when the key has no state row yet.
   - The panel is read-only. It adds no SOQL to the orchestrator. It does not show state rows that have no config.
+
+### Fleet Health
+
+The **Fleet Health** button opens a read-only view. It shows one row for each definition that has instances in the window (1 hour, 24 hours or 7 days).
+
+- **Counts:** the instances that started in the window. Started, completed (`Completed`, `ContinuedAsNew`), failed (`Failed`, `CompensationFailed`, `Compensated`, `Cancelled`) and in-flight (`Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `Pending`, `DefinitionChanged`). `CompensationFailed` is an active status, but the view counts it as failed.
+- **Success rate:** completed ÷ (completed + failed). When the rate is less than the threshold (default 95%), the row shows a red **Below threshold** badge. Set the threshold in the view. The value stays until the page reloads.
+- **Duration:** the average and the maximum of `Terminal_At__c` − `CreatedDate`, for the instances that finished in the window. The values come from the 2,000 instances of all definitions that finished last. When more instances finished, each duration shows **≈**. Active instances are not in the duration.
+- **Deep link:** click a definition to open the instance list for that definition. The link clears the status, search and attribute filters.
+- **Cost:** three queries each time the view loads. When more than 20,000 instances started in the window, the counts use the 20,000 newest instances and the view shows a note. The view writes no data. See [ADR 0004](docs/adr/0004-fleet-health-duration-sample.md).
+- The System Doctor **Definition Health** panel counts by terminal time. Fleet Health counts by start time. Because of this, the numbers can be different.
 
 ---
 
@@ -887,6 +952,11 @@ By default, Salesforce Platform Event triggers (like `WorkflowEventTrigger`) exe
 ## Packaging Revenant
 
 Revenant supports being packaged inside a Managed Package (1GP or 2GP) and installed in subscriber orgs. The engine resolves workflow and step classes dynamically across the namespace boundary.
+
+### Global API (What Subscribers Can See)
+A subscriber sees only `global` Apex. Revenant makes a small, frozen set of members `global`. The set is: the step and definition interfaces, `StepContext` and its accessor objects, `StepResult`, `RetryPolicy`, `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`), `WorkflowStatusRead.getStatus`, and three Flow actions (Start, Signal, Get Workflow Status). All other engine code is namespace-private.
+
+Other APIs in this README (for example `getHistory`, `findInstances`, `RateLimiter`, `PayloadCodec`) work in the package namespace only. They are candidates for the global API. `withParent` stays namespace-private. For each member and the stability policy, see [docs/global-api.md](docs/global-api.md). For the decision, see [ADR 0006](docs/adr/0006-frozen-global-api.md).
 
 ### Class Resolution Model
 - **Engine Namespace**: When Revenant is installed as a package, the engine executes in the package namespace (e.g. `revenant`).
