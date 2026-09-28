@@ -32,7 +32,7 @@ public inherited sharing class WorkflowEngine {
   public static Boolean strictDeterminism = false;
   // Operator settings (Revenant_Config__mdt, issue #112): step-history warn
   // threshold and ceiling, in rows per instance. 0 turns a check off.
-  // WorkflowStepHistoryGuard.resolve validates the values.
+  // WorkflowStepHistoryGuard.resolve clamps the values.
   public static Integer stepHistoryWarnThreshold = 5000;
   public static Integer stepHistoryCeiling = 10000;
 

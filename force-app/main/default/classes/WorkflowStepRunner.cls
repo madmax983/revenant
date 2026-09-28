@@ -5,7 +5,8 @@
  * ORDER: load (no lock) → finished-check → compensation route →
  * definition-change park (issue #89) → pause park →
  * concurrency admission (instance `FOR UPDATE`) → in-memory init → stale-parallel
- * guard → step-history guard (issue #112) → step-execution log lock (step-exec `FOR UPDATE`) → validate → resolve
+ * guard → step-history guard (issue #112) →
+ * step-execution log lock (step-exec `FOR UPDATE`) → validate → resolve
  * previous output → invoke + outcome. The instance is locked for admission
  * BEFORE the step-execution row is locked for execution, so a bounded workflow
  * can never double-run a step or resurrect a finished instance. The phase
@@ -100,7 +101,7 @@ public inherited sharing class WorkflowStepRunner {
       stepName
     );
     WorkflowStepInvoke.invokeStepAndHandleOutcome(ctx, prevOutput);
-    // After the outcome: DML before execute() blocks callouts.
+    // Write the warning after the outcome. DML before execute() blocks callouts.
     WorkflowStepHistoryGuard.recordWarning(ctx);
   }
 

@@ -280,7 +280,13 @@ public class WorkflowStepHistoryGuardTest {
 
   private static List<Workflow_Step_Execution__c> snapshot(Id instId) {
     return [
-      SELECT Id, Step_Name__c, Status__c, Output__c, SystemModstamp
+      SELECT
+        Id,
+        Step_Name__c,
+        Status__c,
+        Output__c,
+        Timeout_At__c,
+        SystemModstamp
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :instId
       ORDER BY Id
@@ -326,139 +332,151 @@ public class WorkflowStepHistoryGuardTest {
 
   @IsTest
   static void resolveUsesDefaultsForBlankOrNegative() {
-    WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
-      null,
-      null
-    );
-    Assert.areEqual(5000, t.warn, 'Blank warn uses the default');
-    Assert.areEqual(10000, t.ceiling, 'Blank ceiling uses the default');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
+        null,
+        null
+      );
+      Assert.areEqual(5000, t.warn, 'Blank warn uses the default');
+      Assert.areEqual(10000, t.ceiling, 'Blank ceiling uses the default');
 
-    t = WorkflowStepHistoryGuard.resolve(-1, -5);
-    Assert.areEqual(5000, t.warn, 'Negative warn uses the default');
-    Assert.areEqual(10000, t.ceiling, 'Negative ceiling uses the default');
+      t = WorkflowStepHistoryGuard.resolve(-1, -5);
+      Assert.areEqual(5000, t.warn, 'Negative warn uses the default');
+      Assert.areEqual(10000, t.ceiling, 'Negative ceiling uses the default');
+    }
   }
 
   @IsTest
   static void resolveZeroTurnsACheckOff() {
-    WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
-      0,
-      800
-    );
-    Assert.areEqual(0, t.warn, 'Warn 0 is off');
-    Assert.areEqual(800, t.ceiling, 'Ceiling is kept');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
+        0,
+        800
+      );
+      Assert.areEqual(0, t.warn, 'Warn 0 is off');
+      Assert.areEqual(800, t.ceiling, 'Ceiling is kept');
 
-    t = WorkflowStepHistoryGuard.resolve(300, 0);
-    Assert.areEqual(300, t.warn, 'Warn is kept');
-    Assert.areEqual(0, t.ceiling, 'Ceiling 0 is off');
+      t = WorkflowStepHistoryGuard.resolve(300, 0);
+      Assert.areEqual(300, t.warn, 'Warn is kept');
+      Assert.areEqual(0, t.ceiling, 'Ceiling 0 is off');
+    }
   }
 
   @IsTest
   static void resolveClampsToTheMaximum() {
-    WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
-      0,
-      45000
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.MAX_THRESHOLD,
-      t.ceiling,
-      'Ceiling is clamped'
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
+        0,
+        45000
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.MAX_THRESHOLD,
+        t.ceiling,
+        'Ceiling is clamped'
+      );
 
-    t = WorkflowStepHistoryGuard.resolve(60000, 0);
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.MAX_THRESHOLD,
-      t.warn,
-      'Warn is clamped'
-    );
+      t = WorkflowStepHistoryGuard.resolve(60000, 0);
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.MAX_THRESHOLD,
+        t.warn,
+        'Warn is clamped'
+      );
+    }
   }
 
   @IsTest
   static void resolveKeepsWarnBelowCeiling() {
-    WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
-      900,
-      600
-    );
-    Assert.areEqual(300, t.warn, 'Warn >= ceiling uses half the ceiling');
-    Assert.areEqual(600, t.ceiling, 'Ceiling is kept');
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStepHistoryGuard.Thresholds t = WorkflowStepHistoryGuard.resolve(
+        900,
+        600
+      );
+      Assert.areEqual(300, t.warn, 'Warn >= ceiling uses half the ceiling');
+      Assert.areEqual(600, t.ceiling, 'Ceiling is kept');
 
-    t = WorkflowStepHistoryGuard.resolve(600, 600);
-    Assert.areEqual(300, t.warn, 'Warn = ceiling uses half the ceiling');
+      t = WorkflowStepHistoryGuard.resolve(600, 600);
+      Assert.areEqual(300, t.warn, 'Warn = ceiling uses half the ceiling');
+    }
   }
 
   @IsTest
   static void evaluateFollowsTheDecisionTable() {
-    WorkflowStepHistoryGuard.Thresholds t = new WorkflowStepHistoryGuard.Thresholds(
-      3,
-      5
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.Verdict.OK,
-      WorkflowStepHistoryGuard.evaluate(2, t),
-      'Below warn'
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.Verdict.WARN,
-      WorkflowStepHistoryGuard.evaluate(3, t),
-      'At warn'
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.Verdict.WARN,
-      WorkflowStepHistoryGuard.evaluate(4, t),
-      'Between warn and ceiling'
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.Verdict.HALT,
-      WorkflowStepHistoryGuard.evaluate(5, t),
-      'At ceiling'
-    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStepHistoryGuard.Thresholds t = new WorkflowStepHistoryGuard.Thresholds(
+        3,
+        5
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.Verdict.OK,
+        WorkflowStepHistoryGuard.evaluate(2, t),
+        'Below warn'
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.Verdict.WARN,
+        WorkflowStepHistoryGuard.evaluate(3, t),
+        'At warn'
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.Verdict.WARN,
+        WorkflowStepHistoryGuard.evaluate(4, t),
+        'Between warn and ceiling'
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.Verdict.HALT,
+        WorkflowStepHistoryGuard.evaluate(5, t),
+        'At ceiling'
+      );
 
-    WorkflowStepHistoryGuard.Thresholds warnOff = new WorkflowStepHistoryGuard.Thresholds(
-      0,
-      5
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.Verdict.OK,
-      WorkflowStepHistoryGuard.evaluate(4, warnOff),
-      'Warn off'
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.Verdict.HALT,
-      WorkflowStepHistoryGuard.evaluate(5, warnOff),
-      'Ceiling still on'
-    );
+      WorkflowStepHistoryGuard.Thresholds warnOff = new WorkflowStepHistoryGuard.Thresholds(
+        0,
+        5
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.Verdict.OK,
+        WorkflowStepHistoryGuard.evaluate(4, warnOff),
+        'Warn off'
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.Verdict.HALT,
+        WorkflowStepHistoryGuard.evaluate(5, warnOff),
+        'Ceiling still on'
+      );
 
-    WorkflowStepHistoryGuard.Thresholds ceilingOff = new WorkflowStepHistoryGuard.Thresholds(
-      3,
-      0
-    );
-    Assert.areEqual(
-      WorkflowStepHistoryGuard.Verdict.WARN,
-      WorkflowStepHistoryGuard.evaluate(99999, ceilingOff),
-      'Ceiling off never halts'
-    );
+      WorkflowStepHistoryGuard.Thresholds ceilingOff = new WorkflowStepHistoryGuard.Thresholds(
+        3,
+        0
+      );
+      Assert.areEqual(
+        WorkflowStepHistoryGuard.Verdict.WARN,
+        WorkflowStepHistoryGuard.evaluate(99999, ceilingOff),
+        'Ceiling off never halts'
+      );
+    }
   }
 
   @IsTest
   static void engineWorkflowsAreExempt() {
-    for (
-      String name : new List<String>{
-        'WatchdogWorkflow',
-        'CleanupWorkflow',
-        'BulkRedriveWorkflow',
-        'BulkCancelWorkflow',
-        'ArchiveWorkflow',
-        'ns.WatchdogWorkflow'
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      for (
+        String name : new List<String>{
+          'WatchdogWorkflow',
+          'CleanupWorkflow',
+          'BulkRedriveWorkflow',
+          'BulkCancelWorkflow',
+          'ArchiveWorkflow',
+          'ns.WatchdogWorkflow'
+        }
+      ) {
+        Assert.isTrue(
+          WorkflowStepHistoryGuard.isExempt(name),
+          name + ' is exempt'
+        );
       }
-    ) {
-      Assert.isTrue(
-        WorkflowStepHistoryGuard.isExempt(name),
-        name + ' is exempt'
+      Assert.isFalse(
+        WorkflowStepHistoryGuard.isExempt(LoopWorkflow.class.getName()),
+        'A user workflow is not exempt'
       );
     }
-    Assert.isFalse(
-      WorkflowStepHistoryGuard.isExempt(LoopWorkflow.class.getName()),
-      'A user workflow is not exempt'
-    );
   }
 
   // ============================================================
@@ -697,8 +715,51 @@ public class WorkflowStepHistoryGuardTest {
     }
   }
 
+  @IsTest
+  static void stalledViewShowsTheWarning() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>{
+        new Workflow_Instance__c(
+          Workflow_Name__c = LoopWorkflow.class.getName(),
+          Status__c = 'Suspended',
+          Correlation_Key__c = 'History-Stalled-Warned'
+        ),
+        new Workflow_Instance__c(
+          Workflow_Name__c = LoopWorkflow.class.getName(),
+          Status__c = 'Suspended',
+          Correlation_Key__c = 'History-Stalled-Quiet'
+        )
+      };
+      insert insts;
+      insert new Workflow_Log__c(
+        Log_Type__c = WorkflowStepHistoryGuard.LOG_TYPE,
+        Level__c = 'Warn',
+        Message__c = 'Step history reached 3 rows.',
+        Fire_Key__c = WorkflowStepHistoryGuard.fireKey(insts[0].Id),
+        Workflow_Instance__c = insts[0].Id
+      );
+
+      Test.startTest();
+      List<Map<String, Object>> rows = WorkflowDashboardController.getStalledInstances(
+        WorkflowDashboardQueryBuilders.stalledQuery()
+          .criteria(LoopWorkflow.class.getName(), '', -1)
+          .page(10, 0, 'history')
+          .build()
+      );
+      Test.stopTest();
+
+      Map<Id, Object> flagById = new Map<Id, Object>();
+      for (Map<String, Object> row : rows) {
+        flagById.put((Id) row.get('Id'), row.get('stepHistoryWarning'));
+      }
+      Assert.areEqual(2, flagById.size(), 'Both rows are stalled');
+      Assert.areEqual(true, flagById.get(insts[0].Id), 'Warned row is flagged');
+      Assert.areEqual(false, flagById.get(insts[1].Id), 'Quiet row is not');
+    }
+  }
+
   // ============================================================
-  // CEILING: CLEAN FAILED, READ-ONLY HISTORY
+  // CEILING: FAILED STATUS, NO CHANGE TO STEP ROWS
   // ============================================================
 
   @IsTest
@@ -706,6 +767,14 @@ public class WorkflowStepHistoryGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       loopsLeft = 100;
       Id instId = start(LoopWorkflow.class.getName());
+      // The open row of the active step has an armed timeout.
+      Workflow_Step_Execution__c open = [
+        SELECT Id
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :instId AND Step_Name__c = :LOOP
+      ];
+      open.Timeout_At__c = Datetime.now().addHours(1);
+      update open;
       seedRows(instId, 5);
       setThresholds(3, 5);
       List<Workflow_Step_Execution__c> before = snapshot(instId);
@@ -721,6 +790,10 @@ public class WorkflowStepHistoryGuardTest {
         'The category is STEP_HISTORY_LIMIT'
       );
       Assert.isTrue(
+        inst.Error_Message__c.contains('Failed at step ' + LOOP),
+        'The message names the active step: ' + inst.Error_Message__c
+      );
+      Assert.isTrue(
         inst.Error_Message__c.contains('Step history reached 5 rows'),
         'The message names the ceiling: ' + inst.Error_Message__c
       );
@@ -734,22 +807,49 @@ public class WorkflowStepHistoryGuardTest {
       Assert.areEqual(before.size(), after.size(), 'No step row is added');
       for (Integer i = 0; i < before.size(); i++) {
         Assert.areEqual(before[i].Id, after[i].Id, 'Same rows');
+        if (before[i].Id == open.Id) {
+          Assert.areEqual('Failed', after[i].Status__c, 'Open row is closed');
+          Assert.isNull(after[i].Timeout_At__c, 'Open row timeout is cleared');
+          continue;
+        }
         Assert.areEqual(
           before[i].Status__c,
           after[i].Status__c,
-          'Row status is not changed'
+          'Closed row status is not changed'
         );
         Assert.areEqual(
           before[i].Output__c,
           after[i].Output__c,
-          'Row output is not changed'
+          'Closed row output is not changed'
         );
         Assert.areEqual(
           before[i].SystemModstamp,
           after[i].SystemModstamp,
-          'Row is not updated'
+          'Closed row is not updated'
         );
       }
+    }
+  }
+
+  @IsTest
+  static void staleNamedDeliveryHaltsUnderTheActiveStep() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      loopsLeft = 100;
+      Id instId = start(LoopWorkflow.class.getName());
+      setThresholds(0, 100);
+      WorkflowEngine.runStep(instId); // Current step is LOOP.
+      seedRows(instId, 5);
+      setThresholds(0, 5);
+      Test.startTest();
+      WorkflowEngine.runStep(instId, DONE); // Stale: DONE is not active.
+      Test.stopTest();
+
+      Workflow_Instance__c inst = load(instId);
+      Assert.areEqual('Failed', inst.Status__c, 'The ceiling fails the run');
+      Assert.isTrue(
+        inst.Error_Message__c.contains('Failed at step ' + LOOP + ':'),
+        'The message names the active step: ' + inst.Error_Message__c
+      );
     }
   }
 
@@ -856,7 +956,8 @@ public class WorkflowStepHistoryGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       canHop = 0;
       generationsLeft = 1;
-      // Per generation the check sees max 2 rows. Both generations have 4.
+      // Each generation has max 2 rows at the check. Together they have 4,
+      // more than the ceiling of 3.
       setThresholds(0, 3);
       Id firstId = start(CanWorkflow.class.getName());
       WorkflowEngine.runStep(firstId); // count 1. Loop.

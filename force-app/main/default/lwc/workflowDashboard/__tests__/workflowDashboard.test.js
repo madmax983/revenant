@@ -3037,7 +3037,10 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     jest.clearAllMocks();
   });
 
-  function mockLongHistory(stepHistoryWarning, detailWarning) {
+  const WARNING_TEXT =
+    "Step history reached 5000 rows. At 10000 rows the engine fails this instance. Change this workflow to use Continue-As-New.";
+
+  function mockLongHistory(stepHistoryWarning, detailWarning, instance = {}) {
     getFilteredInstances.mockResolvedValue([
       {
         Id: "a0G000000000112",
@@ -3045,6 +3048,7 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
         Workflow_Name__c: "PollerWorkflow",
         Status__c: "Running",
         stepHistoryWarning,
+        ...instance,
       },
     ]);
     getInstanceDetails.mockResolvedValue({
@@ -3053,6 +3057,7 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
         Name: "WI-0112",
         Workflow_Name__c: "PollerWorkflow",
         Status__c: "Running",
+        ...instance,
       },
       steps: [],
       children: [],
@@ -3061,12 +3066,17 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     });
   }
 
-  async function openFirst() {
+  async function mount() {
     const element = createElement("c-workflow-dashboard", {
       is: WorkflowDashboard,
     });
     document.body.appendChild(element);
     await flushPromises();
+    return element;
+  }
+
+  async function openFirst() {
+    const element = await mount();
     element.shadowRoot
       .querySelector(".list-item")
       .dispatchEvent(new CustomEvent("click"));
@@ -3075,39 +3085,39 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     return element;
   }
 
+  function findCategoryCombo(element) {
+    return Array.from(
+      element.shadowRoot.querySelectorAll("lightning-combobox"),
+    ).find((c) =>
+      (c.options || []).some((o) => o.value === "STEP_NON_DETERMINISM"),
+    );
+  }
+
   it("shows a LONG HISTORY badge on a flagged list row", async () => {
     mockLongHistory(true, null);
-    const element = createElement("c-workflow-dashboard", {
-      is: WorkflowDashboard,
-    });
-    document.body.appendChild(element);
-    await flushPromises();
+    const element = await mount();
 
     const badge = element.shadowRoot.querySelector(
       '[data-id="step-history-badge"]',
     );
     expect(badge).not.toBeNull();
     expect(badge.textContent).toContain("LONG HISTORY");
+    expect(badge.textContent).toContain("Continue-As-New");
     expect(badge.title).toContain("Continue-As-New");
   });
 
   it("shows no badge on a quiet list row", async () => {
     mockLongHistory(false, null);
-    const element = createElement("c-workflow-dashboard", {
-      is: WorkflowDashboard,
-    });
-    document.body.appendChild(element);
-    await flushPromises();
+    const element = await mount();
 
     expect(
       element.shadowRoot.querySelector('[data-id="step-history-badge"]'),
     ).toBeNull();
   });
 
-  it("shows the warning message in the detail pane", async () => {
+  it("shows the warning message and first-seen date in the detail pane", async () => {
     mockLongHistory(true, {
-      message:
-        "Step history reached 5000 rows. Refactor this workflow to use Continue-As-New.",
+      message: WARNING_TEXT,
       createdDate: "2026-09-28T10:00:00.000Z",
     });
     const element = await openFirst();
@@ -3116,7 +3126,14 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
       '[data-id="step-history-warning"]',
     );
     expect(callout).not.toBeNull();
-    expect(callout.textContent).toContain("Step history reached 5000 rows");
+    expect(callout.textContent).toContain(
+      "Step history reached 5000 rows. At 10000 rows",
+    );
+    const date = element.shadowRoot.querySelector(
+      '[data-id="step-history-warning-date"]',
+    );
+    expect(date.textContent).toContain("First seen:");
+    expect(date.textContent).not.toContain("undefined");
   });
 
   it("shows no detail warning when the instance has none", async () => {
@@ -3128,22 +3145,40 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     ).toBeNull();
   });
 
-  it("offers STEP_HISTORY_LIMIT as a failure category filter", async () => {
-    const element = createElement("c-workflow-dashboard", {
-      is: WorkflowDashboard,
+  it("labels a STEP_HISTORY_LIMIT failure in the detail pane", async () => {
+    mockLongHistory(false, null, {
+      Status__c: "Failed",
+      Failure_Category__c: "STEP_HISTORY_LIMIT",
     });
-    document.body.appendChild(element);
-    await flushPromises();
-    const combos = Array.from(
-      element.shadowRoot.querySelectorAll("lightning-combobox"),
-    );
-    const categoryCombo = combos.find((c) =>
-      (c.options || []).some((o) => o.value === "STEP_NON_DETERMINISM"),
-    );
+    const element = await openFirst();
+
+    const labels = Array.from(
+      element.shadowRoot.querySelectorAll(".badge-red"),
+    ).map((n) => n.textContent.trim());
+    expect(labels).toContain("Step History Limit");
+  });
+
+  it("offers STEP_HISTORY_LIMIT as a failure category filter and sends it", async () => {
+    getFilteredInstances.mockResolvedValue([]);
+    const element = await mount();
+    const categoryCombo = findCategoryCombo(element);
+    expect(categoryCombo).toBeDefined();
     const option = categoryCombo.options.find(
       (o) => o.value === "STEP_HISTORY_LIMIT",
     );
     expect(option).toBeDefined();
     expect(option.label).toBe("Step History Limit");
+
+    getFilteredInstances.mockClear();
+    categoryCombo.value = "STEP_HISTORY_LIMIT";
+    categoryCombo.dispatchEvent(new CustomEvent("change"));
+    await flushPromises();
+
+    expect(getFilteredInstances).toHaveBeenCalled();
+    const lastCall =
+      getFilteredInstances.mock.calls[
+        getFilteredInstances.mock.calls.length - 1
+      ][0];
+    expect(JSON.stringify(lastCall)).toContain("STEP_HISTORY_LIMIT");
   });
 });

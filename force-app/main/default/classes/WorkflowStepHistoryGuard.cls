@@ -1,17 +1,9 @@
 /**
- * @description Step-history guard (issue #112). Stops one instance from
- * growing its step history until a hydrate query hits the query-row or heap
- * limit.
- *
- * `WorkflowStepRunner` calls `check` after admission and before the first
- * full-history read. The check does one `COUNT()` with `LIMIT`, so it uses no
- * heap and max `ceiling` query rows. At the warn threshold it keeps a warning
- * on the run context. The runner writes it after the step outcome, because a
- * DML statement before `execute()` blocks callouts. At the ceiling it fails
- * the instance with `STEP_HISTORY_LIMIT` and skips error routing. The guard
- * changes no step row and not the compensation stack. Continue-As-New makes a
- * new instance, so the count starts again. Engine workflows are exempt. All
- * DML and SOQL run in system mode.
+ * @description Step-history guard (issue #112). Stops an instance before its
+ * step history hits the query-row or heap limit. The runner calls it after
+ * admission and before the first full-history read. It does one `COUNT()`
+ * with `LIMIT`. The guard does not change closed step rows or the
+ * compensation stack. See docs/step-history-guard.md.
  */
 public inherited sharing class WorkflowStepHistoryGuard {
   /** @description Log_Type__c of the warning row. */
@@ -21,8 +13,8 @@ public inherited sharing class WorkflowStepHistoryGuard {
   public static final Integer DEFAULT_WARN = 5000;
 
   /**
-   * @description Default ceiling (rows). The count and two full-history reads
-   * use max 30,000 of the 50,000 query rows.
+   * @description Default ceiling (rows). Below it, the full-history reads of
+   * one hop use max approximately 30,000 of the 50,000 query rows.
    */
   public static final Integer DEFAULT_CEILING = 10000;
 
@@ -32,7 +24,10 @@ public inherited sharing class WorkflowStepHistoryGuard {
   // Fire_Key__c prefix. The key is unique, so one warning row per instance.
   private static final String FIRE_KEY_PREFIX = 'StepHistoryWarn:';
 
-  // Statuses the guard can fail from. Any other status is owned by another path.
+  // Max open rows the halt closes. Each active step has max one open row.
+  private static final Integer OPEN_ROW_CAP = 200;
+
+  // Statuses the guard can fail from. Another path owns each other status.
   private static final Set<String> HALTABLE_STATUSES = new Set<String>{
     'Pending',
     'Running',
@@ -66,9 +61,9 @@ public inherited sharing class WorkflowStepHistoryGuard {
 
   /**
    * @description Makes effective thresholds from the configured values. Blank
-   * or negative uses the default. 0 turns the check off. Values above
-   * MAX_THRESHOLD use MAX_THRESHOLD. A warn value that is not below the
-   * ceiling uses half the ceiling.
+   * or negative uses the default. 0 turns the check off. The max is
+   * MAX_THRESHOLD. A warn value that is not below the ceiling becomes half the
+   * ceiling. Thus a ceiling of 1 gives no warning.
    * @param warnRaw Configured warn value.
    * @param ceilingRaw Configured ceiling value.
    * @return The effective thresholds.
@@ -99,8 +94,8 @@ public inherited sharing class WorkflowStepHistoryGuard {
   }
 
   /**
-   * @description Tells if a workflow is an engine workflow. The guard never
-   * fails one: a failed watchdog stops the engine.
+   * @description Returns true for an engine workflow. The guard never fails
+   * one. A failed watchdog stops the engine.
    * @param workflowName Workflow name, with or without a namespace.
    * @return True when the workflow is exempt.
    */
@@ -113,7 +108,7 @@ public inherited sharing class WorkflowStepHistoryGuard {
   /**
    * @description Counts the step rows of the instance and applies the
    * verdict. On WARN it sets ctx.stepHistoryWarning and does no DML. On HALT
-   * it fails the instance.
+   * it closes the open rows of the active steps and fails the instance.
    * @param ctx Run context with instanceId, instance and activeStepName.
    * @return True when the caller must stop the delivery.
    */
@@ -130,7 +125,7 @@ public inherited sharing class WorkflowStepHistoryGuard {
       return false; // Both checks off: no SOQL.
     }
     Id instanceId = ctx.instanceId;
-    // COUNT() uses one query row per counted row. LIMIT stops it at the cap.
+    // COUNT() uses one query row and no heap. LIMIT stops the scan at the cap.
     Integer count = [
       SELECT COUNT()
       FROM Workflow_Step_Execution__c
@@ -151,13 +146,16 @@ public inherited sharing class WorkflowStepHistoryGuard {
 
   /**
    * @description Writes the warning row that check() kept on the context.
-   * Call it after the step outcome. A second row for the same instance fails
-   * on the unique Fire_Key__c and is ignored.
+   * Call it after the step outcome. An insert of a second row for the same
+   * instance fails on the unique Fire_Key__c. The code ignores this failure.
    * @param ctx Run context.
    */
   public static void recordWarning(WorkflowStepRunner.RunStepContext ctx) {
-    if (String.isBlank(ctx.stepHistoryWarning)) {
-      return;
+    if (
+      String.isBlank(ctx.stepHistoryWarning) ||
+      Limits.getDmlStatements() >= Limits.getLimitDmlStatements()
+    ) {
+      return; // No warning, or no DML statement left: try on the next hop.
     }
     Database.insert(
       new Workflow_Log__c(
@@ -250,7 +248,7 @@ public inherited sharing class WorkflowStepHistoryGuard {
   ) {
     Id instanceId = ctx.instanceId;
     List<Workflow_Instance__c> locked = [
-      SELECT Id, Status__c
+      SELECT Id, Status__c, Current_Step__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -260,27 +258,85 @@ public inherited sharing class WorkflowStepHistoryGuard {
     if (locked.isEmpty() || !HALTABLE_STATUSES.contains(locked[0].Status__c)) {
       return;
     }
-    WorkflowEngine.FailInstanceRequest req = new WorkflowEngine.FailInstanceRequest();
-    req.instanceId = instanceId;
-    req.stepName = ctx.activeStepName;
-    req.errorMessage =
+    List<String> activeSteps = activeSteps(
+      locked[0].Current_Step__c,
+      ctx.activeStepName
+    );
+    String message =
       'Step history reached ' +
       ceiling +
-      ' rows (the ceiling). Refactor this workflow to use Continue-As-New.';
+      ' rows (the ceiling). Change this workflow to use Continue-As-New.';
+    closeOpenRows(instanceId, activeSteps, message);
+
+    WorkflowEngine.FailInstanceRequest req = new WorkflowEngine.FailInstanceRequest();
+    req.instanceId = instanceId;
+    // A stale named delivery can carry a step that is not active.
+    req.stepName = activeSteps.contains(ctx.activeStepName)
+      ? ctx.activeStepName
+      : String.join(activeSteps, ',');
+    req.errorMessage = message;
     req.failureCategory = WorkflowEngine.CAT_STEP_HISTORY_LIMIT;
-    // The error step cannot run past this guard. Routing to it loops.
+    // Error routing causes a loop: the error step cannot run past this guard.
     req.skipErrorRouting = true;
     WorkflowEngine.failWorkflowInstance(req);
+  }
+
+  // The active step names. A parallel step is a comma list.
+  private static List<String> activeSteps(String currentStep, String fallback) {
+    List<String> steps = new List<String>();
+    String source = String.isNotBlank(currentStep) ? currentStep : fallback;
+    if (String.isBlank(source)) {
+      return steps;
+    }
+    for (String step : source.split(',')) {
+      if (String.isNotBlank(step)) {
+        steps.add(step.trim());
+      }
+    }
+    return steps;
+  }
+
+  // Close the open rows of the active steps, as each failure path does, and
+  // abort the scheduled jobs. Else a stale timeout fails a compensating saga.
+  // Closed rows do not change. The guard inserts and deletes no row.
+  private static void closeOpenRows(
+    Id instanceId,
+    List<String> activeSteps,
+    String message
+  ) {
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(instanceId);
+    if (activeSteps.isEmpty()) {
+      return;
+    }
+    List<Workflow_Step_Execution__c> open = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c IN :activeSteps
+        AND Status__c IN ('Pending', 'Running', 'Retrying')
+      WITH SYSTEM_MODE
+      LIMIT :OPEN_ROW_CAP
+      FOR UPDATE
+    ];
+    for (Workflow_Step_Execution__c row : open) {
+      row.Status__c = 'Failed';
+      row.Timeout_At__c = null;
+      row.Error_Details__c = message;
+    }
+    if (!open.isEmpty()) {
+      Database.update(open, true, AccessLevel.SYSTEM_MODE);
+    }
   }
 
   private static String warningMessage(Integer count, Integer ceiling) {
     String limitText = ceiling > 0
       ? 'At ' + ceiling + ' rows the engine fails this instance. '
       : 'A large history can hit the query-row and heap limits. ';
-    return 'Step history has ' +
+    return 'Step history reached ' +
       count +
       ' rows. ' +
       limitText +
-      'Refactor this workflow to use Continue-As-New.';
+      'Change this workflow to use Continue-As-New.';
   }
 }

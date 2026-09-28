@@ -1088,8 +1088,15 @@ export default class WorkflowDashboard extends LightningElement {
           pendingCompensations: result.pendingCompensations || [],
           attributes: result.attributes || [],
           definitionChange: this.mapDefinitionChange(result.definitionChange),
-          // Issue #112: { message, createdDate } or null.
-          stepHistoryWarning: result.stepHistoryWarning || null,
+          // Issue #112: { message, createdDate, formattedDate } or null.
+          stepHistoryWarning: result.stepHistoryWarning
+            ? {
+                ...result.stepHistoryWarning,
+                formattedDate: this.formatDateTime(
+                  result.stepHistoryWarning.createdDate,
+                ),
+              }
+            : null,
         };
 
         // Map children

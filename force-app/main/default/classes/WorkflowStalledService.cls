@@ -164,6 +164,15 @@ public inherited sharing class WorkflowStalledService {
     ) {
       results.add(stalledRows[i]);
     }
+    // Step-history warnings (issue #112): one query for the page.
+    Set<Id> pageIds = new Set<Id>();
+    for (Map<String, Object> row : results) {
+      pageIds.add((Id) row.get('Id'));
+    }
+    Set<Id> historyWarned = WorkflowStepHistoryGuard.warnedInstanceIds(pageIds);
+    for (Map<String, Object> row : results) {
+      row.put('stepHistoryWarning', historyWarned.contains((Id) row.get('Id')));
+    }
     return results;
   }
 
