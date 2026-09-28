@@ -115,7 +115,8 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WorkflowAlertManager`, `WorkflowAlertEmailBuilder`,
   `WorkflowFailureAlertEvaluator`
 - `WatchdogLiveness` (sweep stamp, stale state), `WatchdogStallDetector`
-  (one alert per stall, runs from `WorkflowWatchdog.bootstrap()`)
+  (one alert per stall; runs from `WorkflowWatchdog.bootstrap()` and the
+  System Doctor read)
 
 ## Payload persistence & codec
 
