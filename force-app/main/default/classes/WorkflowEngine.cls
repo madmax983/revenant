@@ -16,6 +16,10 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator toggle (Revenant_Config__mdt.Publish_Metrics_Events__c, issue
+  // #127): when true each watchdog sweep publishes Workflow_Metrics__e.
+  // Default: off.
+  public static Boolean publishMetricsEvents = false;
   // Operator setting (Revenant_Config__mdt.Payload_Codec__c): the PayloadCodec
   // class name. Blank selects the identity codec. See WorkflowPayloadCodecs.
   public static String payloadCodecClass = null;

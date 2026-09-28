@@ -315,6 +315,48 @@
         <readable>true</readable>
     </fieldPermissions>
 
+    <!-- fieldPermissions for Workflow_Metrics__e subscribers -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Chunk_Count__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Chunk_Index__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Is_Truncated__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Metrics_Json__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Schema_Version__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Snapshot_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Snapshot_Id__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Window_Start__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
     <!-- Workflow_Schedule__c field permissions (required fields omitted; Salesforce manages them) -->
     <fieldPermissions>
         <editable>true</editable>
@@ -512,6 +554,17 @@
         <allowRead>true</allowRead>
         <modifyAllRecords>false</modifyAllRecords>
         <object>Workflow_Lifecycle__e</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+
+    <!-- Publish (create) and subscribe (read) access for the metrics event -->
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Metrics__e</object>
         <viewAllRecords>false</viewAllRecords>
     </objectPermissions>
 

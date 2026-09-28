@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Chunk_Index__c</fullName>
+    <description>Number of this chunk, from 1 to Chunk_Count__c.</description>
+    <externalId>false</externalId>
+    <label>Chunk Index</label>
+    <precision>4</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

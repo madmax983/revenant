@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Snapshot_At__c</fullName>
+    <description>Time of the snapshot. This is the end of the window (included).</description>
+    <externalId>false</externalId>
+    <label>Snapshot At</label>
+    <required>false</required>
+    <type>DateTime</type>
+</CustomField>

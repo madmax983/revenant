@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>Engine-health snapshot. The watchdog sweep publishes it when Revenant_Config__mdt.Publish_Metrics_Events__c is on. Metrics_Json__c holds the counts for each workflow definition. A large snapshot uses more than one event with the same Snapshot_Id__c. Delivery is at-least-once. Dedupe on Snapshot_Id__c + Chunk_Index__c. Contract: docs/workflow-metrics-event.md.</description>
+    <eventType>HighVolume</eventType>
+    <label>Workflow Metrics</label>
+    <pluralLabel>Workflow Metrics Events</pluralLabel>
+    <publishBehavior>PublishAfterCommit</publishBehavior>
+</CustomObject>
