@@ -121,9 +121,9 @@ private class WorkflowDeterminismGuardTest {
       Integer before = Limits.getQueries();
       String first = digestOf(rowContext(instId), contextFor(instId));
       Assert.areEqual(
-        before + 3,
+        before + 2,
         Limits.getQueries(),
-        'On costs three SOQL: live signals, newest signal, children'
+        'On costs two SOQL: live signals and child status'
       );
       Assert.areEqual(64, first.length(), 'SHA-256 hex digest');
       Assert.areEqual(

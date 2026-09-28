@@ -6,8 +6,8 @@
  * dispatch writes the decision. When the mode is off, the guard does no work.
  *
  * The inputs digest holds: the stored step input, previous output and step
- * state, the attempt, the timeout-resume flag, the live signal counts, the
- * newest signal, and the child status counts. The guard digests stored forms,
+ * state, the attempt, the timeout-resume flag, the live signals, and the
+ * child status counts. The guard digests stored forms,
  * so no decoded payload goes into the digest. Captures are not inputs:
  * once() values are stable by contract.
  */
@@ -45,28 +45,18 @@ public inherited sharing class WorkflowDeterminismGuard {
       'attempt=' + context.attempt,
       'timeoutResume=' + context.retry().isTimeoutResume()
     };
-    // Live signals only: consumed history does not count query rows.
-    for (AggregateResult row : [
-      SELECT Status__c sigStatus, COUNT(Id) total
+    // Live signals only: a step reads only these. Consumed history does
+    // not count query rows.
+    for (Workflow_Signal__c sig : [
+      SELECT Id, Status__c
       FROM Workflow_Signal__c
       WHERE
         Workflow_Instance__c = :instanceId
         AND Status__c IN ('Received', 'Processing')
       WITH SYSTEM_MODE
-      GROUP BY Status__c
-      ORDER BY Status__c
+      ORDER BY Id
     ]) {
-      parts.add('live=' + row.get('sigStatus') + '|' + row.get('total'));
-    }
-    for (Workflow_Signal__c newest : [
-      SELECT Id
-      FROM Workflow_Signal__c
-      WHERE Workflow_Instance__c = :instanceId
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-      LIMIT 1
-    ]) {
-      parts.add('newest=' + newest.Id);
+      parts.add('signal=' + sig.Id + '|' + sig.Status__c);
     }
     for (AggregateResult row : [
       SELECT Status__c childStatus, COUNT(Id) total

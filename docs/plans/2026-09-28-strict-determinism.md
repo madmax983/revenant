@@ -23,7 +23,7 @@ Thus, the only durable decision that a later run can contradict is a wait decisi
 | B2 | Record the decision of each wait. Compare the next run when its inputs did not change. | Yes. Same inputs must give the same decision. |
 | B3 | Compare every re-run after a wait, also after a new signal. | No. A new signal is a legal reason to change the decision. False positives. |
 | B4 | Run `execute()` two times in strict mode and compare. | No. Double side effects and callouts. |
-| B5 | Inputs digest: stored input, previous output and step state; attempt; timeout-resume flag; live signal counts; newest signal; child status counts. | Yes. Three SOQL in strict mode only. |
+| B5 | Inputs digest: stored input, previous output and step state; attempt; timeout-resume flag; live signal Ids and status; child status counts. | Yes. Two SOQL in strict mode only. |
 | B6 | Put captures (`once()`) in the inputs digest. | No. Captures are stable by contract. A first capture would hide every check. |
 | B7 | Put step state (`stepStateJson`) in the inputs digest. | Yes (changed after review). A resume payload arrives as step state. Without it, a resume is a false positive. |
 | B8 | Decision text covers routing only: action, next step hint, split targets, child targets, approval key and role, timeout route, compensation flag. Each value is JSON. | Yes. Payloads and durations are not routing (out of scope). JSON stops a delimiter collision. |
@@ -45,7 +45,8 @@ Thus, the only durable decision that a later run can contradict is a wait decisi
 | Strict mode off still costs SOQL or CPU. | One static Boolean check. No query. The field read uses the existing query. |
 | A resume payload looks like no new input. | Step state is an input. The resume service also clears the record. |
 | A step retries or sleeps on a duplicate run. | `RETRY`, `SLEEP` and `YIELD` are not decisions. |
-| The signal query counts all history rows. | Count live signals only. Read the newest signal with `LIMIT 1`. |
+| The signal query counts all history rows. | Read live signals only. |
+| Two branches swap which signal is claimed. | Digest the live signal Ids, not only counts. |
 | Two different child lists give the same text. | Each value is JSON. |
 | A new signal arrives and the step moves on. The guard fails it. | The signal status counts change. The guard does not compare. |
 | A signal arrives during the run. The guard records it but the step did not see it. | Take the inputs digest before `execute()`. The next run then has other inputs, so no compare. |

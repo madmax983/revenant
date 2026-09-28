@@ -805,7 +805,7 @@ Revenant settings can be configured without code modifications by editing the **
 6. **Payload Codec** (`Payload_Codec__c` - Text, default blank):
    - The API name of a class that implements `PayloadCodec`. Use `ns.ClassName` for a namespaced class. The engine encodes author payloads with it at rest. Blank selects the identity codec. If the name is not a valid codec, every payload write throws, and a read of an encoded value throws (fail closed). See [docs/payload-codec.md](docs/payload-codec.md).
 7. **Strict Determinism** (`Strict_Determinism__c` - Checkbox, default `false`):
-   - **`true`**: A step that makes a different routing decision when it runs again with the same inputs fails with `STEP_NON_DETERMINISM`. Each step run costs three SOQL queries. Use in development and staging. A deploy of the source sets it to off again. See [docs/strict-determinism.md](docs/strict-determinism.md).
+   - **`true`**: A step that makes a different routing decision when it runs again with the same inputs fails with `STEP_NON_DETERMINISM`. Each step run costs two SOQL queries. Use in development and staging. A deploy of the source sets it to off again. See [docs/strict-determinism.md](docs/strict-determinism.md).
    - **`false`**: No check and no cost.
 
 ### Architectural Trade-offs

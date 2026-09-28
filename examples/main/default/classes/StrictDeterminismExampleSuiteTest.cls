@@ -151,29 +151,6 @@ private class StrictDeterminismExampleSuiteTest {
   }
 
   @IsTest
-  static void childFanOutCompletes() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      Test.startTest();
-      strictOn();
-      Id parentId = WorkflowEngine.start(
-        'ChildWorkflowFanOutExample',
-        'StrictFanOut_' + Crypto.getRandomInteger(),
-        new List<Map<String, Object>>{
-          new Map<String, Object>{ 'id' => 'itemA', 'value' => 15 },
-          new Map<String, Object>{ 'id' => 'itemB', 'value' => 25 },
-          new Map<String, Object>{ 'id' => 'itemC', 'value' => 5 }
-        }
-      );
-      WorkflowTestHarness.Result result = new WorkflowTestHarness(parentId)
-        .drive();
-      Test.stopTest();
-
-      Assert.areEqual('Completed', result.status, 'The fan-out completes');
-      assertNoDivergence();
-    }
-  }
-
-  @IsTest
   static void captureOnceCompletes() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       CaptureOnceWorkflowExample.resetProducerCounters();

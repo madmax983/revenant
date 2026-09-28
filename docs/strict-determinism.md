@@ -42,12 +42,12 @@ In an Apex test, set `WorkflowEngine.strictDeterminism = true`.
 
 ## Cost
 
-When the mode is off, the engine does no work for it: no SOQL, no DML.
+When the mode is off, the engine does no SOQL and no extra DML statement for it. It clears an old record in the step row save that occurs anyway.
 
 When the mode is on, each step run costs:
 
-- Three SOQL queries: live signal counts, the newest signal, and child status counts.
-- One query row for each live signal (`Received` or `Processing`) and each child instance.
+- Two SOQL queries: the live signals, and the child status counts.
+- One query row for each live signal (`Received` or `Processing`) and each child instance, also a closed child.
 - One SHA-256 digest of the stored inputs.
 
 ## What the engine records
@@ -65,7 +65,7 @@ The step inputs are:
 
 - The stored step input, previous output and step state. Stored forms are encoded or offloaded. The digest holds no decoded payload.
 - `ctx.attempt` and the timeout-resume flag.
-- The counts of live signals, and the newest signal of the instance. Signals carry approvals and child outcomes.
+- The live signals of the instance (`Received` or `Processing`): Id and status. Signals carry approvals and child outcomes.
 - The status counts of the child instances.
 
 Captures are not inputs. A `once()` value is stable by contract.
@@ -86,7 +86,7 @@ The decision text holds routing data only. Each value is JSON.
 
 The decision text does not include payloads, step state or durations. The engine records only wait decisions. The text of other decisions shows in the error message.
 
-`RETRY`, `SLEEP` and `YIELD` are not decisions. The engine keeps the record and compares the next decision. A thrown error is not a decision.
+`RETRY`, `SLEEP` and `YIELD` are not decisions. The engine keeps the record and compares the next decision. `RETRY` increases the attempt, so the next run has new inputs. A thrown error is not a decision.
 
 ## What the engine checks
 
@@ -144,3 +144,4 @@ Correct the step code before you retry. A deploy of changed step code can change
 - The engine does not check side effects that do not change routing.
 - The engine does not check `compensate()`.
 - With a payload codec, each wait that writes step state writes new stored state. The engine then compares less often.
+- An approval, child or timed wait writes step state. The first duplicate run after it has new inputs. The engine compares from the second duplicate run.

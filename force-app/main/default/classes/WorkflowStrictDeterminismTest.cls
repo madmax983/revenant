@@ -5,8 +5,10 @@
  * fails with STEP_NON_DETERMINISM. A step that repeats its wait, reads a new
  * signal, or uses a capture-once value does not fail.
  */
+// Public: WorkflowEngine.start authorizes a definition through
+// ApexTypeImplementor, which does not list inner classes of a private class.
 @IsTest
-private class WorkflowStrictDeterminismTest {
+public class WorkflowStrictDeterminismTest {
   private static final String GATE = 'WorkflowStrictDeterminismTest.GateStep';
   private static final String NEXT = 'WorkflowStrictDeterminismTest.NextStep';
   private static final String OTHER = 'WorkflowStrictDeterminismTest.OtherStep';

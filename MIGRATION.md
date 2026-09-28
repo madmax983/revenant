@@ -446,7 +446,7 @@ See [docs/definition-change-detection.md](docs/definition-change-detection.md).
 **Issue #102.** No signature changes. Read this if your code switches on `Failure_Category__c`.
 
 - `Workflow_Instance__c.Failure_Category__c` has a new value: `STEP_NON_DETERMINISM` (label "Step Non-Determinism").
-- New field: `Workflow_Step_Execution__c.Decision_Record__c`. Only strict determinism mode writes it.
+- New field: `Workflow_Step_Execution__c.Decision_Record__c`. Strict determinism mode fills it. When the mode is off, the engine clears it.
 - New config field: `Revenant_Config__mdt.Strict_Determinism__c`. Default: off. When off, nothing changes.
 
 See [docs/strict-determinism.md](docs/strict-determinism.md).

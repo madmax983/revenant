@@ -22,8 +22,8 @@ decision.
    reads it in the existing static config query.
 2. When the mode is on, digest the step inputs before `execute()`: the
    stored step input, previous output and step state, the attempt, the
-   timeout-resume flag, the live signal counts, the newest signal and the
-   child status counts. Three SOQL queries.
+   timeout-resume flag, the live signals (Id and status) and the child status
+   counts. Two SOQL queries.
 3. Build a decision text from routing data only. Each value is JSON. Sort
    split and child targets.
 4. Record a wait decision and its inputs digest in the new field
@@ -42,7 +42,7 @@ decision.
 ## Consequences
 
 - Off: no SOQL, no DML. One Boolean check for each run.
-- On: three SOQL queries for each run. No extra DML, except on a divergence.
+- On: two SOQL queries for each run. No extra DML, except on a divergence.
 - Error routing (#90) and compensation handle a divergence as they handle
   other failures.
 - A `Compensated` instance keeps a blank category. This behavior does not

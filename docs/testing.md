@@ -412,7 +412,7 @@ To find a step that changes its decision on a re-run, turn on the mode in the te
 WorkflowEngine.strictDeterminism = true;
 ```
 
-Then run the waiting step again with no new input, for example with `WorkflowEngine.runStep(instanceId)`. A step that changes its decision fails with `STEP_NON_DETERMINISM`. See [strict-determinism.md](strict-determinism.md).
+Then run the waiting step again with no new input, for example with `WorkflowEngine.runStep(instanceId)`. A step that changes its decision fails with `STEP_NON_DETERMINISM`. After an approval, child or timed wait, run the step two times: the first run after such a wait has new step state. See [strict-determinism.md](strict-determinism.md).
 
 ---
 
