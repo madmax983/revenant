@@ -194,6 +194,16 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>false</editable>
+        <field>Workflow_Instance__c.Definition_Fingerprint__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Definition_Shape__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
         <field>Workflow_Instance__c.Error_Message__c</field>
         <readable>true</readable>
     </fieldPermissions>

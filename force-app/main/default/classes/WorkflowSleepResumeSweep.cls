@@ -41,7 +41,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
    * level so paused sleepers cannot fill the bounded batch and starve resumable
    * rows from other workflows (they would be re-selected and skipped every
    * heartbeat). An org-wide '*' pause means nothing is resumable, so the phase is
-   * skipped entirely.
+   * skipped entirely. The latest-step subquery skips the definition-change
+   * marker row (issue #89), because the marker is not a step.
    * @param now the heartbeat evaluation instant
    */
   public static void processSleepResumptions(Datetime now) {
@@ -62,6 +63,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
           (
             SELECT Workflow_Instance__c, Step_Name__c, Output__c, Id, Status__c
             FROM Workflow_Step_Executions__r
+            WHERE Step_Name__c != :WorkflowDefinitionChangeGate.MARKER_STEP_NAME
             ORDER BY CreatedDate DESC, Id DESC
             LIMIT 1
           )

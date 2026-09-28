@@ -215,9 +215,13 @@ public inherited sharing class WorkflowPauseGate {
     return workflowName == null ? null : workflowName.toLowerCase();
   }
 
-  // Case-insensitive so a reserved engine workflow is never pausable regardless of the
-  // casing the caller supplies.
-  private static Boolean isReserved(String workflowName) {
+  /**
+   * @description Tells if a name is an engine-internal workflow. The check does
+   * not use case. The definition-change gate (issue #89) also uses it.
+   * @param workflowName The workflow name to check.
+   * @return True when the name is reserved.
+   */
+  public static Boolean isReserved(String workflowName) {
     String lower = normalize(workflowName);
     for (String reserved : RESERVED_NAMES) {
       if (reserved.toLowerCase() == lower) {

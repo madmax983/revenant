@@ -71,6 +71,11 @@
                 <default>false</default>
                 <label>Paused</label>
             </value>
+            <value>
+                <fullName>DefinitionChanged</fullName>
+                <default>false</default>
+                <label>Definition Changed</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

@@ -76,7 +76,9 @@ public inherited sharing class WorkflowStepAdmission {
     List<Workflow_Step_Execution__c> latestSteps = [
       SELECT Step_Name__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instanceId
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c != :WorkflowDefinitionChangeGate.MARKER_STEP_NAME
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1

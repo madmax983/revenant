@@ -117,7 +117,9 @@ public inherited sharing class WorkflowInstanceDetailService {
       'pendingCompensations' => pendingCompensations,
       'payloadFiles' => payloadFiles,
       'attributes' => attributes,
-      'breadcrumbs' => breadcrumbs
+      'breadcrumbs' => breadcrumbs,
+      // Stored-versus-live steps for a DefinitionChanged park (issue #89), else null.
+      'definitionChange' => WorkflowDefinitionChangeService.describe(instance)
     };
   }
 
@@ -145,7 +147,9 @@ public inherited sharing class WorkflowInstanceDetailService {
         Compensation_Stack__c,
         Deadline_At__c,
         Failure_Category__c,
-        Progress__c
+        Progress__c,
+        Definition_Fingerprint__c,
+        Definition_Shape__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

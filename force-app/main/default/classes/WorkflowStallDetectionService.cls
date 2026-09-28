@@ -211,7 +211,8 @@ public inherited sharing class WorkflowStallDetectionService {
       stat == 'Suspended' ||
       stat == 'Compensating' ||
       stat == 'Cancelling' ||
-      stat == 'Paused';
+      stat == 'Paused' ||
+      stat == 'DefinitionChanged';
   }
 
   private static Boolean isFailedStat(String stat) {

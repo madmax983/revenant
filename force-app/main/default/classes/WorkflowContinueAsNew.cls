@@ -142,6 +142,7 @@ public inherited sharing class WorkflowContinueAsNew {
     // Resolve initial step for successor instance
     String initialStep = null;
     Datetime nextDeadline = null;
+    Object successorDef = null;
     Type wflowType = WorkflowTypeResolver.resolve(
       instance.Workflow_Name__c,
       WorkflowTypeResolver.extractNamespace(instance.Workflow_Name__c)
@@ -152,6 +153,7 @@ public inherited sharing class WorkflowContinueAsNew {
         initialStep = ((WorkflowDefinition) defObj).getInitialStep();
       }
       nextDeadline = resolveExecutionDeadline(defObj);
+      successorDef = defObj;
     }
 
     // Spawn successor instance. Carry the chain's root correlation key forward
@@ -182,6 +184,8 @@ public inherited sharing class WorkflowContinueAsNew {
       // behavior — the same contract Temporal/DBOS use for polling cursors.
       Previous_Run_At__c = instance.CreatedDate
     );
+    // The successor starts from the initial step, so it takes the live shape.
+    WorkflowDefinitionFingerprint.stamp(nextInstance, successorDef);
     insertSuccessorRecord(nextInstance, newKey);
     copyPredecessorSearchAttributes(instance.Id, nextInstance.Id);
     finalizeSuccessorInstance(nextInstance, result, initialStep);

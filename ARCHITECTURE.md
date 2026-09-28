@@ -58,6 +58,10 @@ is the concurrency gate that decides whether a step may run now.
 - `CircuitBreakerGate` (facade) + `CircuitBreakerConfigResolver`,
   `CircuitBreakerReconciler` — dependency-health fast-fail via the
   `CircuitBreakerGuarded` step marker (issue #128)
+- `WorkflowDefinitionChangeGate`, `WorkflowDefinitionFingerprint`,
+  `WorkflowDefinitionChangeService` — park an instance in `DefinitionChanged`
+  when the live `getSteps()` list differs from the list stored at start;
+  release a parked instance (issue #89)
 
 ## Signal claim, consume & routing
 

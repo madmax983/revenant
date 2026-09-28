@@ -2,7 +2,8 @@
  * @description Durable step-execution orchestrator for the engine's
  * exactly-once heart. Drives one `Workflow_Instance__c` delivery through the
  * mandated admission + lock + invoke sequence and preserves its guarded-return
- * ORDER: load (no lock) → finished-check → compensation route → pause park →
+ * ORDER: load (no lock) → finished-check → compensation route →
+ * definition-change park (issue #89) → pause park →
  * concurrency admission (instance `FOR UPDATE`) → in-memory init → stale-parallel
  * guard → step-execution log lock (step-exec `FOR UPDATE`) → validate → resolve
  * previous output → invoke + outcome. The instance is locked for admission
@@ -64,6 +65,10 @@ public inherited sharing class WorkflowStepRunner {
     if (WorkflowStepAdmission.routeIfCompensating(ctx.instance)) {
       return;
     }
+    // Runs before the pause gate so a parked instance is never re-parked as Paused.
+    if (WorkflowDefinitionChangeGate.parkIfChanged(ctx.instance)) {
+      return;
+    }
     if (WorkflowStepAdmission.parkIfPaused(ctx.instance)) {
       return;
     }
@@ -105,6 +110,7 @@ public inherited sharing class WorkflowStepRunner {
         Parent_Instance__c,
         Compensation_Stack__c,
         Definition_Version__c,
+        Definition_Fingerprint__c,
         Error_Message__c,
         Previous_Run_At__c,
         Concurrency_Slot_Held__c,

@@ -426,6 +426,23 @@ and `Validation Error` (String) — so a Flow can branch on invalid input instea
 catching a fault. Existing invocable outputs (`Workflow Instance ID`, `Is New`) are
 unchanged. See the README's "Validate Start Input Against a Contract (opt-in)"
 section for the full contract shape, type-coercion rules, and bulk/Flow behavior.
+
+---
+
+## New (additive, non-breaking): `DefinitionChanged` status
+
+**Issue #89.** No signature changes. Read this if your code switches on `Status__c`.
+
+- `Workflow_Instance__c.Status__c` has a new value: `DefinitionChanged` (label "Definition Changed"). It is not terminal. The instance waits for an operator release or a cancel.
+- `Workflow_Step_Execution__c.Status__c` has the same new value. The engine uses it only on the `Workflow_Definition_Changed` marker row.
+- New fields: `Workflow_Instance__c.Definition_Fingerprint__c` and `Definition_Shape__c`. Instances that started before the upgrade have blank values. The engine never parks them.
+- New API: `WorkflowDefinitionChangeService.release(Id instanceId)`. It is not on the `WorkflowEngine` facade. The dashboard calls it through `WorkflowDashboardCommandController.releaseDefinitionChangedInstance`.
+- If you change `getSteps()` of a plain definition while instances are in flight, those instances now park. To avoid this, implement `VersionedWorkflow`.
+
+See [docs/definition-change-detection.md](docs/definition-change-detection.md).
+
+---
+
 ## 9. New (additive, non-breaking): `WorkflowInstanceQuery.findInstances`
 
 **Issue #93.** This is **not a breaking change** — it adds a new supported read

@@ -62,7 +62,9 @@ public inherited sharing class WorkflowHistoryRead {
     'Compensated',
     'Cancelled',
     'OperatorSkipped',
-    'ContinuedAsNew'
+    'ContinuedAsNew',
+    // The Workflow_Definition_Changed marker row (issue #89) is a point event.
+    'DefinitionChanged'
   };
 
   /**

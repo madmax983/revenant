@@ -14,6 +14,7 @@ import getRedriveEligibleCount from "@salesforce/apex/WorkflowDashboardControlle
 import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandController.redriveMatchingInstances";
 import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
+import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 
 jest.mock(
@@ -49,6 +50,11 @@ jest.mock(
 jest.mock(
   "@salesforce/apex/WorkflowDashboardCommandController.injectSignal",
   () => ({ default: jest.fn() }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance",
+  () => ({ default: jest.fn(() => Promise.resolve()) }),
   { virtual: true },
 );
 jest.mock(
@@ -2819,5 +2825,206 @@ describe("c-workflow-dashboard rate limits panel (#61)", () => {
     expect(
       element.shadowRoot.querySelector('[data-id="rate-limit-empty"]'),
     ).toBeNull();
+  });
+});
+
+// Issue #89: an instance parked because its definition step list changed.
+describe("c-workflow-dashboard definition changed", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function mockParkedInstance(currentStepInLive, overrides = {}) {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: "a0G000000000089",
+        Name: "WI-0089",
+        Workflow_Name__c: "OnboardingWorkflow",
+        Status__c: "DefinitionChanged",
+      },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000089",
+        Name: "WI-0089",
+        Workflow_Name__c: "OnboardingWorkflow",
+        Status__c: "DefinitionChanged",
+        Current_Step__c: "StepB",
+        Error_Message__c: "Definition step list changed in flight.",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      definitionChange: {
+        storedSteps: ["StepA", "StepB", "StepOld"],
+        liveSteps: ["StepA", "StepX", "StepB"],
+        addedSteps: ["StepX"],
+        removedSteps: ["StepOld"],
+        storedAvailable: true,
+        liveAvailable: true,
+        storedFingerprint: "v1:aaa",
+        liveFingerprint: "v1:bbb",
+        currentStep: "StepB",
+        currentStepInLive,
+        ...overrides,
+      },
+    });
+  }
+
+  async function openParked() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  it("offers DefinitionChanged as a distinct status filter", async () => {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    const combos = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-combobox"),
+    );
+    const statusCombo = combos.find((c) =>
+      (c.options || []).some((o) => o.value === "Failed"),
+    );
+    const option = statusCombo.options.find(
+      (o) => o.value === "DefinitionChanged",
+    );
+    expect(option).toBeDefined();
+    expect(option.label).toBe("Definition Changed");
+  });
+
+  it("shows stored and live step lists with added steps marked", async () => {
+    mockParkedInstance(true);
+    const element = await openParked();
+
+    const panel = element.shadowRoot.querySelector(
+      '[data-id="definition-change-panel"]',
+    );
+    expect(panel).not.toBeNull();
+    const stored = Array.from(
+      panel.querySelectorAll('[data-id="stored-step"]'),
+    ).map((n) => n.textContent.trim());
+    const live = Array.from(panel.querySelectorAll('[data-id="live-step"]'));
+    expect(stored).toEqual(["StepA", "StepB", "StepOld"]);
+    const storedNodes = panel.querySelectorAll('[data-id="stored-step"]');
+    expect(storedNodes[2].className).toContain("step-removed");
+    expect(storedNodes[0].className).not.toContain("step-removed");
+    expect(live.map((n) => n.textContent.trim())).toEqual([
+      "StepA",
+      "StepX",
+      "StepB",
+    ]);
+    expect(live[1].className).toContain("step-added");
+  });
+
+  it("uses a distinct badge and does not offer Retry for a parked instance", async () => {
+    mockParkedInstance(true);
+    const element = await openParked();
+
+    const panel = element.shadowRoot.querySelector(
+      '[data-id="definition-change-panel"]',
+    );
+    expect(panel).not.toBeNull();
+    // The park reason is not a failure: the failure block stays hidden.
+    expect(element.shadowRoot.textContent).not.toContain(
+      "Workflow Failure Message",
+    );
+    expect(
+      element.shadowRoot.querySelector(
+        '[data-id="definition-change-current-step"]',
+      ).textContent,
+    ).toContain("StepB");
+    const retry = findButton(
+      element,
+      (b) => b.label && b.label.startsWith("Retry"),
+    );
+    expect(retry).toBeUndefined();
+    const listBadge = element.shadowRoot.querySelector(".list-item .badge");
+    expect(listBadge.className).toContain("badge-purple");
+  });
+
+  it("calls release with the instance id when Release is clicked", async () => {
+    mockParkedInstance(true);
+    const element = await openParked();
+
+    const release = element.shadowRoot.querySelector(
+      'lightning-button[data-id="release-definition-btn"]',
+    );
+    expect(release).not.toBeNull();
+    expect(release.disabled).toBe(false);
+    release.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    expect(releaseDefinitionChangedInstance).toHaveBeenCalledWith({
+      instanceId: "a0G000000000089",
+    });
+  });
+
+  it("disables Release when the current step is not in the live definition", async () => {
+    mockParkedInstance(false);
+    const element = await openParked();
+
+    const release = element.shadowRoot.querySelector(
+      'lightning-button[data-id="release-definition-btn"]',
+    );
+    expect(release.disabled).toBe(true);
+    expect(element.shadowRoot.textContent).toContain(
+      "The current step is not in the live definition",
+    );
+  });
+
+  it("shows an unreadable live definition instead of a missing-step warning", async () => {
+    mockParkedInstance(false, {
+      liveAvailable: false,
+      liveSteps: [],
+      addedSteps: [],
+      removedSteps: [],
+      liveFingerprint: null,
+    });
+    const element = await openParked();
+
+    const text = element.shadowRoot.textContent;
+    expect(text).toContain("The engine cannot read the live definition");
+    expect(text).not.toContain(
+      "The current step is not in the live definition",
+    );
+    const release = element.shadowRoot.querySelector(
+      'lightning-button[data-id="release-definition-btn"]',
+    );
+    expect(release.disabled).toBe(true);
+  });
+
+  it("shows an error toast when release fails", async () => {
+    mockParkedInstance(true);
+    releaseDefinitionChangedInstance.mockRejectedValueOnce({
+      body: { message: "Current step StepB is not in the live definition." },
+    });
+    const element = await openParked();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="release-definition-btn"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    const detail = toastHandler.mock.calls[0][0].detail;
+    expect(detail.variant).toBe("error");
+    expect(detail.message).toContain("StepB");
   });
 });

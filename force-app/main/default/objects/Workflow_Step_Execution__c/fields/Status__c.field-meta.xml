@@ -66,6 +66,11 @@
                 <default>false</default>
                 <label>OperatorSkipped</label>
             </value>
+            <value>
+                <fullName>DefinitionChanged</fullName>
+                <default>false</default>
+                <label>Definition Changed</label>
+            </value>
         </valueSetDefinition>
     </valueSet>
 </CustomField>

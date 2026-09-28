@@ -232,7 +232,9 @@ public inherited sharing class WorkflowLatencyService {
     return [
       SELECT Workflow_Instance__c, Step_Name__c, CreatedDate
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :instanceIds
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c != :WorkflowDefinitionChangeGate.MARKER_STEP_NAME
       WITH SYSTEM_MODE
       ORDER BY Workflow_Instance__c, CreatedDate ASC
       LIMIT :cap

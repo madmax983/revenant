@@ -137,6 +137,7 @@ public inherited sharing class WorkflowChildBulkPlanner {
       instance.Definition_Version__c = 1;
     }
     instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
+    WorkflowDefinitionFingerprint.stamp(instance, defObj);
     return instance;
   }
 

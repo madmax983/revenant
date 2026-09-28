@@ -28,7 +28,9 @@ public inherited sharing class WorkflowCancellation {
     'Suspended',
     'Cancelling',
     'CompensationFailed',
-    'Paused'
+    'Paused',
+    // A definition-change park (issue #89) is in flight, so a cascade reaches it.
+    'DefinitionChanged'
   };
 
   private static final String CANCELLED_MESSAGE = 'Cancelled by user.';

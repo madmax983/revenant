@@ -27,7 +27,8 @@ public inherited sharing class WorkflowCatalogService {
     'Running',
     'Compensating',
     'Cancelling',
-    'Paused'
+    'Paused',
+    'DefinitionChanged'
   };
 
   // Broken/recoverable statuses rolled up as "failed".
@@ -40,7 +41,7 @@ public inherited sharing class WorkflowCatalogService {
   private static final String SUSPENDED_STATUS = 'Suspended';
 
   // Union of the statuses the health rollup cares about. Restricting the aggregate to these
-  // both bounds the number of GROUP BY rows (<= ~200 definitions * 8 statuses) and skips the
+  // both bounds the number of GROUP BY rows (<= ~200 definitions * 9 statuses) and skips the
   // clean-terminal (Completed/Cancelled/Compensated/ContinuedAsNew) rows the Catalog never
   // shows, so the scan stays governor-safe for large orgs.
   private static final Set<String> HEALTH_STATUSES = new Set<String>{
@@ -49,6 +50,7 @@ public inherited sharing class WorkflowCatalogService {
     'Compensating',
     'Cancelling',
     'Paused',
+    'DefinitionChanged',
     'Failed',
     'CompensationFailed',
     'Suspended'

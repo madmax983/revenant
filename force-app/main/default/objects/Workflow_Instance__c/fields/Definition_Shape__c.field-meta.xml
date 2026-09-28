@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Definition_Shape__c</fullName>
+    <description>JSON list of the definition getSteps() names at start. The dashboard shows it next to the live list when the instance is DefinitionChanged.</description>
+    <externalId>false</externalId>
+    <label>Definition Shape</label>
+    <length>32768</length>
+    <trackTrending>false</trackTrending>
+    <type>LongTextArea</type>
+    <visibleLines>5</visibleLines>
+</CustomField>

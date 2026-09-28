@@ -207,6 +207,7 @@ public inherited sharing class WorkflowStartInstanceBuilder {
     if (defObj instanceof WorkflowDefinition) {
       instance.Current_Step__c = ((WorkflowDefinition) defObj).getInitialStep();
     }
+    WorkflowDefinitionFingerprint.stamp(instance, defObj);
     if (defObj instanceof ExecutionTimeoutConfigurable) {
       Integer timeoutSecs = ((ExecutionTimeoutConfigurable) defObj)
         .getExecutionTimeoutSeconds();

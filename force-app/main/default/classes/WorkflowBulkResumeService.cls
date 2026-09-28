@@ -273,7 +273,9 @@ public inherited sharing class WorkflowBulkResumeService {
     List<Workflow_Step_Execution__c> allActiveSteps = [
       SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Output__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :activeInstIds
+      WHERE
+        Workflow_Instance__c IN :activeInstIds
+        AND Step_Name__c != :WorkflowDefinitionChangeGate.MARKER_STEP_NAME
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
     ];

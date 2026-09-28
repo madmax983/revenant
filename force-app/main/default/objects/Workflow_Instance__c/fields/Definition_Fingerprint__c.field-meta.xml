@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Definition_Fingerprint__c</fullName>
+    <description>Versioned SHA-256 fingerprint of the definition getSteps() list at start. The engine compares it to the live definition at each hop. Blank means unknown and never blocks.</description>
+    <externalId>false</externalId>
+    <label>Definition Fingerprint</label>
+    <length>80</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>
