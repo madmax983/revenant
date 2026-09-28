@@ -83,4 +83,4 @@ Builder. Set **Platform Event Warning %** and **Platform Event Critical %**.
 - To see the same values outside Salesforce, use the REST `/limits`
   resource.
 
-See [ADR 0006](adr/0006-platform-event-headroom.md).
+See [ADR 0007](adr/0007-platform-event-headroom.md).

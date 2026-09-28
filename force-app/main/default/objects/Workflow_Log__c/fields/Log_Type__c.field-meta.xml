@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Log_Type__c</fullName>
-    <description>Category of log entry (e.g. ScheduleFire).</description>
+    <description>Category of log entry (for example ScheduleFire or Notification).</description>
     <externalId>false</externalId>
     <label>Log Type</label>
     <length>40</length>

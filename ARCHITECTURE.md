@@ -52,6 +52,14 @@ is the concurrency gate that decides whether a step may run now.
 - `WorkflowStepInvoke`, `WorkflowStepContext`, `WorkflowStepAdvance`
 - `WorkflowStepOutcome`, `WorkflowStepSuspension`, `WorkflowOutcomePrepare`
 - `WorkflowStepExecStore` — `saveStepExec` / `saveStepExecAsCrash`
+- `WorkflowNotification`, `WorkflowNotifier` — approver notifications (issue
+  #123). The SUSPEND and WAIT_FOR_APPROVAL handlers insert one
+  `Workflow_Log__c` anchor (unique `Fire_Key__c` `Notify:<stepExecId>`) and
+  publish one `NOTIFY` `Workflow_Event__e` with the key. A separate
+  subscriber, `WorkflowNotifyTrigger`, calls `WorkflowNotifier.handleEvents`
+  in its own transaction. It reads the `Requested` anchor rows and sends the
+  Custom Notification. `WorkflowEventTrigger` ignores `NOTIFY`.
+  Toggle: `Revenant_Config__mdt.Send_Notifications__c`.
 - `WorkflowStepTimeoutConfig`, `WorkflowTimeoutArming`, `WorkflowTimeoutReArm`
 - `ConcurrencyGate` (facade) + `ConcurrencyConfigResolver`,
   `ConcurrencyReconciler`, `ConcurrencyReleaseProcessor`
@@ -208,6 +216,10 @@ endpoints moved). All three delegate to `inherited sharing` service classes.
   `WorkflowRateLimitStatusService`. It is a separate controller because
   `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The
   service uses the `RateLimiter` refill formula (`availableTokens`).
+- Fleet Health view (#111): `WorkflowFleetHealthController` →
+  `WorkflowFleetHealthService`. It is a separate controller for the same PMD reason.
+  It uses three queries, each with a cap: a count probe, the counts (an aggregate up
+  to 2,000 instances, else a row query) and a duration sample (ADR 0004).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,
@@ -233,6 +245,8 @@ sub-objects and helper classes.
   `ContinueDirective`, `ChildRequest`) + `StepResultJson`, `StepResultValidator`,
   `BusinessSleepCalculator`, `BusinessHoursCalendar`
 - `WorkflowDefinition`, `WorkflowStep`, `RetryPolicy`, `AutoRetryConfigurable`
+- Global subset: only the members in [docs/global-api.md](docs/global-api.md) are
+  `global`. Subscriber code sees nothing else (issue #122).
 
 ---
 

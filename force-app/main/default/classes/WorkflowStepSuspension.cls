@@ -45,7 +45,8 @@ public inherited sharing class WorkflowStepSuspension {
   /**
    * @description SUSPEND outcome: saves the step's state and suspends the
    * instance awaiting an external signal, arming or clearing the timed-suspend
-   * deadline before redelivering any matching buffered signals.
+   * deadline before redelivering any matching buffered signals. Then requests
+   * the notification of the step, if any (issue #123).
    * @param outcome the step outcome bundle carrying instance, step exec, result
    * and context
    */
@@ -104,6 +105,8 @@ public inherited sharing class WorkflowStepSuspension {
       instance.Id,
       instance.Correlation_Key__c
     );
+    // Issue #123: last, after the required DML. Fire-and-forget.
+    WorkflowNotifier.request(outcome);
   }
 
   /**
@@ -257,7 +260,8 @@ public inherited sharing class WorkflowStepSuspension {
   /**
    * @description WAIT_FOR_APPROVAL outcome: suspends the step awaiting an
    * approval signal, arming or clearing the timed-approval deadline before
-   * redelivering any matching buffered signals.
+   * redelivering any matching buffered signals. Then requests the
+   * notification of the step, if any (issue #123).
    * @param outcome the step outcome bundle carrying instance, step exec, result
    * and context
    */
@@ -301,6 +305,8 @@ public inherited sharing class WorkflowStepSuspension {
       instance.Id,
       instance.Correlation_Key__c
     );
+    // Issue #123: last, after the required DML. Fire-and-forget.
+    WorkflowNotifier.request(outcome);
   }
 
   /**

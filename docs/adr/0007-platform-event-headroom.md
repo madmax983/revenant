@@ -1,4 +1,4 @@
-# ADR 0006: Platform Event allocation in System Doctor
+# ADR 0007: Platform Event allocation in System Doctor
 
 - **Status:** Accepted
 - **Date:** 2026-09-28

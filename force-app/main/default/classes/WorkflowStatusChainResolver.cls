@@ -36,7 +36,8 @@ public inherited sharing class WorkflowStatusChainResolver {
     public Map<Id, Workflow_Instance__c> byId = new Map<Id, Workflow_Instance__c>();
 
     /**
-     * @description Matched instances indexed by their preferred correlation key.
+     * @description Matched instances indexed by their preferred correlation key,
+     * lower-cased with `WorkflowKeys.normalizeKey`.
      */
     public Map<String, Workflow_Instance__c> byKey = new Map<String, Workflow_Instance__c>();
   }
@@ -47,7 +48,7 @@ public inherited sharing class WorkflowStatusChainResolver {
    * list after the chain walk, correspondingly ordered.
    *
    * @param reqIds The per-request parsed instance Ids (null where not id-shaped), in order.
-   * @param reqKeys The per-request raw correlation keys (null where blank), in order.
+   * @param reqKeys The per-request normalized correlation keys (null where blank), in order.
    * @param index The direct-match index to resolve each request against.
    * @return The per-request resolved instances (null where unmatched), after the chain walk.
    */
@@ -175,15 +176,7 @@ public inherited sharing class WorkflowStatusChainResolver {
   ) {
     Map<Id, Workflow_Instance__c> successorByPrev = new Map<Id, Workflow_Instance__c>();
     for (Workflow_Instance__c succ : [
-      SELECT
-        Id,
-        Status__c,
-        Output__c,
-        Error_Message__c,
-        Correlation_Key__c,
-        Previous_Instance__c,
-        Progress__c,
-        Causation_Id__c
+      SELECT Id, Status__c, Correlation_Key__c, Previous_Instance__c
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c IN :predecessorIds
       WITH SYSTEM_MODE

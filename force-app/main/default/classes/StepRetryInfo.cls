@@ -7,15 +7,24 @@
  * `attempt` and the `isFinalAttempt()` convenience remain directly on
  * StepContext, which reads maxAttempts from here.
  */
-public inherited sharing class StepRetryInfo {
+global inherited sharing class StepRetryInfo {
+  /**
+   * @description Keeps construction in the package namespace. Without an
+   * explicit constructor, a global class gets a global default
+   * constructor (issue #122).
+   */
+  public StepRetryInfo() {
+    // No state to set.
+  }
+
   /** The maximum number of attempts permitted for this step. */
-  public Integer maxAttempts { get; private set; }
+  global Integer maxAttempts { get; private set; }
   /** The cumulative count of attempts carried across re-executions. */
-  public Integer attemptCount { get; private set; }
+  global Integer attemptCount { get; private set; }
   /** In a compensation/error context, the name of the step that failed. */
-  public String failedStepName { get; private set; }
+  global String failedStepName { get; private set; }
   /** In a compensation/error context, the failure's error message. */
-  public String errorMessage { get; private set; }
+  global String errorMessage { get; private set; }
 
   /** True when this execution is the engine-routed timeout fallback. */
   private Boolean timeoutResume = false;
@@ -66,7 +75,7 @@ public inherited sharing class StepRetryInfo {
    * rather than a normal run, so a step can take its timeout-handling branch.
    * @return True if the context was built as a timeout resume.
    */
-  public Boolean isTimeoutResume() {
+  global Boolean isTimeoutResume() {
     return timeoutResume == true;
   }
 }

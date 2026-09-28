@@ -8,7 +8,16 @@
  * of SOQL queries and zero DML. Extracted from `WorkflowEngine`; returns the
  * resident public DTO `WorkflowEngine.WorkflowStatus`.
  */
-public inherited sharing class WorkflowStatusRead {
+global inherited sharing class WorkflowStatusRead {
+  /**
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
+   */
+  private WorkflowStatusRead() {
+    // No state to set.
+  }
+
   // Terminal statuses for the read API. ContinuedAsNew is deliberately excluded
   // (it is a hand-off, not an outcome) and CompensationFailed is excluded
   // (it is non-terminal — the rollback can still be resumed/retried). Public so
@@ -40,7 +49,7 @@ public inherited sharing class WorkflowStatusRead {
    * @param instanceId Id of the workflow instance to read
    * @return the instance status DTO, or null when no such instance exists
    */
-  public static WorkflowEngine.WorkflowStatus getStatus(Id instanceId) {
+  global static WorkflowEngine.WorkflowStatus getStatus(Id instanceId) {
     List<WorkflowEngine.WorkflowStatus> results = getStatus(
       new List<Id>{ instanceId }
     );
@@ -55,7 +64,7 @@ public inherited sharing class WorkflowStatusRead {
    * @param correlationKey correlation key to resolve
    * @return the status DTO for the resolved instance, or null when none matches
    */
-  public static WorkflowEngine.WorkflowStatus getStatus(String correlationKey) {
+  global static WorkflowEngine.WorkflowStatus getStatus(String correlationKey) {
     List<WorkflowEngine.WorkflowStatus> results = getStatus(
       new List<String>{ correlationKey }
     );
@@ -69,7 +78,7 @@ public inherited sharing class WorkflowStatusRead {
    * @param instanceIds instance Ids to read
    * @return status DTOs positionally aligned with instanceIds (null per missing Id)
    */
-  public static List<WorkflowEngine.WorkflowStatus> getStatus(
+  global static List<WorkflowEngine.WorkflowStatus> getStatus(
     List<Id> instanceIds
   ) {
     List<WorkflowEngine.WorkflowStatus> out = new List<WorkflowEngine.WorkflowStatus>();
@@ -146,7 +155,7 @@ public inherited sharing class WorkflowStatusRead {
    * @return status DTOs positionally aligned with correlationKeys (null per blank
    * or unmatched key)
    */
-  public static List<WorkflowEngine.WorkflowStatus> getStatus(
+  global static List<WorkflowEngine.WorkflowStatus> getStatus(
     List<String> correlationKeys
   ) {
     List<WorkflowEngine.WorkflowStatus> out = new List<WorkflowEngine.WorkflowStatus>();
