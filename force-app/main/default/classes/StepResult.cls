@@ -359,6 +359,11 @@ public inherited sharing class StepResult {
    * @return This StepResult, for fluent chaining.
    */
   public StepResult withNotification(WorkflowNotification notification) {
+    StepResultValidator.requireNotifiable(
+      this.directiveData.action,
+      notification
+    );
+    this.directiveData.notification = notification;
     return this;
   }
 

@@ -583,6 +583,22 @@ public class WorkflowNotifierTest {
   // ----- Toggle
 
   @IsTest
+  static void toggleReadsTheDefaultConfig() {
+    List<Revenant_Config__mdt> configs = [
+      SELECT Send_Notifications__c
+      FROM Revenant_Config__mdt
+      WHERE DeveloperName = 'Default'
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    Boolean expected = configs.isEmpty() ||
+      configs[0].Send_Notifications__c == null
+      ? true
+      : configs[0].Send_Notifications__c;
+    Assert.areEqual(expected, WorkflowEngine.sendNotifications);
+  }
+
+  @IsTest
   static void toggleOffPublishesNothing() {
     seedType();
     WorkflowEngine.sendNotifications = false;

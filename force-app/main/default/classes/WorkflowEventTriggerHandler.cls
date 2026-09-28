@@ -3,7 +3,8 @@
  * here so the trigger itself stays a thin delegate (AvoidLogicInTrigger). Events are
  * classified in-order, resume/signal requests are executed in bulk, and any throttled
  * overflow is republished in a single EventBus.publish call. `CASCADE_CANCEL` events
- * go to WorkflowCascadeCancel (issue #94).
+ * go to WorkflowCascadeCancel (issue #94). `NOTIFY` events go to WorkflowNotifier
+ * (issue #123).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and
@@ -20,6 +21,7 @@ public inherited sharing class WorkflowEventTriggerHandler {
   private final List<WorkflowEngine.SignalRequest> signalRequests = new List<WorkflowEngine.SignalRequest>();
   private final List<Workflow_Event__e> throttledEvents = new List<Workflow_Event__e>();
   private final List<Workflow_Event__e> cascadeEvents = new List<Workflow_Event__e>();
+  private final List<Workflow_Event__e> notifyEvents = new List<Workflow_Event__e>();
   private Integer processedResumeSignals = 0;
 
   /**
@@ -47,6 +49,9 @@ public inherited sharing class WorkflowEventTriggerHandler {
     // 2b. Reap children of failed parents (own savepoint; catches its errors)
     WorkflowCascadeCancel.handleEvents(cascadeEvents);
 
+    // 2c. Send approver notifications (never throws)
+    WorkflowNotifier.handleEvents(notifyEvents);
+
     // 3. Publish throttled events in a single bulk DML statement
     publishThrottledEvents();
   }
@@ -65,6 +70,8 @@ public inherited sharing class WorkflowEventTriggerHandler {
       routeStepExecution(event);
     } else if (event.Event_Type__c == WorkflowCascadeCancel.EVENT_TYPE) {
       cascadeEvents.add(event);
+    } else if (event.Event_Type__c == WorkflowNotifier.EVENT_TYPE) {
+      notifyEvents.add(event);
     }
   }
 

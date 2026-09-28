@@ -11,7 +11,7 @@ public inherited sharing class WorkflowNotification {
   public static final Integer MAX_TITLE_LENGTH = 250;
   /** @description Max body length. */
   public static final Integer MAX_BODY_LENGTH = 750;
-  /** @description Max static recipients. */
+  /** @description Max static recipients. Also the size of one send. */
   public static final Integer MAX_RECIPIENTS = 500;
 
   /** @description Notification title. */
@@ -29,7 +29,10 @@ public inherited sharing class WorkflowNotification {
   /** @description Records whose owner gets the notification. */
   public Set<Id> ownerRecordIds { get; private set; }
 
-  private WorkflowNotification() {
+  private WorkflowNotification(String title, String body) {
+    this.title = title;
+    this.body = body;
+    this.typeName = DEFAULT_TYPE;
     this.recipientIds = new Set<Id>();
     this.inputFields = new Set<String>();
     this.ownerRecordIds = new Set<Id>();
@@ -42,7 +45,9 @@ public inherited sharing class WorkflowNotification {
    * @return The notification.
    */
   public static WorkflowNotification create(String title, String body) {
-    return new WorkflowNotification();
+    requireText(title, MAX_TITLE_LENGTH, 'title');
+    requireText(body, MAX_BODY_LENGTH, 'body');
+    return new WorkflowNotification(title, body);
   }
 
   /**
@@ -51,7 +56,12 @@ public inherited sharing class WorkflowNotification {
    * @return This notification.
    */
   public WorkflowNotification toRecipient(Id recipientId) {
-    return this;
+    if (recipientId == null) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification.toRecipient: recipientId must not be null'
+      );
+    }
+    return toRecipients(new Set<Id>{ recipientId });
   }
 
   /**
@@ -60,16 +70,38 @@ public inherited sharing class WorkflowNotification {
    * @return This notification.
    */
   public WorkflowNotification toRecipients(Set<Id> ids) {
+    if (ids == null || ids.contains(null)) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification.toRecipients: ids must not be null or contain null'
+      );
+    }
+    Set<Id> merged = new Set<Id>(this.recipientIds);
+    merged.addAll(ids);
+    if (merged.size() > MAX_RECIPIENTS) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification: max ' +
+          MAX_RECIPIENTS +
+          ' static recipients. Use toInputField for a larger audience.'
+      );
+    }
+    this.recipientIds = merged;
     return this;
   }
 
   /**
    * @description Adds the recipients in a top-level workflow input key. The
-   * value is one Id or a list of Ids. The engine reads it at the SUSPEND.
+   * value is one Id or a list of Ids. The engine reads it at the SUSPEND and
+   * ignores a value that is not an Id.
    * @param key Input key. Not blank.
    * @return This notification.
    */
   public WorkflowNotification toInputField(String key) {
+    if (String.isBlank(key)) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification.toInputField: key must not be blank'
+      );
+    }
+    this.inputFields.add(key);
     return this;
   }
 
@@ -80,6 +112,8 @@ public inherited sharing class WorkflowNotification {
    * @return This notification.
    */
   public WorkflowNotification toRecordOwner(Id recordId) {
+    requireRecordId(recordId, 'toRecordOwner');
+    this.ownerRecordIds.add(recordId);
     return this;
   }
 
@@ -89,6 +123,8 @@ public inherited sharing class WorkflowNotification {
    * @return This notification.
    */
   public WorkflowNotification withTarget(Id recordId) {
+    requireRecordId(recordId, 'withTarget');
+    this.targetId = recordId;
     return this;
   }
 
@@ -98,6 +134,12 @@ public inherited sharing class WorkflowNotification {
    * @return This notification.
    */
   public WorkflowNotification withType(String developerName) {
+    if (String.isBlank(developerName)) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification.withType: developerName must not be blank'
+      );
+    }
+    this.typeName = developerName;
     return this;
   }
 
@@ -106,6 +148,32 @@ public inherited sharing class WorkflowNotification {
    * @return True when a static, input or owner recipient is set.
    */
   public Boolean hasRecipientSource() {
-    return false;
+    return !recipientIds.isEmpty() ||
+      !inputFields.isEmpty() ||
+      !ownerRecordIds.isEmpty();
+  }
+
+  private static void requireText(
+    String value,
+    Integer maxLength,
+    String name
+  ) {
+    if (String.isBlank(value) || value.length() > maxLength) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification.create: ' +
+          name +
+          ' must not be blank and must have max ' +
+          maxLength +
+          ' characters'
+      );
+    }
+  }
+
+  private static void requireRecordId(Id recordId, String method) {
+    if (recordId == null) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification.' + method + ': recordId must not be null'
+      );
+    }
   }
 }
