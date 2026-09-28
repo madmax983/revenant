@@ -29,8 +29,12 @@ function parse(source, file) {
 function parseAny(source, file) {
   try {
     return parse(source, file);
-  } catch {
-    return parseAs(source, file, (p) => p.anonymousUnit());
+  } catch (first) {
+    try {
+      return parseAs(source, file, (p) => p.anonymousUnit());
+    } catch {
+      throw first; // the class parse error is the more useful one
+    }
   }
 }
 
@@ -445,20 +449,17 @@ const topOf = (t) => (t.outer ? topOf(t.outer) : t);
  * @AuraEnabled members (dashboard services).
  */
 export function exposedInternals(types) {
-  const internalTops = new Set();
-  for (const t of types.values()) {
-    const top = topOf(t);
-    const byStructure = t.implementsRefs.some((r) =>
-      INTERNAL_INTERFACE.test(r.getText()),
-    );
-    if (INTERNAL_PATTERN.test(top.name) || byStructure || t.auraEnabled)
-      internalTops.add(top);
-  }
+  const exposes = (t) => t.global || t.members.some((m) => m.global);
   const bad = new Set();
   for (const t of types.values()) {
     const top = topOf(t);
-    if (!internalTops.has(top)) continue;
-    if (t.global || t.members.some((m) => m.global)) bad.add(top.name);
+    // By name: the whole top-level type and its inner types.
+    if (INTERNAL_PATTERN.test(top.name) && exposes(t)) bad.add(top.name);
+    // By structure: only the type that is the job, finalizer, or service.
+    const byStructure = t.implementsRefs.some((r) =>
+      INTERNAL_INTERFACE.test(r.getText()),
+    );
+    if ((byStructure || t.auraEnabled) && exposes(t)) bad.add(t.name);
   }
   return [...bad].sort();
 }
@@ -489,11 +490,14 @@ const SYSTEM_INTERFACE_METHODS = { comparable: ["compareto"] };
 /** Returns the lower-case method names that the class's interfaces require. */
 function requiredMethodNames(t, types) {
   const names = new Set();
+  const seen = new Set();
   const add = (refs, scope) => {
     for (const r of refs) {
       let repo = null;
       renderType(r, scope, types, (rt) => (repo = rt));
+      if (repo && seen.has(repo)) continue;
       if (repo) {
+        seen.add(repo);
         repo.members.forEach((m) => names.add(m.name.toLowerCase()));
         add(repo.extendsRefs, repo.outer ?? repo); // super-interfaces
       } else {
@@ -653,18 +657,26 @@ export function prefixRepoTypes(source, types, namespace, ownType) {
   return out + source.slice(at);
 }
 
-/** Maps each declared variable (lower-case) to the repo type it names. */
+/**
+ * Maps each declared variable (lower-case) to the set of types it is declared
+ * with in the file. A repo type is the type object; any other type is null.
+ * The map is file-wide, so a name with two types keeps both.
+ */
 function variableTypes(unit, types) {
   const map = new Map();
   const add = (ref, id) => {
     const names = ref.typeName_list();
-    if (names.some((tn) => tn.typeArguments() || !tn.id())) return;
-    const repo = resolveRepoType(
-      names.map((tn) => tn.id().getText()),
-      null,
-      types,
-    );
-    if (repo) map.set(id.getText().toLowerCase(), repo);
+    const plain = names.every((tn) => !tn.typeArguments() && tn.id());
+    const repo = plain
+      ? resolveRepoType(
+          names.map((tn) => tn.id().getText()),
+          null,
+          types,
+        )
+      : null;
+    const key = id.getText().toLowerCase();
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key).add(repo);
   };
   const visit = (node) => {
     if (
@@ -725,7 +737,7 @@ export function readOnlyWrites(source, types) {
     }
   }
   const isReadOnlyOn = (type, name) => {
-    const m = type.members.find(
+    const m = type?.members.find(
       (x) => x.kind === "property" && x.name.toLowerCase() === name,
     );
     return !!m && m.global && !(m.hasSetter && m.setterOpen);
@@ -737,17 +749,56 @@ export function readOnlyWrites(source, types) {
   const out = [];
   tokens.forEach((tok, i) => {
     if (i < 2 || tokens[i - 1].text !== ".") return;
-    const name = tok.text.toLowerCase();
-    const recv = tokens[i - 2];
-    const prefixOp = ["++", "--"].includes(tokens[i - 3]?.text);
+    const start = receiverStart(tokens, i - 2);
+    const prefixOp = ["++", "--"].includes(tokens[start - 1]?.text);
     if (!isAssignAt(tokens, i + 1) && !prefixOp) return;
-    const simple = /^\w+$/.test(recv.text) && tokens[i - 3]?.text !== ".";
-    const type = simple ? vars.get(recv.text.toLowerCase()) : null;
-    const bad = type ? isReadOnlyOn(type, name) : readOnlyAnywhere.has(name);
-    if (bad)
-      out.push(`line ${tok.line}: ${simple ? recv.text : "?"}.${tok.text}`);
+    const name = tok.text.toLowerCase();
+    const recv = tokens[i - 2].text;
+    let bad;
+    let label = recv;
+    if (start !== i - 2) {
+      bad = readOnlyAnywhere.has(name); // chain, call, or index: strict
+      label = "?";
+    } else if (/^this$/i.test(recv)) {
+      bad = false; // the subscriber's own member
+    } else if (vars.has(recv.toLowerCase())) {
+      bad = [...vars.get(recv.toLowerCase())].some((t) =>
+        isReadOnlyOn(t, name),
+      );
+    } else {
+      // Not a declared variable: a static reference to a repo type, or else unknown.
+      const repo = resolveRepoType([recv], null, types);
+      bad = repo ? isReadOnlyOn(repo, name) : false;
+    }
+    if (bad) out.push(`line ${tok.line}: ${label}.${tok.text}`);
   });
   return out;
+}
+
+/**
+ * Returns the index of the first token of the receiver expression that ends
+ * at `end`: identifiers joined by dots, with calls and index brackets.
+ */
+function receiverStart(tokens, end) {
+  let i = end;
+  for (;;) {
+    const text = tokens[i]?.text;
+    if (text === ")" || text === "]") {
+      const open = text === ")" ? "(" : "[";
+      let depth = 0;
+      for (; i >= 0; i--) {
+        if (tokens[i].text === text) depth++;
+        if (tokens[i].text === open && --depth === 0) break;
+      }
+      i--; // the method name or indexed expression
+      continue;
+    }
+    if (tokens[i - 1]?.text === ".") {
+      i -= 2;
+      continue;
+    }
+    return i;
+  }
 }
 
 /**
@@ -755,6 +806,8 @@ export function readOnlyWrites(source, types) {
  * implement an interface. apex-ls does not check public access across
  * namespaces, so a call to one would pass against the stub only.
  */
+// It matches by name only, so it can also flag a call on another type (for
+// example String.compareTo). That fails closed.
 export function stubOnlyCalls(source, types) {
   const names = stubOnlyMethodNames(types);
   const tokens = ApexParserFactory.createLexer(source)

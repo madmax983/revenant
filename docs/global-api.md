@@ -10,7 +10,7 @@ Decision record: [ADR 0006](adr/0006-frozen-global-api.md). Issue: #122.
 - Do not add a method to a `global` interface. The platform blocks it after a release, and it breaks each subscriber class that implements the interface. Add a new opt-in interface instead, as `VersionedWorkflow` does.
 - A new `@InvocableVariable` must be optional. A required variable breaks existing Flows.
 - Add a member only when a subscriber must use it. Each addition is a new, permanent contract.
-- To retire a member, add `@Deprecated` and keep its behavior. `@Deprecated` compiles only in the namespaced packaging org. Until then, mark the member as deprecated in this page.
+- To retire a member, add `@Deprecated` and keep its behavior. `@Deprecated` compiles only in the namespaced packaging org. Before the package is in the packaging org, mark the member as deprecated in this page.
 - When you change the surface, change the manifest block below in the same commit. `npm run test:global-api` fails when the code and the manifest are different.
 - A property with `{ get }` is read-only outside the package.
 
@@ -59,7 +59,7 @@ The examples in `examples/` run in the package namespace. Some use classes that 
 These values are part of the contract. Do not rename them.
 
 - `WorkflowEngine.WorkflowStatus.status` and `WorkflowStatusInvocableAction.StatusResult.status`: `Pending`, `Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `DefinitionChanged`, `CompensationFailed`, `ContinuedAsNew`, `Completed`, `Failed`, `Compensated`, `Cancelled`. `isTerminal` is true for `Completed`, `Failed`, `Compensated`, and `Cancelled`.
-- `StepContext.ChildOutcome.status`: `Completed` or `Failed`.
+- `StepContext.ChildOutcome.status`: `Completed`, or the status of a child that did not complete: `Failed`, `Cancelled`, `Compensated`, or `CompensationFailed`. Use `isSuccess()` to test for `Completed`.
 
 ## Manifest
 
@@ -68,7 +68,7 @@ One line for each declaration. The test reads the block below.
 - `global <kind> <Type>`: a type. `extends` and `implements` show the super types. An enum shows its values.
 - `<Type>.<method>(<parameter types>): <return type>`: a method. `static` is shown.
 - `new <Type>(<parameter types>)`: a constructor. `new <Type>()` is also the default constructor of a `global` class with no explicit constructor.
-- `<Type>.<name>: <type> { get }` or `{ get; set }`: a property.
+- `<Type>.<name>: <type> { get }`, `{ set }`, or `{ get; set }`: a property. It shows the accessors that a subscriber can use.
 - `<Type>.<name>: <type>`: a field (read and write).
 - `@InvocableMethod` and `@InvocableVariable` show Flow members, with the arguments that change compatibility (`required`, `callout`). `@Deprecated` is shown.
 - `virtual`, `abstract`, `override`, and `webservice` are shown. A `webservice` member is visible outside the package, as a `global` member.
@@ -315,11 +315,11 @@ npm run test:global-api
 The test does these checks:
 
 1. The `global` declarations in `force-app` are equal to the manifest.
-2. Each `global` member is in a `global` type. Each `global` signature uses only `global` or system types. Each `global` interface extends only `global` interfaces.
+2. Each `global` member is in a `global` type. Each `global` signature uses only `global` or system types. Each `global` interface extends only `global` interfaces. Each `global` class implements only `global` or system interfaces.
 3. No engine internal has `global`.
 4. Each `@InvocableMethod` and `@InvocableVariable` in a `global` class is `global`.
 5. `GlobalApiSubscriberTest` writes no read-only `global` property. It calls no method that the stub keeps only to implement an interface (for example `compareTo`). apex-ls does not check setter access or `public` access across namespaces.
-6. Packaged view: the test makes a stub project in namespace `rvn`. The stub holds only the `global` members. The test compiles the stub with apex-ls. Then it compiles `GlobalApiSubscriberTest` in namespace `acme` against the stub. The fixture must have zero errors. A probe that uses a namespace-private method and type must fail with exactly these two errors. Its call to a `global` method must pass.
+6. Packaged view: the test makes a stub project in namespace `rvn`. The stub holds only the `global` members, and the `public` methods that a class needs to implement an interface (for example `compareTo`). The test compiles the stub with apex-ls. Then it compiles `GlobalApiSubscriberTest` in namespace `acme` against the stub. The fixture must have zero errors. A probe that uses a namespace-private method and type must fail with exactly these two errors. Its call to a `global` method must pass.
 
 Check 6 needs Java and apex-ls. Run `scripts/global-api/fetch-apex-ls.sh` one time (it needs Maven), or set `APEX_LS_CLASSPATH`. Without them, the test skips check 6. Set `REQUIRE_APEX_LS=1` to make the skip a failure.
 

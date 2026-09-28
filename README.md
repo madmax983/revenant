@@ -886,7 +886,7 @@ Revenant supports being packaged inside a Managed Package (1GP or 2GP) and insta
 ### Global API (What Subscribers Can See)
 A subscriber sees only `global` Apex. Revenant makes a small, frozen set of members `global`. The set is: the step and definition interfaces, `StepContext` and its accessor objects, `StepResult`, `RetryPolicy`, `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`), `WorkflowStatusRead.getStatus`, and three Flow actions (Start, Signal, Get Workflow Status). All other engine code is namespace-private.
 
-Other APIs in this README (for example `getHistory`, `findInstances`, `withParent`, `RateLimiter`, `PayloadCodec`) work in the package namespace only. They are candidates for the global API. For each member and the stability policy, see [docs/global-api.md](docs/global-api.md). For the decision, see [ADR 0006](docs/adr/0006-frozen-global-api.md).
+Other APIs in this README (for example `getHistory`, `findInstances`, `RateLimiter`, `PayloadCodec`) work in the package namespace only. They are candidates for the global API. `withParent` stays namespace-private. For each member and the stability policy, see [docs/global-api.md](docs/global-api.md). For the decision, see [ADR 0006](docs/adr/0006-frozen-global-api.md).
 
 ### Class Resolution Model
 - **Engine Namespace**: When Revenant is installed as a package, the engine executes in the package namespace (e.g. `revenant`).

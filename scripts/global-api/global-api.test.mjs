@@ -305,6 +305,41 @@ test("checker: finds calls to stub-only public methods", () => {
   );
 });
 
+test("checker: read-only writes use scope-safe receiver types", () => {
+  const m = buildModel(
+    parseSources({
+      "S.cls":
+        "global class S { global String status { get; private set; } global Integer n { get; private set; } global S next() { return this; } }",
+      "D.cls": "global class D { global String status; }",
+    }),
+  );
+  const src =
+    "public class Sub { String status; " +
+    "void a() { S s; s.status = 'x'; } void b() { D s; s.status = 'y'; } " +
+    "void c() { Account acc; acc.Name = 'z'; this.status = 'w'; ++s.next().n; } }";
+  assert.deepEqual(readOnlyWrites(src, m), [
+    "line 1: s.status",
+    "line 1: s.status",
+    "line 1: ?.n",
+  ]);
+});
+
+test("checker: survives cyclic interfaces and flags only the structural internal type", () => {
+  const m = buildModel(
+    parseSources({
+      "A.cls": "global interface A extends B { void a(); }",
+      "B.cls": "global interface B extends A { void b(); }",
+      "K.cls":
+        "global class K implements A { public void a() {} public void b() {} }",
+      "Facade.cls":
+        "global class Facade { global static void go() {} " +
+        "private class Hop implements Queueable { public void execute(QueueableContext c) {} } }",
+    }),
+  );
+  assert.match(stubSources(m)["K.cls"], /public void b\(\)/);
+  assert.deepEqual(exposedInternals(m), []);
+});
+
 // ─── Repo checks ───────────────────────────────────────────────────────────
 
 test("manifest has no duplicate lines", () => {
