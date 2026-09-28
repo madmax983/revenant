@@ -199,6 +199,9 @@ endpoints moved). All three delegate to `inherited sharing` service classes.
   `WorkflowRateLimitStatusService`. It is a separate controller because
   `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The
   service uses the `RateLimiter` refill formula (`availableTokens`).
+- Fleet Health view (#111): `WorkflowFleetHealthController` →
+  `WorkflowFleetHealthService`. A separate controller for the same PMD reason. Two
+  queries: a `COUNT` group query and a duration sample with a fixed cap.
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,

@@ -111,6 +111,10 @@
   background: var(--slds-g-color-surface-2, rgba(241, 245, 249, 0.6));
 }
 
+/* Fleet Health row below the operator threshold (#111). */
+.health-row-below {
+  background: var(--slds-g-color-error-base-95, hsl(0, 100%, 96%));
+}
 .item-selected {
   background: var(--slds-g-color-accent-light-1, rgba(239, 246, 255, 0.85));
   border-left: var(--slds-g-sizing-border-4, 4px) solid
