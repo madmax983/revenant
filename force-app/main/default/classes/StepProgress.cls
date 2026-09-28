@@ -5,7 +5,16 @@
  * and persisted onto Workflow_Instance__c.Progress__c at the transition
  * checkpoint. Reached by step authors via StepContext.progress().
  */
-public inherited sharing class StepProgress {
+global inherited sharing class StepProgress {
+  /**
+   * @description Keeps construction in the package namespace. Without an
+   * explicit constructor, a global class gets a global default
+   * constructor (issue #122).
+   */
+  public StepProgress() {
+    // No state to set.
+  }
+
   /** The buffered progress snapshot as JSON, or null when none was reported. */
   private String progressJson = null;
   /** True once a step reported progress during this execution. */
@@ -17,7 +26,7 @@ public inherited sharing class StepProgress {
    * @param percentComplete The completion percentage to record.
    * @param message A human-readable progress description.
    */
-  public void reportProgress(Decimal percentComplete, String message) {
+  global void reportProgress(Decimal percentComplete, String message) {
     Map<String, Object> progressMap = new Map<String, Object>{
       'percentComplete' => percentComplete,
       'message' => message
@@ -31,7 +40,7 @@ public inherited sharing class StepProgress {
    * payload clears the buffered progress.
    * @param progressData The progress object to serialize, or null to clear.
    */
-  public void reportProgress(Object progressData) {
+  global void reportProgress(Object progressData) {
     if (progressData == null) {
       this.progressJson = null;
     } else {

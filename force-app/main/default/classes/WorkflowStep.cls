@@ -4,7 +4,7 @@
  * (complete, retry, sleep, yield, split, etc.) that drives the engine's durable
  * state transitions.
  */
-public interface WorkflowStep {
+global interface WorkflowStep {
   /**
    * @description Executes the step's business logic using its durable per-step
    * context and returns the outcome that determines the workflow's next transition.

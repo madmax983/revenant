@@ -242,6 +242,8 @@ sub-objects and helper classes.
   `ContinueDirective`, `ChildRequest`) + `StepResultJson`, `StepResultValidator`,
   `BusinessSleepCalculator`, `BusinessHoursCalendar`
 - `WorkflowDefinition`, `WorkflowStep`, `RetryPolicy`, `AutoRetryConfigurable`
+- Global subset: only the members in [docs/global-api.md](docs/global-api.md) are
+  `global`. Subscriber code sees nothing else (issue #122).
 
 ---
 
