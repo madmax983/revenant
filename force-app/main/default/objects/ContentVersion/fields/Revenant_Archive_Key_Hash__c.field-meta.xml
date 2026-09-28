@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Revenant_Archive_Key_Hash__c</fullName>
+    <description>Set only by CsvArchiveSink in system mode: the SHA-256 hex of the correlation key of the archived instance. No permission set grants access. Indexed for reads.</description>
+    <externalId>true</externalId>
+    <label>Revenant Archive Key Hash</label>
+    <length>64</length>
+    <required>false</required>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

@@ -117,7 +117,8 @@ public class WorkflowPauseGateApiTest {
         'WatchdogWorkflow',
         'CleanupWorkflow',
         'BulkRedriveWorkflow',
-        'BulkCancelWorkflow'
+        'BulkCancelWorkflow',
+        'ArchiveWorkflow'
       };
       for (String name : reserved) {
         Boolean threw = false;

@@ -1,9 +1,12 @@
 /**
- * Value object describing a step's retry behavior: the first back-off interval,
+ * @description Value object describing a step's retry behavior: the first back-off interval,
  * the multiplier applied to each successive interval, and the maximum number of
  * attempts before the step is treated as failed.
  */
 public inherited sharing class RetryPolicy {
+  // True when the author gives no policy and the operator record decides.
+  private Boolean configManaged = false;
+
   /** @description Seconds to wait before the first retry attempt. */
   public Integer initialIntervalSeconds { get; set; }
   /** @description Multiplier applied to the wait interval after each attempt. */
@@ -35,5 +38,27 @@ public inherited sharing class RetryPolicy {
     this.initialIntervalSeconds = initialIntervalSeconds;
     this.backoffCoefficient = backoffCoefficient;
     this.maximumAttempts = maximumAttempts;
+  }
+
+  /**
+   * @description Returns a policy that the operator controls (issue #103). The
+   * engine uses the matching Workflow_Retry_Config__mdt record. With no
+   * record, it uses the engine default (5 s, 2.0, 5 attempts). See
+   * docs/retry-config.md.
+   * @return A policy with the engine default values and no author values.
+   */
+  public static RetryPolicy fromConfig() {
+    RetryPolicy policy = new RetryPolicy();
+    policy.configManaged = true;
+    return policy;
+  }
+
+  /**
+   * @description Returns true for a policy from `fromConfig()`. The engine
+   * then treats the step as a step with no author policy.
+   * @return True when the operator record decides the policy.
+   */
+  public Boolean isFromConfig() {
+    return configManaged == true;
   }
 }

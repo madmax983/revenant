@@ -59,6 +59,31 @@ private class StepResultValidationTest {
   }
 
   @IsTest
+  static void testRetryWithConfigPolicy() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      StepResult r = StepResult.retry(RetryPolicy.fromConfig());
+      Assert.areEqual(
+        StepResult.ActionType.RETRY,
+        r.directive().action,
+        'A fromConfig() retry is a RETRY result'
+      );
+      Assert.isTrue(
+        r.directive().retry.policy.isFromConfig(),
+        'The operator record decides the policy'
+      );
+      Assert.areEqual(
+        5,
+        r.directive().retry.policy.maximumAttempts,
+        'fromConfig() has the engine default values'
+      );
+      Assert.isFalse(
+        new RetryPolicy().isFromConfig(),
+        'An author policy is not from config'
+      );
+    }
+  }
+
+  @IsTest
   static void testStartChildValidation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       try {

@@ -177,7 +177,7 @@ public inherited sharing class StepResult {
   }
 
   /**
-   * @description Requests a retry of the step governed by the given retry policy's backoff and attempt limits. For a legacy fixed delay, pass new RetryPolicy(seconds, 1.0, 5).
+   * @description Requests a retry of the step governed by the given retry policy's backoff and attempt limits. For a legacy fixed delay, pass new RetryPolicy(seconds, 1.0, 5). To use the operator policy from Workflow_Retry_Config__mdt, pass RetryPolicy.fromConfig().
    * @param policy The non-null retry policy controlling delay and max attempts.
    * @return A RETRY result carrying the retry policy.
    */

@@ -516,7 +516,8 @@ public class WorkflowDefinitionChangeTest {
           'WatchdogWorkflow',
           'CleanupWorkflow',
           'BulkRedriveWorkflow',
-          'BulkCancelWorkflow'
+          'BulkCancelWorkflow',
+          'ArchiveWorkflow'
         }
       ) {
         Workflow_Instance__c inst = new Workflow_Instance__c(

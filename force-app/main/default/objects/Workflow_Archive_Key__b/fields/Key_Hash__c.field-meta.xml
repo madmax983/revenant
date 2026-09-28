@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Key_Hash__c</fullName>
+    <description>SHA-256 hex of the correlation key. A Big Object index holds at most 100 text characters. Index field 1.</description>
+    <externalId>false</externalId>
+    <label>Key Hash</label>
+    <length>64</length>
+    <required>true</required>
+    <type>Text</type>
+</CustomField>

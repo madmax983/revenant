@@ -328,8 +328,10 @@ public inherited sharing class WorkflowCompensationOutcome {
     Workflow_Step_Execution__c stepExec = outcome.stepExec;
     StepResult result = outcome.result;
     stepExec.Retry_Count__c += 1;
-    // Get and sanitize retry policy
-    RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
+    // Effective policy: author policy or Workflow_Retry_Config__mdt (issue #103).
+    RetryPolicy policy = WorkflowRetryConfigResolver.resolve(
+      instance.Workflow_Name__c,
+      stepExec.Step_Name__c,
       result.directive().retry.policy
     );
 

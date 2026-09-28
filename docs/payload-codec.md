@@ -32,6 +32,9 @@ The engine does **not** encode control data:
 - `Status__c`, `Compensation_Stack__c`, `Terminal_At__c`, correlation keys,
   approval keys and roles, child keys.
 - `idempotencyKey` and signal dedup keys (`Signal_Key__c`, `Idempotency_Key__c`).
+- The definition-change marker row (`Workflow_Definition_Changed`) and the
+  `Definition_Fingerprint__c` and `Definition_Shape__c` fields (issue #89). They
+  hold step names and fingerprints only.
 
 The engine makes idempotency and dedup keys from instance Ids, step names and
 caller keys. It does not use payload text. Dedup, saga rollback and signal

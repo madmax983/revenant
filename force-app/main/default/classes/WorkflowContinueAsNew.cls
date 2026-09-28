@@ -36,8 +36,10 @@ public inherited sharing class WorkflowContinueAsNew {
     // count). No-op for an unguarded/unconfigured step (0 SOQL/0 DML). Best-effort.
     recordBreakerFailure(instance, stepExec);
 
-    // Get and sanitize retry policy
-    RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
+    // Effective policy: author policy or Workflow_Retry_Config__mdt (issue #103).
+    RetryPolicy policy = WorkflowRetryConfigResolver.resolve(
+      instance.Workflow_Name__c,
+      stepExec.Step_Name__c,
       result.directive().retry.policy
     );
 
