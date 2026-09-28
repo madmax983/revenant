@@ -205,9 +205,9 @@ translation/evaluation.
 
 ## Dashboard services
 
-The LWC-facing API has three **read** controllers and one **command**
+The LWC-facing API has five **read** controllers and one **command**
 controller (endpoint names unchanged; only the host class of the 16 command
-endpoints moved). All of them delegate to `inherited sharing` service classes.
+endpoints moved). All six delegate to `inherited sharing` service classes.
 
 - Read side: `WorkflowDashboardController` (holds `InstanceQuery` / `StalledQuery`
   / `UnroutedQuery` DTOs) → `WorkflowInstanceListService`,
@@ -226,6 +226,10 @@ endpoints moved). All of them delegate to `inherited sharing` service classes.
   `WorkflowAsyncCapacityService` → `AsyncCapacityEvaluator` (pure rules). One
   `AsyncApexJob` read (max 2,001 rows) and `System.OrgLimits`. The orchestrator does not
   call it. See [docs/async-capacity.md](docs/async-capacity.md).
+- Readiness panel (#114): `WorkflowReadinessController` →
+  `WorkflowReadinessService` (rows: top-level `WorkflowReadinessCheck` DTO). It is a separate controller for the same PMD
+  reason. The watchdog check uses `WorkflowDashboardStatusService.watchdogRunning`,
+  the same signal as the Watchdog Daemon Health panel.
 - Fleet Health view (#111): `WorkflowFleetHealthController` →
   `WorkflowFleetHealthService`. It is a separate controller for the same PMD reason.
   It uses three queries, each with a cap: a count probe, the counts (an aggregate up

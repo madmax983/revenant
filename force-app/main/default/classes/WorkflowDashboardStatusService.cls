@@ -15,23 +15,7 @@ public inherited sharing class WorkflowDashboardStatusService {
   public static Map<String, Object> watchdogStatus() {
     WorkflowDashboardSupport.checkAuthorization();
     try {
-      List<Workflow_Instance__c> watchdogInstances = [
-        SELECT
-          Id,
-          Name,
-          Status__c,
-          Current_Step__c,
-          Error_Message__c,
-          CreatedDate,
-          LastModifiedDate
-        FROM Workflow_Instance__c
-        WHERE
-          Correlation_Key__c = 'SystemWatchdog'
-          OR Correlation_Key__c LIKE 'SystemWatchdog_run%'
-        WITH SYSTEM_MODE
-        ORDER BY CreatedDate DESC
-        LIMIT 5
-      ];
+      List<Workflow_Instance__c> watchdogInstances = recentWatchdogs();
       Workflow_Instance__c latestWatchdog = watchdogInstances.isEmpty()
         ? null
         : watchdogInstances[0];
@@ -89,6 +73,36 @@ public inherited sharing class WorkflowDashboardStatusService {
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
     }
+  }
+
+  /**
+   * @description The watchdog health signal of System Doctor. The Readiness panel (#114)
+   * uses it too. The caller checks authorization.
+   * @return True when the latest watchdog instance is Pending, Running or Suspended.
+   */
+  public static Boolean watchdogRunning() {
+    return isWatchdogRunning(recentWatchdogs());
+  }
+
+  // The five newest watchdog instances, newest first.
+  private static List<Workflow_Instance__c> recentWatchdogs() {
+    return [
+      SELECT
+        Id,
+        Name,
+        Status__c,
+        Current_Step__c,
+        Error_Message__c,
+        CreatedDate,
+        LastModifiedDate
+      FROM Workflow_Instance__c
+      WHERE
+        Correlation_Key__c = 'SystemWatchdog'
+        OR Correlation_Key__c LIKE 'SystemWatchdog_run%'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC
+      LIMIT 5
+    ];
   }
 
   // Watchdog liveness (issue #113). Each read calculates the state, so a dead

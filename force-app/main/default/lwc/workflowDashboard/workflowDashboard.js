@@ -41,6 +41,7 @@ import pauseDefinition from "@salesforce/apex/WorkflowDashboardCommandController
 import resumeDefinition from "@salesforce/apex/WorkflowDashboardCommandController.resumeDefinition";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 import getStorageFootprint from "@salesforce/apex/WorkflowDashboardController.getStorageFootprint";
+import getReadinessChecks from "@salesforce/apex/WorkflowReadinessController.getReadinessChecks";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getDefinitionTrends from "@salesforce/apex/WorkflowDashboardController.getDefinitionTrends";
@@ -75,6 +76,33 @@ const RATE_LIMIT_UNKNOWN = {
   iconClass: "slds-m-right_xx-small text-weak-icon",
 };
 
+// Readiness panel (#114). Each status has a word and an icon, not only a colour.
+const READINESS_STATUS = {
+  Fail: {
+    label: "Fail",
+    badgeClass: "badge badge-red",
+    icon: "utility:error",
+    iconClass: "slds-m-right_xx-small text-red-icon",
+  },
+  Warn: {
+    label: "Warn",
+    badgeClass: "badge badge-orange",
+    icon: "utility:warning",
+    iconClass: "slds-m-right_xx-small text-orange-icon",
+  },
+  Pass: {
+    label: "Pass",
+    badgeClass: "badge badge-green",
+    icon: "utility:success",
+    iconClass: "slds-m-right_xx-small text-green-icon",
+  },
+};
+const READINESS_UNKNOWN = {
+  label: "Unknown",
+  badgeClass: "badge badge-grey",
+  icon: "utility:question",
+  iconClass: "slds-m-right_xx-small text-weak-icon",
+};
 // Watchdog liveness (#113): state code to word and colour.
 const LIVENESS_STATUS = {
   HEALTHY: { label: "Healthy", badgeClass: "badge badge-green" },
@@ -334,6 +362,14 @@ export default class WorkflowDashboard extends LightningElement {
   // per-object rows and allowance metrics returned by getStorageFootprint.
   storageData = null;
   storageObjectRows = [];
+
+  // Readiness panel state (System Doctor, #114).
+  readinessRows = [];
+  readinessError = null;
+  readinessLoaded = false;
+  readinessElapsedMs = null;
+  readinessRunning = false;
+  readinessRequestSeq = 0;
 
   // Rate Limits panel state (System Doctor, #61).
   rateLimitRows = [];
@@ -2396,6 +2432,116 @@ export default class WorkflowDashboard extends LightningElement {
 
     this.loadStorageFootprint();
     this.loadRateLimitStatus();
+    this.loadReadiness();
+  }
+
+  // Runs the readiness checks. Only the newest request can change the panel.
+  // Best-effort: a failure shows an inline message and does not stop the view.
+  loadReadiness() {
+    const requestId = ++this.readinessRequestSeq;
+    const startedMs = Date.now();
+    this.readinessRunning = true;
+    getReadinessChecks()
+      .then((rows) => {
+        if (requestId !== this.readinessRequestSeq) {
+          return;
+        }
+        if (!Array.isArray(rows) || rows.length === 0) {
+          this.setReadinessError("No checks were returned.");
+          return;
+        }
+        this.readinessError = null;
+        this.readinessRows = rows.map((row) => this.shapeReadinessRow(row));
+        this.readinessElapsedMs = Date.now() - startedMs;
+        this.readinessLoaded = true;
+        this.readinessRunning = false;
+      })
+      .catch((error) => {
+        if (requestId !== this.readinessRequestSeq) {
+          return;
+        }
+        const reason = this.reduceErrors(error);
+        this.setReadinessError(reason);
+        console.error("Failed to load readiness checks:", reason);
+      });
+  }
+
+  handleRunReadiness() {
+    this.loadReadiness();
+  }
+
+  setReadinessError(reason) {
+    this.readinessRows = [];
+    this.readinessElapsedMs = null;
+    this.readinessError = reason;
+    this.readinessLoaded = true;
+    this.readinessRunning = false;
+  }
+
+  // Adds display labels to one row. Apex sets the status and the text.
+  // A Pass row shows no fix.
+  shapeReadinessRow(row) {
+    const status = READINESS_STATUS[row.status] || READINESS_UNKNOWN;
+    return {
+      ...row,
+      statusLabel: status.label,
+      badgeClass: status.badgeClass,
+      icon: status.icon,
+      iconClass: status.iconClass,
+      showRemediation: status !== READINESS_STATUS.Pass && !!row.remediation,
+    };
+  }
+
+  get hasReadinessRows() {
+    return this.readinessRows.length > 0;
+  }
+
+  get showReadinessLoading() {
+    return !this.readinessLoaded;
+  }
+
+  // "All checks pass" only when every row is a known Pass. Error and empty are not a pass.
+  get readinessSummary() {
+    if (!this.hasReadinessRows) {
+      return "";
+    }
+    const fails = this.readinessRows.filter((r) => r.statusLabel === "Fail");
+    const warns = this.readinessRows.filter((r) => r.statusLabel === "Warn");
+    const unknown = this.readinessRows.filter(
+      (r) => r.statusLabel === "Unknown",
+    );
+    const parts = [];
+    if (fails.length) {
+      parts.push(`${fails.length} fail`);
+    }
+    if (warns.length) {
+      parts.push(`${warns.length} warn`);
+    }
+    if (unknown.length) {
+      parts.push(`${unknown.length} unknown`);
+    }
+    return parts.length ? `· ${parts.join(" · ")}` : "· All checks pass";
+  }
+
+  // Red for a Fail, orange for Warn or Unknown, green for all Pass.
+  get readinessSummaryClass() {
+    const labels = this.readinessRows.map((r) => r.statusLabel);
+    let colour = "text-green";
+    if (labels.includes("Fail")) {
+      colour = "text-red";
+    } else if (labels.some((label) => label !== "Pass")) {
+      colour = "text-orange";
+    }
+    return `slds-m-left_x-small ${colour}`;
+  }
+
+  get readinessTimingLabel() {
+    if (this.readinessRunning) {
+      return "Running…";
+    }
+    return this.readinessElapsedMs === null
+      ? ""
+      : `Checked in ${this.readinessElapsedMs} ms`;
   }
 
   refreshPeView() {

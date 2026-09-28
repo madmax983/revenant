@@ -758,6 +758,7 @@ How the gates map to permissions:
 - **Dashboard visibility** is gated by `WorkflowDashboardSupport.checkAuthorization()`, which passes for holders of the `Workflow_Dashboard_View` custom permission (granted by `Revenant_Operator`), the `Workflow_Admin` custom permission (granted by `Revenant_Admin`), or the "Modify All Data" system permission.
 - **State-mutating recovery actions** are separately gated by `WorkflowDashboardSupport.checkOperatorAction()`, which passes only for holders of the `Workflow_Operator_Action` custom permission, `Workflow_Admin`, or "Modify All Data". Because the read-only tier holds `Workflow_Dashboard_View` (not `Workflow_Admin`), **granting dashboard visibility never implicitly grants the ability to re-drive, cancel, or delete.**
 - **Rate Limits panel** Apex access: the panel calls `WorkflowRateLimitController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
+- **Readiness panel** Apex access: the panel calls `WorkflowReadinessController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Fleet Health view** Apex access: the view calls `WorkflowFleetHealthController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
 
@@ -903,6 +904,7 @@ Revenant settings can be configured without code modifications by editing the **
 
 The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check configuration settings, and audit watchdog health:
 
+- **Readiness**: A read-only install check list at the top of the tab. It checks the `Default` engine config, the `Default` alert config, the `WorkflowEventTrigger` status, the watchdog chain, and the access of your user to the engine objects and fields. Each `Warn` and `Fail` names the missing item and the fix. See [docs/readiness.md](docs/readiness.md).
 - **Watchdog Health**: `Running` means an active watchdog record exists; `Stopped` means none exists. Use **Watchdog Liveness** to see if sweeps occur.
 - **Watchdog Liveness**: Shows the last complete sweep, the minutes since it, and a state: **Healthy** (green), **Stale** (red, more than 2 × the cadence since the last sweep) or **Unknown** (no sweep recorded). Each read calculates the state. A dead watchdog shows red. The next sweep shows green. The read also sends the stall alert if no other call sent it. See [docs/watchdog-liveness.md](docs/watchdog-liveness.md).
 - **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).

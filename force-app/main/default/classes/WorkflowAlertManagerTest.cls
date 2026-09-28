@@ -256,6 +256,38 @@ public class WorkflowAlertManagerTest {
     }
   }
 
+  /**
+   * @description A recipient list of only separators is no channel (#114).
+   */
+  @IsTest
+  static void testSeparatorOnlyRecipientsIsNotActionable() {
+    Workflow_Alert_Config__mdt config = (Workflow_Alert_Config__mdt) JSON.deserialize(
+      '{"DeveloperName":"Default","Enable_Alerts__c":true,' +
+      '"Email_Recipients__c":" ,; ","Publish_Alert_Event__c":false}',
+      Workflow_Alert_Config__mdt.class
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertManager.isAlertActionable(config),
+      'Only separators give no recipient, so no alert can be sent'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.hasRecipients(' ,; '),
+      'Separators are not recipients'
+    );
+    System.assertEquals(
+      true,
+      WorkflowAlertEmailBuilder.hasRecipients('ops@example.com;'),
+      'One address is a recipient'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.hasRecipients(null),
+      'Null is no recipient'
+    );
+  }
+
   @IsTest
   static void testConsecutiveFailuresThreshold() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
