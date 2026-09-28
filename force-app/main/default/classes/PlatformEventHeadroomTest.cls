@@ -43,8 +43,70 @@ private class PlatformEventHeadroomTest {
 
   @IsTest
   static void testDefaultThresholdsAre80And95() {
-    assertDecimal(80, PlatformEventHeadroom.DEFAULT_WARNING_PERCENT);
-    assertDecimal(95, PlatformEventHeadroom.DEFAULT_CRITICAL_PERCENT);
+    Assert.isTrue(
+      PlatformEventHeadroom.DEFAULT_WARNING_PERCENT == 80,
+      'Default Warning threshold'
+    );
+    Assert.isTrue(
+      PlatformEventHeadroom.DEFAULT_CRITICAL_PERCENT == 95,
+      'Default Critical threshold'
+    );
+  }
+
+  @IsTest
+  static void testEachKeyHasLabelAndImpact() {
+    Map<String, String> expectedImpact = new Map<String, String>{
+      'HourlyPublishedPlatformEvents' => PlatformEventHeadroom.IMPACT_PUBLISH,
+      'DailyDeliveredPlatformEvents' => PlatformEventHeadroom.IMPACT_DELIVERY,
+      'MonthlyPlatformEventsUsageEntitlement' => PlatformEventHeadroom.IMPACT_DELIVERY,
+      'HourlyPublishedStandardVolumePlatformEvents' => PlatformEventHeadroom.IMPACT_STANDARD_VOLUME,
+      'DailyStandardVolumePlatformEvents' => PlatformEventHeadroom.IMPACT_STANDARD_VOLUME
+    };
+    List<PlatformEventHeadroom.Reading> readings = new List<PlatformEventHeadroom.Reading>();
+    for (String key : PlatformEventHeadroom.limitKeys()) {
+      readings.add(reading(key, 1, 100));
+    }
+
+    List<Map<String, Object>> result = rows(evaluateDefaults(readings));
+
+    Assert.areEqual(
+      new List<String>{
+        'HourlyPublishedPlatformEvents',
+        'DailyDeliveredPlatformEvents',
+        'MonthlyPlatformEventsUsageEntitlement',
+        'HourlyPublishedStandardVolumePlatformEvents',
+        'DailyStandardVolumePlatformEvents'
+      },
+      PlatformEventHeadroom.limitKeys(),
+      'Key order'
+    );
+    Assert.areEqual(5, result.size(), 'One row for each key');
+    for (Map<String, Object> row : result) {
+      String name = (String) row.get('name');
+      Assert.areEqual(expectedImpact.get(name), row.get('impact'), name);
+      Assert.areNotEqual(name, row.get('label'), 'Readable label: ' + name);
+    }
+  }
+
+  @IsTest
+  static void testLimitKeysReturnsACopy() {
+    PlatformEventHeadroom.limitKeys().clear();
+
+    Assert.areEqual(5, PlatformEventHeadroom.limitKeys().size());
+  }
+
+  @IsTest
+  static void testUnknownKeyUsesNameAsLabelAndPublishImpact() {
+    Map<String, Object> row = rows(
+      evaluateDefaults(
+        new List<PlatformEventHeadroom.Reading>{
+          reading('SomeNewPlatformEventLimit', 1, 100)
+        }
+      )
+    )[0];
+
+    Assert.areEqual('SomeNewPlatformEventLimit', row.get('label'));
+    Assert.areEqual(PlatformEventHeadroom.IMPACT_PUBLISH, row.get('impact'));
   }
 
   @IsTest
@@ -123,9 +185,10 @@ private class PlatformEventHeadroomTest {
     Assert.areEqual(83333, row.get('value'));
     Assert.areEqual(250000, row.get('limit'));
     Assert.areEqual(166667, row.get('remaining'));
-    // 33.3332 % used: round down to 33.3. Remaining is 100 - 33.3.
+    // 33.3332% used and 66.6668% remaining: both round down.
     assertDecimal(33.3, row.get('percentUsed'));
-    assertDecimal(66.7, row.get('percentRemaining'));
+    assertDecimal(66.6, row.get('percentRemaining'));
+    Assert.areEqual(PlatformEventHeadroom.IMPACT_PUBLISH, row.get('impact'));
     Assert.areEqual(PlatformEventHeadroom.STATE_HEALTHY, row.get('state'));
   }
 
@@ -137,6 +200,7 @@ private class PlatformEventHeadroomTest {
 
     Map<String, Object> row = rows(result)[0];
     assertDecimal(79.9, row.get('percentUsed'));
+    assertDecimal(20.0, row.get('percentRemaining'));
     Assert.areEqual(PlatformEventHeadroom.STATE_HEALTHY, row.get('state'));
   }
 
@@ -275,7 +339,7 @@ private class PlatformEventHeadroomTest {
     Map<String, Object> result = PlatformEventHeadroom.fromOrgLimits(live);
 
     List<String> expected = new List<String>();
-    for (String key : PlatformEventHeadroom.LIMIT_KEYS) {
+    for (String key : PlatformEventHeadroom.limitKeys()) {
       if (live.containsKey(key) && live.get(key).getLimit() > 0) {
         expected.add(key);
       }

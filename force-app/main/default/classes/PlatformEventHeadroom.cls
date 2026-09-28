@@ -1,12 +1,13 @@
 /**
- * @description Calculates the org Platform Event headroom for System Doctor
- * (issue #120). Reads the `System.OrgLimits` map only. Does no SOQL, no DML,
- * no async enqueue and no event publish.
+ * @description Calculates the org Platform Event allocation use for System
+ * Doctor (issue #120). Reads only the `System.OrgLimits` map. Does no SOQL,
+ * no DML, no async enqueue and no event publish.
  *
- * State per limit key (thresholds in percent, `warn < crit`):
- * `value × 100 ≥ crit × limit` gives CRITICAL. `value × 100 ≥ warn × limit`
- * gives WARNING. Else HEALTHY. A key with no positive limit gives no row. No
- * rows gives UNAVAILABLE.
+ * State for each limit key (thresholds in percent, `warn < crit`): if
+ * `value × 100 ≥ crit × limit`, the state is CRITICAL. If
+ * `value × 100 ≥ warn × limit`, the state is WARNING. If not, the state is
+ * HEALTHY. If a key has no positive limit, the class adds no row. If there
+ * are no rows, the state is UNAVAILABLE.
  */
 public inherited sharing class PlatformEventHeadroom {
   public static final String STATE_HEALTHY = 'HEALTHY';
@@ -14,16 +15,22 @@ public inherited sharing class PlatformEventHeadroom {
   public static final String STATE_CRITICAL = 'CRITICAL';
   public static final String STATE_UNAVAILABLE = 'UNAVAILABLE';
 
+  /** @description Revenant events use this allocation (all are high-volume). */
+  public static final String IMPACT_PUBLISH = 'PUBLISH';
+  /** @description Delivery to CometD, Pub/Sub API and empApi clients. */
+  public static final String IMPACT_DELIVERY = 'DELIVERY';
+  /** @description Standard-volume events. Revenant does not use them. */
+  public static final String IMPACT_STANDARD_VOLUME = 'STANDARD_VOLUME';
+
   public static final Decimal DEFAULT_WARNING_PERCENT = 80;
   public static final Decimal DEFAULT_CRITICAL_PERCENT = 95;
 
-  /**
-   * @description The Platform Event limit keys to read, in display order.
-   * Publish keys come first because a publish failure stops wake-ups.
-   */
-  public static final List<String> LIMIT_KEYS = new List<String>{
+  // Limit keys in display order. The high-volume publish key is first:
+  // each engine wake-up uses it.
+  private static final List<String> LIMIT_KEYS = new List<String>{
     'HourlyPublishedPlatformEvents',
     'DailyDeliveredPlatformEvents',
+    'MonthlyPlatformEventsUsageEntitlement',
     'HourlyPublishedStandardVolumePlatformEvents',
     'DailyStandardVolumePlatformEvents'
   };
@@ -31,8 +38,17 @@ public inherited sharing class PlatformEventHeadroom {
   private static final Map<String, String> LABELS = new Map<String, String>{
     'HourlyPublishedPlatformEvents' => 'Hourly Published Platform Events',
     'DailyDeliveredPlatformEvents' => 'Daily Delivered Platform Events',
+    'MonthlyPlatformEventsUsageEntitlement' => 'Monthly Platform Event Delivery Entitlement',
     'HourlyPublishedStandardVolumePlatformEvents' => 'Hourly Published Standard-Volume Platform Events',
-    'DailyStandardVolumePlatformEvents' => 'Daily Standard-Volume Platform Events'
+    'DailyStandardVolumePlatformEvents' => 'Daily Delivered Standard-Volume Platform Events'
+  };
+
+  private static final Map<String, String> IMPACTS = new Map<String, String>{
+    'HourlyPublishedPlatformEvents' => IMPACT_PUBLISH,
+    'DailyDeliveredPlatformEvents' => IMPACT_DELIVERY,
+    'MonthlyPlatformEventsUsageEntitlement' => IMPACT_DELIVERY,
+    'HourlyPublishedStandardVolumePlatformEvents' => IMPACT_STANDARD_VOLUME,
+    'DailyStandardVolumePlatformEvents' => IMPACT_STANDARD_VOLUME
   };
 
   private static final Map<String, Integer> SEVERITY = new Map<String, Integer>{
@@ -43,8 +59,8 @@ public inherited sharing class PlatformEventHeadroom {
   };
 
   /**
-   * @description Test seam. When not null, `fromOrgLimits` uses these
-   * readings. Apex tests cannot make a `System.OrgLimit`.
+   * @description Tests use this seam. If it is not null, `fromOrgLimits` uses
+   * these readings. Apex tests cannot make a `System.OrgLimit`.
    */
   @TestVisible
   private static List<Reading> readingsOverride;
@@ -71,7 +87,15 @@ public inherited sharing class PlatformEventHeadroom {
   }
 
   /**
-   * @description Gives the state for one limit. Uses the exact ratio, not a
+   * @description The limit keys that the class reads, in display order.
+   * @return A copy of the key list.
+   */
+  public static List<String> limitKeys() {
+    return LIMIT_KEYS.clone();
+  }
+
+  /**
+   * @description Returns the state for one limit. Uses the exact ratio, not a
    * rounded percent.
    * @param value The used amount.
    * @param limitValue The allocation.
@@ -191,19 +215,26 @@ public inherited sharing class PlatformEventHeadroom {
     };
   }
 
-  // Rounds the used percent down, so a label never shows the threshold
-  // before the state changes.
+  // Rounds both percents down. The used label does not show a threshold
+  // before the state changes. The remaining label does not show more
+  // headroom than the org has.
   private static Map<String, Object> toRow(Reading r, String state) {
+    Integer remaining = Math.max(0, r.limitValue - r.value);
     Decimal percentUsed = (Decimal.valueOf(r.value) * 100)
+      .divide(r.limitValue, 1, System.RoundingMode.DOWN);
+    Decimal percentRemaining = (Decimal.valueOf(remaining) * 100)
       .divide(r.limitValue, 1, System.RoundingMode.DOWN);
     return new Map<String, Object>{
       'name' => r.name,
       'label' => LABELS.containsKey(r.name) ? LABELS.get(r.name) : r.name,
       'value' => r.value,
       'limit' => r.limitValue,
-      'remaining' => Math.max(0, r.limitValue - r.value),
+      'impact' => IMPACTS.containsKey(r.name)
+        ? IMPACTS.get(r.name)
+        : IMPACT_PUBLISH,
+      'remaining' => remaining,
       'percentUsed' => percentUsed,
-      'percentRemaining' => Math.max(0.0, 100 - percentUsed),
+      'percentRemaining' => percentRemaining,
       'state' => state
     };
   }

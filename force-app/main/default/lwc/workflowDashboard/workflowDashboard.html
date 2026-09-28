@@ -459,19 +459,29 @@
                                     </template>
                                 </div>
 
-                                <!-- Platform Event Headroom (#120) -->
+                                <!-- Platform Event Allocation (#120) -->
                                 <div class="slds-m-bottom_large">
                                     <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
-                                        <h3 class="slds-text-heading_small font-outfit">Platform Event Headroom</h3>
-                                        <span class={peStatus.badgeClass} data-id="pe-panel-state">{peStatus.label}</span>
+                                        <h3 class="slds-text-heading_small font-outfit">Platform Event Allocation</h3>
+                                        <span class={peView.status.badgeClass} data-id="pe-panel-state">{peView.status.label}</span>
                                     </div>
-                                    <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_small" data-id="pe-thresholds">{peThresholdsLabel}</div>
-                                    <template if:true={peAtRisk}>
-                                        <div class={peConsequenceClass} role="alert" data-id="pe-consequence">{peConsequence}</div>
+                                    <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_small" data-id="pe-thresholds">{peView.thresholdsLabel}</div>
+                                    <template if:true={peView.atRisk}>
+                                        <div class={peView.consequenceClass} role="status" data-id="pe-consequence">
+                                            <div class="slds-media__figure">
+                                                <lightning-icon icon-name={peView.consequenceIcon} alternative-text={peView.status.label} size="small" variant="inverse"></lightning-icon>
+                                            </div>
+                                            <div class="slds-media__body">
+                                                <p><strong>{peView.status.label}:</strong> {peView.consequenceIntro}</p>
+                                                <template for:each={peView.consequenceLines} for:item="line">
+                                                    <p key={line.key}>{line.text}</p>
+                                                </template>
+                                            </div>
+                                        </div>
                                     </template>
-                                    <template if:true={hasPeRows}>
+                                    <template if:true={peView.hasRows}>
                                         <div class="slds-grid slds-wrap slds-gutters">
-                                            <template for:each={peRows} for:item="row">
+                                            <template for:each={peView.rows} for:item="row">
                                                 <div key={row.key} class="slds-col slds-size_1-of-2 slds-m-bottom_small" data-id="pe-row">
                                                     <div class="stat-card">
                                                         <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
@@ -486,9 +496,9 @@
                                             </template>
                                         </div>
                                     </template>
-                                    <template if:false={hasPeRows}>
+                                    <template if:false={peView.hasRows}>
                                         <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center" data-id="pe-unavailable">
-                                            Not available. This org shows no Platform Event limit in OrgLimits.
+                                            Not available. The OrgLimits map has no Platform Event limit, or the read failed.
                                         </div>
                                     </template>
                                 </div>

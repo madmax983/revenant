@@ -613,7 +613,7 @@ public class WorkflowDashboardControllerAuthTest {
     }
   }
 
-  // Issue #120: the controller payload gives the correct state at each
+  // Issue #120: the controller payload contains the correct state at each
   // boundary. Apex cannot make an OrgLimit, so the test sets the readings.
   @IsTest
   static void testWatchdogStatusPlatformEventStateAtBoundaries() {
@@ -652,7 +652,8 @@ public class WorkflowDashboardControllerAuthTest {
     }
   }
 
-  // Issue #120: no Platform Event key gives "not available", not an error.
+  // Issue #120: if there is no Platform Event key, the payload state is
+  // UNAVAILABLE. The method does not throw an error.
   @IsTest
   static void testWatchdogStatusPlatformEventUnavailable() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -669,6 +670,28 @@ public class WorkflowDashboardControllerAuthTest {
         ((List<Map<String, Object>>) status.get('platformEventLimits'))
           .isEmpty()
       );
+    }
+  }
+
+  // Issue #120: a failed Platform Event read returns UNAVAILABLE. The other
+  // System Doctor keys stay.
+  @IsTest
+  static void testWatchdogStatusPlatformEventReadErrorIsUnavailable() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A null reading makes evaluate() throw a NullPointerException.
+      PlatformEventHeadroom.readingsOverride = new List<PlatformEventHeadroom.Reading>{
+        null
+      };
+
+      Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+
+      Assert.areEqual(
+        PlatformEventHeadroom.STATE_UNAVAILABLE,
+        status.get('platformEventState')
+      );
+      Assert.areEqual(false, status.get('hasPlatformEventLimits'));
+      Assert.isTrue(status.containsKey('dailyAsyncValue'));
+      Assert.isTrue(status.containsKey('liveness'));
     }
   }
 

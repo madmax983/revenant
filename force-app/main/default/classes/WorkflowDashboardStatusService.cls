@@ -144,8 +144,8 @@ public inherited sharing class WorkflowDashboardStatusService {
     return result;
   }
 
-  // Platform Event headroom (issue #120). Map reads only. An error gives the
-  // UNAVAILABLE payload, so System Doctor still loads.
+  // Platform Event allocation (issue #120). Reads only the map. If the read
+  // fails, it returns the UNAVAILABLE payload. System Doctor continues to load.
   private static Map<String, Object> readPlatformEventHeadroom(
     Map<String, System.OrgLimit> limitsMap
   ) {
