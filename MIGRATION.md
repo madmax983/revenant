@@ -496,6 +496,22 @@ shapes, the keyset-cursor / ContinueAsNew semantics, and the honest SOQL profile
 
 ---
 
+## New (additive, non-breaking): `WorkflowChainRead.getChain`
+
+**Issue #116.** A new read contract. No signature changes. It gives all generations of a Continue-As-New chain, newest first, with a cursor. Before, you walked `Previous_Instance__c` with SOQL. Do not do that now.
+
+```apex
+WorkflowEngine.ChainRequest req = new WorkflowEngine.ChainRequest();
+req.keyOrId = 'nightly-sync';   // any member: root key, successor key or Id
+req.pageSize = 100;             // null -> 50; above 200 -> 200; 0 or less -> throws
+WorkflowEngine.ChainPage page = WorkflowChainRead.getChain(req);
+req.cursor = page.nextCursor;   // send back with no change; null on the last page
+```
+
+The DTOs (`ChainRequest`, `ChainPage`, `ChainGeneration`) are inner classes of `WorkflowEngine`. New dashboard method: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)`. See [docs/continue-as-new-chain.md](docs/continue-as-new-chain.md).
+
+---
+
 ## PR index
 
 | PR | Breaking change(s) covered here |

@@ -13,6 +13,7 @@ import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
+import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.startWorkflow";
@@ -108,6 +109,18 @@ export default class WorkflowDashboard extends LightningElement {
   childInstances = [];
   loadingDetails = false;
   successor = null;
+
+  // Continue-As-New chain (issue #116). chainAnchorId is the instance that
+  // loaded the first page; older pages use the same anchor.
+  chainActive = false;
+  chainLoading = false;
+  chainError = null;
+  chainGenerations = [];
+  chainTotal = 0;
+  chainTotalCapped = false;
+  chainNextCursor = null;
+  chainAnchorId = null;
+  chainRequestSeq = 0;
   approvalComments = "";
   modalOpen = false;
   searchTerm = "";
@@ -346,6 +359,100 @@ export default class WorkflowDashboard extends LightningElement {
 
   get hasChildren() {
     return this.childInstances && this.childInstances.length > 0;
+  }
+
+  // Generation rows with labels and the selected-row class.
+  get chainRows() {
+    return this.chainGenerations.map((g) => ({
+      ...g,
+      generationLabel: `Gen ${g.generation ?? "—"}`,
+      formattedStartedAt: this.formatDateTime(g.startedAt),
+      formattedEndedAt: this.formatDateTime(g.endedAt),
+      statusBadgeClass: this.getStatusBadgeClass(g.status),
+      failureCategoryLabel: g.failureCategory
+        ? FAILURE_CATEGORY_LABELS[g.failureCategory] || g.failureCategory
+        : null,
+      rowClass: `slds-p-around_small list-item clickable chain-row ${
+        g.instanceId === this.selectedInstanceId ? "item-selected" : ""
+      }`,
+    }));
+  }
+
+  get chainCountLabel() {
+    const total = `${this.chainTotal}${this.chainTotalCapped ? "+" : ""}`;
+    return `Showing ${this.chainGenerations.length} of ${total} generations`;
+  }
+
+  get hasOlderGenerations() {
+    return !!this.chainNextCursor;
+  }
+
+  // Loads the chain only for an instance with a predecessor or a successor.
+  // A row that is already in the list keeps the list (and its older pages).
+  syncChain(instanceId, inst, successor) {
+    if (!inst.Previous_Instance__c && !successor) {
+      this.resetChain();
+      return;
+    }
+    const inList = this.chainGenerations.some(
+      (g) => g.instanceId === instanceId,
+    );
+    if (!inList) {
+      this.loadChain(instanceId, null);
+    }
+  }
+
+  resetChain() {
+    this.chainRequestSeq++;
+    this.chainActive = false;
+    this.chainLoading = false;
+    this.chainError = null;
+    this.chainGenerations = [];
+    this.chainTotal = 0;
+    this.chainTotalCapped = false;
+    this.chainNextCursor = null;
+    this.chainAnchorId = null;
+  }
+
+  loadChain(instanceId, cursor) {
+    const seq = ++this.chainRequestSeq;
+    this.chainActive = true;
+    this.chainLoading = true;
+    this.chainError = null;
+    getInstanceChain({ instanceId, cursor })
+      .then((page) => {
+        if (seq !== this.chainRequestSeq) {
+          return;
+        }
+        if (!page) {
+          this.resetChain();
+          return;
+        }
+        const rows = page.generations || [];
+        this.chainGenerations = cursor
+          ? [...this.chainGenerations, ...rows]
+          : rows;
+        this.chainTotal = page.totalCount;
+        this.chainTotalCapped = !!page.isTotalCapped;
+        this.chainNextCursor = page.hasMore ? page.nextCursor : null;
+        this.chainAnchorId = instanceId;
+      })
+      .catch((error) => {
+        if (seq === this.chainRequestSeq) {
+          this.chainError = this.reduceErrors(error);
+        }
+      })
+      .finally(() => {
+        if (seq === this.chainRequestSeq) {
+          this.chainLoading = false;
+        }
+      });
+  }
+
+  handleLoadOlderGenerations() {
+    if (this.chainNextCursor && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, this.chainNextCursor);
+    }
   }
 
   get hasBreakdownRows() {
@@ -1058,6 +1165,7 @@ export default class WorkflowDashboard extends LightningElement {
         const payloadFiles = result.payloadFiles || {};
         const breadcrumbs = result.breadcrumbs || [];
         this.successor = result.successor;
+        this.syncChain(currentInstanceId, inst, result.successor);
         this.selectedInst = {
           ...inst,
           formattedDate: this.formatDateTime(inst.CreatedDate),

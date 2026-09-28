@@ -17,6 +17,7 @@ import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.get
 import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
+import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -143,6 +144,11 @@ jest.mock(
   () => ({
     default: jest.fn(() => Promise.resolve(null)),
   }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getInstanceChain",
+  () => ({ default: jest.fn(() => Promise.resolve(null)) }),
   { virtual: true },
 );
 jest.mock(
@@ -3335,5 +3341,261 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
         getFilteredInstances.mock.calls.length - 1
       ][0];
     expect(JSON.stringify(lastCall)).toContain("STEP_HISTORY_LIMIT");
+  });
+});
+
+// Issue #116: Continue-As-New generation chain in the detail pane.
+describe("c-workflow-dashboard continue-as-new chain", () => {
+  const LIVE_ID = "a0G000000000003";
+  const PREV_ID = "a0G000000000002";
+  const OLDER_ID = "a0G000000000004";
+
+  const PAGE_1 = {
+    rootCorrelationKey: "poller",
+    totalCount: 5,
+    isTotalCapped: false,
+    hasMore: true,
+    nextCursor: "CURSOR-1",
+    pageSize: 2,
+    generations: [
+      {
+        instanceId: LIVE_ID,
+        instanceName: "WI-0003",
+        generation: 5,
+        status: "Suspended",
+        correlationKey: "poller_run5",
+        startedAt: "2026-09-01T10:04:00.000Z",
+        endedAt: null,
+        continuedAt: null,
+        outcome: null,
+      },
+      {
+        instanceId: PREV_ID,
+        instanceName: "WI-0002",
+        generation: 4,
+        status: "ContinuedAsNew",
+        correlationKey: "poller_run4",
+        startedAt: "2026-09-01T10:03:00.000Z",
+        endedAt: "2026-09-01T10:03:30.000Z",
+        continuedAt: "2026-09-01T10:03:30.000Z",
+        outcome: "ContinuedAsNew",
+        failureCategory: "TIMEOUT",
+      },
+    ],
+  };
+
+  const PAGE_2 = {
+    ...PAGE_1,
+    hasMore: false,
+    nextCursor: null,
+    generations: [
+      {
+        instanceId: OLDER_ID,
+        instanceName: "WI-0004",
+        generation: 3,
+        status: "Failed",
+        correlationKey: "poller_run3",
+        startedAt: "2026-09-01T10:02:00.000Z",
+        endedAt: "2026-09-01T10:02:30.000Z",
+        continuedAt: null,
+        outcome: "Failed",
+      },
+    ],
+  };
+
+  function details(id, extra) {
+    return {
+      instance: {
+        Id: id,
+        Name: "WI",
+        Workflow_Name__c: "Poller",
+        Status__c: "Suspended",
+        ...extra,
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      successor: null,
+    };
+  }
+
+  function arrangeChained() {
+    getFilteredInstances.mockResolvedValue([
+      {
+        Id: LIVE_ID,
+        Name: "WI-0003",
+        Workflow_Name__c: "Poller",
+        Status__c: "Suspended",
+      },
+    ]);
+    getInstanceDetails.mockImplementation(({ instanceId }) =>
+      Promise.resolve(
+        details(instanceId, {
+          Previous_Instance__c: PREV_ID,
+          Previous_Instance__r: { Name: "WI-0002" },
+        }),
+      ),
+    );
+    getInstanceChain.mockResolvedValue(PAGE_1);
+  }
+
+  async function mountAndSelect() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  function chainRows(element) {
+    return Array.from(element.shadowRoot.querySelectorAll(".chain-row"));
+  }
+
+  function chainCount(element) {
+    const node = element.shadowRoot.querySelector('[data-id="chain-count"]');
+    return node ? node.textContent.trim() : null;
+  }
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+    getInstanceDetails.mockReset();
+    getInstanceChain.mockReset();
+    getInstanceChain.mockResolvedValue(null);
+  });
+
+  it("loads and renders generations newest first with status badges", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+    expect(getInstanceChain).toHaveBeenCalledWith({
+      instanceId: LIVE_ID,
+      cursor: null,
+    });
+    const rows = chainRows(element);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].dataset.id).toBe(LIVE_ID);
+    expect(rows[0].textContent).toContain("Gen 5");
+    expect(rows[0].textContent).toContain("WI-0003");
+    expect(rows[1].textContent).toContain("Gen 4");
+    expect(rows[1].textContent).toContain("Timeout");
+    expect(rows[0].className).toContain("item-selected");
+    expect(rows[1].className).not.toContain("item-selected");
+    expect(rows[0].querySelector(".badge").textContent.trim()).toBe(
+      "Suspended",
+    );
+    expect(rows[1].querySelector(".badge").textContent.trim()).toBe(
+      "ContinuedAsNew",
+    );
+    expect(chainCount(element)).toBe("Showing 2 of 5 generations");
+  });
+
+  it("does not call getInstanceChain for a single generation", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: LIVE_ID, Name: "WI-0003", Status__c: "Suspended" },
+    ]);
+    getInstanceDetails.mockResolvedValue(details(LIVE_ID, {}));
+    const element = await mountAndSelect();
+
+    expect(getInstanceDetails).toHaveBeenCalled();
+    expect(getInstanceChain).not.toHaveBeenCalled();
+    expect(
+      element.shadowRoot.querySelector('[data-id="chain-section"]'),
+    ).toBeNull();
+  });
+
+  it("loads the chain when only a successor exists", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: LIVE_ID, Name: "WI-0003", Status__c: "ContinuedAsNew" },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      ...details(LIVE_ID, { Status__c: "ContinuedAsNew" }),
+      successor: { Id: "a0G000000000009", Name: "WI-0009" },
+    });
+    getInstanceChain.mockResolvedValue(PAGE_1);
+    const element = await mountAndSelect();
+
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+    expect(chainRows(element)).toHaveLength(2);
+  });
+
+  it("deep-links a generation row to its step timeline", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+
+    chainRows(element)[1].dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(getInstanceDetails).toHaveBeenLastCalledWith({
+      instanceId: PREV_ID,
+    });
+    // The row is in the list, so the list stays and no new call runs.
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+    const rows = chainRows(element);
+    expect(rows[1].className).toContain("item-selected");
+    expect(rows[0].className).not.toContain("item-selected");
+  });
+
+  it("loads older generations with the cursor", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    getInstanceChain.mockResolvedValue(PAGE_2);
+
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="chain-load-more"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: "CURSOR-1",
+    });
+    const rows = chainRows(element);
+    expect(rows).toHaveLength(3);
+    expect(rows[2].dataset.id).toBe(OLDER_ID);
+    expect(rows[2].textContent).toContain("Gen 3");
+    expect(chainCount(element)).toBe("Showing 3 of 5 generations");
+    expect(
+      element.shadowRoot.querySelector(
+        'lightning-button[data-id="chain-load-more"]',
+      ),
+    ).toBeNull();
+  });
+
+  it("shows a lower bound when the total is capped", async () => {
+    arrangeChained();
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      totalCount: 50000,
+      isTotalCapped: true,
+      generations: PAGE_1.generations.map((g) => ({ ...g, generation: null })),
+    });
+    const element = await mountAndSelect();
+
+    expect(chainCount(element)).toBe("Showing 2 of 50000+ generations");
+    expect(chainRows(element)[0].textContent).toContain("Gen —");
+  });
+
+  it("shows an error line when the chain read fails", async () => {
+    arrangeChained();
+    getInstanceChain.mockRejectedValue({ body: { message: "boom" } });
+    const element = await mountAndSelect();
+
+    const error = element.shadowRoot.querySelector('[data-id="chain-error"]');
+    expect(error).not.toBeNull();
+    expect(error.textContent).toContain("boom");
+    expect(chainRows(element)).toHaveLength(0);
   });
 });

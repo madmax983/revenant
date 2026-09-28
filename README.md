@@ -15,6 +15,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Resumable Execution (Yielding)**: Long-running processing loops or query pagination steps can call `shouldYield()` to monitor governor limits. If limits are exceeded, the step checkpoints its state to custom objects and resumes execution transparently in a fresh asynchronous transaction.
 - **Scatter-Gather (Parallel Processing)**: Split execution flow across multiple parallel branches and rejoin their output payloads before moving to subsequent steps. See [ParallelSagaFanoutWorkflowExample](examples/main/default/classes/ParallelSagaFanoutWorkflowExample.cls).
 - **Continue-As-New (Perpetual Loops)**: Execute perpetual poller tasks or long-lived daemons. A step can request a transition to a new successor run linked via `Previous_Instance__c` to prevent storage footprint explosion and clear heap and debug log limits. The successor's `StepContext.previousRunAt` carries the engine-set timestamp of when the predecessor completed, so incremental polling workflows can query only records modified since the last run without any manual timestamp bookkeeping. See [docs/incremental-polling.md](docs/incremental-polling.md) and [IncrementalSyncWorkflowExample](examples/main/default/classes/IncrementalSyncWorkflowExample.cls).
+- **Continue-As-New Chain View**: `WorkflowChainRead.getChain(keyOrId)` gives all generations of a chain, newest first, from any member. Each row has the generation number, status, start and end time, and outcome. It pages with a cursor and reports the total. Max 6 SOQL, no DML. The dashboard shows the list in the detail pane. Click a row to open the step timeline of that generation. See [docs/continue-as-new-chain.md](docs/continue-as-new-chain.md).
 
 ### Fault Tolerance & Safety
 
@@ -690,6 +691,25 @@ do {
 - **No exact total is exposed.** An unbounded, deeply-paged result set cannot be counted within a constant SOQL/heap budget, so there is deliberately no `totalCount`; page until `hasMore` is `false`. (A single `COUNT()` over a huge filtered set still counts rows against the 50,000 query-rows governor, so exposing it would break the constant-budget guarantee.)
 - **ContinueAsNew is consistent with `getStatus`.** `findInstances` is a raw row enumeration, **not** a chain resolution: it returns each matching row on its own and does **not** collapse a continue-as-new chain to a single winner the way `getStatus(correlationKey)` does. A `ContinuedAsNew` predecessor generation is its own row, returned only when the `statuses` filter admits it (unset/empty, or explicitly includes `ContinuedAsNew`); and — matching `getStatus` — `ContinuedAsNew` is a non-terminal hand-off, so its summary's `isTerminal` is `false`. To resolve a chain to its live/final successor, take a matching row's `correlationKey` and call `getStatus(correlationKey)`.
 - **Honest SOQL profile:** exactly **one** SOQL query per call and zero DML, no matter how many filters are set, the page size, or the total number of matching instances. Safe to call from any Apex context.
+
+### 11. Navigate a Continue-As-New Chain (Apex)
+
+`getStatus` gives the last outcome of a chain. `WorkflowChainRead.getChain` gives each generation, newest first. Use any member: the root key, a successor key or an Id.
+
+```apex
+WorkflowEngine.ChainPage page = WorkflowChainRead.getChain('nightly-sync');
+for (WorkflowEngine.ChainGeneration g : page.entries) {
+  System.debug(g.generation + ' ' + g.status + ' ' + g.outcome + ' ' + g.endedAt);
+}
+// page.totalCount = all generations; page.nextCursor = next (older) page, or null.
+```
+
+- Read-only. Max 6 SOQL for all chain lengths. One SOQL for a single generation. No DML.
+- Page size 50 by default, max 200. Send `nextCursor` back in `WorkflowEngine.ChainRequest.cursor` with no change.
+- Unknown or blank input gives `null`.
+- A later independent run with the same key is a separate chain.
+
+See [docs/continue-as-new-chain.md](docs/continue-as-new-chain.md) for the fields, membership rules and limits.
 
 ---
 

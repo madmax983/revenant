@@ -1585,6 +1585,47 @@
                                     </template>
                                 </div>
 
+                                <!-- Continue-As-New Generations (issue #116) -->
+                                <template if:true={chainActive}>
+                                    <div class="slds-m-bottom_large" data-id="chain-section">
+                                        <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                            <h3 class="slds-text-heading_small font-outfit">Continue-As-New Generations</h3>
+                                            <span class="slds-text-body_small slds-text-color_weak" data-id="chain-count">{chainCountLabel}</span>
+                                        </div>
+                                        <template if:true={chainError}>
+                                            <div class="slds-text-body_small slds-text-color_error slds-m-bottom_x-small" data-id="chain-error">Cannot load the generations: {chainError}</div>
+                                        </template>
+                                        <div class="panel-card">
+                                            <div class="slds-scrollable_y" style="max-height: 260px;">
+                                                <ul class="slds-has-dividers_bottom-space">
+                                                    <template for:each={chainRows} for:item="gen">
+                                                        <li key={gen.instanceId} class={gen.rowClass} data-id={gen.instanceId} onclick={handleSelectRelatedInstance} title="Open the step timeline of this generation">
+                                                            <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
+                                                                <div>
+                                                                    <div class="slds-text-title_bold text-primary">{gen.generationLabel} · {gen.instanceName}</div>
+                                                                    <div class="slds-text-body_small slds-text-color_weak">
+                                                                        Key: {gen.correlationKey} | Started: {gen.formattedStartedAt}
+                                                                        <template if:true={gen.formattedEndedAt}> | Ended: {gen.formattedEndedAt}</template>
+                                                                    </div>
+                                                                    <template if:true={gen.failureCategoryLabel}>
+                                                                        <div class="slds-text-body_small text-red">{gen.failureCategoryLabel}</div>
+                                                                    </template>
+                                                                </div>
+                                                                <span class={gen.statusBadgeClass}>{gen.status}</span>
+                                                            </div>
+                                                        </li>
+                                                    </template>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                        <template if:true={hasOlderGenerations}>
+                                            <div class="slds-m-top_x-small slds-text-align_center">
+                                                <lightning-button variant="base" label="Load older generations" data-id="chain-load-more" onclick={handleLoadOlderGenerations} disabled={chainLoading}></lightning-button>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+
                                 <!-- Child Workflows Section -->
                                 <template if:true={hasChildren}>
                                     <div class="slds-m-bottom_large">
