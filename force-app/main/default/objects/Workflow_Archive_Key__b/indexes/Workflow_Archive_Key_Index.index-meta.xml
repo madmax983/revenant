@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Index xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Workflow_Archive_Key_Index</fullName>
+    <fields>
+        <name>Key_Hash__c</name>
+        <sortDirection>ASC</sortDirection>
+    </fields>
+    <fields>
+        <name>Instance_Id__c</name>
+        <sortDirection>ASC</sortDirection>
+    </fields>
+    <label>Workflow Archive Key Index</label>
+</Index>

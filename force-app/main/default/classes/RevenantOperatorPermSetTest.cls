@@ -88,6 +88,23 @@ public class RevenantOperatorPermSetTest {
         'Operator must NOT be able to delete step-execution audit rows'
       );
 
+      // Archive Big Objects (issue #105): read only. Only the sweep writes.
+      System.assertEquals(
+        true,
+        Schema.SObjectType.Workflow_Archive__b.isAccessible(),
+        'Operator must be able to read archived history'
+      );
+      System.assertEquals(
+        false,
+        Schema.SObjectType.Workflow_Archive__b.isCreateable(),
+        'Operator must NOT be able to write archived history'
+      );
+      System.assertEquals(
+        false,
+        Schema.SObjectType.Workflow_Archive_Key__b.isCreateable(),
+        'Operator must NOT be able to write the archive key index'
+      );
+
       // Negative: instance object itself is read-only for the operator.
       System.assertEquals(
         false,

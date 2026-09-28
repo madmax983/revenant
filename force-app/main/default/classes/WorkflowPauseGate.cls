@@ -13,7 +13,8 @@
  *
  * RESERVED NAMES
  *   Engine-internal workflows (WatchdogWorkflow, CleanupWorkflow,
- *   BulkRedriveWorkflow) are NEVER paused — not by an explicit record and not
+ *   BulkRedriveWorkflow, BulkCancelWorkflow, ArchiveWorkflow) are NEVER
+ *   paused — not by an explicit record and not
  *   by the wildcard *. Pausing the watchdog would deadlock the resume path
  *   itself.
  */
@@ -24,7 +25,8 @@ public inherited sharing class WorkflowPauseGate {
     'WatchdogWorkflow',
     'CleanupWorkflow',
     'BulkRedriveWorkflow',
-    'BulkCancelWorkflow'
+    'BulkCancelWorkflow',
+    'ArchiveWorkflow'
   };
 
   // Transaction-scope cache: null = not yet loaded this tx
