@@ -8,28 +8,28 @@
 @IsTest
 public class GlobalApiSubscriberTest {
   private static final String WORKFLOW = 'GlobalApiSubscriberTest.SubscriberWorkflow';
-  private static final String RESERVE_STEP = 'GlobalApiSubscriberTest.ReserveStep';
-  private static final String CONFIRM_STEP = 'GlobalApiSubscriberTest.ConfirmStep';
+  private static final String DECIDE_STEP = 'GlobalApiSubscriberTest.DecideStep';
   private static final String DECISION = 'Decision';
 
   /**
-   * @description Two-step versioned definition: reserve, then confirm.
+   * @description One-step versioned definition. One step makes one async hop in
+   * a test: Test.stopTest() does not run a chained second queueable.
    */
   public class SubscriberWorkflow implements VersionedWorkflow {
     /**
      * @description Returns the step inventory.
-     * @return The two step class names.
+     * @return The step class name.
      */
     public List<String> getSteps() {
-      return new List<String>{ RESERVE_STEP, CONFIRM_STEP };
+      return new List<String>{ DECIDE_STEP };
     }
 
     /**
      * @description Returns the first step.
-     * @return The reserve step name.
+     * @return The decide step name.
      */
     public String getInitialStep() {
-      return RESERVE_STEP;
+      return DECIDE_STEP;
     }
 
     /**
@@ -51,8 +51,7 @@ public class GlobalApiSubscriberTest {
     }
 
     /**
-     * @description Uses the step's own route when it gives one. Else goes from
-     * reserve to confirm, then ends.
+     * @description Uses the route of the step when it gives one. Else ends.
      * @param currentStepName The step that completed.
      * @param result The result of that step.
      * @param version The pinned version.
@@ -64,18 +63,16 @@ public class GlobalApiSubscriberTest {
       Integer version
     ) {
       String routed = result.directive().nextStepName;
-      if (String.isNotBlank(routed)) {
-        return routed;
-      }
-      return currentStepName == RESERVE_STEP ? CONFIRM_STEP : null;
+      return String.isNotBlank(routed) ? routed : null;
     }
   }
 
   /**
-   * @description Compensatable step with a timeout. Uses the context values and
-   * the capture, log, and progress accessors.
+   * @description Compensatable step with a timeout. Waits for the decision
+   * signal. Then it uses the capture, log, and progress accessors and completes
+   * with the signal payload.
    */
-  public class ReserveStep implements CompensatableStep, TimeoutConfigurable {
+  public class DecideStep implements CompensatableStep, TimeoutConfigurable {
     /**
      * @description Returns the step timeout.
      * @return 120 seconds.
@@ -85,30 +82,37 @@ public class GlobalApiSubscriberTest {
     }
 
     /**
-     * @description Captures a token and completes with it.
+     * @description Suspends until the decision signal is present.
      * @param ctx The step context.
-     * @return A COMPLETE result.
+     * @return YIELD when the step must yield, SUSPEND with no signal, else
+     * COMPLETE with the payload.
      */
     public StepResult execute(StepContext ctx) {
       if (ctx.shouldYield()) {
         return StepResult.yield(ctx.stepStateJson);
       }
+      StepContext.Signal decision = ctx.signals().getSignal(DECISION);
+      if (!decision.isPresent()) {
+        return StepResult.suspend();
+      }
       Object token = ctx.captures().once('token', new TokenProducer());
-      ctx.logger().log(StepContext.Level.INFO, 'Reserve ' + ctx.workflowName);
-      ctx.progress().reportProgress(50, 'Reserved');
-      return StepResult.complete(
-        null,
-        new Map<String, Object>{
-          'token' => token,
-          'key' => ctx.idempotencyKey,
-          'input' => ctx.workflowInputJson,
-          'final' => ctx.isFinalAttempt()
-        }
-      );
+      ctx.logger()
+        .log(
+          StepContext.Level.INFO,
+          'Decide ' + ctx.workflowName,
+          new Map<String, Object>{
+            'token' => token,
+            'key' => ctx.idempotencyKey,
+            'input' => ctx.workflowInputJson,
+            'final' => ctx.isFinalAttempt()
+          }
+        );
+      ctx.progress().reportProgress(100, 'Decided');
+      return StepResult.complete(null, decision.payload);
     }
 
     /**
-     * @description Undoes the reservation.
+     * @description Compensates the step. The fixture has no state to undo.
      * @param ctx The step context.
      * @return A COMPLETE result.
      */
@@ -131,28 +135,10 @@ public class GlobalApiSubscriberTest {
   }
 
   /**
-   * @description Waits for the decision signal, then completes with its payload.
-   */
-  public class ConfirmStep implements WorkflowStep, CalloutStep {
-    /**
-     * @description Suspends until the decision signal is present.
-     * @param ctx The step context.
-     * @return SUSPEND with no signal, else COMPLETE with the payload.
-     */
-    public StepResult execute(StepContext ctx) {
-      StepContext.Signal decision = ctx.signals().getSignal(DECISION);
-      if (!decision.isPresent()) {
-        return StepResult.suspend();
-      }
-      return StepResult.complete(null, decision.payload);
-    }
-  }
-
-  /**
    * @description Compile probe for the author members that the run tests do not
    * use. No workflow runs this step.
    */
-  public class SurfaceStep implements WorkflowStep {
+  public class SurfaceStep implements WorkflowStep, CalloutStep {
     /**
      * @description Reads each remaining author member.
      * @param ctx The step context.
@@ -194,12 +180,7 @@ public class GlobalApiSubscriberTest {
       );
       ctx.captures().deprecated('change-0');
       ctx.captures().deprecated('change-00', Datetime.now());
-      ctx.logger()
-        .log(
-          StepContext.Level.WARN,
-          'Seen',
-          new Map<String, Object>{ 'count' => seen.size() }
-        );
+      ctx.logger().log(StepContext.Level.WARN, 'Seen');
       seen.add(StepResult.sleep(1, 'Hours', 'Default'));
       ctx.progress().reportProgress(seen);
       ctx.events().emit(new Account(Name = 'probe'));
