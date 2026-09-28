@@ -851,14 +851,14 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
 
 ### Fleet Health
 
-The **Fleet Health** button opens a read-only view. It shows one row for each definition with instances started in the window (1 hour, 24 hours or 7 days).
+The **Fleet Health** button opens a read-only view. It shows one row for each definition that has instances in the window (1 hour, 24 hours or 7 days).
 
-- **Counts:** started, completed (`Completed`, `ContinuedAsNew`), failed (`Failed`, `CompensationFailed`, `Compensated`, `Cancelled`) and in-flight (`Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `Pending`, `DefinitionChanged`).
-- **Success rate:** completed ÷ (completed + failed). A row below the threshold (default 95%) shows a red **Below** badge. Set the threshold in the view. The value stays until the page reloads.
-- **Duration:** the average and the maximum of `Terminal_At__c` − `CreatedDate` for terminal instances. The values come from the 2,000 most recent terminal instances. A value with **≈** is from part of the instances. Active instances are not in the duration.
-- **Deep link:** click a definition to open the instance list with that filter.
-- **Cost:** two queries for each load. The cost does not grow with the instance volume. The view writes no data. See [ADR 0004](docs/adr/0004-fleet-health-duration-sample.md).
-- The System Doctor **Definition Health** panel counts by terminal time. Fleet Health counts by start time. Thus the numbers can be different.
+- **Counts:** the instances that started in the window. Started, completed (`Completed`, `ContinuedAsNew`), failed (`Failed`, `CompensationFailed`, `Compensated`, `Cancelled`) and in-flight (`Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `Pending`, `DefinitionChanged`). `CompensationFailed` is an active status, but the view counts it as failed.
+- **Success rate:** completed ÷ (completed + failed). When the rate is less than the threshold (default 95%), the row shows a red **Below threshold** badge. Set the threshold in the view. The value stays until the page reloads.
+- **Duration:** the average and the maximum of `Terminal_At__c` − `CreatedDate`, for the instances that finished in the window. The values come from the 2,000 instances of all definitions that finished last. When more instances finished, each duration shows **≈**. Active instances are not in the duration.
+- **Deep link:** click a definition to open the instance list for that definition. The link clears the status, search and attribute filters.
+- **Cost:** three queries each time the view loads. When more than 20,000 instances started in the window, the counts use the 20,000 newest instances and the view shows a note. The view writes no data. See [ADR 0004](docs/adr/0004-fleet-health-duration-sample.md).
+- The System Doctor **Definition Health** panel counts by terminal time. Fleet Health counts by start time. Because of this, the numbers can be different.
 
 ---
 

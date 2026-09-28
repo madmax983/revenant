@@ -82,6 +82,13 @@ const FAILURE_CATEGORY_LABELS = {
   UNKNOWN: "Unknown",
 };
 
+// Rolling windows shared by Definition Health and Fleet Health.
+const ROLLING_WINDOW_OPTIONS = [
+  { label: "Last 1 hour", value: "1h" },
+  { label: "Last 24 hours", value: "24h" },
+  { label: "Last 7 days", value: "7d" },
+];
+
 const ASYNC_LIMITS = {
   CPU: 60000,
   SOQL: 200,
@@ -192,11 +199,7 @@ export default class WorkflowDashboard extends LightningElement {
   _restoreScroll = false;
   _pendingScrollTop = 0;
   // Stable option array (see note above workflowOptions on why getters are avoided).
-  trendWindowOptions = [
-    { label: "Last 1 hour", value: "1h" },
-    { label: "Last 24 hours", value: "24h" },
-    { label: "Last 7 days", value: "7d" },
-  ];
+  trendWindowOptions = ROLLING_WINDOW_OPTIONS;
 
   // Fleet Health view state (#111): read-only, one row per definition.
   viewingHealth = false;
@@ -204,13 +207,11 @@ export default class WorkflowDashboard extends LightningElement {
   healthWindow = "24h";
   healthThreshold = 95;
   healthData = null;
-  // Latest request wins: a stale response is discarded.
+  healthRows = [];
+  healthError = "";
+  // Only the latest request updates the view. The component discards a stale response.
   _healthRequestId = 0;
-  healthWindowOptions = [
-    { label: "Last 1 hour", value: "1h" },
-    { label: "Last 24 hours", value: "24h" },
-    { label: "Last 7 days", value: "7d" },
-  ];
+  healthWindowOptions = ROLLING_WINDOW_OPTIONS;
 
   // Catalog view state (read-only deployed-workflow catalog with live health)
   viewingCatalog = false;
@@ -1015,29 +1016,27 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleSelectInstance(event) {
     this.stopPolling();
-    this.viewingDoctor = false;
-    this.viewingSchedules = false;
-    this.viewingDrain = false;
-    this.viewingUnrouted = false;
-    this.viewingCatalog = false;
-    this.viewingHealth = false;
-    this.viewingFailureBreakdown = false;
-    this.viewingLatency = false;
+    this.closeViews();
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
   }
 
-  handleSelectRelatedInstance(event) {
-    this.stopPolling();
+  // Closes every view so that the instance detail panel shows.
+  closeViews() {
     this.viewingDoctor = false;
     this.viewingSchedules = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
     this.viewingCatalog = false;
-    this.viewingHealth = false;
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
+    this.handleCloseHealth();
+  }
+
+  handleSelectRelatedInstance(event) {
+    this.stopPolling();
+    this.closeViews();
     this.selectedInstanceId = event.currentTarget.dataset.id;
     this.filterInstancesList();
     this.loadDetails(true);
@@ -1309,7 +1308,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadDoctorStatus();
@@ -1326,7 +1325,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
@@ -1350,7 +1349,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
   }
 
@@ -1366,7 +1365,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.viewingCatalog = false;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
     this.filterInstancesList();
     this.loadUnroutedSignals();
@@ -1383,7 +1382,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
     this.viewingCatalog = false;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.viewingLatency = false;
     this.selectedInstanceId = null;
     this.filterInstancesList();
@@ -1401,7 +1400,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenCatalog() {
     this.viewingCatalog = true;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.viewingDoctor = false;
     this.viewingDrain = false;
     this.viewingUnrouted = false;
@@ -1454,8 +1453,8 @@ export default class WorkflowDashboard extends LightningElement {
     };
   }
 
-  // Deep-links from a catalog row (or one of its status counts) to the instance list,
-  // filtered to that definition and — for a status count — that status.
+  // Opens the instance list from a Catalog row or a status count. The list shows that
+  // definition and, for a status count, that status.
   handleCatalogRowClick(event) {
     this.openInstanceList(
       event.currentTarget.dataset.definition,
@@ -1464,17 +1463,20 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   // Opens the instance list for a definition and an optional status. Closes the Catalog
-  // and Fleet Health views. Uses the selectedWorkflow / selectedStatus filter state.
+  // and Fleet Health views. Clears the search and attribute filters, so that the list
+  // shows all instances of the definition.
   openInstanceList(definition, status) {
     if (!definition) {
       return;
     }
     this.viewingCatalog = false;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.showingStalled = false;
     this.selectedWorkflow = definition;
     this.selectedStatus = status;
     this.selectedFailureCategory = "";
+    this.searchTerm = "";
+    this.attributeFilters = {};
     this.fetchInstances(false);
   }
 
@@ -1496,8 +1498,12 @@ export default class WorkflowDashboard extends LightningElement {
     this.fetchHealth();
   }
 
+  // Closes the view. A request that is in progress becomes stale, so it cannot show a
+  // toast on a different view.
   handleCloseHealth() {
     this.viewingHealth = false;
+    this._healthRequestId++;
+    this.loadingHealth = false;
   }
 
   fetchHealth() {
@@ -1507,16 +1513,21 @@ export default class WorkflowDashboard extends LightningElement {
       .then((result) => {
         if (requestId === this._healthRequestId) {
           this.healthData = result;
+          this.healthError = "";
+          this.buildHealthRows();
         }
       })
       .catch((error) => {
         if (requestId !== this._healthRequestId) {
           return;
         }
+        const message = this.reduceErrors(error);
         this.healthData = null;
+        this.healthError = message;
+        this.buildHealthRows();
         this.showToast(
           "Error",
-          "Failed to load fleet health: " + this.reduceErrors(error),
+          "Failed to load fleet health: " + message,
           "error",
         );
       })
@@ -1533,11 +1544,13 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   // Keeps the last valid threshold when the input is blank, not a number, or out of range.
+  // The view shows the threshold that it uses.
   handleHealthThresholdChange(event) {
     const raw = event.detail ? event.detail.value : event.target.value;
     const value = raw === "" || raw === null ? NaN : Number(raw);
     if (Number.isFinite(value) && value >= 0 && value <= 100) {
       this.healthThreshold = value;
+      this.buildHealthRows();
     }
   }
 
@@ -1549,6 +1562,11 @@ export default class WorkflowDashboard extends LightningElement {
     return this.healthRows.length > 0;
   }
 
+  // The empty state shows only after a load that has no rows.
+  get showHealthEmpty() {
+    return !this.healthError && this.healthRows.length === 0;
+  }
+
   get healthIsSampled() {
     return !!(this.healthData && this.healthData.isSampled);
   }
@@ -1557,12 +1575,23 @@ export default class WorkflowDashboard extends LightningElement {
     return this.healthData ? this.healthData.sampleCap : 0;
   }
 
-  // Display rows. The threshold flag is set here, so a threshold change needs no server call.
-  get healthRows() {
+  get healthCountsCapped() {
+    return !!(this.healthData && this.healthData.countsCapped);
+  }
+
+  get healthCountCap() {
+    return this.healthData ? this.healthData.countCap : 0;
+  }
+
+  // Builds the display rows. It runs when data arrives or the threshold changes, not on
+  // each render. The flag uses the counts, not the rounded rate, so 94.96% is below 95%.
+  buildHealthRows() {
     const rows = (this.healthData && this.healthData.rows) || [];
-    return rows.map((row) => {
-      const hasRate = row.successRate !== null && row.successRate !== undefined;
-      const belowThreshold = hasRate && row.successRate < this.healthThreshold;
+    this.healthRows = rows.map((row) => {
+      const terminal = (row.completed || 0) + (row.failed || 0);
+      const hasRate = terminal > 0;
+      const belowThreshold =
+        hasRate && (row.completed * 100) / terminal < this.healthThreshold;
       return {
         ...row,
         belowThreshold,
@@ -1572,22 +1601,24 @@ export default class WorkflowDashboard extends LightningElement {
         rateDisplay: hasRate ? `${row.successRate}%` : "—",
         rateClass: belowThreshold ? "text-red" : hasRate ? "text-green" : "",
         failedClass: row.failed > 0 ? "text-red" : "",
-        avgDisplay: this.formatHealthDuration(
+        linkTitle: `View the instances of ${row.workflowName}`,
+        avgApprox: this.isApproxDuration(
           row.avgDurationMs,
           row.durationSampled,
         ),
-        maxDisplay: this.formatHealthDuration(
+        avgDisplay: this.formatDuration(row.avgDurationMs),
+        maxApprox: this.isApproxDuration(
           row.maxDurationMs,
           row.durationSampled,
         ),
+        maxDisplay: this.formatDuration(row.maxDurationMs),
       };
     });
   }
 
-  // Adds "≈" to a sampled duration. A missing value stays "—".
-  formatHealthDuration(ms, sampled) {
-    const text = this.formatDuration(ms);
-    return sampled && ms !== null && ms !== undefined ? `≈ ${text}` : text;
+  // A sampled duration shows "≈". A missing value shows only "—".
+  isApproxDuration(ms, sampled) {
+    return !!sampled && ms !== null && ms !== undefined;
   }
 
   handleBreakdownWorkflowChange(event) {
@@ -1638,7 +1669,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingUnrouted = false;
     this.viewingSchedules = false;
     this.viewingCatalog = false;
-    this.viewingHealth = false;
+    this.handleCloseHealth();
     this.selectedInstanceId = null;
     this.filterInstancesList();
     if (this.selectedWorkflow) {
@@ -2379,6 +2410,7 @@ export default class WorkflowDashboard extends LightningElement {
               "Progress is shown in the detail panel below.",
             "success",
           );
+          this.closeViews();
           this.selectedInstanceId = outcome.redriveInstanceId;
           this.refreshInstances();
           this.loadDetails(true);
@@ -2463,6 +2495,7 @@ export default class WorkflowDashboard extends LightningElement {
               "Progress is shown in the detail panel below.",
             "success",
           );
+          this.closeViews();
           this.selectedInstanceId = outcome.cancelInstanceId;
           this.refreshInstances();
           this.loadDetails(true);

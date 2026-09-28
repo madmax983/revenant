@@ -1,9 +1,11 @@
 /**
- * @description Builds the Fleet Health summary (#111). One row for each definition with
- * instances started in a rolling window. Read-only: no DML, no events, no jobs.
+ * @description Builds the Fleet Health summary (#111). It makes one row for each definition
+ * that has instances in a rolling window. It does no DML, publishes no events and starts no
+ * jobs.
  *
- * Cost: two queries for each call. The count query uses COUNT only, so it uses one query
- * row for each group. The duration sample has a fixed LIMIT. See ADR 0004.
+ * Cost: three queries for each call. Query rows are at most 2 * COUNT_CAP + SAMPLE_CAP + 2
+ * for all instance volumes. This is true if an aggregate query uses one query row for each
+ * group or one query row for each record. See ADR 0004.
  */
 public inherited sharing class WorkflowFleetHealthService {
   private static final Map<String, Integer> WINDOW_HOURS = new Map<String, Integer>{
@@ -13,10 +15,17 @@ public inherited sharing class WorkflowFleetHealthService {
   };
   private static final String DEFAULT_WINDOW = '24h';
 
-  // Maximum terminal rows read for the durations.
+  // The maximum number of started instances that the counts read. Above this number, the
+  // counts use the newest COUNT_CAP instances. 2 * 20,000 + 2,000 stays below the
+  // 50,000-row limit, also when each aggregated record uses one query row.
+  private static final Integer COUNT_CAP = 20000;
+
+  // The maximum number of terminal rows that the duration query reads.
   private static final Integer SAMPLE_CAP = 2000;
 
-  // Test-only cap. Null in production.
+  // Tests set these caps. They are null in production.
+  @TestVisible
+  private static Integer countCapOverride = null;
   @TestVisible
   private static Integer sampleCapOverride = null;
 
@@ -24,7 +33,7 @@ public inherited sharing class WorkflowFleetHealthService {
     'Completed',
     'ContinuedAsNew'
   };
-  // CompensationFailed is active (no Terminal_At__c), but its outcome is a failure.
+  // CompensationFailed is an active status (no Terminal_At__c). Its outcome is a failure.
   private static final Set<String> FAILED_STATUSES = new Set<String>{
     'Failed',
     'CompensationFailed',
@@ -41,21 +50,15 @@ public inherited sharing class WorkflowFleetHealthService {
     'Pending',
     'DefinitionChanged'
   };
-  // Statuses that set Terminal_At__c. Only these rows can be in the duration sample.
-  private static final Set<String> TIMED_STATUSES = new Set<String>{
-    'Completed',
-    'ContinuedAsNew',
-    'Failed',
-    'Compensated',
-    'Cancelled'
-  };
 
   /**
-   * @description Returns the Fleet Health summary for a window. The cohort is the set of
-   * instances with CreatedDate in the window.
+   * @description Returns the Fleet Health summary for a window. The counts use the instances
+   * that started in the window. The durations use the instances that got a Terminal_At__c
+   * in the window.
    * @param windowKey '1h', '24h' or '7d'. A blank or unknown key gives '24h'.
-   * @return A map with windowKey, windowHours, sampleCap, isSampled and rows. The rows go
-   *         from the lowest success rate to the highest. Rows with no rate go last.
+   * @return A map with windowKey, windowHours, countCap, countsCapped, sampleCap, isSampled
+   *         and rows. The rows go from the lowest success rate to the highest. A row with no
+   *         rate goes last.
    */
   public static Map<String, Object> fleetHealth(String windowKey) {
     WorkflowDashboardSupport.checkAuthorization();
@@ -65,10 +68,66 @@ public inherited sharing class WorkflowFleetHealthService {
       : DEFAULT_WINDOW;
     Integer windowHours = WINDOW_HOURS.get(resolvedKey);
     Datetime since = Datetime.now().addHours(-windowHours);
-    Integer cap = sampleCap();
 
-    Map<String, DefinitionHealth> byName = new Map<String, DefinitionHealth>();
-    // A list, not a SOQL for loop: an aggregate for loop fails above 2,000 groups.
+    try {
+      Map<String, DefinitionHealth> byName = new Map<String, DefinitionHealth>();
+      Boolean countsCapped = addCounts(byName, since);
+      Boolean isSampled = addDurations(byName, since);
+
+      List<DefinitionHealth> ordered = byName.values();
+      ordered.sort();
+      List<Map<String, Object>> rows = new List<Map<String, Object>>();
+      for (DefinitionHealth health : ordered) {
+        rows.add(health.toRow(isSampled));
+      }
+
+      return new Map<String, Object>{
+        'windowKey' => resolvedKey,
+        'windowHours' => windowHours,
+        'countCap' => countCap(),
+        'countsCapped' => countsCapped,
+        'sampleCap' => sampleCap(),
+        'isSampled' => isSampled,
+        'rows' => rows
+      };
+    } catch (Exception ex) {
+      throw WorkflowDashboardSupport.auraError(ex.getMessage());
+    }
+  }
+
+  // Adds the status counts of the instances started in the window. Returns true when the
+  // window has more than countCap() instances. Then the counts use the newest countCap().
+  private static Boolean addCounts(
+    Map<String, DefinitionHealth> byName,
+    Datetime since
+  ) {
+    Integer cap = countCap();
+    Integer probeLimit = cap + 1;
+    Integer inWindow = [
+      SELECT COUNT()
+      FROM Workflow_Instance__c
+      WHERE CreatedDate >= :since
+      WITH SYSTEM_MODE
+      LIMIT :probeLimit
+    ];
+
+    if (inWindow > cap) {
+      // A SOQL for loop reads 200 rows at a time. This keeps the heap small.
+      for (Workflow_Instance__c inst : [
+        SELECT Workflow_Name__c, Status__c
+        FROM Workflow_Instance__c
+        WHERE CreatedDate >= :since
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate DESC
+        LIMIT :cap
+      ]) {
+        healthFor(byName, inst.Workflow_Name__c).addCount(inst.Status__c, 1);
+      }
+      return true;
+    }
+
+    // Use a list, not a SOQL for loop. An aggregate for loop fails when it has more than
+    // 2,000 groups.
     List<AggregateResult> groups = [
       SELECT Workflow_Name__c, Status__c, COUNT(Id) cnt
       FROM Workflow_Instance__c
@@ -80,57 +139,63 @@ public inherited sharing class WorkflowFleetHealthService {
       healthFor(byName, (String) ar.get('Workflow_Name__c'))
         .addCount((String) ar.get('Status__c'), (Integer) ar.get('cnt'));
     }
+    return false;
+  }
 
+  // Adds the durations of the newest sampleCap() instances that got a Terminal_At__c in the
+  // window. Returns true when more instances exist. The query reads one extra row to know.
+  private static Boolean addDurations(
+    Map<String, DefinitionHealth> byName,
+    Datetime since
+  ) {
+    Integer cap = sampleCap();
+    Integer probeLimit = cap + 1;
     List<Workflow_Instance__c> sample = [
       SELECT Workflow_Name__c, CreatedDate, Terminal_At__c
       FROM Workflow_Instance__c
-      WHERE CreatedDate >= :since AND Terminal_At__c != NULL
+      WHERE Terminal_At__c >= :since
       WITH SYSTEM_MODE
       ORDER BY Terminal_At__c DESC
-      LIMIT :cap
+      LIMIT :probeLimit
     ];
-    for (Workflow_Instance__c inst : sample) {
+    Integer used = Math.min(sample.size(), cap);
+    for (Integer i = 0; i < used; i++) {
+      Workflow_Instance__c inst = sample[i];
       healthFor(byName, inst.Workflow_Name__c)
         .addDuration(
           inst.Terminal_At__c.getTime() - inst.CreatedDate.getTime()
         );
     }
+    return sample.size() > cap;
+  }
 
-    List<DefinitionHealth> ordered = byName.values();
-    ordered.sort();
-    List<Map<String, Object>> rows = new List<Map<String, Object>>();
-    for (DefinitionHealth health : ordered) {
-      rows.add(health.toRow());
-    }
-
-    return new Map<String, Object>{
-      'windowKey' => resolvedKey,
-      'windowHours' => windowHours,
-      'sampleCap' => cap,
-      'isSampled' => sample.size() >= cap,
-      'rows' => rows
-    };
+  private static Integer countCap() {
+    return countCapOverride != null ? countCapOverride : COUNT_CAP;
   }
 
   private static Integer sampleCap() {
     return sampleCapOverride != null ? sampleCapOverride : SAMPLE_CAP;
   }
 
+  // SOQL GROUP BY ignores case. The lower-case key does the same, so one definition gets
+  // one row. The row keeps the first spelling.
   private static DefinitionHealth healthFor(
     Map<String, DefinitionHealth> byName,
     String workflowName
   ) {
-    DefinitionHealth health = byName.get(workflowName);
+    String key = workflowName.toLowerCase();
+    DefinitionHealth health = byName.get(key);
     if (health == null) {
       health = new DefinitionHealth(workflowName);
-      byName.put(workflowName, health);
+      byName.put(key, health);
     }
     return health;
   }
 
   /**
-   * @description Counts and durations for one definition. Sorts by success rate, lowest
-   * first. Rows with no rate go last. Equal rates sort by name.
+   * @description This class holds the counts and durations for one definition. It sorts by
+   * success rate, lowest first. A row with no rate goes last. Rows with equal rates sort by
+   * name.
    */
   private class DefinitionHealth implements Comparable {
     String workflowName;
@@ -138,7 +203,6 @@ public inherited sharing class WorkflowFleetHealthService {
     Integer completed = 0;
     Integer failed = 0;
     Integer inFlight = 0;
-    Integer timedTerminal = 0;
     Integer sampleSize = 0;
     Long totalMs = 0;
     Long maxMs = null;
@@ -147,6 +211,7 @@ public inherited sharing class WorkflowFleetHealthService {
       this.workflowName = workflowName;
     }
 
+    // A status that is not in a bucket adds to started only.
     void addCount(String status, Integer count) {
       started += count;
       if (COMPLETED_STATUSES.contains(status)) {
@@ -155,9 +220,6 @@ public inherited sharing class WorkflowFleetHealthService {
         failed += count;
       } else if (IN_FLIGHT_STATUSES.contains(status)) {
         inFlight += count;
-      }
-      if (TIMED_STATUSES.contains(status)) {
-        timedTerminal += count;
       }
     }
 
@@ -176,7 +238,7 @@ public inherited sharing class WorkflowFleetHealthService {
             .divide(terminal, 1, System.RoundingMode.HALF_UP);
     }
 
-    Map<String, Object> toRow() {
+    Map<String, Object> toRow(Boolean isSampled) {
       return new Map<String, Object>{
         'workflowName' => workflowName,
         'started' => started,
@@ -187,12 +249,12 @@ public inherited sharing class WorkflowFleetHealthService {
         'avgDurationMs' => sampleSize == 0 ? null : totalMs / sampleSize,
         'maxDurationMs' => maxMs,
         'durationSampleSize' => sampleSize,
-        'durationSampled' => sampleSize < timedTerminal
+        'durationSampled' => isSampled
       };
     }
 
     /**
-     * @description Compares by success rate, lowest first. No rate goes last.
+     * @description Compares by success rate, lowest first. A row with no rate goes last.
      * @param other The other DefinitionHealth.
      * @return A negative, zero or positive value (Comparable contract).
      */

@@ -23,7 +23,7 @@ private class WorkflowFleetHealthServiceTest {
     insert inst;
     Test.setCreatedDate(inst.Id, createdAt);
     if (terminalAt != null) {
-      // Terminal to terminal: the trigger keeps this value.
+      // The status is already terminal, so the trigger keeps this value.
       inst.Terminal_At__c = terminalAt;
       update inst;
     }
@@ -279,11 +279,13 @@ private class WorkflowFleetHealthServiceTest {
       System.assertEquals(3, row.get('durationSampleSize'));
       System.assertEquals(false, row.get('durationSampled'));
       System.assertEquals(false, result.get('isSampled'));
+      System.assertEquals(false, result.get('countsCapped'));
     }
   }
 
   /**
-   * @description AC4 and AC6: the duration sample has a cap. Counts stay exact.
+   * @description AC4 and AC6: the duration sample has a cap. Counts stay exact. All rows
+   * show that the durations are sampled.
    */
   @IsTest
   static void testDurationSampleCap() {
@@ -315,6 +317,122 @@ private class WorkflowFleetHealthServiceTest {
       System.assertEquals(null, noDurRow.get('avgDurationMs'));
       System.assertEquals(null, noDurRow.get('maxDurationMs'));
       System.assertEquals(true, noDurRow.get('durationSampled'));
+    }
+  }
+
+  /**
+   * @description AC4: exactly cap terminal rows is a full sample, not a partial sample.
+   */
+  @IsTest
+  static void testExactCapIsNotSampled() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      seed('ExactDef', 'Completed', now.addSeconds(-10), now);
+      seed('ExactDef', 'Failed', now.addSeconds(-20), now);
+      WorkflowFleetHealthService.sampleCapOverride = 2;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      System.assertEquals(false, result.get('isSampled'));
+      Map<String, Object> row = findRow(result, 'ExactDef');
+      System.assertEquals(2, row.get('durationSampleSize'));
+      System.assertEquals(false, row.get('durationSampled'));
+      System.assertEquals(20000L, (Long) row.get('maxDurationMs'));
+    }
+  }
+
+  /**
+   * @description AC1 and AC4: an instance that started before the window and got its
+   * Terminal_At__c in the window gives a duration. The duration is not cut at the window.
+   */
+  @IsTest
+  static void testDurationIncludesInstancesStartedBeforeWindow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      seed('LongDef', 'Completed', now.addDays(-3), now);
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      Map<String, Object> row = findRow(result, 'LongDef');
+      System.assertNotEquals(
+        null,
+        row,
+        'The definition had an instance in the window'
+      );
+      System.assertEquals(
+        0,
+        row.get('started'),
+        'It started before the window'
+      );
+      System.assertEquals(null, row.get('successRate'));
+      Long threeDaysMs = 3L * 24 * 60 * 60 * 1000;
+      System.assertEquals(threeDaysMs, (Long) row.get('avgDurationMs'));
+      System.assertEquals(threeDaysMs, (Long) row.get('maxDurationMs'));
+    }
+  }
+
+  /**
+   * @description AC6: above the count cap, the counts use the newest instances and the
+   * result shows countsCapped.
+   */
+  @IsTest
+  static void testCountCapUsesNewestInstances() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      for (Integer i = 1; i <= 3; i++) {
+        seed('NewDef', 'Completed', now.addMinutes(-i), now);
+      }
+      for (Integer i = 10; i <= 13; i++) {
+        seed('OldDef', 'Running', now.addMinutes(-i), null);
+      }
+      WorkflowFleetHealthService.countCapOverride = 5;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      System.assertEquals(true, result.get('countsCapped'));
+      System.assertEquals(5, result.get('countCap'));
+      System.assertEquals(3, findRow(result, 'NewDef').get('started'));
+      System.assertEquals(3, findRow(result, 'NewDef').get('completed'));
+      System.assertEquals(2, findRow(result, 'OldDef').get('started'));
+      System.assertEquals(2, findRow(result, 'OldDef').get('inFlight'));
+    }
+  }
+
+  /**
+   * @description AC1: names that differ only in case give one row, as SOQL GROUP BY does.
+   */
+  @IsTest
+  static void testNameCaseGivesOneRow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      seed('CaseDef', 'Completed', now.addSeconds(-10), now);
+      seed('casedef', 'Running', now, null);
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      List<Object> rows = rowsOf(result);
+      System.assertEquals(1, rows.size(), 'One row for one definition');
+      System.assertEquals(2, ((Map<String, Object>) rows[0]).get('started'));
+      System.assertEquals(
+        1,
+        ((Map<String, Object>) rows[0]).get('durationSampleSize')
+      );
     }
   }
 
@@ -392,15 +510,15 @@ private class WorkflowFleetHealthServiceTest {
   }
 
   /**
-   * @description AC6: two queries for each call. Query rows stay at or below
-   * groups + cap. The cost does not change when the volume increases.
+   * @description AC6: three queries for each call. Query rows stay at or below the caps.
+   * Above the count cap, the rows do not grow with volume. The checks are true if an
+   * aggregate query uses one row for each group or one row for each record.
    */
   @IsTest
   static void testQueryCostIsBounded() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Datetime now = baseTime();
       List<Workflow_Instance__c> batch = new List<Workflow_Instance__c>();
-      for (Integer i = 0; i < 10; i++) {
+      for (Integer i = 0; i < 2; i++) {
         batch.add(
           new Workflow_Instance__c(
             Workflow_Name__c = 'CostDef',
@@ -415,7 +533,10 @@ private class WorkflowFleetHealthServiceTest {
         );
       }
       insert batch;
+      WorkflowFleetHealthService.countCapOverride = 5;
       WorkflowFleetHealthService.sampleCapOverride = 3;
+      // Probe (cap + 1) + counts (cap) + sample (cap + 1).
+      Integer maxRows = (5 + 1) + 5 + (3 + 1);
 
       Test.startTest();
       // Cost of the gate alone, so that the check measures the summary only.
@@ -425,27 +546,55 @@ private class WorkflowFleetHealthServiceTest {
       gateQueries = Limits.getQueries() - gateQueries;
       gateRows = Limits.getQueryRows() - gateRows;
 
+      // Under the count cap: 4 instances.
       Integer queries = Limits.getQueries();
       Integer rows = Limits.getQueryRows();
-      WorkflowFleetHealthController.getFleetHealth('24h');
+      Map<String, Object> small = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
       Integer smallQueries = Limits.getQueries() - queries - gateQueries;
       Integer smallRows = Limits.getQueryRows() - rows - gateRows;
 
-      // Double the volume.
-      List<Workflow_Instance__c> more = batch.deepClone(false, false, false);
+      // Above the count cap: 20 instances.
+      List<Workflow_Instance__c> more = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 4; i++) {
+        more.addAll(batch.deepClone(false, false, false));
+      }
       insert more;
       queries = Limits.getQueries();
       rows = Limits.getQueryRows();
-      WorkflowFleetHealthController.getFleetHealth('24h');
+      Map<String, Object> big = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
       Integer bigQueries = Limits.getQueries() - queries - gateQueries;
       Integer bigRows = Limits.getQueryRows() - rows - gateRows;
+
+      // Double the volume: 40 instances.
+      insert batch.deepClone(false, false, false);
+      List<Workflow_Instance__c> evenMore = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 4; i++) {
+        evenMore.addAll(batch.deepClone(false, false, false));
+      }
+      insert evenMore;
+      queries = Limits.getQueries();
+      rows = Limits.getQueryRows();
+      WorkflowFleetHealthController.getFleetHealth('24h');
+      Integer biggerQueries = Limits.getQueries() - queries - gateQueries;
+      Integer biggerRows = Limits.getQueryRows() - rows - gateRows;
       Test.stopTest();
 
-      System.assertEquals(2, smallQueries, 'Two queries for each call');
-      System.assertEquals(2, bigQueries, 'Query count is constant');
-      // 2 status groups + a sample cap of 3.
-      System.assert(smallRows <= 5, 'Rows used: ' + smallRows);
-      System.assertEquals(smallRows, bigRows, 'Rows do not grow with volume');
+      System.assertEquals(false, small.get('countsCapped'));
+      System.assertEquals(true, big.get('countsCapped'));
+      System.assertEquals(3, smallQueries, 'Three queries for each call');
+      System.assertEquals(3, bigQueries, 'Three queries above the cap');
+      System.assertEquals(3, biggerQueries, 'Query count is constant');
+      System.assert(smallRows <= maxRows, 'Rows used: ' + smallRows);
+      System.assert(bigRows <= maxRows, 'Rows used: ' + bigRows);
+      System.assertEquals(
+        bigRows,
+        biggerRows,
+        'Above the cap, rows do not grow with volume'
+      );
     }
   }
 

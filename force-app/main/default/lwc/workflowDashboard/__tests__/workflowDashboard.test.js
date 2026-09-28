@@ -3036,50 +3036,67 @@ describe("c-workflow-dashboard definition changed", () => {
 });
 
 describe("c-workflow-dashboard fleet health view (#111)", () => {
-  const HEALTH_TWO_DEFS = {
-    windowKey: "24h",
-    windowHours: 24,
-    sampleCap: 2000,
-    isSampled: false,
-    rows: [
-      {
-        workflowName: "OnboardingWorkflow",
-        started: 12,
-        completed: 8,
-        failed: 2,
-        inFlight: 2,
-        successRate: 80.0,
-        avgDurationMs: 90000,
-        maxDurationMs: 3723000,
-        durationSampleSize: 10,
-        durationSampled: false,
-      },
-      {
-        workflowName: "BillingWorkflow",
-        started: 5,
-        completed: 5,
-        failed: 0,
-        inFlight: 0,
-        successRate: 100.0,
-        avgDurationMs: 500,
-        maxDurationMs: 900,
-        durationSampleSize: 3,
-        durationSampled: true,
-      },
-      {
-        workflowName: "QuietWorkflow",
-        started: 1,
-        completed: 0,
-        failed: 0,
-        inFlight: 1,
-        successRate: null,
-        avgDurationMs: null,
-        maxDurationMs: null,
-        durationSampleSize: 0,
-        durationSampled: false,
-      },
-    ],
-  };
+  function row(name, overrides) {
+    return {
+      workflowName: name,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      inFlight: 0,
+      successRate: null,
+      avgDurationMs: null,
+      maxDurationMs: null,
+      durationSampleSize: 0,
+      durationSampled: false,
+      ...overrides,
+    };
+  }
+
+  // Shapes that the Apex service can return: durationSampled equals isSampled.
+  function health(rows, overrides = {}) {
+    const isSampled = !!overrides.isSampled;
+    return {
+      windowKey: "24h",
+      windowHours: 24,
+      countCap: 20000,
+      countsCapped: false,
+      sampleCap: 2000,
+      isSampled,
+      rows: rows.map((r) => ({ ...r, durationSampled: isSampled })),
+      ...overrides,
+    };
+  }
+
+  const ROWS = [
+    row("OnboardingWorkflow", {
+      started: 12,
+      completed: 8,
+      failed: 2,
+      inFlight: 2,
+      successRate: 80.0,
+      avgDurationMs: 90000,
+      maxDurationMs: 3723000,
+      durationSampleSize: 10,
+    }),
+    // 1,899 / 2,000 = 94.95%. Apex rounds it to 95.0.
+    row("EdgeWorkflow", {
+      started: 2000,
+      completed: 1899,
+      failed: 101,
+      successRate: 95.0,
+      avgDurationMs: 500,
+      maxDurationMs: 900,
+      durationSampleSize: 3,
+    }),
+    // 19 / 20 = 95% exactly.
+    row("ExactWorkflow", {
+      started: 20,
+      completed: 19,
+      failed: 1,
+      successRate: 95.0,
+    }),
+    row("QuietWorkflow", { started: 1, inFlight: 1 }),
+  ];
 
   afterEach(() => {
     while (document.body.firstChild) {
@@ -3088,16 +3105,25 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
     jest.clearAllMocks();
   });
 
-  async function openHealth(data = HEALTH_TWO_DEFS) {
-    getFleetHealth.mockResolvedValue(data);
+  function mount() {
     const element = createElement("c-workflow-dashboard", {
       is: WorkflowDashboard,
     });
     document.body.appendChild(element);
-    await flushPromises();
-    findButton(element, (b) => b.label === "Fleet Health").dispatchEvent(
+    return element;
+  }
+
+  function clickButton(element, label) {
+    findButton(element, (b) => b.label === label).dispatchEvent(
       new CustomEvent("click"),
     );
+  }
+
+  async function openHealth(data = health(ROWS)) {
+    getFleetHealth.mockResolvedValue(data);
+    const element = mount();
+    await flushPromises();
+    clickButton(element, "Fleet Health");
     await flushPromises();
     await flushPromises();
     return element;
@@ -3109,15 +3135,32 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
     );
   }
 
-  function cell(row, id) {
-    return row.querySelector(`[data-id="${id}"]`).textContent.trim();
+  function cell(tr, id) {
+    return tr.querySelector(`[data-id="${id}"]`).textContent.trim();
+  }
+
+  function isFlagged(element, name) {
+    return !!rowFor(element, name).querySelector('[data-id="health-below"]');
+  }
+
+  function query(element, id) {
+    return element.shadowRoot.querySelector(`[data-id="${id}"]`);
+  }
+
+  function setThreshold(element, value) {
+    element.shadowRoot
+      .querySelector('lightning-input[data-id="health-threshold"]')
+      .dispatchEvent(new CustomEvent("change", { detail: { value } }));
+  }
+
+  function changeWindow(element, value) {
+    element.shadowRoot
+      .querySelector('lightning-combobox[data-id="health-window"]')
+      .dispatchEvent(new CustomEvent("change", { detail: { value } }));
   }
 
   it("does not request fleet health on load", async () => {
-    const element = createElement("c-workflow-dashboard", {
-      is: WorkflowDashboard,
-    });
-    document.body.appendChild(element);
+    mount();
     await flushPromises();
 
     expect(getFleetHealth).not.toHaveBeenCalled();
@@ -3127,29 +3170,29 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
     const element = await openHealth();
 
     expect(getFleetHealth).toHaveBeenCalledWith({ windowKey: "24h" });
-    const rows = element.shadowRoot.querySelectorAll(
-      'tr[data-id="health-row"]',
-    );
-    expect(rows.length).toBe(3);
+    expect(
+      element.shadowRoot.querySelectorAll('tr[data-id="health-row"]').length,
+    ).toBe(4);
 
-    const row = rowFor(element, "OnboardingWorkflow");
-    expect(cell(row, "health-started")).toBe("12");
-    expect(cell(row, "health-completed")).toBe("8");
-    expect(cell(row, "health-failed")).toBe("2");
-    expect(cell(row, "health-inflight")).toBe("2");
-    expect(cell(row, "health-rate")).toContain("80%");
-    expect(cell(row, "health-avg")).toBe("1m 30s");
-    expect(cell(row, "health-max")).toBe("1h 2m");
+    const tr = rowFor(element, "OnboardingWorkflow");
+    expect(cell(tr, "health-started")).toBe("12");
+    expect(cell(tr, "health-completed")).toBe("8");
+    expect(cell(tr, "health-failed")).toBe("2");
+    expect(cell(tr, "health-inflight")).toBe("2");
+    expect(cell(tr, "health-rate")).toContain("80%");
+    expect(cell(tr, "health-avg")).toBe("1m 30s");
+    expect(cell(tr, "health-max")).toBe("1h 2m");
+    expect(tr.querySelector("abbr")).toBeNull();
   });
 
   it("shows a dash for a row with no rate or duration", async () => {
     const element = await openHealth();
 
-    const row = rowFor(element, "QuietWorkflow");
-    expect(cell(row, "health-rate")).toBe("—");
-    expect(cell(row, "health-avg")).toBe("—");
-    expect(cell(row, "health-max")).toBe("—");
-    expect(row.querySelector('[data-id="health-below"]')).toBeNull();
+    const tr = rowFor(element, "QuietWorkflow");
+    expect(cell(tr, "health-rate")).toBe("—");
+    expect(cell(tr, "health-avg")).toBe("—");
+    expect(cell(tr, "health-max")).toBe("—");
+    expect(isFlagged(element, "QuietWorkflow")).toBe(false);
   });
 
   it("flags rows below the default 95% threshold (AC3)", async () => {
@@ -3159,88 +3202,95 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
       'lightning-input[data-id="health-threshold"]',
     );
     expect(Number(threshold.value)).toBe(95);
-    expect(
-      rowFor(element, "OnboardingWorkflow").querySelector(
-        '[data-id="health-below"]',
-      ),
-    ).not.toBeNull();
-    expect(
-      rowFor(element, "BillingWorkflow").querySelector(
-        '[data-id="health-below"]',
-      ),
-    ).toBeNull();
+    expect(query(element, "health-threshold-applied").textContent).toContain(
+      "95%",
+    );
+    expect(isFlagged(element, "OnboardingWorkflow")).toBe(true);
+    expect(rowFor(element, "OnboardingWorkflow").className).toContain(
+      "health-row-below",
+    );
+    expect(isFlagged(element, "ExactWorkflow")).toBe(false);
+  });
+
+  it("flags from the counts, not from the rounded rate (AC3)", async () => {
+    const element = await openHealth();
+
+    const tr = rowFor(element, "EdgeWorkflow");
+    expect(cell(tr, "health-rate")).toContain("95%");
+    expect(isFlagged(element, "EdgeWorkflow")).toBe(true);
   });
 
   it("applies an operator threshold without a new server call (AC3)", async () => {
     const element = await openHealth();
     getFleetHealth.mockClear();
 
-    const threshold = element.shadowRoot.querySelector(
-      'lightning-input[data-id="health-threshold"]',
-    );
-    threshold.dispatchEvent(
-      new CustomEvent("change", { detail: { value: "70" } }),
-    );
+    setThreshold(element, "70");
     await flushPromises();
 
-    expect(
-      rowFor(element, "OnboardingWorkflow").querySelector(
-        '[data-id="health-below"]',
-      ),
-    ).toBeNull();
+    expect(isFlagged(element, "OnboardingWorkflow")).toBe(false);
+    expect(isFlagged(element, "EdgeWorkflow")).toBe(false);
+    expect(query(element, "health-threshold-applied").textContent).toContain(
+      "70%",
+    );
     expect(getFleetHealth).not.toHaveBeenCalled();
   });
 
-  it("ignores a threshold that is not a number", async () => {
-    const element = await openHealth();
+  it.each(["", "150", "-1", "abc"])(
+    "keeps the last threshold for the input %p",
+    async (value) => {
+      const element = await openHealth();
 
-    const threshold = element.shadowRoot.querySelector(
-      'lightning-input[data-id="health-threshold"]',
-    );
-    threshold.dispatchEvent(
-      new CustomEvent("change", { detail: { value: "abc" } }),
-    );
-    await flushPromises();
+      setThreshold(element, value);
+      await flushPromises();
 
-    expect(
-      rowFor(element, "OnboardingWorkflow").querySelector(
-        '[data-id="health-below"]',
-      ),
-    ).not.toBeNull();
-  });
+      expect(isFlagged(element, "OnboardingWorkflow")).toBe(true);
+      expect(query(element, "health-threshold-applied").textContent).toContain(
+        "95%",
+      );
+    },
+  );
 
   it("marks sampled durations as approximate (AC4)", async () => {
-    const element = await openHealth({ ...HEALTH_TWO_DEFS, isSampled: true });
+    const element = await openHealth(health(ROWS, { isSampled: true }));
 
-    const sampled = rowFor(element, "BillingWorkflow");
-    expect(cell(sampled, "health-avg")).toBe("≈ 500ms");
-    expect(cell(sampled, "health-max")).toBe("≈ 900ms");
-    expect(
-      element.shadowRoot.querySelector('[data-id="health-sampled-note"]'),
-    ).not.toBeNull();
+    const tr = rowFor(element, "EdgeWorkflow");
+    expect(tr.querySelector('[data-id="health-avg"] abbr').title).toBe(
+      "Approximate",
+    );
+    expect(cell(tr, "health-avg")).toContain("≈");
+    expect(cell(tr, "health-avg")).toContain("500ms");
+    expect(cell(tr, "health-max")).toContain("900ms");
+    // A missing value shows no mark.
+    expect(cell(rowFor(element, "QuietWorkflow"), "health-avg")).toBe("—");
+    expect(query(element, "health-sampled-note")).not.toBeNull();
   });
 
-  it("does not show the sample note when the sample is complete", async () => {
+  it("shows no sample or count note when the data is complete", async () => {
     const element = await openHealth();
 
-    expect(
-      element.shadowRoot.querySelector('[data-id="health-sampled-note"]'),
-    ).toBeNull();
+    expect(query(element, "health-sampled-note")).toBeNull();
+    expect(query(element, "health-capped-note")).toBeNull();
+  });
+
+  it("shows a note when the counts use the newest instances only (AC6)", async () => {
+    const element = await openHealth(
+      health(ROWS, { countsCapped: true, countCap: 20000 }),
+    );
+
+    expect(query(element, "health-capped-note").textContent).toContain("20000");
   });
 
   it("requests a new window when the operator changes it (AC1)", async () => {
     const element = await openHealth();
     getFleetHealth.mockClear();
 
-    element.shadowRoot
-      .querySelector('lightning-combobox[data-id="health-window"]')
-      .dispatchEvent(new CustomEvent("change", { detail: { value: "7d" } }));
+    changeWindow(element, "7d");
     await flushPromises();
 
     expect(getFleetHealth).toHaveBeenCalledWith({ windowKey: "7d" });
   });
 
-  it("discards a stale response from an older window", async () => {
+  it("discards a stale response that arrives after a newer one", async () => {
     const element = await openHealth();
     let resolveOld;
     getFleetHealth
@@ -3250,27 +3300,116 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
             resolveOld = resolve;
           }),
       )
-      .mockResolvedValueOnce({ ...HEALTH_TWO_DEFS, rows: [] });
+      .mockResolvedValueOnce(health([]));
 
-    const combo = element.shadowRoot.querySelector(
-      'lightning-combobox[data-id="health-window"]',
-    );
-    combo.dispatchEvent(new CustomEvent("change", { detail: { value: "1h" } }));
-    combo.dispatchEvent(new CustomEvent("change", { detail: { value: "7d" } }));
+    changeWindow(element, "1h");
+    changeWindow(element, "7d");
     await flushPromises();
-    resolveOld(HEALTH_TWO_DEFS);
+    resolveOld(health(ROWS));
     await flushPromises();
 
     expect(
       element.shadowRoot.querySelectorAll('tr[data-id="health-row"]').length,
     ).toBe(0);
-    expect(
-      element.shadowRoot.querySelector('[data-id="health-empty"]'),
-    ).not.toBeNull();
+    expect(query(element, "health-empty")).not.toBeNull();
   });
 
-  it("deep-links a row to the filtered instance list (AC7)", async () => {
+  it("keeps the spinner when a stale response arrives first", async () => {
     const element = await openHealth();
+    let resolveOld;
+    getFleetHealth
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    changeWindow(element, "1h");
+    changeWindow(element, "7d");
+    resolveOld(health([]));
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector("lightning-spinner"),
+    ).not.toBeNull();
+    expect(query(element, "health-empty")).toBeNull();
+  });
+
+  it("does not show a toast for a stale error", async () => {
+    const element = await openHealth();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+    let rejectOld;
+    getFleetHealth
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            rejectOld = reject;
+          }),
+      )
+      .mockResolvedValueOnce(health(ROWS));
+
+    changeWindow(element, "1h");
+    changeWindow(element, "7d");
+    await flushPromises();
+    rejectOld({ body: { message: "Old failure" } });
+    await flushPromises();
+
+    expect(toastHandler).not.toHaveBeenCalled();
+    expect(rowFor(element, "OnboardingWorkflow")).not.toBeNull();
+  });
+
+  it("does not show a toast after the view closes", async () => {
+    const element = await openHealth();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+    let rejectPending;
+    getFleetHealth.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          rejectPending = reject;
+        }),
+    );
+
+    changeWindow(element, "7d");
+    await flushPromises();
+    clickButton(element, "Close");
+    rejectPending({ body: { message: "Late failure" } });
+    await flushPromises();
+
+    expect(toastHandler).not.toHaveBeenCalled();
+  });
+
+  it("deep-links a row to the filtered instance list and clears other filters (AC7)", async () => {
+    getWorkflowCatalog.mockResolvedValue([
+      {
+        className: "OnboardingWorkflow",
+        label: "Onboarding",
+        documented: true,
+        versioned: false,
+        active: 0,
+        failed: 1,
+        suspended: 0,
+        total: 1,
+      },
+    ]);
+    const element = await openHealth();
+    // Set a status (from a Catalog count) and a search term first.
+    clickButton(element, "Catalog");
+    await flushPromises();
+    element.shadowRoot
+      .querySelector('button.link-button[data-status="Failed"]')
+      .dispatchEvent(new CustomEvent("click"));
+    const search = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-input"),
+    ).find((i) => i.name === "search");
+    search.value = "abc";
+    search.dispatchEvent(new CustomEvent("change"));
+    clickButton(element, "Fleet Health");
+    await flushPromises();
+    await flushPromises();
     getFilteredInstances.mockClear();
 
     element.shadowRoot
@@ -3287,32 +3426,27 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
       ][0].criteria;
     expect(criteria.workflowName).toBe("OnboardingWorkflow");
     expect(criteria.status).toBe("");
+    expect(criteria.searchTerm).toBe("");
     expect(
       element.shadowRoot.querySelector('tr[data-id="health-row"]'),
     ).toBeNull();
   });
 
-  it("shows an empty state when no instance started in the window", async () => {
-    const element = await openHealth({ ...HEALTH_TWO_DEFS, rows: [] });
+  it("shows an empty state when no instance is in the window", async () => {
+    const element = await openHealth(health([]));
 
-    expect(
-      element.shadowRoot.querySelector('[data-id="health-empty"]'),
-    ).not.toBeNull();
+    expect(query(element, "health-empty")).not.toBeNull();
+    expect(query(element, "health-error")).toBeNull();
   });
 
-  it("shows an error toast when the call fails", async () => {
+  it("shows an error state and a toast when the call fails", async () => {
     getFleetHealth.mockRejectedValue({ body: { message: "Unauthorized" } });
-    const element = createElement("c-workflow-dashboard", {
-      is: WorkflowDashboard,
-    });
-    document.body.appendChild(element);
+    const element = mount();
     await flushPromises();
     const toastHandler = jest.fn();
     element.addEventListener("lightning__showtoast", toastHandler);
 
-    findButton(element, (b) => b.label === "Fleet Health").dispatchEvent(
-      new CustomEvent("click"),
-    );
+    clickButton(element, "Fleet Health");
     await flushPromises();
     await flushPromises();
 
@@ -3320,6 +3454,10 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
     const detail = toastHandler.mock.calls[0][0].detail;
     expect(detail.variant).toBe("error");
     expect(detail.message).toContain("Unauthorized");
+    expect(query(element, "health-error").textContent).toContain(
+      "Unauthorized",
+    );
+    expect(query(element, "health-empty")).toBeNull();
   });
 
   it("reloads the view on refresh", async () => {
@@ -3334,16 +3472,38 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
     expect(getFleetHealth).toHaveBeenCalledWith({ windowKey: "24h" });
   });
 
-  it("closes the view when another view opens", async () => {
+  it.each([
+    "System Doctor",
+    "Schedules",
+    "Version Drain",
+    "Unrouted Signals",
+    "Failure Breakdown",
+    "Latency",
+    "Catalog",
+  ])("closes the view when %s opens", async (label) => {
     const element = await openHealth();
 
-    findButton(element, (b) => b.label === "Catalog").dispatchEvent(
-      new CustomEvent("click"),
-    );
+    clickButton(element, label);
     await flushPromises();
 
     expect(
       element.shadowRoot.querySelector('tr[data-id="health-row"]'),
     ).toBeNull();
+  });
+
+  it("closes the view when the operator selects an instance", async () => {
+    mockSuspendedInstance();
+    const element = await openHealth();
+
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector('tr[data-id="health-row"]'),
+    ).toBeNull();
+    expect(getInstanceDetails).toHaveBeenCalled();
   });
 });
