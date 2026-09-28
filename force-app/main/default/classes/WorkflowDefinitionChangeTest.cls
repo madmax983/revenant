@@ -640,6 +640,32 @@ public class WorkflowDefinitionChangeTest {
     }
   }
 
+  // Codex review: the test harness must treat a parked parallel instance as
+  // stable. Otherwise drive() spends its hop budget on gate no-ops and throws.
+  @IsTest
+  static void testHarnessTreatsParkedParallelInstanceAsStable() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'DefinitionChanged',
+        Current_Step__c = STEP_X + ',' + STEP_B,
+        Correlation_Key__c = 'DefChg-Harness-' + Datetime.now().getTime()
+      );
+      insert inst;
+      Test.startTest();
+      Boolean advanceable = WorkflowHarnessAdvancer.isAdvanceable(
+        new WorkflowHarnessContext(inst.Id),
+        inst
+      );
+      Test.stopTest();
+      System.assertEquals(
+        false,
+        advanceable,
+        'A parked instance with unrun branches must not be advanceable'
+      );
+    }
+  }
+
   // ============================================================
   // 7. APPEND-ONLY AUDIT AND LIFO STACK UNTOUCHED
   // ============================================================
