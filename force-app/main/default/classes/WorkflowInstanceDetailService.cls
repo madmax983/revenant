@@ -119,7 +119,11 @@ public inherited sharing class WorkflowInstanceDetailService {
       'attributes' => attributes,
       'breadcrumbs' => breadcrumbs,
       // Stored-versus-live steps for a DefinitionChanged park (issue #89), else null.
-      'definitionChange' => WorkflowDefinitionChangeService.describe(instance)
+      'definitionChange' => WorkflowDefinitionChangeService.describe(instance),
+      // Step-history warning (issue #112), else null.
+      'stepHistoryWarning' => WorkflowStepHistoryGuard.describeWarning(
+        instanceId
+      )
     };
   }
 
