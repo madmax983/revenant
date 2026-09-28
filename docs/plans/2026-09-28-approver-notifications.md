@@ -60,7 +60,8 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | The admin turns the feature off during a wait. | The trigger checks the toggle again. The row shows `Skipped`. |
 | An author calls `withNotification` on a COMPLETE. | `IllegalArgumentException`. |
 | A test depends on the real send. | Test context captures the request and does not call `send()`. Tests can set the type Id. |
-| A matching signal is already buffered. The step resumes at once. | The approver gets one notification that links to a finished instance. Documented. |
+| A matching signal is already buffered. The step resumes at once. | At send time, check that the step row is still `Pending`. Else `Skipped`. (Codex review.) |
+| No SOQL is left in the trigger pass. Valid requests fail with "type not found". (Codex review.) | Check the query budget first. Publish the requests again. |
 
 ## Six Thinking Hats
 
@@ -112,8 +113,8 @@ In the trigger (`WorkflowNotifier.handleEvents`):
 |----|------|
 | Suspend API with recipients, title, body, target; no `Messaging` code in author code | `WorkflowNotificationTest`, `WorkflowNotifierTest.suspendRequestsOneNotification`, `approvalWaitRequestsOneNotification`, `timedSuspendAlsoNotifies` |
 | Static or data-driven recipients | `inputFieldRecipientsResolvedAtSuspend`, `recordOwnerResolvedAtSend`, `nonUserRecipientsAreIgnored` |
-| Once per logical suspend | `reSuspendDoesNotNotifyAgain`, `operatorResumeDoesNotNotifyAgain`, `rolledBackSuspendLeavesNoAnchor`, `replayedEventDoesNotSendAgain`, `copiesInOneBatchSendOnce`, `forgedEventWithNoAnchorSendsNothing`, `forgedPayloadIsIgnored` |
-| Fire-and-forget | `publishFailureDoesNotBlockSuspend`, `lowDmlBudgetSkipsNotify`, `dmlReserveSkipsNotify`, `sendFailureIsLogged`, `eachRequestInABatchIsIsolated`, `badNotifyDoesNotBlockResumeInSameBatch`, `sendBudgetDefersTheRest`, `tooManyRecipientsForOnePassFails` |
+| Once per logical suspend | `reSuspendDoesNotNotifyAgain`, `operatorResumeDoesNotNotifyAgain`, `rolledBackSuspendLeavesNoAnchor`, `replayedEventDoesNotSendAgain`, `copiesInOneBatchSendOnce`, `forgedEventWithNoAnchorSendsNothing`, `forgedPayloadIsIgnored`, `endedWaitIsSkipped` |
+| Fire-and-forget | `publishFailureDoesNotBlockSuspend`, `lowDmlBudgetSkipsNotify`, `dmlReserveSkipsNotify`, `sendFailureIsLogged`, `eachRequestInABatchIsIsolated`, `badNotifyDoesNotBlockResumeInSameBatch`, `sendBudgetDefersTheRest`, `tooManyRecipientsForOnePassFails`, `lowResultDmlSendsNothingAndWaits`, `lowQueryBudgetWaits`, `deferredPublishFailureIsLogged` |
 | Deep link | `suspendRequestsOneNotification` (default: instance), `authorTargetAndTypeAreUsed` |
 | Toggle | `toggleReadsTheDefaultConfig`, `toggleOffPublishesNothing`, `toggleOffAtSendSkips` |
 | Shipped type | `Revenant_Workflow_Notification.notiftype-meta.xml` |

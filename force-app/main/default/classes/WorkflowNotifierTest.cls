@@ -526,6 +526,55 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
+  static void endedWaitIsSkipped() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-ended-wait',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(instanceId);
+    // The decision arrives and the step completes before the send.
+    WorkflowEngine.signal('notify-ended-wait', 'Go', '{}');
+    WorkflowEngine.runStep(instanceId);
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Workflow_Log__c log = anchors(instanceId)[0];
+    Assert.areEqual(WorkflowNotifier.OUTCOME_SKIPPED, log.Outcome__c);
+    Assert.isTrue(log.Message__c.contains('wait ended'), log.Message__c);
+  }
+
+  @IsTest
+  static void lowQueryBudgetWaits() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-query-budget',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(instanceId);
+    WorkflowNotifier.forceQueryBudgetExhausted = true;
+    Test.getEventBus().deliver();
+    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_REQUESTED,
+      anchors(instanceId)[0].Outcome__c,
+      'No query budget: the request waits, it does not fail'
+    );
+    WorkflowNotifier.forceQueryBudgetExhausted = false;
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SENT,
+      anchors(instanceId)[0].Outcome__c
+    );
+  }
+
+  @IsTest
   static void deferredPublishFailureIsLogged() {
     seedType();
     WorkflowNotifier.sendCallsPerPass = 1;

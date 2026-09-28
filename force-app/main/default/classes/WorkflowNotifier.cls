@@ -95,6 +95,8 @@ public inherited sharing class WorkflowNotifier {
   private static Boolean forceDmlBudgetExhausted = false;
   @TestVisible
   private static Boolean forceResultDmlExhausted = false;
+  @TestVisible
+  private static Boolean forceQueryBudgetExhausted = false;
 
   /**
    * @description Returns the Fire_Key__c of the anchor row of a step row.
@@ -353,18 +355,12 @@ public inherited sharing class WorkflowNotifier {
         return;
       }
       List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
-      if (WorkflowEngine.sendNotifications) {
-        deferred = sendAll(anchors);
+      if (!WorkflowEngine.sendNotifications) {
+        skipAll(anchors, 'Send_Notifications__c is off');
+      } else if (!hasQueryBudget(1)) {
+        deferred = anchors;
       } else {
-        for (Workflow_Log__c anchor : anchors) {
-          setResult(
-            anchor,
-            null,
-            OUTCOME_SKIPPED,
-            LEVEL_WARN,
-            'Send_Notifications__c is off'
-          );
-        }
+        deferred = sendAll(skipEndedWaits(anchors));
       }
       // A deferred request that cannot be published again fails now. Else its
       // row stays Requested with no event.
@@ -417,8 +413,67 @@ public inherited sharing class WorkflowNotifier {
     ];
   }
 
+  private static void skipAll(List<Workflow_Log__c> anchors, String reason) {
+    for (Workflow_Log__c anchor : anchors) {
+      setResult(anchor, null, OUTCOME_SKIPPED, LEVEL_WARN, reason);
+    }
+  }
+
+  // Skips the requests whose step row no longer waits (Pending). For example,
+  // a buffered signal resumed the step before this pass. One SOQL.
+  private static List<Workflow_Log__c> skipEndedWaits(
+    List<Workflow_Log__c> anchors
+  ) {
+    Set<Id> stepIds = new Set<Id>();
+    for (Workflow_Log__c anchor : anchors) {
+      Id stepId = stepExecIdOf(anchor.Fire_Key__c);
+      if (stepId != null) {
+        stepIds.add(stepId);
+      }
+    }
+    Set<Id> waiting = new Map<Id, Workflow_Step_Execution__c>(
+        [
+          SELECT Id
+          FROM Workflow_Step_Execution__c
+          WHERE Id IN :stepIds AND Status__c = 'Pending'
+          WITH SYSTEM_MODE
+        ]
+      )
+      .keySet();
+    List<Workflow_Log__c> open = new List<Workflow_Log__c>();
+    for (Workflow_Log__c anchor : anchors) {
+      if (waiting.contains(stepExecIdOf(anchor.Fire_Key__c))) {
+        open.add(anchor);
+      } else {
+        setResult(
+          anchor,
+          null,
+          OUTCOME_SKIPPED,
+          LEVEL_INFO,
+          'The wait ended before the send'
+        );
+      }
+    }
+    return open;
+  }
+
+  private static Id stepExecIdOf(String key) {
+    try {
+      return Id.valueOf(key.substringAfter(FIRE_KEY_PREFIX));
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  // True when the pass has the given number of SOQL queries left.
+  private static Boolean hasQueryBudget(Integer queries) {
+    return !forceQueryBudgetExhausted &&
+      Limits.getQueries() + queries <= Limits.getLimitQueries();
+  }
+
   // Sends the requests in a send-call budget. Returns the rows to send in a
-  // later pass. Sets the result on each other row.
+  // later pass. Sets the result on each other row. When the pass cannot run
+  // the type and owner queries, all requests wait for a later pass.
   private static List<Workflow_Log__c> sendAll(List<Workflow_Log__c> anchors) {
     List<OpenRequest> requests = new List<OpenRequest>();
     Set<String> typeNames = new Set<String>();
@@ -440,6 +495,17 @@ public inherited sharing class WorkflowNotifier {
         typeNames.add((String) req.get('type'));
       }
       ownerRecordIds.addAll(ids(req.get('owners')));
+    }
+    Set<Schema.SObjectType> ownerTypes = new Set<Schema.SObjectType>();
+    for (Id recordId : ownerRecordIds) {
+      ownerTypes.add(recordId.getSObjectType());
+    }
+    if (!hasQueryBudget(1 + ownerTypes.size())) {
+      List<Workflow_Log__c> all = new List<Workflow_Log__c>();
+      for (OpenRequest open : requests) {
+        all.add(open.anchor);
+      }
+      return all;
     }
     resolveTypeIds(typeNames);
     Map<Id, Id> owners = resolveOwners(ownerRecordIds);

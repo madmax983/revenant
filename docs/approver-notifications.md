@@ -88,6 +88,7 @@ A logical suspend is one `Workflow_Step_Execution__c` row. A resume uses the sam
 | The platform delivers the `NOTIFY` event again | The row is not `Requested`, or the copy is in the same pass. The engine sends nothing. |
 | A user publishes a forged `NOTIFY` event | No `Requested` row has its key. The engine sends nothing. With a real key, the engine sends the content of the row, not of the event. |
 | A new visit of the step (a loop) | A new row. One new notification. |
+| The wait ends before the send (for example, a buffered signal resumes the step) | The step row is not `Pending`. The row is `Skipped`. The engine sends nothing. |
 
 You do not supply a dedup token.
 
@@ -100,7 +101,7 @@ A step that waits again on the same row with a new notification (for example, a 
 - When the anchor insert fails for a reason other than a duplicate key, `request` writes a `Notification` error row.
 - A publish error sets the anchor row to `Failed` (`Level__c = Error`).
 - In the trigger, each request has its own `try`/`catch`. A failed row update writes one error row.
-- The trigger sends only when it can save the result rows. Else it publishes the requests again for a later pass.
+- The trigger sends only when it can save the result rows and run its queries. Else it publishes the requests again for a later pass.
 - When the publish for a later pass fails, the row is `Failed`.
 
 `Outcome__c` values:
@@ -110,7 +111,7 @@ A step that waits again on the same row with a new notification (for example, a 
 | `Requested` | The SUSPEND published the request. The trigger did not run yet. |
 | `Sent` | The platform accepted the send. It does not prove delivery. |
 | `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, too many recipients, a request that is not readable, or the error. |
-| `Skipped` | `Send_Notifications__c` was off at send time. |
+| `Skipped` | `Send_Notifications__c` was off at send time, or the wait ended before the send. |
 
 `Message__c` holds the request as JSON. After the send, it also has a `result` key.
 
@@ -140,7 +141,7 @@ On a SUSPEND with a notification:
 
 A SUSPEND with no notification costs nothing.
 
-In the trigger, for each pass: one SOQL for the anchor rows, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, one update, max 10 send calls, and one publish for the requests that wait for a later pass.
+In the trigger, for each pass: one SOQL for the anchor rows, one SOQL for the step rows that still wait, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, one update, max 10 send calls, and one publish for the requests that wait for a later pass.
 
 ## Data
 
@@ -158,7 +159,6 @@ These members are `@TestVisible private`. In your own tests, read `result.direct
 - In rare cases a row stays `Requested` with no event (for example, a platform publish error after the commit). No sweep sends it again yet. See issue #274.
 
 - The notification opens the instance or the target record, not a decision screen. Use a Flow screen, a quick action or the Signal Workflow invocable action to publish the decision.
-- When a matching signal is already buffered, the step resumes at once. The approver still gets the notification.
 - A send to more than 500 recipients uses more than one call. When a later call fails, the row is `Failed`, but the earlier recipients got the notification.
 - One request can send to max 5,000 recipients (10 calls of 500). Else the row is `Failed`. For a larger audience, use a public group.
 - `Message__c` holds max 131,000 characters. A `toInputKey` list of more than approximately 6,000 Ids makes the request not readable (`Failed`). For a large audience, use a public group.
