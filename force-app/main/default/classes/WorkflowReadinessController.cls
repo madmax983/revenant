@@ -10,7 +10,7 @@ public inherited sharing class WorkflowReadinessController {
    * @return One row per check, in a fixed order.
    */
   @AuraEnabled
-  public static List<WorkflowReadinessService.ReadinessCheck> getReadinessChecks() {
+  public static List<WorkflowReadinessCheck> getReadinessChecks() {
     return WorkflowReadinessService.runChecks();
   }
 }

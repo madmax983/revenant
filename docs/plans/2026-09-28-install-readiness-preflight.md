@@ -85,7 +85,7 @@ Invariants:
 ## Changes
 
 - `WorkflowReadinessController.getReadinessChecks()` (not cacheable).
-- `WorkflowReadinessService` with `ReadinessCheck` DTO and `Probe` seam.
+- `WorkflowReadinessService` with a `Probe` seam, and the top-level `WorkflowReadinessCheck` DTO (LWC reads it from the return value).
 - `WorkflowDashboardStatusService.watchdogRunning()` (shared).
 - `WorkflowAlertManager.isAlertActionable` is public.
 - Permission sets: class access for `WorkflowReadinessController`.

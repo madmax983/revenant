@@ -148,22 +148,20 @@ private class WorkflowReadinessControllerTest {
     return u;
   }
 
-  private static Map<String, WorkflowReadinessService.ReadinessCheck> byKey(
-    List<WorkflowReadinessService.ReadinessCheck> checks
+  private static Map<String, WorkflowReadinessCheck> byKey(
+    List<WorkflowReadinessCheck> checks
   ) {
-    Map<String, WorkflowReadinessService.ReadinessCheck> result = new Map<String, WorkflowReadinessService.ReadinessCheck>();
-    for (WorkflowReadinessService.ReadinessCheck check : checks) {
+    Map<String, WorkflowReadinessCheck> result = new Map<String, WorkflowReadinessCheck>();
+    for (WorkflowReadinessCheck check : checks) {
       result.put(check.key, check);
     }
     return result;
   }
 
   // AC3: every Warn and Fail names the fix. Every row has a name and a finding.
-  private static void assertActionable(
-    List<WorkflowReadinessService.ReadinessCheck> checks
-  ) {
+  private static void assertActionable(List<WorkflowReadinessCheck> checks) {
     System.assertEquals(7, checks.size(), 'Seven checks are expected');
-    for (WorkflowReadinessService.ReadinessCheck check : checks) {
+    for (WorkflowReadinessCheck check : checks) {
       System.assert(String.isNotBlank(check.name), 'Each check has a name');
       System.assert(
         String.isNotBlank(check.finding),
@@ -188,11 +186,11 @@ private class WorkflowReadinessControllerTest {
     }
   }
 
-  private static WorkflowReadinessService.ReadinessCheck check(
+  private static WorkflowReadinessCheck check(
     String key,
-    List<WorkflowReadinessService.ReadinessCheck> checks
+    List<WorkflowReadinessCheck> checks
   ) {
-    WorkflowReadinessService.ReadinessCheck found = byKey(checks).get(key);
+    WorkflowReadinessCheck found = byKey(checks).get(key);
     System.assertNotEquals(null, found, 'Missing check: ' + key);
     return found;
   }
@@ -206,16 +204,13 @@ private class WorkflowReadinessControllerTest {
     fake.hasConfig = false;
     WorkflowReadinessService.probe = fake;
 
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
 
     assertActionable(checks);
-    WorkflowReadinessService.ReadinessCheck config = check(
-      'engineConfig',
-      checks
-    );
+    WorkflowReadinessCheck config = check('engineConfig', checks);
     System.assertEquals(FAIL, config.status, 'A missing config fails');
     System.assert(
       config.finding.contains('Revenant_Config__mdt'),
@@ -230,10 +225,7 @@ private class WorkflowReadinessControllerTest {
       config.remediation
     );
 
-    WorkflowReadinessService.ReadinessCheck alert = check(
-      'alertConfig',
-      checks
-    );
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
     System.assertEquals(WARN, alert.status, 'A missing alert config warns');
     System.assert(
       alert.finding.contains('will not alert anyone'),
@@ -244,10 +236,7 @@ private class WorkflowReadinessControllerTest {
       alert.remediation
     );
 
-    WorkflowReadinessService.ReadinessCheck trig = check(
-      'eventTrigger',
-      checks
-    );
+    WorkflowReadinessCheck trig = check('eventTrigger', checks);
     System.assertEquals(FAIL, trig.status, 'An inactive trigger fails');
     System.assert(
       trig.finding.containsIgnoreCase(
@@ -260,10 +249,7 @@ private class WorkflowReadinessControllerTest {
       trig.remediation
     );
 
-    WorkflowReadinessService.ReadinessCheck watchdog = check(
-      'watchdog',
-      checks
-    );
+    WorkflowReadinessCheck watchdog = check('watchdog', checks);
     System.assertEquals(FAIL, watchdog.status, 'No watchdog fails');
     System.assert(watchdog.finding.contains('not running'), watchdog.finding);
     System.assert(
@@ -285,13 +271,13 @@ private class WorkflowReadinessControllerTest {
     WorkflowReadinessService.probe = new FakeProbe().withAlert(goodAlert());
     User admin = userWith('Revenant_Admin');
 
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(admin) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
 
     assertActionable(checks);
-    for (WorkflowReadinessService.ReadinessCheck c : checks) {
+    for (WorkflowReadinessCheck c : checks) {
       System.assertEquals(PASS, c.status, c.key + ' should pass: ' + c.finding);
     }
   }
@@ -302,12 +288,12 @@ private class WorkflowReadinessControllerTest {
   @IsTest
   static void testRowOrderIsFixed() {
     WorkflowReadinessService.probe = new FakeProbe().withAlert(goodAlert());
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
     List<String> keys = new List<String>();
-    for (WorkflowReadinessService.ReadinessCheck c : checks) {
+    for (WorkflowReadinessCheck c : checks) {
       keys.add(c.key);
     }
     System.assertEquals(
@@ -332,14 +318,11 @@ private class WorkflowReadinessControllerTest {
   static void testDisabledDefaultAlertWarns() {
     WorkflowReadinessService.probe = new FakeProbe()
       .withAlert(alertConfig(false, 'ops@example.com', true));
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck alert = check(
-      'alertConfig',
-      checks
-    );
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
     System.assertEquals(WARN, alert.status, 'Disabled alerts warn');
     System.assert(alert.finding.contains('Enable_Alerts__c'), alert.finding);
     System.assert(
@@ -359,14 +342,11 @@ private class WorkflowReadinessControllerTest {
   static void testDefaultAlertWithoutChannelWarns() {
     WorkflowReadinessService.probe = new FakeProbe()
       .withAlert(alertConfig(true, null, false));
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck alert = check(
-      'alertConfig',
-      checks
-    );
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
     System.assertEquals(WARN, alert.status, 'No channel warns');
     System.assert(alert.finding.contains('Email_Recipients__c'), alert.finding);
   }
@@ -378,14 +358,11 @@ private class WorkflowReadinessControllerTest {
   static void testSeparatorOnlyRecipientsWarns() {
     WorkflowReadinessService.probe = new FakeProbe()
       .withAlert(alertConfig(true, ',; ', false));
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck alert = check(
-      'alertConfig',
-      checks
-    );
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
     System.assertEquals(WARN, alert.status, 'No real recipient warns');
     System.assert(alert.finding.contains('Email_Recipients__c'), alert.finding);
   }
@@ -398,14 +375,11 @@ private class WorkflowReadinessControllerTest {
     WorkflowReadinessService.probe = new FakeProbe()
       .withAlert(goodAlert())
       .withTrigger(null);
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck trig = check(
-      'eventTrigger',
-      checks
-    );
+    WorkflowReadinessCheck trig = check('eventTrigger', checks);
     System.assertEquals(FAIL, trig.status, 'A missing trigger fails');
     System.assert(trig.finding.contains('not deployed'), trig.finding);
     System.assert(
@@ -422,14 +396,11 @@ private class WorkflowReadinessControllerTest {
     WorkflowReadinessService.probe = new FakeProbe()
       .withAlert(goodAlert())
       .withTrigger('Deleted');
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck trig = check(
-      'eventTrigger',
-      checks
-    );
+    WorkflowReadinessCheck trig = check('eventTrigger', checks);
     System.assertEquals(FAIL, trig.status, 'A deleted trigger fails');
     System.assert(trig.finding.contains('not deployed'), trig.finding);
   }
@@ -442,15 +413,12 @@ private class WorkflowReadinessControllerTest {
     FakeProbe fake = new FakeProbe().withAlert(goodAlert());
     fake.triggerThrows = true;
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
     assertActionable(checks);
-    WorkflowReadinessService.ReadinessCheck trig = check(
-      'eventTrigger',
-      checks
-    );
+    WorkflowReadinessCheck trig = check('eventTrigger', checks);
     System.assertEquals(WARN, trig.status, 'A failed probe warns');
     System.assert(trig.finding.contains('could not run'), trig.finding);
     System.assert(trig.finding.contains('Probe failed'), trig.finding);
@@ -484,7 +452,7 @@ private class WorkflowReadinessControllerTest {
   @IsTest
   static void testStoppedWatchdogFailsLikeSystemDoctor() {
     WorkflowReadinessService.probe = new FakeProbe().withAlert(goodAlert());
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     Map<String, Object> doctor;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       seedWatchdog('Completed');
@@ -512,15 +480,12 @@ private class WorkflowReadinessControllerTest {
     FakeProbe fake = new FakeProbe().withAlert(goodAlert());
     fake.livenessState = 'STALE';
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       seedWatchdog('Suspended');
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck watchdog = check(
-      'watchdog',
-      checks
-    );
+    WorkflowReadinessCheck watchdog = check('watchdog', checks);
     System.assertEquals(WARN, watchdog.status, 'A stale chain warns');
     System.assert(watchdog.finding.contains('Stale'), watchdog.finding);
     System.assert(
@@ -542,7 +507,7 @@ private class WorkflowReadinessControllerTest {
     FakeProbe fake = new FakeProbe().withAlert(goodAlert());
     fake.livenessState = 'UNKNOWN';
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(new User(Id = UserInfo.getUserId())) {
       seedWatchdog('Suspended');
       checks = WorkflowReadinessController.getReadinessChecks();
@@ -561,7 +526,7 @@ private class WorkflowReadinessControllerTest {
   static void testOperatorGetsCreateWarnNotFail() {
     WorkflowReadinessService.probe = new FakeProbe().withAlert(goodAlert());
     User operator = userWith('Revenant_Operator');
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(operator) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
@@ -573,7 +538,7 @@ private class WorkflowReadinessControllerTest {
         'access.Workflow_Signal__c'
       }
     ) {
-      WorkflowReadinessService.ReadinessCheck access = check(key, checks);
+      WorkflowReadinessCheck access = check(key, checks);
       System.assertEquals(WARN, access.status, key + ': read-only warns');
       System.assert(access.finding.contains('cannot create'), access.finding);
       System.assert(
@@ -599,11 +564,11 @@ private class WorkflowReadinessControllerTest {
     FakeProbe fake = new FakeProbe().withAlert(goodAlert());
     fake.unreadableFields.add(Workflow_Instance__c.Terminal_At__c);
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck access = check(
+    WorkflowReadinessCheck access = check(
       'access.Workflow_Instance__c',
       checks
     );
@@ -627,14 +592,11 @@ private class WorkflowReadinessControllerTest {
     FakeProbe fake = new FakeProbe().withAlert(goodAlert());
     fake.unreadableObjects.add(Workflow_Signal__c.SObjectType);
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck access = check(
-      'access.Workflow_Signal__c',
-      checks
-    );
+    WorkflowReadinessCheck access = check('access.Workflow_Signal__c', checks);
     System.assertEquals(FAIL, access.status, 'No object read fails');
     System.assert(
       access.finding.contains('Workflow_Signal__c (object)'),
@@ -655,20 +617,17 @@ private class WorkflowReadinessControllerTest {
     fake.unreadableFields.add(Workflow_Signal__c.Signal_Key__c);
     fake.uncreatableFields.add(Workflow_Instance__c.Definition_Shape__c);
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck signal = check(
-      'access.Workflow_Signal__c',
-      checks
-    );
+    WorkflowReadinessCheck signal = check('access.Workflow_Signal__c', checks);
     System.assertEquals(FAIL, signal.status, 'Signal_Key__c read gap fails');
     System.assert(
       signal.finding.contains('Workflow_Signal__c.Signal_Key__c'),
       signal.finding
     );
-    WorkflowReadinessService.ReadinessCheck instance = check(
+    WorkflowReadinessCheck instance = check(
       'access.Workflow_Instance__c',
       checks
     );
@@ -729,11 +688,11 @@ private class WorkflowReadinessControllerTest {
     fake.unreadableFields.add(Workflow_Instance__c.Output__c);
     fake.uncreatableFields.add(Workflow_Instance__c.Current_Step__c);
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck access = check(
+    WorkflowReadinessCheck access = check(
       'access.Workflow_Instance__c',
       checks
     );
@@ -759,14 +718,11 @@ private class WorkflowReadinessControllerTest {
     fake.uncreatableObjects.add(Workflow_Signal__c.SObjectType);
     fake.uncreatableFields.add(Workflow_Signal__c.Payload__c);
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck access = check(
-      'access.Workflow_Signal__c',
-      checks
-    );
+    WorkflowReadinessCheck access = check('access.Workflow_Signal__c', checks);
     System.assertEquals(WARN, access.status, 'A create gap warns');
     System.assert(
       access.finding.contains('cannot create: Workflow_Signal__c (object).'),
@@ -786,11 +742,11 @@ private class WorkflowReadinessControllerTest {
     FakeProbe fake = new FakeProbe().withAlert(goodAlert());
     fake.uncreatableFields.add(Workflow_Step_Execution__c.Timeout_At__c);
     WorkflowReadinessService.probe = fake;
-    List<WorkflowReadinessService.ReadinessCheck> checks;
+    List<WorkflowReadinessCheck> checks;
     System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    WorkflowReadinessService.ReadinessCheck access = check(
+    WorkflowReadinessCheck access = check(
       'access.Workflow_Step_Execution__c',
       checks
     );
@@ -816,7 +772,7 @@ private class WorkflowReadinessControllerTest {
       Integer events = Limits.getPublishImmediateDML();
       Integer cpu = Limits.getCpuTime();
 
-      List<WorkflowReadinessService.ReadinessCheck> checks = WorkflowReadinessController.getReadinessChecks();
+      List<WorkflowReadinessCheck> checks = WorkflowReadinessController.getReadinessChecks();
 
       System.assertEquals(7, checks.size(), 'All checks run');
       System.assertEquals(0, Limits.getDmlStatements() - dml, 'No DML');

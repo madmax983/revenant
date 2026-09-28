@@ -31,22 +31,6 @@ public inherited sharing class WorkflowReadinessService {
   }
 
   /**
-   * @description One readiness check row.
-   */
-  public class ReadinessCheck {
-    @AuraEnabled
-    public String key;
-    @AuraEnabled
-    public String name;
-    @AuraEnabled
-    public String status;
-    @AuraEnabled
-    public String finding;
-    @AuraEnabled
-    public String remediation;
-  }
-
-  /**
    * @description Reads org facts. Tests extend it to make a broken install.
    */
   public virtual class Probe {
@@ -143,7 +127,7 @@ public inherited sharing class WorkflowReadinessService {
    * view gate first. A check that throws gives Warn; the other checks still run.
    * @return One row per check.
    */
-  public static List<ReadinessCheck> runChecks() {
+  public static List<WorkflowReadinessCheck> runChecks() {
     WorkflowDashboardSupport.checkAuthorization();
     List<Rule> rules = new List<Rule>{
       new EngineConfigRule(),
@@ -155,7 +139,7 @@ public inherited sharing class WorkflowReadinessService {
       rules.add(rule);
     }
 
-    List<ReadinessCheck> checks = new List<ReadinessCheck>();
+    List<WorkflowReadinessCheck> checks = new List<WorkflowReadinessCheck>();
     for (Rule rule : rules) {
       checks.add(rule.safeRun());
     }
@@ -188,9 +172,9 @@ public inherited sharing class WorkflowReadinessService {
     protected String key;
     protected String name;
 
-    protected abstract ReadinessCheck evaluate();
+    protected abstract WorkflowReadinessCheck evaluate();
 
-    public ReadinessCheck safeRun() {
+    public WorkflowReadinessCheck safeRun() {
       try {
         return evaluate();
       } catch (Exception ex) {
@@ -202,17 +186,17 @@ public inherited sharing class WorkflowReadinessService {
       }
     }
 
-    protected ReadinessCheck pass(String finding) {
+    protected WorkflowReadinessCheck pass(String finding) {
       return row(STATUS_PASS, finding, null);
     }
 
     // Builds a row. A Pass row has no remediation.
-    protected ReadinessCheck row(
+    protected WorkflowReadinessCheck row(
       String status,
       String finding,
       String remediation
     ) {
-      ReadinessCheck check = new ReadinessCheck();
+      WorkflowReadinessCheck check = new WorkflowReadinessCheck();
       check.key = key;
       check.name = name;
       check.status = status;
@@ -229,7 +213,7 @@ public inherited sharing class WorkflowReadinessService {
       name = 'Engine config';
     }
 
-    protected override ReadinessCheck evaluate() {
+    protected override WorkflowReadinessCheck evaluate() {
       if (probe.hasEngineConfig()) {
         return pass('The Default Revenant_Config__mdt record is present.');
       }
@@ -248,7 +232,7 @@ public inherited sharing class WorkflowReadinessService {
       name = 'Failure alerts';
     }
 
-    protected override ReadinessCheck evaluate() {
+    protected override WorkflowReadinessCheck evaluate() {
       Workflow_Alert_Config__mdt config = probe.defaultAlertConfig();
       if (config == null) {
         return row(
@@ -284,7 +268,7 @@ public inherited sharing class WorkflowReadinessService {
       name = 'Event trigger';
     }
 
-    protected override ReadinessCheck evaluate() {
+    protected override WorkflowReadinessCheck evaluate() {
       String status = probe.eventTriggerStatus();
       if (status == 'Active') {
         return pass('WorkflowEventTrigger is Active.');
@@ -312,7 +296,7 @@ public inherited sharing class WorkflowReadinessService {
       name = 'Watchdog chain';
     }
 
-    protected override ReadinessCheck evaluate() {
+    protected override WorkflowReadinessCheck evaluate() {
       if (!probe.watchdogRunning()) {
         return row(
           STATUS_FAIL,
@@ -349,7 +333,7 @@ public inherited sharing class WorkflowReadinessService {
     }
 
     // When the object itself has a gap, only the object is listed for that gap.
-    protected override ReadinessCheck evaluate() {
+    protected override WorkflowReadinessCheck evaluate() {
       String objectName = describeObjectName();
       Boolean objectReadable = probe.canRead(objectType);
       Boolean objectCreatable = probe.canCreate(objectType);
@@ -399,7 +383,7 @@ public inherited sharing class WorkflowReadinessService {
       return result;
     }
 
-    private ReadinessCheck toCheck(
+    private WorkflowReadinessCheck toCheck(
       String objectName,
       List<String> readGaps,
       List<String> createGaps

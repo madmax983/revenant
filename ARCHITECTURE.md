@@ -223,7 +223,7 @@ endpoints moved). All five delegate to `inherited sharing` service classes.
   `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The
   service uses the `RateLimiter` refill formula (`availableTokens`).
 - Readiness panel (#114): `WorkflowReadinessController` →
-  `WorkflowReadinessService`. It is a separate controller for the same PMD
+  `WorkflowReadinessService` (rows: top-level `WorkflowReadinessCheck` DTO). It is a separate controller for the same PMD
   reason. The watchdog check uses `WorkflowDashboardStatusService.watchdogRunning`,
   the same signal as the Watchdog Daemon Health panel.
 - Fleet Health view (#111): `WorkflowFleetHealthController` →
