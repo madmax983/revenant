@@ -104,12 +104,15 @@ public inherited sharing class WorkflowNotifier {
       if (wouldExceedDmlBudget()) {
         return; // Drop the best-effort request. Keep the SUSPEND.
       }
-      String payloadJson = JSON.serialize(buildPayload(outcome, notification));
+      String key = fireKey(outcome.stepExec.Id);
+      String payloadJson = JSON.serialize(
+        buildPayload(key, outcome, notification)
+      );
       Workflow_Log__c anchor = new Workflow_Log__c(
         Log_Type__c = LOG_TYPE,
         Level__c = LEVEL_INFO,
         Outcome__c = OUTCOME_REQUESTED,
-        Fire_Key__c = fireKey(outcome.stepExec.Id),
+        Fire_Key__c = key,
         Fire_Time__c = Datetime.now(),
         Message__c = truncate(payloadJson),
         Workflow_Instance__c = outcome.instance.Id,
@@ -139,6 +142,7 @@ public inherited sharing class WorkflowNotifier {
   }
 
   private static Map<String, Object> buildPayload(
+    String key,
     WorkflowEngine.StepOutcomeContext outcome,
     WorkflowNotification notification
   ) {
@@ -153,7 +157,7 @@ public inherited sharing class WorkflowNotifier {
       )
     );
     return new Map<String, Object>{
-      'key' => fireKey(outcome.stepExec.Id),
+      'key' => key,
       'type' => notification.typeName,
       'title' => notification.title,
       'body' => notification.body,
