@@ -52,6 +52,14 @@ is the concurrency gate that decides whether a step may run now.
 - `WorkflowStepInvoke`, `WorkflowStepContext`, `WorkflowStepAdvance`
 - `WorkflowStepOutcome`, `WorkflowStepSuspension`, `WorkflowOutcomePrepare`
 - `WorkflowStepExecStore` — `saveStepExec` / `saveStepExecAsCrash`
+- `WorkflowNotification`, `WorkflowNotifier` — approver notifications (issue
+  #123). The SUSPEND and WAIT_FOR_APPROVAL handlers insert one
+  `Workflow_Log__c` anchor (unique `Fire_Key__c` `Notify:<stepExecId>`) and
+  publish one `NOTIFY` `Workflow_Event__e` with the key. A separate
+  subscriber, `WorkflowNotifyTrigger`, calls `WorkflowNotifier.handleEvents`
+  in its own transaction. It reads the `Requested` anchor rows and sends the
+  Custom Notification. `WorkflowEventTrigger` ignores `NOTIFY`.
+  Toggle: `Revenant_Config__mdt.Send_Notifications__c`.
 - `WorkflowStepTimeoutConfig`, `WorkflowTimeoutArming`, `WorkflowTimeoutReArm`
 - `ConcurrencyGate` (facade) + `ConcurrencyConfigResolver`,
   `ConcurrencyReconciler`, `ConcurrencyReleaseProcessor`
@@ -62,6 +70,8 @@ is the concurrency gate that decides whether a step may run now.
   `WorkflowDefinitionChangeService` — park an instance in `DefinitionChanged`
   when the live `getSteps()` list differs from the list stored at start;
   release a parked instance (issue #89)
+- `WorkflowInstanceHoldGate`, `WorkflowInstanceHold` — park one operator-held
+  instance in `Held` at the next step boundary; hold and release API (issue #119)
 - `WorkflowDeterminismGuard`, `WorkflowDecisionFingerprint` — strict
   determinism mode: record each wait decision with an inputs digest, and fail
   a re-run that changes its decision on equal inputs with
@@ -120,6 +130,10 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WatchdogLiveness` (sweep stamp, stale state), `WatchdogStallDetector`
   (one alert per stall; runs from `WorkflowWatchdog.bootstrap()` and the
   System Doctor read)
+- `WorkflowMetricsPublisher`, `WorkflowMetricsCollector`,
+  `WorkflowMetricsSnapshot` (engine-health `Workflow_Metrics__e` snapshot on
+  each sweep; default off. See
+  [docs/workflow-metrics-event.md](docs/workflow-metrics-event.md))
 
 ## Payload persistence & codec
 
@@ -201,6 +215,9 @@ endpoints moved). All five delegate to `inherited sharing` service classes.
   `WorkflowTrendService`, `WorkflowVersionDrainService`,
   `WorkflowFailureBreakdownService`, `WorkflowDashboardStatusService`,
   `WorkflowDashboardQueryBuilders`, `WorkflowDashboardSupport`
+- Platform Event allocation (#120): `PlatformEventHeadroom`. It reads only
+  the `System.OrgLimits` map. `WorkflowDashboardStatusService` adds its
+  result to the `getWatchdogStatus()` payload.
 - Rate Limits panel (#61): `WorkflowRateLimitController` →
   `WorkflowRateLimitStatusService`. It is a separate controller because
   `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The
@@ -216,7 +233,8 @@ endpoints moved). All five delegate to `inherited sharing` service classes.
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,
-  `WorkflowMaintenanceCommandService`, `WorkflowSignalCommandService`
+  `WorkflowMaintenanceCommandService`, `WorkflowSignalCommandService`,
+  `WorkflowHoldCommandService` (issue #119)
 
 ## Authoring surface (step-author API)
 
@@ -238,6 +256,8 @@ sub-objects and helper classes.
   `ContinueDirective`, `ChildRequest`) + `StepResultJson`, `StepResultValidator`,
   `BusinessSleepCalculator`, `BusinessHoursCalendar`
 - `WorkflowDefinition`, `WorkflowStep`, `RetryPolicy`, `AutoRetryConfigurable`
+- Global subset: only the members in [docs/global-api.md](docs/global-api.md) are
+  `global`. Subscriber code sees nothing else (issue #122).
 
 ---
 

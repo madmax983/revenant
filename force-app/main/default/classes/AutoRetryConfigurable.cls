@@ -8,7 +8,7 @@
  * this policy. The engine undoes the step DML before the retry. It does not
  * undo DML in a `CalloutStep`, so make that step safe to run again.
  */
-public interface AutoRetryConfigurable {
+global interface AutoRetryConfigurable {
   /**
    * @description Returns the default retry policy for thrown exceptions.
    * @return The policy, or null to fail fast on a thrown exception.

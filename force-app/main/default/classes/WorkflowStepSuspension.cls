@@ -45,7 +45,8 @@ public inherited sharing class WorkflowStepSuspension {
   /**
    * @description SUSPEND outcome: saves the step's state and suspends the
    * instance awaiting an external signal, arming or clearing the timed-suspend
-   * deadline before redelivering any matching buffered signals.
+   * deadline before redelivering any matching buffered signals. Then requests
+   * the notification of the step, if any (issue #123).
    * @param outcome the step outcome bundle carrying instance, step exec, result
    * and context
    */
@@ -98,12 +99,14 @@ public inherited sharing class WorkflowStepSuspension {
       : null;
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
+    // Issue #123: last, after the required DML. Fire-and-forget.
+    WorkflowNotifier.request(outcome);
   }
 
   /**
@@ -135,7 +138,7 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     instance.Sleep_Until__c = DateTime.now()
       .addSeconds(result.directive().sleepDurationSeconds);
     instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
@@ -185,7 +188,7 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
@@ -241,7 +244,7 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
@@ -257,7 +260,8 @@ public inherited sharing class WorkflowStepSuspension {
   /**
    * @description WAIT_FOR_APPROVAL outcome: suspends the step awaiting an
    * approval signal, arming or clearing the timed-approval deadline before
-   * redelivering any matching buffered signals.
+   * redelivering any matching buffered signals. Then requests the
+   * notification of the step, if any (issue #123).
    * @param outcome the step outcome bundle carrying instance, step exec, result
    * and context
    */
@@ -295,12 +299,14 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
       instance.Correlation_Key__c
     );
+    // Issue #123: last, after the required DML. Fire-and-forget.
+    WorkflowNotifier.request(outcome);
   }
 
   /**

@@ -80,7 +80,7 @@ public inherited sharing class WorkflowRetryScheduling {
     Double rawDelay = policy.initialIntervalSeconds * backoff;
     Integer delay = rawDelay >= 86400 ? 86400 : rawDelay.intValue();
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     instance.Sleep_Until__c = DateTime.now().addSeconds(delay);
     instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleRetry(
       instance.Id,

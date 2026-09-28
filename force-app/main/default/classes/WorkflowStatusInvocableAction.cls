@@ -8,7 +8,16 @@
  * observe, and it follows ContinuedAsNew chains so a lookup by correlation key
  * reports the live/terminal successor rather than a stale predecessor.
  */
-public inherited sharing class WorkflowStatusInvocableAction {
+global inherited sharing class WorkflowStatusInvocableAction {
+  /**
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
+   */
+  private WorkflowStatusInvocableAction() {
+    // No state to set.
+  }
+
   // Statuses that represent a finished workflow. ContinuedAsNew is deliberately
   // excluded: it is a hand-off, not a terminal outcome, so the action resolves it
   // forward to a successor rather than reporting it as terminal.
@@ -23,73 +32,73 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * @description Invocable request identifying the workflow instance to read, by either its
    * record Id or its correlation key.
    */
-  public class StatusRequest {
+  global class StatusRequest {
     @InvocableVariable(
       label='Correlation Key or Workflow Instance ID'
       description='Either a Workflow Instance record Id or a Correlation Key identifying the workflow to read.'
       required=true
     )
-    public String workflowKeyOrId;
+    global String workflowKeyOrId;
   }
 
   /**
    * @description Invocable response reporting a workflow instance's resolved status, output,
    * progress, and failure detail, with payloads rehydrated from offloaded storage.
    */
-  public class StatusResult {
+  global class StatusResult {
     @InvocableVariable(
       label='Found'
       description='False when no workflow instance matched the supplied key or Id.'
     )
-    public Boolean found;
+    global Boolean found;
 
     @InvocableVariable(
       label='Workflow Instance ID'
       description='The resolved current instance Id, following any ContinuedAsNew chain.'
     )
-    public Id workflowInstanceId;
+    global Id workflowInstanceId;
 
     @InvocableVariable(
       label='Status'
       description='The workflow instance Status value (e.g. Running, Completed, Failed).'
     )
-    public String status;
+    global String status;
 
     @InvocableVariable(
       label='Is Terminal'
       description='True when the workflow has finished (Completed, Failed, Compensated, or Cancelled).'
     )
-    public Boolean isTerminal;
+    global Boolean isTerminal;
 
     @InvocableVariable(
       label='Is Success'
       description='True only when the workflow finished successfully (Completed).'
     )
-    public Boolean isSuccess;
+    global Boolean isSuccess;
 
     @InvocableVariable(
       label='Output JSON'
       description='The workflow output, fully rehydrated from offloaded storage when applicable.'
     )
-    public String outputJson;
+    global String outputJson;
 
     @InvocableVariable(
       label='Error Message'
       description='Failure detail sourced from the workflow Error Message field.'
     )
-    public String errorMessage;
+    global String errorMessage;
 
     @InvocableVariable(
       label='Progress JSON'
       description='The workflow progress snapshot, fully rehydrated from offloaded storage when applicable.'
     )
-    public String progressJson;
+    global String progressJson;
 
     @InvocableVariable(
       label='Causation ID'
       description='Causation or trace identifier linking this instance to the upstream instance/event.'
     )
-    public String causationId;
+    global String causationId;
 
     /**
      * @description Initializes the result to a not-found, non-terminal, non-success state.
@@ -122,7 +131,7 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * @param requests The status requests to resolve; null or empty yields an empty list.
    * @return A StatusResult per input request, in the same order.
    */
-  public static List<StatusResult> getStatus(List<StatusRequest> requests) {
+  global static List<StatusResult> getStatus(List<StatusRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return new List<StatusResult>();
     }

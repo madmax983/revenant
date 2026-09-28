@@ -12,7 +12,8 @@ public inherited sharing class BulkCancelWorkflow implements WorkflowDefinition 
     'Suspended',
     'Paused',
     'CompensationFailed',
-    'DefinitionChanged'
+    'DefinitionChanged',
+    'Held'
   };
 
   @TestVisible
