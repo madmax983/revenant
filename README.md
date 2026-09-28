@@ -352,7 +352,7 @@ The engine ships full parent→child orchestration: `StepResult.startChild()` su
 | **Child output**      | The child's final outcome (status, error message, and output) can be read with `ctx.signals().getChildOutcome(childKey)`. This is the preferred way to distinguish a successful child from a failed, compensated, or cancelled one without hand-rolled SOQL. For backward compatibility, the successful child's final output still arrives as the payload of the `ChildCompleted:<childKey>` signal (read with `ctx.signals().getSignal("ChildCompleted:" + childKey).payload`). |
 | **Idempotent resume** | The step that launched the child also handles the resume: check for the child outcome first, then act on it. Return `StepResult.complete()` (not `suspend()`) on the resume path — returning COMPLETE triggers engine-managed signal consumption, so an at-least-once redelivered duplicate completion or failure event cannot double-advance the parent.                                                                                                    |
 | **Idempotent launch** | The engine automatically dedupes child launches against the deterministic `(Parent_Instance__c, Correlation_Key__c)` pair. If `startChild()` is called again during a re-entrant hop or watchdog re-check, and the active child already exists, the engine resolves to an idempotent re-suspend without starting a duplicate or failing the parent.                                                                                                          |
-| **Cancellation**      | `WorkflowEngine.cancel(parentId)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. (Use `WorkflowCancellation.cancelWithCompensations(parentId)` — the compensating-cancel entry point lives on `WorkflowCancellation`, not the engine — to also run each cancelled instance's compensation stack.) A parent that **fails** also cancels its in-flight children (see below). |
+| **Cancellation**      | `WorkflowEngine.cancel(parentId)` cancels the parent and all of its active descendants (root-first traversal over `Parent_Instance__c`), so explicitly cancelling a parent reaps its in-flight children. (Use `WorkflowEngine.cancel(parentId, true)` to also run each cancelled instance's compensation stack.) A parent that **fails** also cancels its in-flight children (see below). |
 
 **Parent failure cascades to children (issue #94).** When a parent becomes `Failed`, `Compensated` or `CompensationFailed`, the engine cancels its in-flight descendants.
 
@@ -395,15 +395,16 @@ public class RequestCreditCheckStep implements WorkflowStep {
 
 The correlation key format `'<prefix>_' + ctx.workflowInstanceId` guarantees uniqueness across concurrent parent instances while remaining stable across retries of the same step.
 
-### 7. Flow Interoperability (Start, Signal, Read)
+### 7. Flow Interoperability (Start, Signal, Read, Cancel)
 
 Flow Builders interact with the engine through supported Invocable Actions (category **Revenant Workflows**) — no internal field API names required:
 
-| Action                  | Apex Class                      | Purpose                                                        |
-| ----------------------- | ------------------------------- | -------------------------------------------------------------- |
-| **Start Workflow**      | `WorkflowStartInvocableAction`  | Launch a durable workflow, returning its Instance Id.          |
-| **Signal Workflow**     | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance. |
-| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only).         |
+| Action                  | Apex Class                      | Purpose                                                               |
+| ----------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| **Start Workflow**      | `WorkflowStartInvocableAction`  | Launch a durable workflow, returning its Instance Id.                 |
+| **Signal Workflow**     | `WorkflowSignalInvocableAction` | Send a signal (approve, cancel, resume) to a running instance.        |
+| **Get Workflow Status** | `WorkflowStatusInvocableAction` | Read an instance's outcome back into Flow (read-only).                |
+| **Cancel Workflow**     | `WorkflowCancelInvocableAction` | Cancel an instance and its active children, with or without rollback. |
 
 **Reading a workflow's outcome.** _Get Workflow Status_ accepts **either** a `Workflow_Instance__c` Id **or** a Correlation Key and returns typed outputs a Decision element can branch on:
 
@@ -420,6 +421,18 @@ The action is **strictly read-only** (no transition, enqueue, signal, schedule, 
 - **By Instance Id** — reads _that exact instance_ and deliberately does **not** follow the chain (an Id is a precise handle). The Id returned by _Start Workflow_ points at the original generation, so polling that saved Id on a continue-as-new workflow would keep reading the predecessor and miss the successor's outcome.
 
 > Note: a single read returns the full rehydrated `outputJson` even for offloaded (>100k) payloads. A Flow batch that polls _many_ instances whose outputs are _all_ large/offloaded materializes them all at once and can approach the Apex heap limit; use smaller batch sizes for that case.
+
+**Cancelling a workflow.** _Cancel Workflow_ takes the same **Correlation Key or Workflow Instance ID** input as _Get Workflow Status_ and finds the instance the same way (a key follows the `ContinuedAsNew` chain; an Id does not).
+
+- **Run Compensations** — `true` (or empty) rolls back the completed steps that can roll back, last step first. The status goes `Cancelling`, then `Cancelled`. Each rolled-back step row is `Compensated`. `false` stops at once: status `Cancelled`, no rollback. `false` on a `Cancelling` instance stops its rollback. See [ADR 0004](docs/adr/0004-cancel-workflow-invocable-action.md).
+- **Idempotency Key** — optional. A repeat with the same key for the same instance does nothing. All keyed signals (Signal Workflow) use the same keys, so do not reuse the key of a different signal.
+- Outputs: `found` (`false` instead of a fault), `workflowInstanceId`, `cancelled`, `isCompensating`, and `status`. `cancelled` is `false` when the instance is already finished, when a rollback is requested and a rollback already runs, when the key was already used, or when another row did the cancel.
+
+The action cancels active children through the engine cascade. It never faults on a finished instance. SOQL and DML **statements** do not grow with the Flow batch size. A repeat cancel with rollback does not start a second rollback. When two rows in one batch find the same instance, the first row that can act wins. A parent row with Run Compensations `false` also stops a child that another row asked to roll back.
+
+> Limits: each rollback row writes about 5 DML rows (claim, step cancel, compensation step, instance update, orchestrator event). Keep a batch under about 1,500 rollback rows (the limit is 10,000 DML rows). A key follows at most 50 `ContinuedAsNew` generations, the same as _Get Workflow Status_.
+>
+> Access: like _Signal Workflow_, the action runs in system mode and has no custom-permission check. Give access to the Apex class only to trusted users, and do not expose it in a guest screen flow.
 
 **Reference recipe** — start a workflow, then later branch on its outcome:
 

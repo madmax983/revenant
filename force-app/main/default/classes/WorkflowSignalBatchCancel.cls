@@ -41,18 +41,54 @@ public inherited sharing class WorkflowSignalBatchCancel {
       return cancelledInstanceIds;
     }
     Savepoint cancelSp = Database.setSavepoint();
-    Database.SaveResult[] claimResults = Database.insert(
-      batch.claims,
-      false,
-      AccessLevel.SYSTEM_MODE
-    );
-    List<Integer> freshClaims = collectFreshClaimIndices(
-      claimResults,
-      cancelSp
-    );
+    List<Integer> freshClaims = insertCancelClaims(batch.claims, cancelSp);
     Set<Id> attemptedCancelIds = runKeyedCancels(batch, freshClaims, cancelSp);
     refreshAfterKeyedCancels(attemptedCancelIds, maps, cancelledInstanceIds);
     return cancelledInstanceIds;
+  }
+
+  /**
+   * @description Builds one keyed-cancel claim: a `Consumed` tombstone keyed by
+   * the per-instance dedup hash. A unique Signal_Key__c lets only one claim win.
+   * @param instanceId the instance being cancelled
+   * @param signalName the cancel signal name to record
+   * @param idempotencyKey the caller idempotency key (not blank)
+   * @return the unsaved claim row
+   */
+  public static Workflow_Signal__c buildCancelClaim(
+    Id instanceId,
+    String signalName,
+    String idempotencyKey
+  ) {
+    return new Workflow_Signal__c(
+      Workflow_Instance__c = instanceId,
+      Signal_Name__c = signalName,
+      Status__c = 'Consumed',
+      Signal_Key__c = WorkflowSignalDedup.deriveSignalDedupKey(
+        instanceId,
+        idempotencyKey
+      )
+    );
+  }
+
+  /**
+   * @description Inserts the claims in one DML (allOrNone=false). A duplicate
+   * key loses the race and is skipped. Any other error rolls back to the
+   * savepoint and throws.
+   * @param claims the claim rows from {@link buildCancelClaim}
+   * @param cancelSp the savepoint to roll back on a genuine failure
+   * @return the indices of the claims that won
+   */
+  public static List<Integer> insertCancelClaims(
+    List<Workflow_Signal__c> claims,
+    Savepoint cancelSp
+  ) {
+    Database.SaveResult[] claimResults = Database.insert(
+      claims,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    return collectFreshClaimIndices(claimResults, cancelSp);
   }
 
   /**
@@ -86,22 +122,15 @@ public inherited sharing class WorkflowSignalBatchCancel {
       if (inst == null) {
         continue; // unmatched keyed cancel already no-op'd above
       }
-      String claimKey = WorkflowSignalDedup.deriveSignalDedupKey(
+      Workflow_Signal__c claim = buildCancelClaim(
         inst.Id,
+        req.signalName,
         req.idempotencyKey
       );
-      if (seenCancelKeys.contains(claimKey)) {
+      if (!seenCancelKeys.add(claim.Signal_Key__c)) {
         continue; // in-batch duplicate keyed cancel
       }
-      seenCancelKeys.add(claimKey);
-      batch.claims.add(
-        new Workflow_Signal__c(
-          Workflow_Instance__c = inst.Id,
-          Signal_Name__c = req.signalName,
-          Status__c = 'Consumed',
-          Signal_Key__c = claimKey
-        )
-      );
+      batch.claims.add(claim);
       batch.instIds.add(inst.Id);
       batch.runComp.add(
         WorkflowSignalHelpers.parseRunCompensations(req.payload)
