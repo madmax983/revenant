@@ -70,7 +70,8 @@ One line for each declaration. The test reads the block below.
 - `new <Type>(<parameter types>)`: a constructor. `new <Type>()` is also the default constructor of a `global` class with no explicit constructor.
 - `<Type>.<name>: <type> { get }` or `{ get; set }`: a property.
 - `<Type>.<name>: <type>`: a field (read and write).
-- `@InvocableMethod` and `@InvocableVariable` show Flow members.
+- `@InvocableMethod` and `@InvocableVariable` show Flow members, with the arguments that change compatibility (`required`, `callout`). `@Deprecated` is shown.
+- `virtual`, `abstract`, `override`, and `webservice` are shown. A `webservice` member is visible outside the package, as a `global` member.
 - Interface methods are `global` because the interface is `global`.
 - A `global` exception also has the platform exception constructors. The manifest does not show them.
 
@@ -244,8 +245,8 @@ global class WorkflowStartInvocableAction
 @InvocableMethod static WorkflowStartInvocableAction.startWorkflow(List<WorkflowStartInvocableAction.StartRequest>): List<WorkflowStartInvocableAction.StartResult>
 global class WorkflowStartInvocableAction.StartRequest
 new WorkflowStartInvocableAction.StartRequest()
-@InvocableVariable WorkflowStartInvocableAction.StartRequest.workflowName: String
-@InvocableVariable WorkflowStartInvocableAction.StartRequest.correlationKey: String
+@InvocableVariable(required=true) WorkflowStartInvocableAction.StartRequest.workflowName: String
+@InvocableVariable(required=true) WorkflowStartInvocableAction.StartRequest.correlationKey: String
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.inputJson: String
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.attributesJson: String
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.causationId: String
@@ -262,8 +263,8 @@ global class WorkflowSignalInvocableAction
 @InvocableMethod static WorkflowSignalInvocableAction.signalWorkflow(List<WorkflowSignalInvocableAction.SignalRequest>): void
 global class WorkflowSignalInvocableAction.SignalRequest
 new WorkflowSignalInvocableAction.SignalRequest()
-@InvocableVariable WorkflowSignalInvocableAction.SignalRequest.targetKey: String
-@InvocableVariable WorkflowSignalInvocableAction.SignalRequest.signalName: String
+@InvocableVariable(required=true) WorkflowSignalInvocableAction.SignalRequest.targetKey: String
+@InvocableVariable(required=true) WorkflowSignalInvocableAction.SignalRequest.signalName: String
 @InvocableVariable WorkflowSignalInvocableAction.SignalRequest.payloadJson: String
 @InvocableVariable WorkflowSignalInvocableAction.SignalRequest.idempotencyKey: String
 
@@ -272,7 +273,7 @@ global class WorkflowStatusInvocableAction
 @InvocableMethod static WorkflowStatusInvocableAction.getStatus(List<WorkflowStatusInvocableAction.StatusRequest>): List<WorkflowStatusInvocableAction.StatusResult>
 global class WorkflowStatusInvocableAction.StatusRequest
 new WorkflowStatusInvocableAction.StatusRequest()
-@InvocableVariable WorkflowStatusInvocableAction.StatusRequest.workflowKeyOrId: String
+@InvocableVariable(required=true) WorkflowStatusInvocableAction.StatusRequest.workflowKeyOrId: String
 global class WorkflowStatusInvocableAction.StatusResult
 @InvocableVariable WorkflowStatusInvocableAction.StatusResult.found: Boolean
 @InvocableVariable WorkflowStatusInvocableAction.StatusResult.workflowInstanceId: Id
@@ -289,7 +290,7 @@ global class WorkflowStatusInvocableAction.StatusResult
 
 These stay namespace-private. The test fails if one of them gets `global`.
 
-- Engine internals: `WorkflowOrchestrator*`, `WorkflowWatchdog*`, `Watchdog*`, finalizers, `*Job`, `*Controller` (dashboard), `*Sweep`, `*Sweeper`, `*SweepRunner`.
+- Engine internals: `WorkflowOrchestrator*`, `WorkflowWatchdog*`, `Watchdog*`, finalizers, `*Job`, `*Controller` (dashboard), `*Sweep`, `*Sweeper`, `*SweepRunner`. The test also finds internals by structure: a class that implements `Queueable`, `Schedulable`, `Database.Batchable`, or `Finalizer`, and a class with `@AuraEnabled` members.
 - Each member of a manifest type that is not in the manifest. Examples: `StepContext.Builder`, `StepContext.SignalSource`, `StepSignals.markMatched`, `StepResult.ActionType`, the other `StepDirective` data, `WorkflowEngine` configuration fields, `runStep`, `handleCrash`, `failWorkflowInstance`.
 - `WorkflowEngine.StartRequest.withParent` and `parentInstanceId`. A subscriber could make a false parent link. Use `StepResult.startChild` or `startChildren`.
 
@@ -317,8 +318,8 @@ The test does these checks:
 2. Each `global` member is in a `global` type. Each `global` signature uses only `global` or system types. Each `global` interface extends only `global` interfaces.
 3. No engine internal has `global`.
 4. Each `@InvocableMethod` and `@InvocableVariable` in a `global` class is `global`.
-5. `GlobalApiSubscriberTest` writes no read-only `global` property.
-6. Packaged view: the test makes a stub project in namespace `rvn`. The stub holds only the `global` members. The test compiles the stub with apex-ls. Then it compiles `GlobalApiSubscriberTest` in namespace `acme` against the stub. The fixture must have zero errors. A probe that uses two namespace-private members must fail two times.
+5. `GlobalApiSubscriberTest` writes no read-only `global` property. It calls no method that the stub keeps only to implement an interface (for example `compareTo`). apex-ls does not check setter access or `public` access across namespaces.
+6. Packaged view: the test makes a stub project in namespace `rvn`. The stub holds only the `global` members. The test compiles the stub with apex-ls. Then it compiles `GlobalApiSubscriberTest` in namespace `acme` against the stub. The fixture must have zero errors. A probe that uses a namespace-private method and type must fail with exactly these two errors. Its call to a `global` method must pass.
 
 Check 6 needs Java and apex-ls. Run `scripts/global-api/fetch-apex-ls.sh` one time (it needs Maven), or set `APEX_LS_CLASSPATH`. Without them, the test skips check 6. Set `REQUIRE_APEX_LS=1` to make the skip a failure.
 

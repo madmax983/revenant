@@ -201,6 +201,7 @@ public class GlobalApiSubscriberTest {
       ctx.captures().deprecated('change-0');
       ctx.captures().deprecated('change-00', Datetime.now());
       ctx.logger().log(StepContext.Level.WARN, 'Seen');
+      ctx.logger().log(StepContext.Level.ERROR, 'Probe');
       seen.add(StepResult.sleep(1, 'Hours', 'Default'));
       ctx.progress().reportProgress(seen);
       ctx.events().emit(new Account(Name = 'probe'));
@@ -328,10 +329,15 @@ public class GlobalApiSubscriberTest {
       start.workflowName = WORKFLOW;
       start.correlationKey = 'global-api-flow';
       start.inputJson = '{"sku":"A-2"}';
+      start.attributesJson = '{"region":"emea"}';
+      start.causationId = 'trace-flow';
+      start.debounceSeconds = null;
+      start.maxWaitSeconds = null;
       WorkflowSignalInvocableAction.SignalRequest signal = new WorkflowSignalInvocableAction.SignalRequest();
       signal.targetKey = 'global-api-flow';
       signal.signalName = DECISION;
       signal.payloadJson = 'flow';
+      signal.idempotencyKey = 'flow-decision-1';
       WorkflowStatusInvocableAction.StatusRequest read = new WorkflowStatusInvocableAction.StatusRequest();
       read.workflowKeyOrId = 'global-api-flow';
 
@@ -361,6 +367,14 @@ public class GlobalApiSubscriberTest {
         statuses[0].errorMessage
       );
       System.assert(statuses[0].isSuccess, 'Completed is a success');
+      System.assert(statuses[0].isTerminal, 'Completed is terminal');
+      System.assertEquals('"flow"', statuses[0].outputJson, 'Flow output');
+      System.assertEquals('trace-flow', statuses[0].causationId, 'Causation');
+      System.assertNotEquals(
+        null,
+        statuses[0].progressJson,
+        'The step reported progress'
+      );
     }
   }
 

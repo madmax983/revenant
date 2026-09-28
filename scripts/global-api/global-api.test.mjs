@@ -20,6 +20,7 @@ import {
   parseSources,
   prefixRepoTypes,
   readOnlyWrites,
+  stubOnlyCalls,
   ruleViolations,
   stubSources,
   surfaceLines,
@@ -43,11 +44,11 @@ const model = buildModel(classes);
 
 function manifestLines() {
   const block = readFileSync(MANIFEST, "utf8").match(
-    /```revenant-global-api\n([\s\S]*?)```/,
+    /```revenant-global-api\r?\n([\s\S]*?)```/,
   );
   assert.ok(block, "docs/global-api.md has no revenant-global-api block");
   return block[1]
-    .split("\n")
+    .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"));
 }
@@ -191,7 +192,117 @@ test("checker: finds a write to a read-only global property", () => {
     }),
   );
   const src = "P p; p.n = 1; p.n++; p.w = 2; Boolean b = p.n == 1;";
-  assert.deepEqual(readOnlyWrites(src, m), ["line 1: .n", "line 1: .n"]);
+  assert.deepEqual(readOnlyWrites(src, m), ["line 1: p.n", "line 1: p.n"]);
+});
+
+test("checker: renders virtual, abstract, webservice, accessors, and annotation arguments", () => {
+  const m = buildModel(
+    parseSources({
+      "V.cls":
+        "global virtual class V { global virtual Integer a() { return 1; } " +
+        "@Deprecated global static void old() {} " +
+        "webservice static void ws() {} " +
+        "global Integer k { private get; set; } " +
+        "global class R { @InvocableVariable(label='X'   required=true) global String x; } }",
+      "B.cls": "global abstract class B { global abstract void run(); }",
+    }),
+  );
+  const lines = surfaceLines(m);
+  for (const expected of [
+    "global virtual class V",
+    "global abstract class B",
+    "abstract B.run(): void",
+    "virtual V.a(): Integer",
+    "@Deprecated static V.old(): void",
+    "webservice static V.ws(): void",
+    "V.k: Integer { set }",
+    "@InvocableVariable(required=true) V.R.x: String",
+  ]) {
+    assert.ok(
+      lines.includes(expected),
+      `missing: ${expected}\n${lines.join("\n")}`,
+    );
+  }
+});
+
+test("checker: finds webservice in a non-global type and implements of a non-global interface", () => {
+  const m = buildModel(
+    parseSources({
+      "W.cls": "public class W { webservice static void ws() {} }",
+      "G.cls": "global class G implements H {}",
+      "H.cls": "public interface H {}",
+    }),
+  );
+  assert.deepEqual(ruleViolations(m).sort(), [
+    "G: implements non-global H",
+    "W.ws: global member in non-global type",
+  ]);
+});
+
+test("checker: finds internals by structure and ignores name case", () => {
+  const m = buildModel(
+    parseSources({
+      "Tick.cls":
+        "global class Tick implements Schedulable { global void execute(SchedulableContext c) {} }",
+      "Hop.cls":
+        "public class Hop implements Queueable, Database.AllowsCallouts { global void x() {} }",
+      "Ui.cls": "public class Ui { @AuraEnabled global static void x() {} }",
+      "workflowretryjob.cls": "global class workflowretryjob {}",
+      "Fine.cls":
+        "global class Fine implements Comparable { public Integer compareTo(Object o) { return 0; } }",
+    }),
+  );
+  assert.deepEqual(exposedInternals(m), [
+    "Hop",
+    "Tick",
+    "Ui",
+    "workflowretryjob",
+  ]);
+});
+
+test("checker: stub implements the methods of super-interfaces", () => {
+  const m = buildModel(
+    parseSources({
+      "W.cls": "global interface W { void a(); }",
+      "C.cls": "global interface C extends W { void b(); }",
+      "K.cls":
+        "global class K implements C { public void a() {} public void b() {} }",
+    }),
+  );
+  const stub = stubSources(m)["K.cls"];
+  assert.match(stub, /public void a\(\)/);
+  assert.match(stub, /public void b\(\)/);
+});
+
+test("checker: finds typed, prefix, and compound writes to read-only properties", () => {
+  const m = buildModel(
+    parseSources({
+      "S.cls":
+        "global class S { global String status { get; private set; } global Integer n { get; private set; } }",
+      "D.cls": "global class D { global String status; }",
+    }),
+  );
+  const src =
+    "S s; D d; s.status = 'x'; d.status = 'y'; ++s.n; s.n |= 1; s.n <<= 1; Boolean b = s.n == 1;";
+  assert.deepEqual(readOnlyWrites(src, m), [
+    "line 1: s.status",
+    "line 1: s.n",
+    "line 1: s.n",
+    "line 1: s.n",
+  ]);
+});
+
+test("checker: finds calls to stub-only public methods", () => {
+  const m = buildModel(
+    parseSources({
+      "Sig.cls":
+        "global class Sig implements Comparable { public Integer compareTo(Object o) { return 0; } public void helper() {} }",
+    }),
+  );
+  assert.deepEqual(
+    stubOnlyCalls("Sig s; s.compareTo(null); List<Sig> l; l.sort();", m),
+    ["line 1: .compareTo("],
+  );
 });
 
 // ─── Repo checks ───────────────────────────────────────────────────────────
@@ -250,6 +361,11 @@ test("the subscriber fixture is a non-global @IsTest class", () => {
   assert.ok(!fixture.global, `${FIXTURE} must not be global`);
 });
 
+test("the subscriber fixture calls no stub-only public method", () => {
+  const source = readFileSync(join(CLASSES, `${FIXTURE}.cls`), "utf8");
+  assert.deepEqual(stubOnlyCalls(source, model), []);
+});
+
 test("the subscriber fixture writes no read-only global property", () => {
   const source = readFileSync(join(CLASSES, `${FIXTURE}.cls`), "utf8");
   assert.deepEqual(readOnlyWrites(source, model), []);
@@ -304,11 +420,15 @@ function apexLsErrors(classpath, workspace) {
     { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
   if (run.error) throw run.error;
+  // apex-ls exits 0 with no issue and 4 with issues.
+  if (![0, 4].includes(run.status) || !run.stdout.includes("{")) {
+    throw new Error(`apex-ls failed (exit ${run.status}): ${run.stderr}`);
+  }
   const json = JSON.parse(run.stdout.slice(run.stdout.indexOf("{")));
   return json.files.flatMap((f) =>
     f.messages.map(
       (m) =>
-        `${f.path.split("/").pop()}:${m.start.line} ${m.category}: ${m.message}`,
+        `${f.path.split(/[\\/]/).pop()}:${m.start.line} ${m.category}: ${m.message}`,
     ),
   );
 }
@@ -337,6 +457,7 @@ test("packaged view: the subscriber fixture compiles in a foreign namespace", (t
     const source = readFileSync(join(CLASSES, `${FIXTURE}.cls`), "utf8");
     const probe =
       "@IsTest public class NonGlobalProbe { static void probe() { " +
+      "WorkflowEngine.cancel(null); " + // positive control: global
       "WorkflowEngine.runStep(null); StepContext.Builder b; } }";
     writeProject(
       subscriberDir,
@@ -362,12 +483,14 @@ test("packaged view: the subscriber fixture compiles in a foreign namespace", (t
       [],
       "the fixture uses a member that is not global",
     );
-    // Negative control: the packaged view must reject a namespace-private member and type.
-    assert.equal(
-      probeErrors.length,
-      2,
-      `the probe must fail twice, got: ${probeErrors.join(" | ")}`,
+    // Negative control: the packaged view rejects exactly the namespace-private
+    // member and the namespace-private type. The global call has no error.
+    assert.equal(probeErrors.length, 2, probeErrors.join(" | "));
+    assert.match(
+      probeErrors[0],
+      /No matching method found for 'runStep' on 'rvn\.WorkflowEngine'/i,
     );
+    assert.match(probeErrors[1], /'Builder'.*'rvn\.StepContext'/i);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
