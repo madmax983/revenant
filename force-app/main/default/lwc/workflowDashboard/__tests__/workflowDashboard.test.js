@@ -15,6 +15,8 @@ import redriveMatchingInstances from "@salesforce/apex/WorkflowDashboardCommandC
 import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.injectSignal";
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
+import holdInstance from "@salesforce/apex/WorkflowDashboardCommandController.holdInstance";
+import releaseHeldInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseHeldInstance";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
 
@@ -56,6 +58,16 @@ jest.mock(
 jest.mock(
   "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance",
   () => ({ default: jest.fn(() => Promise.resolve()) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardCommandController.holdInstance",
+  () => ({ default: jest.fn(() => Promise.resolve("HELD")) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardCommandController.releaseHeldInstance",
+  () => ({ default: jest.fn(() => Promise.resolve("RELEASED")) }),
   { virtual: true },
 );
 jest.mock(
@@ -3027,6 +3039,190 @@ describe("c-workflow-dashboard definition changed", () => {
     const detail = toastHandler.mock.calls[0][0].detail;
     expect(detail.variant).toBe("error");
     expect(detail.message).toContain("StepB");
+  });
+});
+
+// Issue #119: an operator holds one instance and releases it later.
+describe("c-workflow-dashboard instance hold (#119)", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function mockInstance(fields) {
+    const base = {
+      Id: "a0G000000000119",
+      Name: "WI-0119",
+      Workflow_Name__c: "OrderWorkflow",
+      Status__c: "Running",
+      Current_Step__c: "StepB",
+      Held__c: false,
+      ...fields,
+    };
+    getFilteredInstances.mockResolvedValue([base]);
+    getInstanceDetails.mockResolvedValue({
+      instance: base,
+      steps: [],
+      children: [],
+      payloadFiles: {},
+    });
+  }
+
+  async function openInstance() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  const holdButton = (element) =>
+    element.shadowRoot.querySelector('lightning-button[data-id="hold-btn"]');
+  const releaseButton = (element) =>
+    element.shadowRoot.querySelector(
+      'lightning-button[data-id="release-hold-btn"]',
+    );
+
+  it("offers Held as a distinct status filter", async () => {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    const statusCombo = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-combobox"),
+    ).find((c) => (c.options || []).some((o) => o.value === "Failed"));
+    const option = statusCombo.options.find((o) => o.value === "Held");
+    expect(option).toBeDefined();
+    expect(option.label).toBe("Held");
+  });
+
+  it("shows the held state, reason and held-since for a parked instance", async () => {
+    mockInstance({
+      Status__c: "Held",
+      Held__c: true,
+      Hold_Reason__c: "Downstream outage",
+      Held_At__c: "2026-09-28T10:00:00.000Z",
+    });
+    const element = await openInstance();
+
+    const panel = element.shadowRoot.querySelector('[data-id="hold-panel"]');
+    expect(panel).not.toBeNull();
+    expect(
+      panel.querySelector('[data-id="hold-reason"]').textContent,
+    ).toContain("Downstream outage");
+    expect(
+      panel.querySelector('[data-id="hold-since"]').textContent.trim(),
+    ).not.toBe("");
+    expect(panel.querySelector('[data-id="hold-waiting"]')).toBeNull();
+    const listBadge = element.shadowRoot.querySelector(".list-item .badge");
+    expect(listBadge.className).toContain("badge-cyan");
+  });
+
+  it("marks a hold that waits for the next step boundary", async () => {
+    mockInstance({
+      Status__c: "Suspended",
+      Held__c: true,
+      Hold_Reason__c: "check",
+      Held_At__c: "2026-09-28T10:00:00.000Z",
+    });
+    const element = await openInstance();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="hold-waiting"]'),
+    ).not.toBeNull();
+    expect(
+      element.shadowRoot.querySelector('.list-item [data-id="held-marker"]'),
+    ).not.toBeNull();
+  });
+
+  it("holds a running instance with the typed reason", async () => {
+    mockInstance({});
+    const element = await openInstance();
+
+    expect(releaseButton(element)).toBeNull();
+    const input = element.shadowRoot.querySelector(
+      'lightning-input[data-id="hold-reason-input"]',
+    );
+    input.value = "Investigate loop";
+    input.dispatchEvent(new CustomEvent("change"));
+    holdButton(element).dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    expect(holdInstance).toHaveBeenCalledWith({
+      instanceId: "a0G000000000119",
+      reason: "Investigate loop",
+    });
+  });
+
+  it("releases a held instance with one click", async () => {
+    mockInstance({
+      Status__c: "Held",
+      Held__c: true,
+      Held_At__c: "2026-09-28T10:00:00.000Z",
+    });
+    const element = await openInstance();
+
+    expect(holdButton(element)).toBeNull();
+    releaseButton(element).dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    expect(releaseHeldInstance).toHaveBeenCalledWith({
+      instanceId: "a0G000000000119",
+    });
+  });
+
+  it("offers no hold on a terminal instance", async () => {
+    mockInstance({ Status__c: "Completed" });
+    const element = await openInstance();
+    expect(holdButton(element)).toBeNull();
+    expect(releaseButton(element)).toBeNull();
+  });
+
+  it("lets an operator cancel a held instance", async () => {
+    mockInstance({ Status__c: "Held", Held__c: true });
+    const element = await openInstance();
+    const cancel = findButton(element, (b) => b.label === "Cancel Workflow");
+    expect(cancel).toBeDefined();
+  });
+
+  it("shows a warning toast when the engine rejects the hold", async () => {
+    mockInstance({});
+    holdInstance.mockResolvedValueOnce("REJECTED_TERMINAL");
+    const element = await openInstance();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    holdButton(element).dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    expect(toastHandler.mock.calls[0][0].detail.variant).toBe("warning");
+  });
+
+  it("shows an error toast when release fails", async () => {
+    mockInstance({ Status__c: "Held", Held__c: true });
+    releaseHeldInstance.mockRejectedValueOnce({
+      body: { message: "Unauthorized" },
+    });
+    const element = await openInstance();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    releaseButton(element).dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    const detail = toastHandler.mock.calls[0][0].detail;
+    expect(detail.variant).toBe("error");
+    expect(detail.message).toContain("Unauthorized");
   });
 });
 
