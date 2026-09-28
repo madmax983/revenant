@@ -35,10 +35,8 @@ public inherited sharing class WorkflowCancellation {
     'DefinitionChanged'
   };
 
-  /**
-   * @description Statuses that a cancel skips: the instance is already finished.
-   */
-  public static final Set<String> TERMINAL_STATUSES = new Set<String>{
+  // Statuses that a cancel skips: the instance is already finished.
+  private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
     'Failed',
     'Compensated',
@@ -46,10 +44,8 @@ public inherited sharing class WorkflowCancellation {
     'ContinuedAsNew'
   };
 
-  /**
-   * @description Statuses of a node whose rollback already runs.
-   */
-  public static final Set<String> ROLLBACK_STATUSES = new Set<String>{
+  // Statuses of a node whose rollback already runs.
+  private static final Set<String> ROLLBACK_STATUSES = new Set<String>{
     'Cancelling',
     'Compensating'
   };
@@ -280,8 +276,18 @@ public inherited sharing class WorkflowCancellation {
    * @param status the instance status to test
    * @return true when the status is a terminal (non-cancellable) state
    */
-  private static Boolean isTerminalForCancel(String status) {
+  public static Boolean isTerminalForCancel(String status) {
     return TERMINAL_STATUSES.contains(status);
+  }
+
+  /**
+   * @description Tests whether a status shows a running rollback
+   * (`Cancelling` or `Compensating`).
+   * @param status the instance status to test
+   * @return true when the rollback of the instance already runs
+   */
+  public static Boolean isRollingBack(String status) {
+    return ROLLBACK_STATUSES.contains(status);
   }
 
   /**

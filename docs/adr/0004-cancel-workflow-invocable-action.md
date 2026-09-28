@@ -51,6 +51,8 @@ the cancel phase through a resumed rollback.
 - A repeat without rollback on a `Cancelling` instance stops the rollback.
   This is the "hard stop" of the engine cancel.
 - Idempotency keys are shared with all keyed signals, not only Cancel.
+- A keyed row that is not the owner keeps its claim when its instance was
+  cancelled in the same call. A retry with that key does nothing.
 - A key follows at most 50 `ContinuedAsNew` generations (shared resolver).
 - If the instance continues as new between the read and the lock, the row
   returns `cancelled=false` and status `ContinuedAsNew`. A retry finds the

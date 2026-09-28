@@ -143,9 +143,9 @@ public inherited sharing class WorkflowCancelInvocableAction {
     Boolean isCandidate(Integer i) {
       Workflow_Instance__c inst = resolved[i];
       return inst != null &&
-        !WorkflowCancellation.TERMINAL_STATUSES.contains(inst.Status__c) &&
+        !WorkflowCancellation.isTerminalForCancel(inst.Status__c) &&
         !(wantsRollback(i) &&
-        WorkflowCancellation.ROLLBACK_STATUSES.contains(inst.Status__c));
+        WorkflowCancellation.isRollingBack(inst.Status__c));
     }
 
     Boolean hasCandidates() {
@@ -269,9 +269,7 @@ public inherited sharing class WorkflowCancelInvocableAction {
         res.found = true;
         res.workflowInstanceId = inst.Id;
         res.status = (latest == null) ? inst.Status__c : latest.Status__c;
-        res.isCompensating = WorkflowCancellation.ROLLBACK_STATUSES.contains(
-          res.status
-        );
+        res.isCompensating = WorkflowCancellation.isRollingBack(res.status);
         res.cancelled = batch.isOwner(i) && cancelledRoots.contains(inst.Id);
       }
       results.add(res);
