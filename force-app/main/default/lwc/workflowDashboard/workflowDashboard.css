@@ -332,6 +332,13 @@
   );
 }
 
+.text-green-icon {
+  --slds-c-icon-color-foreground: var(
+    --slds-g-color-palette-green-50,
+    hsl(145, 60%, 40%)
+  );
+}
+
 .text-weak {
   color: var(--slds-g-color-neutral-base-30, hsl(215, 20%, 30%));
 }
@@ -481,4 +488,19 @@ button.link-button:focus {
 .storage-meter_warning {
   border-left-color: var(--slds-g-color-palette-red-60, hsl(0, 85%, 60%));
   background: var(--slds-g-color-palette-red-95, hsl(0, 85%, 98%));
+}
+
+/* Readiness panel (#114): the fix is text that you can select and copy. */
+.readiness-remediation {
+  display: block;
+  margin-top: var(--slds-g-spacing-1, 4px);
+  padding: var(--slds-g-spacing-2, 8px);
+  border-radius: var(--slds-g-radius-border-2, 6px);
+  border: var(--slds-g-sizing-border-1, 1px) solid
+    var(--slds-g-color-border-1, rgba(226, 232, 240, 0.8));
+  background-color: var(--slds-g-color-surface-2, hsl(220, 20%, 97%));
+  color: var(--slds-g-color-on-surface-3, hsl(220, 30%, 25%));
+  font-size: var(--slds-g-font-scale-neg-1, 0.825rem);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
