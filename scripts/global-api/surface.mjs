@@ -3,7 +3,12 @@
 // stub project that holds only the global members (the "packaged view").
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { ApexParserFactory } from "@apexdevtools/apex-parser";
+import {
+  ApexParserFactory,
+  EnhancedForControlContext,
+  FormalParameterContext,
+  VariableDeclaratorContext,
+} from "@apexdevtools/apex-parser";
 
 const hasMod = (mods, name) => mods.some((m) => m[name]() != null);
 const annotationsOf = (mods) =>
@@ -429,11 +434,29 @@ export function stubSources(types) {
   return files;
 }
 
+/** Returns the variable and parameter names that a unit declares. */
+function declaredNames(unit) {
+  const names = new Set();
+  const visit = (node) => {
+    if (
+      node instanceof VariableDeclaratorContext ||
+      node instanceof FormalParameterContext ||
+      node instanceof EnhancedForControlContext
+    ) {
+      names.add(node.id().getText());
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(unit);
+  return names;
+}
+
 /**
  * Adds a namespace prefix to each reference to a top-level repo type in a
  * subscriber source. Skips member names (after a dot) and the file's own type.
  */
 export function prefixRepoTypes(source, types, namespace, ownType) {
+  const declared = declaredNames(parse(source, ownType));
   const tokens = ApexParserFactory.createLexer(source)
     .getAllTokens()
     .filter((tok) => tok.channel === 0);
@@ -448,10 +471,50 @@ export function prefixRepoTypes(source, types, namespace, ownType) {
     const text = source.slice(tok.start, tok.stop + 1);
     const hit = /^[A-Za-z_]\w*$/.test(text) && top.get(text.toLowerCase());
     const afterDot = i > 0 && tokens[i - 1].text === ".";
-    if (hit && !afterDot && hit.toLowerCase() !== ownType.toLowerCase()) {
+    const isVariable = declared.has(text);
+    if (
+      hit &&
+      !afterDot &&
+      !isVariable &&
+      hit.toLowerCase() !== ownType.toLowerCase()
+    ) {
       out += `${source.slice(at, tok.start)}${namespace}.${hit}`;
       at = tok.stop + 1;
     }
   });
   return out + source.slice(at);
+}
+
+/**
+ * Returns the writes in a subscriber source to a global property that is
+ * read-only outside the package. apex-ls does not check setter access.
+ */
+export function readOnlyWrites(source, types) {
+  const readOnly = new Set();
+  const writable = new Set();
+  for (const t of types.values()) {
+    for (const m of t.members) {
+      if (!m.global) continue;
+      if (m.kind === "property") {
+        (m.hasSetter && m.setterOpen ? writable : readOnly).add(
+          m.name.toLowerCase(),
+        );
+      }
+      if (m.kind === "field")
+        m.names.forEach((n) => writable.add(n.toLowerCase()));
+    }
+  }
+  const tokens = ApexParserFactory.createLexer(source)
+    .getAllTokens()
+    .filter((tok) => tok.channel === 0);
+  const assign = /^(=|\+=|-=|\*=|\/=|\+\+|--)$/;
+  const out = [];
+  tokens.forEach((tok, i) => {
+    const name = tok.text.toLowerCase();
+    if (i === 0 || tokens[i - 1].text !== ".") return;
+    if (!readOnly.has(name) || writable.has(name)) return;
+    if (assign.test(tokens[i + 1]?.text ?? ""))
+      out.push(`line ${tok.line}: .${tok.text}`);
+  });
+  return out;
 }

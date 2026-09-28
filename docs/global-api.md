@@ -6,23 +6,25 @@ Decision record: [ADR 0006](adr/0006-frozen-global-api.md). Issue: #122.
 
 ## Stability Policy
 
-- The surface is frozen after the first package release. Do not remove, rename, or change a member in the manifest. Do not change a parameter, a return type, or an access level.
-- Add a member only when a subscriber must use it. An addition is a new, frozen contract.
-- To retire a member, add `@Deprecated` and keep its behavior. Do not delete it.
-- Each change to the surface changes the manifest block below in the same commit. `npm run test:global-api` fails when the code and the manifest are different.
+- After the first package release, do not remove, rename, or change a member in the manifest. Do not change a parameter, a return type, or an access level.
+- Do not add a method to a `global` interface. The platform blocks it after a release, and it breaks each subscriber class that implements the interface. Add a new opt-in interface instead, as `VersionedWorkflow` does.
+- A new `@InvocableVariable` must be optional. A required variable breaks existing Flows.
+- Add a member only when a subscriber must use it. Each addition is a new, permanent contract.
+- To retire a member, add `@Deprecated` and keep its behavior. `@Deprecated` compiles only in the namespaced packaging org. Until then, mark the member as deprecated in this page.
+- When you change the surface, change the manifest block below in the same commit. `npm run test:global-api` fails when the code and the manifest are different.
 - A property with `{ get }` is read-only outside the package.
 
 ## Scope
 
-- **Authoring SPI:** the step and definition interfaces, `StepContext` and its accessor objects, `StepResult`, `RetryPolicy`, `CaptureProducer`.
+- **Authoring SPI:** the step and definition interfaces, `RetryConfigurable`, `AutoRetryConfigurable`, `StepContext` and its accessor objects, `StepResult`, `RetryPolicy`, `CaptureProducer`.
 - **Control facade:** `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`) and `WorkflowStatusRead.getStatus`.
 - **Flow:** the Start, Signal, and Get Workflow Status invocable actions.
 
-`getStatus` is on `WorkflowStatusRead`, not on `WorkflowEngine`. The engine moved it there before this release. The README names `WorkflowStatusRead.getStatus` as the read contract.
+`getStatus` is on `WorkflowStatusRead`, not on `WorkflowEngine`. It moved there on 2026-07-15, before this release. The README names `WorkflowStatusRead.getStatus` as the read contract.
 
 ## Use From A Subscriber Org
 
-Put the package namespace before each type (example namespace: `rvn`):
+Put the package namespace before each type (example namespace: `rvn`). A step class:
 
 ```apex
 public class ReserveStep implements rvn.CompensatableStep {
@@ -37,24 +39,40 @@ public class ReserveStep implements rvn.CompensatableStep {
     return rvn.StepResult.complete(null, null);
   }
 }
+```
 
+Caller code (for example, Anonymous Apex):
+
+```apex
 Id instanceId = rvn.WorkflowEngine.start('acme.OrderWorkflow', 'order-42', null);
 rvn.WorkflowEngine.WorkflowStatus status = rvn.WorkflowStatusRead.getStatus(instanceId);
 ```
 
-The engine finds definition and step classes by name with `Type.forName`. Lookup of a class in a different namespace is issue #58.
+Give the namespace-qualified class name, for example `acme.OrderWorkflow`. `WorkflowTypeResolver` finds the class across namespaces (issue #58).
+
+The static type of the argument selects the `getStatus` overload. An `Id` reads by instance Id. A `String` reads by correlation key, also when the text is an Id. Declare an instance Id as `Id`.
+
+The examples in `examples/` run in the package namespace. Some use classes that are not in this page.
+
+## Status Values
+
+These values are part of the contract. Do not rename them.
+
+- `WorkflowEngine.WorkflowStatus.status` and `WorkflowStatusInvocableAction.StatusResult.status`: `Pending`, `Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `DefinitionChanged`, `CompensationFailed`, `ContinuedAsNew`, `Completed`, `Failed`, `Compensated`, `Cancelled`. `isTerminal` is true for `Completed`, `Failed`, `Compensated`, and `Cancelled`.
+- `StepContext.ChildOutcome.status`: `Completed` or `Failed`.
 
 ## Manifest
 
 One line for each declaration. The test reads the block below.
 
-- `global <kind> <Type>`: a type. `extends` shows the super types. An enum shows its values.
+- `global <kind> <Type>`: a type. `extends` and `implements` show the super types. An enum shows its values.
 - `<Type>.<method>(<parameter types>): <return type>`: a method. `static` is shown.
 - `new <Type>(<parameter types>)`: a constructor. `new <Type>()` is also the default constructor of a `global` class with no explicit constructor.
 - `<Type>.<name>: <type> { get }` or `{ get; set }`: a property.
 - `<Type>.<name>: <type>`: a field (read and write).
 - `@InvocableMethod` and `@InvocableVariable` show Flow members.
 - Interface methods are `global` because the interface is `global`.
+- A `global` exception also has the platform exception constructors. The manifest does not show them.
 
 ```revenant-global-api
 # Authoring interfaces
@@ -74,6 +92,10 @@ global interface TimeoutConfigurable
 TimeoutConfigurable.getTimeoutSeconds(): Integer
 global interface CaptureProducer
 CaptureProducer.produce(): Object
+global interface RetryConfigurable
+RetryConfigurable.getRetryPolicy(): RetryPolicy
+global interface AutoRetryConfigurable
+AutoRetryConfigurable.getAutoRetryPolicy(): RetryPolicy
 
 # StepContext
 global class StepContext
@@ -98,6 +120,7 @@ StepContext.captures(): StepCaptures
 StepContext.retry(): StepRetryInfo
 global enum StepContext.Level { INFO, WARN, ERROR }
 global class StepContext.Signal implements Comparable
+StepContext.Signal.signalId: Id { get }
 StepContext.Signal.name: String { get }
 StepContext.Signal.payload: String { get }
 StepContext.Signal.isPresent(): Boolean
@@ -172,9 +195,9 @@ StepResult.ChildRequest.inputJson: String { get }
 global class RetryPolicy
 new RetryPolicy()
 new RetryPolicy(Integer, Double, Integer)
-RetryPolicy.initialIntervalSeconds: Integer { get; set }
-RetryPolicy.backoffCoefficient: Double { get; set }
-RetryPolicy.maximumAttempts: Integer { get; set }
+RetryPolicy.initialIntervalSeconds: Integer { get }
+RetryPolicy.backoffCoefficient: Double { get }
+RetryPolicy.maximumAttempts: Integer { get }
 static RetryPolicy.fromConfig(): RetryPolicy
 
 # Engine control
@@ -266,18 +289,20 @@ global class WorkflowStatusInvocableAction.StatusResult
 
 These stay namespace-private. The test fails if one of them gets `global`.
 
-- Engine internals: `WorkflowOrchestrator*`, `WorkflowWatchdog*`, finalizers, `*Job`, `*Controller` (dashboard), `*Sweep`, `*Sweeper`.
-- All other members of the classes above. Examples: `StepContext.Builder`, `StepContext.SignalSource`, `StepSignals.markMatched`, `StepResult.ActionType`, the other `StepDirective` data, `WorkflowEngine` configuration fields, `runStep`, `handleCrash`, `failWorkflowInstance`.
+- Engine internals: `WorkflowOrchestrator*`, `WorkflowWatchdog*`, `Watchdog*`, finalizers, `*Job`, `*Controller` (dashboard), `*Sweep`, `*Sweeper`, `*SweepRunner`.
+- Each member of a manifest type that is not in the manifest. Examples: `StepContext.Builder`, `StepContext.SignalSource`, `StepSignals.markMatched`, `StepResult.ActionType`, the other `StepDirective` data, `WorkflowEngine` configuration fields, `runStep`, `handleCrash`, `failWorkflowInstance`.
+- `WorkflowEngine.StartRequest.withParent` and `parentInstanceId`. A subscriber could make a false parent link. Use `StepResult.startChild` or `startChildren`.
 
 ## Candidates
 
-Not global in v1. Add one only when a subscriber needs it. An addition is safe. A removal is not.
+Not global in v1. Add one only when a subscriber needs it. You cannot remove a global member later.
 
 - `WorkflowEngine.signalOrStart` and the Signal-or-Start invocable action.
 - `WorkflowHistoryRead.getHistory`, `WorkflowHistoryRead.getStepError`, `WorkflowInstanceQuery.findInstances`.
-- `WorkflowEngine.StartRequest.withParent`, `inputJson`, `parentInstanceId`.
-- Opt-in interfaces: `RetryConfigurable`, `AutoRetryConfigurable`, `ExecutionTimeoutConfigurable`, `CircuitBreakerGuarded`, `ValidatedWorkflow`, `WorkflowCatalogDescribable`, `PayloadCodec`, `WorkflowArchiveSink`.
-- A non-test step-context builder for subscriber unit tests. `StepContextTestBuilder` is `@IsTest`, so subscribers cannot see it.
+- `RateLimiter.acquire`, `WorkflowDebouncer.startDebounced`, `WorkflowResumeService.resumeInstance`, `WorkflowCancellation.cancelWithCompensations`.
+- `WorkflowEngine.StartRequest.inputJson`. `StepContext.Signal.createdDate`.
+- Opt-in interfaces: `ExecutionTimeoutConfigurable`, `CircuitBreakerGuarded`, `ValidatedWorkflow`, `WorkflowCatalogDescribable`, `PayloadCodec`, `WorkflowArchiveSink`.
+- Subscriber test support (do before the first release). `StepContextTestBuilder` and `WorkflowTestHarness` are `@IsTest`, so subscribers cannot see them. A subscriber test can run only one async hop. A subscriber needs a non-test context builder, a harness that drives more hops, and a way to read the result kind.
 
 ## Verify
 
@@ -292,6 +317,9 @@ The test does these checks:
 2. Each `global` member is in a `global` type. Each `global` signature uses only `global` or system types. Each `global` interface extends only `global` interfaces.
 3. No engine internal has `global`.
 4. Each `@InvocableMethod` and `@InvocableVariable` in a `global` class is `global`.
-5. Packaged view (needs Java; run `scripts/global-api/fetch-apex-ls.sh` one time): the test makes a stub project in namespace `rvn` with only the `global` members. It compiles the stub and `GlobalApiSubscriberTest` in namespace `acme` with apex-ls. The result must have zero errors.
+5. `GlobalApiSubscriberTest` writes no read-only `global` property.
+6. Packaged view: the test makes a stub project in namespace `rvn`. The stub holds only the `global` members. The test compiles the stub with apex-ls. Then it compiles `GlobalApiSubscriberTest` in namespace `acme` against the stub. The fixture must have zero errors. A probe that uses two namespace-private members must fail two times.
+
+Check 6 needs Java and apex-ls. Run `scripts/global-api/fetch-apex-ls.sh` one time (it needs Maven), or set `APEX_LS_CLASSPATH`. Without them, the test skips check 6. Set `REQUIRE_APEX_LS=1` to make the skip a failure.
 
 `GlobalApiSubscriberTest` runs in the org. It uses only the global API. It starts a workflow, runs one async hop, and reads the terminal state.

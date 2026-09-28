@@ -226,7 +226,7 @@ global inherited sharing class StepContext {
    */
   global class Signal implements Comparable {
     /** The Id of the underlying Workflow_Signal__c record. */
-    public Id signalId { get; private set; }
+    global Id signalId { get; private set; }
     /** The author-interpreted signal name this row was delivered under. */
     global String name { get; private set; }
     /** The signal's payload string, or null for the empty sentinel. */

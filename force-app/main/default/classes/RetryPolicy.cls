@@ -8,11 +8,11 @@ global inherited sharing class RetryPolicy {
   private Boolean configManaged = false;
 
   /** @description Seconds to wait before the first retry attempt. */
-  global Integer initialIntervalSeconds { get; set; }
+  global Integer initialIntervalSeconds { get; public set; }
   /** @description Multiplier applied to the wait interval after each attempt. */
-  global Double backoffCoefficient { get; set; }
+  global Double backoffCoefficient { get; public set; }
   /** @description Maximum number of attempts before the step is considered failed. */
-  global Integer maximumAttempts { get; set; }
+  global Integer maximumAttempts { get; public set; }
 
   /**
    * @description Builds a retry policy with the engine defaults (5s initial interval,

@@ -10,9 +10,9 @@
  */
 global inherited sharing class WorkflowEngine {
   /**
-   * @description Keeps construction in the package namespace. Without an
-   * explicit constructor, a global class gets a global default
-   * constructor (issue #122).
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
    */
   private WorkflowEngine() {
     // No state to set.
@@ -289,7 +289,7 @@ global inherited sharing class WorkflowEngine {
 
   /**
    * Stable read-only DTO for a single step execution in an instance's timeline.
-   * A forever-public API contract: v1 is metadata-only (no per-step input/output
+   * A stable in-package contract (not global; see docs/global-api.md): v1 is metadata-only (no per-step input/output
    * payload bodies). All fields are read-only to callers (private setters); the
    * read layer populates them once via the constructor.
    */
@@ -922,7 +922,7 @@ global inherited sharing class WorkflowEngine {
    * @description Filter + pagination criteria for
    * {@link WorkflowInstanceQuery#findInstances}. Every field is optional; an
    * all-null/empty criteria (or a null argument) matches all instances. This is a
-   * forever-public API contract, so the shape is deliberately minimal and each
+   * stable in-package contract (not global), so the shape is deliberately minimal and each
    * field's null/empty semantics are fixed here.
    */
   public class InstanceCriteria {
@@ -993,7 +993,7 @@ global inherited sharing class WorkflowEngine {
    * row returned by {@link WorkflowInstanceQuery#findInstances}. Deliberately omits
    * the heavy long-text payloads (`Input__c` / `Output__c` / `Progress__c`): fetch a
    * terminal instance's full output per-Id via
-   * {@link WorkflowStatusRead#getStatus}. A forever-public read contract; all fields
+   * {@link WorkflowStatusRead#getStatus}. A stable read contract; all fields
    * are read-only to callers (private setters), populated once via the projecting
    * constructor.
    */
@@ -1044,8 +1044,8 @@ global inherited sharing class WorkflowEngine {
    * the ordered summaries plus the keyset cursor for the next page. Callers page
    * until `hasMore` is false (equivalently, `nextCursor` is null). No exact total
    * is exposed: an unbounded, deeply-paged result set cannot be counted within a
-   * constant SOQL/heap budget, so callers walk pages instead. A forever-public
-   * contract; fields are read-only to callers (private setters).
+   * constant SOQL/heap budget, so callers walk pages instead. A stable in-package
+   * contract (not global); fields are read-only to callers (private setters).
    */
   public class InstancePage {
     /**

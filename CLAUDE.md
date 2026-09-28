@@ -8,7 +8,7 @@ Revenant brings durable execution, sagas, and event-driven orchestration to Apex
 - **Deploy changes to default Scratch Org**: `sf project deploy start`
 - **Run all Apex tests**: `sf apex run test -w 10`
 - **Run specific Apex test class**: `sf apex run test -n <TestClassName> -w 5`
-- **Check the frozen global API**: `npm run test:global-api` (packaged-view compile needs Java; run `scripts/global-api/fetch-apex-ls.sh` one time)
+- **Check the frozen global API**: `npm run test:global-api` (packaged-view compile needs Java and apex-ls; with Maven, run `scripts/global-api/fetch-apex-ls.sh` one time)
 - **Format Apex files**: `npx prettier --write --plugin=prettier-plugin-apex "force-app/main/default/classes/<ClassName>.cls"`
 
 ## Architecture Summary

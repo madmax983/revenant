@@ -138,7 +138,23 @@ public class GlobalApiSubscriberTest {
    * @description Compile probe for the author members that the run tests do not
    * use. No workflow runs this step.
    */
-  public class SurfaceStep implements WorkflowStep, CalloutStep {
+  public class SurfaceStep implements WorkflowStep, CalloutStep, RetryConfigurable, AutoRetryConfigurable {
+    /**
+     * @description Returns the retry policy of the step.
+     * @return A fixed policy.
+     */
+    public RetryPolicy getRetryPolicy() {
+      return new RetryPolicy(1, (Double) 2.0, 3);
+    }
+
+    /**
+     * @description Returns the policy for thrown exceptions.
+     * @return The operator-managed policy.
+     */
+    public RetryPolicy getAutoRetryPolicy() {
+      return RetryPolicy.fromConfig();
+    }
+
     /**
      * @description Reads each remaining author member.
      * @param ctx The step context.
@@ -165,7 +181,7 @@ public class GlobalApiSubscriberTest {
         ctx.captures().patched('change-2', Datetime.now())
       };
       for (StepContext.Signal s : ctx.signals().getSignals()) {
-        seen.add(s.name + s.payload);
+        seen.add(String.valueOf(s.signalId) + s.name + s.payload);
       }
       StepContext.ChildOutcome child = ctx.signals().getChildOutcome('child-1');
       seen.add(
@@ -184,7 +200,7 @@ public class GlobalApiSubscriberTest {
       seen.add(StepResult.sleep(1, 'Hours', 'Default'));
       ctx.progress().reportProgress(seen);
       ctx.events().emit(new Account(Name = 'probe'));
-      return StepResult.retry(new RetryPolicy(1, 2.0, 3));
+      return StepResult.retry(new RetryPolicy(1, (Double) 2.0, 3));
     }
   }
 
@@ -346,10 +362,11 @@ public class GlobalApiSubscriberTest {
 
   @IsTest
   static void resultFactoriesAndRetryPolicyAreReachable() {
-    RetryPolicy policy = new RetryPolicy();
-    policy.initialIntervalSeconds = 2;
-    policy.backoffCoefficient = 1.5;
-    policy.maximumAttempts = 4;
+    RetryPolicy policy = new RetryPolicy(2, (Double) 1.5, 4);
+    System.assertEquals(2, policy.initialIntervalSeconds, 'Interval');
+    System.assertEquals((Double) 1.5, policy.backoffCoefficient, 'Coefficient');
+    System.assertEquals(4, policy.maximumAttempts, 'Attempts');
+    System.assertEquals(5, new RetryPolicy().maximumAttempts, 'Default');
     List<StepResult> results = new List<StepResult>{
       StepResult.complete('Next', 'out'),
       StepResult.yield('{}'),

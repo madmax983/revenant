@@ -10,9 +10,9 @@
  */
 global inherited sharing class WorkflowStatusInvocableAction {
   /**
-   * @description Keeps construction in the package namespace. Without an
-   * explicit constructor, a global class gets a global default
-   * constructor (issue #122).
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
    */
   private WorkflowStatusInvocableAction() {
     // No state to set.

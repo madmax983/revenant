@@ -19,6 +19,7 @@ import {
   loadClasses,
   parseSources,
   prefixRepoTypes,
+  readOnlyWrites,
   ruleViolations,
   stubSources,
   surfaceLines,
@@ -166,6 +167,33 @@ test("checker: lists the implicit global constructor, but not for exceptions or 
   ]);
 });
 
+test("checker: prefixes repo types but not variables with the same name", () => {
+  const m = buildModel(
+    parseSources({ "StepResult.cls": "global class StepResult {}" }),
+  );
+  const src =
+    "public class Sub { StepResult go(StepResult stepResult) { " +
+    "for (StepResult r : new List<StepResult>()) {} " +
+    "String s = 'StepResult'; return stepResult; } }";
+  assert.equal(
+    prefixRepoTypes(src, m, "rvn", "Sub"),
+    "public class Sub { rvn.StepResult go(rvn.StepResult stepResult) { " +
+      "for (rvn.StepResult r : new List<rvn.StepResult>()) {} " +
+      "String s = 'StepResult'; return stepResult; } }",
+  );
+});
+
+test("checker: finds a write to a read-only global property", () => {
+  const m = buildModel(
+    parseSources({
+      "P.cls":
+        "global class P { global Integer n { get; private set; } global Integer w { get; set; } }",
+    }),
+  );
+  const src = "P p; p.n = 1; p.n++; p.w = 2; Boolean b = p.n == 1;";
+  assert.deepEqual(readOnlyWrites(src, m), ["line 1: .n", "line 1: .n"]);
+});
+
 // ─── Repo checks ───────────────────────────────────────────────────────────
 
 test("manifest has no duplicate lines", () => {
@@ -220,6 +248,11 @@ test("the subscriber fixture is a non-global @IsTest class", () => {
   const fixture = model.get(FIXTURE.toLowerCase());
   assert.ok(fixture?.isTest, `${FIXTURE} must be an @IsTest class`);
   assert.ok(!fixture.global, `${FIXTURE} must not be global`);
+});
+
+test("the subscriber fixture writes no read-only global property", () => {
+  const source = readFileSync(join(CLASSES, `${FIXTURE}.cls`), "utf8");
+  assert.deepEqual(readOnlyWrites(source, model), []);
 });
 
 // ─── Packaged view: compile against the global API only ───────────────────
