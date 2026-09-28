@@ -84,6 +84,38 @@ public class ThrottledCalloutWorkflowExampleTest {
       .directive();
   }
 
+  // Formats an HTTP-date, for example "Mon, 05 Oct 2026 07:28:00 GMT".
+  // The weekday is not checked by the parser.
+  private static String httpDate(Datetime dt) {
+    List<String> months = new List<String>{
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    };
+    return 'Mon, ' +
+      String.valueOf(dt.dayGmt()).leftPad(2, '0') +
+      ' ' +
+      months[dt.monthGmt() - 1] +
+      ' ' +
+      dt.yearGmt() +
+      ' ' +
+      String.valueOf(dt.hourGmt()).leftPad(2, '0') +
+      ':' +
+      String.valueOf(dt.minuteGmt()).leftPad(2, '0') +
+      ':' +
+      String.valueOf(dt.secondGmt()).leftPad(2, '0') +
+      ' GMT';
+  }
+
   // ─── harness tests (engine sleep and resume) ────────────────────────────
 
   @IsTest
@@ -166,7 +198,11 @@ public class ThrottledCalloutWorkflowExampleTest {
       WorkflowTestHarness.Result parked = harness.drive();
 
       Assert.isTrue(parked.isSleeping, 'HTTP 429 sleeps');
-      Assert.areEqual(CALLOUT, instance(instanceId).Current_Step__c);
+      Assert.areEqual(
+        CALLOUT,
+        instance(instanceId).Current_Step__c,
+        'Parked on the callout step'
+      );
       Assert.areEqual(1, MockThrottledApi.calls, 'One call before the sleep');
       Assert.areEqual(0, MockThrottledApi.effects, '429 applies no effect');
       String firstKey = MockThrottledApi.lastRequest.getHeader(
@@ -208,8 +244,13 @@ public class ThrottledCalloutWorkflowExampleTest {
     StepResult.StepDirective d = new ThrottledCalloutWorkflowExample.AcquireTokenStep()
       .execute(context(ACQUIRE))
       .directive();
-    Assert.areEqual(StepResult.ActionType.COMPLETE, d.action);
-    Assert.areEqual(CALLOUT, d.nextStepName, 'Routes to the callout step');
+    Assert.areEqual(StepResult.ActionType.COMPLETE, d.action, 'Token taken');
+    Assert.areEqual(
+      CALLOUT,
+      new ThrottledCalloutWorkflowExample.ThrottledCalloutWorkflow()
+        .getNextStep(ACQUIRE, null),
+      'getNextStep() routes to the callout step'
+    );
   }
 
   @IsTest
@@ -218,11 +259,12 @@ public class ThrottledCalloutWorkflowExampleTest {
     StepContext ctx = context(CALLOUT);
     StepResult.StepDirective d = callout(ctx);
     HttpRequest req = MockThrottledApi.lastRequest;
-    Assert.areEqual(StepResult.ActionType.COMPLETE, d.action);
-    Assert.areEqual('POST', req.getMethod());
+    Assert.areEqual(StepResult.ActionType.COMPLETE, d.action, '200 completes');
+    Assert.areEqual('POST', req.getMethod(), 'Method is POST');
     Assert.areEqual(
       ThrottledCalloutWorkflowExample.ENDPOINT,
-      req.getEndpoint()
+      req.getEndpoint(),
+      'Endpoint is the constant'
     );
     Assert.areEqual(
       ctx.idempotencyKey,
@@ -256,7 +298,7 @@ public class ThrottledCalloutWorkflowExampleTest {
   }
 
   @IsTest
-  static void badRetryAfterUsesDefault() {
+  static void badRetryAfterUsesDefaultOrCap() {
     MockThrottledApi.reset();
     Integer fallback = ThrottledCalloutWorkflowExample.DEFAULT_RETRY_AFTER_SECONDS;
     Map<String, Integer> expected = new Map<String, Integer>{
@@ -266,7 +308,12 @@ public class ThrottledCalloutWorkflowExampleTest {
       '0' => fallback,
       '1.5' => fallback,
       '9999999999' => ThrottledCalloutWorkflowExample.MAX_RETRY_AFTER_SECONDS,
-      '99999' => ThrottledCalloutWorkflowExample.MAX_RETRY_AFTER_SECONDS
+      '99999' => ThrottledCalloutWorkflowExample.MAX_RETRY_AFTER_SECONDS,
+      'Sun, 06 Nov 1994 08:49:37 GMT' => fallback,
+      'Wed, 21 Oct 2099 07:28:00 GMT' => ThrottledCalloutWorkflowExample.MAX_RETRY_AFTER_SECONDS,
+      'Wed, 21 Foo 2099 07:28:00 GMT' => fallback,
+      'Wed, 21 Oct 2099 07:28 GMT' => fallback,
+      'Wed, xx Oct 2099 07:28:00 GMT' => fallback
     };
     for (String raw : expected.keySet()) {
       MockThrottledApi.queue(429, raw);
@@ -277,12 +324,83 @@ public class ThrottledCalloutWorkflowExampleTest {
   }
 
   @IsTest
-  static void serverErrorFailsTheStep() {
+  static void httpDateRetryAfterSleepsUntilThatTime() {
     MockThrottledApi.reset();
-    MockThrottledApi.queue(500, null);
+    MockThrottledApi.queue(429, httpDate(Datetime.now().addSeconds(120)));
     StepResult.StepDirective d = callout(context(CALLOUT));
-    Assert.areEqual(StepResult.ActionType.FAIL, d.action, 'Real error fails');
-    Assert.isTrue(d.failureReason.contains('500'), d.failureReason);
+    Assert.areEqual(StepResult.ActionType.SLEEP, d.action, '429 sleeps');
+    Assert.isTrue(
+      d.sleepDurationSeconds >= 110 && d.sleepDurationSeconds <= 121,
+      'Sleeps until the HTTP-date: ' + d.sleepDurationSeconds
+    );
+  }
+
+  @IsTest
+  static void tooManyRequestsCountsSleepsInStepState() {
+    MockThrottledApi.reset();
+    MockThrottledApi.queue(429, '7');
+    StepResult.StepDirective d = callout(
+      new StepContextTestBuilder()
+        .stepName(CALLOUT)
+        .stepState(new Map<String, Object>{ 'remoteThrottles' => 3 })
+        .build()
+    );
+    Assert.areEqual(StepResult.ActionType.SLEEP, d.action, '429 sleeps');
+    Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
+      d.stepStateJson
+    );
+    Assert.areEqual(4, state.get('remoteThrottles'), 'Count goes up by 1');
+  }
+
+  @IsTest
+  static void endlessTooManyRequestsFailsTheStep() {
+    MockThrottledApi.reset();
+    MockThrottledApi.queue(429, '7');
+    StepResult.StepDirective d = callout(
+      new StepContextTestBuilder()
+        .stepName(CALLOUT)
+        .stepState(
+          new Map<String, Object>{
+            'remoteThrottles' => ThrottledCalloutWorkflowExample.MAX_REMOTE_THROTTLES
+          }
+        )
+        .build()
+    );
+    Assert.areEqual(StepResult.ActionType.FAIL, d.action, 'Cap stops the loop');
+    Assert.isTrue(d.failureReason.contains('429'), d.failureReason);
+  }
+
+  @IsTest
+  static void unknownResultRetriesWithTheSameKey() {
+    MockThrottledApi.reset();
+    for (Integer code : new List<Integer>{ 408, 409, 500, 503 }) {
+      MockThrottledApi.queue(code, null);
+      StepResult.StepDirective d = callout(context(CALLOUT));
+      Assert.areEqual(StepResult.ActionType.RETRY, d.action, 'HTTP ' + code);
+      Assert.areEqual(
+        4,
+        d.retry.policy.maximumAttempts,
+        'Uses the step retry policy'
+      );
+    }
+    Assert.areEqual(0, MockThrottledApi.effects, 'No effect yet');
+  }
+
+  @IsTest
+  static void clientErrorFailsTheStep() {
+    MockThrottledApi.reset();
+    MockThrottledApi.queue(400, null);
+    StepResult.StepDirective d = callout(context(CALLOUT));
+    Assert.areEqual(StepResult.ActionType.FAIL, d.action, 'HTTP 400 fails');
+    Assert.isTrue(d.failureReason.contains('400'), d.failureReason);
+  }
+
+  @IsTest
+  static void thrownCalloutExceptionHasAnAutoRetryPolicy() {
+    RetryPolicy policy = new ThrottledCalloutWorkflowExample.ThrottledCalloutStep()
+      .getAutoRetryPolicy();
+    Assert.isNotNull(policy, 'A timeout retries, it does not fail the saga');
+    Assert.areEqual(4, policy.maximumAttempts, 'Four attempts');
   }
 
   @IsTest
@@ -292,16 +410,17 @@ public class ThrottledCalloutWorkflowExampleTest {
     Test.setMock(HttpCalloutMock.class, new MockThrottledApi());
     StepContext ctx = context(CALLOUT);
     StepResult.StepDirective d = callout(ctx);
-    Assert.areEqual(StepResult.ActionType.COMPLETE, d.action);
+    Assert.areEqual(StepResult.ActionType.COMPLETE, d.action, '200 completes');
     Assert.areEqual(1, MockThrottledApi.calls, 'Http.send reached the mock');
     Assert.areEqual(
       ctx.idempotencyKey,
-      MockThrottledApi.lastRequest.getHeader('Idempotency-Key')
+      MockThrottledApi.lastRequest.getHeader('Idempotency-Key'),
+      'Real request carries the key'
     );
   }
 
   @IsTest
-  static void bucketCapsCallsAcrossManyInstances() {
+  static void bucketAdmitsCapacityThenSleepsTheRest() {
     useBucket(3);
     Integer allowed = 0;
     Integer slept = 0;

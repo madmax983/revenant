@@ -8,15 +8,22 @@
  *      Idempotency-Key = ctx.idempotencyKey. An HTTP 429 returns
  *      StepResult.sleep(Retry-After). The step runs again on resume with the
  *      same key, so the API applies one effect.
+ *   3. A timeout or HTTP 408, 409, or 5xx has an unknown result. The step
+ *      retries with the same key. Other codes fail the step. The saga then
+ *      rolls back, but a rollback does not undo a remote effect.
  *
  * Why two steps: acquire() does DML. Apex blocks a callout after DML in the
  * same transaction. The engine runs each step in a new transaction.
+ * ThrottledCalloutStep implements CalloutStep, so the engine does no DML
+ * before execute().
  *
  * A sleep is not a failure. It does not unwind the compensation stack.
  *
  * A RetryPolicy retry, an HTTP 429 resume, or an operator re-drive runs
  * ThrottledCalloutStep again without a new token. To take a token for each
- * call, return StepResult.complete(ACQUIRE_STEP, null) from the callout step.
+ * call, make getNextStep() return ACQUIRE_STEP after the callout step. A loop
+ * starts a new step visit, so the callout gets a new idempotency key. Use a
+ * loop only when the API applied no effect.
  *
  * See docs/rate-limiting.md.
  */
@@ -29,9 +36,26 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
   public static final Integer DEFAULT_RETRY_AFTER_SECONDS = 60;
   /** @description Longest sleep for one HTTP 429. */
   public static final Integer MAX_RETRY_AFTER_SECONDS = 3600;
+  /** @description Number of HTTP 429 sleeps before the step fails. */
+  public static final Integer MAX_REMOTE_THROTTLES = 24;
 
   private static final String ACQUIRE_STEP = 'ThrottledCalloutWorkflowExample.AcquireTokenStep';
   private static final String CALLOUT_STEP = 'ThrottledCalloutWorkflowExample.ThrottledCalloutStep';
+  private static final String THROTTLES_KEY = 'remoteThrottles';
+  private static final List<String> MONTHS = new List<String>{
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
+  };
 
   /** @description Sends the HTTP request. Tests replace it with a fake. */
   public interface Transport {
@@ -104,19 +128,22 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
         // Not a failure. The engine runs this step again after the sleep.
         return StepResult.sleep(token.sleepDurationSeconds);
       }
-      return StepResult.complete(CALLOUT_STEP, null);
+      // getNextStep() routes to the callout step.
+      return StepResult.complete(null, null);
     }
   }
 
   /**
    * @description Calls the API with the step's idempotency key. An HTTP 429
-   * makes a durable sleep.
+   * makes a durable sleep. CalloutStep: the engine does no DML before
+   * execute().
    */
-  public class ThrottledCalloutStep implements WorkflowStep, CalloutStep {
+  public class ThrottledCalloutStep implements WorkflowStep, CalloutStep, AutoRetryConfigurable {
     /**
      * @description Sends the request and maps the status code.
      * @param ctx The step context.
-     * @return COMPLETE for 2xx, SLEEP for 429, else FAIL.
+     * @return COMPLETE for 2xx, SLEEP for 429, RETRY for 408, 409, or 5xx,
+     * else FAIL.
      */
     public StepResult execute(StepContext ctx) {
       HttpRequest req = new HttpRequest();
@@ -124,7 +151,7 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
       req.setMethod('POST');
       req.setHeader('Content-Type', 'application/json');
       // The key is the same on each run of this step visit. The API applies
-      // one effect.
+      // one effect. Send the same body on each run.
       req.setHeader('Idempotency-Key', ctx.idempotencyKey);
       req.setBody(
         String.isBlank(ctx.workflowInputJson) ? '{}' : ctx.workflowInputJson
@@ -132,35 +159,108 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
 
       HttpResponse res = transport.send(req);
       Integer code = res.getStatusCode();
-      if (code == 429) {
-        // The API is full. Sleep. Do not fail.
-        return StepResult.sleep(retryAfterSeconds(res));
-      }
       if (code >= 200 && code < 300) {
         return StepResult.complete(
           null,
           new Map<String, Object>{ 'statusCode' => code }
         );
       }
+      if (code == 429) {
+        return remoteThrottle(ctx, res);
+      }
+      if (code == 408 || code == 409 || code >= 500) {
+        // Unknown result. Retry with the same key.
+        return StepResult.retry(getAutoRetryPolicy());
+      }
       return StepResult.fail('Throttled API returned HTTP ' + code);
+    }
+
+    /**
+     * @description Retry policy for a thrown CalloutException (for example, a
+     * timeout) and for HTTP 408, 409, or 5xx. A retry keeps the same key.
+     * @return Four attempts: 30 s, then 60 s, then 120 s.
+     */
+    public RetryPolicy getAutoRetryPolicy() {
+      return new RetryPolicy(30, (Double) 2.0, 4);
     }
   }
 
-  // Reads Retry-After in seconds. Uses the default for a missing, non-integer,
-  // or zero value. Caps the value at MAX_RETRY_AFTER_SECONDS.
+  // HTTP 429: the API refuses more requests now. Sleep for Retry-After. Do not
+  // fail. Count the sleeps in the step state, so a 429 that does not stop
+  // fails the step after MAX_REMOTE_THROTTLES sleeps.
+  private static StepResult remoteThrottle(StepContext ctx, HttpResponse res) {
+    Integer throttles = remoteThrottles(ctx.stepStateJson) + 1;
+    if (throttles > MAX_REMOTE_THROTTLES) {
+      return StepResult.fail(
+        'Throttled API returned HTTP 429 ' + throttles + ' times'
+      );
+    }
+    return StepResult.sleep(retryAfterSeconds(res))
+      .withStepState(
+        JSON.serialize(new Map<String, Object>{ THROTTLES_KEY => throttles })
+      );
+  }
+
+  // Reads the HTTP 429 count from the step state. Returns 0 when it is absent.
+  private static Integer remoteThrottles(String stepStateJson) {
+    if (String.isBlank(stepStateJson)) {
+      return 0;
+    }
+    Object state = JSON.deserializeUntyped(stepStateJson);
+    if (!(state instanceof Map<String, Object>)) {
+      return 0;
+    }
+    Object count = ((Map<String, Object>) state).get(THROTTLES_KEY);
+    return (count instanceof Integer) ? (Integer) count : 0;
+  }
+
+  // Reads Retry-After as seconds or as an HTTP-date. Uses the default for a
+  // missing, unknown, zero, or past value. Caps the value at
+  // MAX_RETRY_AFTER_SECONDS.
   private static Integer retryAfterSeconds(HttpResponse res) {
     String raw = res.getHeader('Retry-After');
     raw = (raw == null) ? '' : raw.trim();
-    if (!raw.isNumeric()) {
+    Long seconds = null;
+    if (raw.isNumeric() && raw.length() <= 9) {
+      seconds = Long.valueOf(raw);
+    } else if (raw.isNumeric()) {
+      seconds = MAX_RETRY_AFTER_SECONDS;
+    } else {
+      Datetime wakeAt = parseHttpDate(raw);
+      if (wakeAt != null) {
+        Decimal waitMs = wakeAt.getTime() - System.currentTimeMillis();
+        seconds = waitMs.divide(1000, 3).round(System.RoundingMode.CEILING);
+      }
+    }
+    if (seconds == null || seconds < 1) {
       return DEFAULT_RETRY_AFTER_SECONDS;
     }
-    if (raw.length() > 9) {
-      return MAX_RETRY_AFTER_SECONDS;
+    return Math.min(seconds, (Long) MAX_RETRY_AFTER_SECONDS).intValue();
+  }
+
+  // Parses an HTTP-date, for example "Wed, 21 Oct 2026 07:28:00 GMT".
+  // Returns null for a different form.
+  private static Datetime parseHttpDate(String raw) {
+    List<String> parts = raw.split(' ');
+    if (parts.size() != 6 || parts[5] != 'GMT') {
+      return null;
     }
-    Integer seconds = Integer.valueOf(raw);
-    if (seconds < 1) {
-      return DEFAULT_RETRY_AFTER_SECONDS;
+    Integer month = MONTHS.indexOf(parts[2]) + 1;
+    List<String> clock = parts[4].split(':');
+    if (month == 0 || clock.size() != 3) {
+      return null;
     }
-    return Math.min(seconds, MAX_RETRY_AFTER_SECONDS);
+    try {
+      return Datetime.newInstanceGmt(
+        Integer.valueOf(parts[3]),
+        month,
+        Integer.valueOf(parts[1]),
+        Integer.valueOf(clock[0]),
+        Integer.valueOf(clock[1]),
+        Integer.valueOf(clock[2])
+      );
+    } catch (TypeException e) {
+      return null;
+    }
   }
 }
