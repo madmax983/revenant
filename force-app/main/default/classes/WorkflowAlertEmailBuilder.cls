@@ -250,7 +250,7 @@ public inherited sharing class WorkflowAlertEmailBuilder {
    * @param recipients The raw, delimiter-separated recipient address list.
    * @return The cleaned list of individual recipient addresses.
    */
-  private static List<String> parseRecipients(String recipients) {
+  public static List<String> parseRecipients(String recipients) {
     List<String> toAddresses = new List<String>();
     for (String email : recipients.split('[,;]')) {
       if (String.isNotBlank(email)) {

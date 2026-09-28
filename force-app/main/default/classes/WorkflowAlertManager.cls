@@ -248,4 +248,14 @@ public inherited sharing class WorkflowAlertManager {
   public static Boolean detectAndAlertWatchdogStall() {
     return WatchdogStallDetector.detectAndAlert();
   }
+
+  /**
+   * @description Sends one alert for each overdue or failed schedule (issue
+   * #126). Calls ScheduleHealthAlerter.
+   * @param now The evaluation time.
+   * @return The number of alerts sent.
+   */
+  public static Integer detectAndAlertScheduleHealth(Datetime now) {
+    return ScheduleHealthAlerter.detectAndAlert(now);
+  }
 }

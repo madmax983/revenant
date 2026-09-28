@@ -120,6 +120,9 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WatchdogLiveness` (sweep stamp, stale state), `WatchdogStallDetector`
   (one alert per stall; runs from `WorkflowWatchdog.bootstrap()` and the
   System Doctor read)
+- `ScheduleHealth` (overdue and failed rules), `ScheduleHealthAlert`,
+  `ScheduleHealthAlerter` (one alert per problem, runs in the heartbeat after
+  Sweep 3)
 
 ## Payload persistence & codec
 

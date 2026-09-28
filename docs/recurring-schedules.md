@@ -153,6 +153,16 @@ Each run's correlation key is `prefix_yyyyMMddHHmm` (e.g. `NightlyRecon_20260617
 
 Log rows are upserted on `Fire_Key__c` (`corrKey:outcome`) so repeated sweeps of the same window produce at most one row per outcome. Each log is linked to its schedule by the `Schedule__c` lookup (an immutable Id), so the audit trail stays attached even if the schedule is renamed.
 
+## Schedule health
+
+An enabled 0-slot schedule that does not fire within one sweep interval of
+its window shows as **Overdue**. A schedule whose `Last_Outcome__c` is
+`Error`, `Invalid cron` or `Invalid time zone` shows as **Last fire failed**.
+The manager's **Health** column and System Doctor show both. Each problem
+sends one alert when a `Workflow_Alert_Config__mdt` is set. A disabled
+schedule shows as **Paused** and is never reported. See
+[schedule-health.md](schedule-health.md).
+
 ## Disabling / deleting a schedule
 
 - **Disable:** uncheck `Enabled__c`. The next sweep skips it. No orphaned `CronTrigger` or `AsyncApexJob` is left behind (0-slot mode never creates them).

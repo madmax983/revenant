@@ -15,7 +15,8 @@
 public inherited sharing class WorkflowScheduleReadService {
   /**
    * @description Returns all schedules with their fields plus a computed
-   * dedicatedJobArmed flag.
+   * dedicatedJobArmed flag and schedule health (healthStatus, overdue,
+   * lastFireFailed).
    * @return One map of display fields per schedule, ordered by name.
    */
   public static List<Map<String, Object>> listSchedules() {
@@ -52,8 +53,17 @@ public inherited sharing class WorkflowScheduleReadService {
       armedJobNames.add(ct.CronJobDetail.Name);
     }
 
+    // Schedule health (issue #126). Same rules as System Doctor. 0 SOQL.
+    Datetime healthNow = ScheduleHealth.now();
+    Integer grace = ScheduleHealth.graceMinutes();
+
     List<Map<String, Object>> result = new List<Map<String, Object>>();
     for (Workflow_Schedule__c s : schedules) {
+      ScheduleHealth.Assessment health = ScheduleHealth.assess(
+        s,
+        healthNow,
+        grace
+      );
       result.add(
         new Map<String, Object>{
           'Id' => s.Id,
@@ -78,7 +88,10 @@ public inherited sharing class WorkflowScheduleReadService {
           // Apex CPU limit and fail the whole list load. The cursor is populated at
           // save time and advanced by each sweep; the detail view still computes the
           // exact next/last fire lazily for a single schedule.
-          'nextFireTime' => s.Next_Fire_Window__c
+          'nextFireTime' => s.Next_Fire_Window__c,
+          'healthStatus' => health.status,
+          'overdue' => health.overdue,
+          'lastFireFailed' => health.lastFireFailed
         }
       );
     }

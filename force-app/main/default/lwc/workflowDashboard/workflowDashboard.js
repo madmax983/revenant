@@ -1838,6 +1838,49 @@ export default class WorkflowDashboard extends LightningElement {
     return text;
   }
 
+  // Schedule health (#126). The server calculates it on each read.
+  get scheduleHealth() {
+    return (this.doctorData && this.doctorData.scheduleHealth) || {};
+  }
+
+  get scheduleHealthRows() {
+    return (this.scheduleHealth.rows || []).map((row) => ({
+      ...row,
+      detail: this.scheduleHealthDetail(row),
+    }));
+  }
+
+  get hasScheduleHealthRows() {
+    return this.scheduleHealthRows.length > 0;
+  }
+
+  get scheduleHealthSummary() {
+    const health = this.scheduleHealth;
+    return `${health.overdueCount || 0} overdue · ${health.failedCount || 0} last fire failed`;
+  }
+
+  get scheduleHealthTruncated() {
+    return this.scheduleHealth.truncated === true;
+  }
+
+  scheduleHealthDetail(row) {
+    const parts = [];
+    if (row.overdue) {
+      let text = "Expected";
+      if (row.nextFireWindow) {
+        text += ` ${this.formatDateTime(row.nextFireWindow)}`;
+      }
+      if (row.lapsedMinutes != null) {
+        text += ` (${row.lapsedMinutes} min late)`;
+      }
+      parts.push(`${text}.`);
+    }
+    if (row.lastFireFailed) {
+      parts.push(`Last outcome: ${row.lastOutcome}.`);
+    }
+    return parts.join(" ");
+  }
+
   get hasConcurrencyRows() {
     return this.concurrencyRows && this.concurrencyRows.length > 0;
   }

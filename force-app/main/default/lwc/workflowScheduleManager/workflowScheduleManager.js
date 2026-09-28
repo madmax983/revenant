@@ -60,6 +60,12 @@ const COLUMNS = [
     initialWidth: 100,
   },
   {
+    label: "Health",
+    fieldName: "healthLabel",
+    type: "text",
+    initialWidth: 170,
+  },
+  {
     label: "Last Outcome",
     fieldName: "Last_Outcome__c",
     type: "text",
@@ -172,6 +178,7 @@ export default class WorkflowScheduleManager extends LightningElement {
       enabledVariant: s.Enabled__c ? "success" : "neutral",
       enabledLabel: s.Enabled__c ? "Enabled" : "Disabled",
       timeZoneLabel: s.Time_Zone__c || "UTC",
+      healthLabel: this.healthLabel(s),
       outcomeClass: this.badgeClass(outcome),
       dedicatedLabel: s.Dedicated_Slot__c
         ? s.dedicatedJobArmed
@@ -180,6 +187,16 @@ export default class WorkflowScheduleManager extends LightningElement {
         : "0-slot",
       rowActions: this.buildRowActions(s),
     };
+  }
+
+  // Schedule health (#126). The server calculates the flags on each read.
+  healthLabel(s) {
+    if (s.healthStatus === "PAUSED") return "Paused";
+    if (s.overdue && s.lastFireFailed) return "Overdue; last fire failed";
+    if (s.overdue) return "Overdue";
+    if (s.lastFireFailed) return "Last fire failed";
+    if (s.healthStatus === "OK") return "OK";
+    return "—";
   }
 
   badgeClass(outcome) {
