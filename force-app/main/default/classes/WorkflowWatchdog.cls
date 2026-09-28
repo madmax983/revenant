@@ -53,6 +53,10 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
     }
     bootstrapped = true;
 
+    // Stall check (issue #113). This call is not in the watchdog chain, so it
+    // can find a dead watchdog. When HEALTHY it costs 0 SOQL and 0 DML.
+    WorkflowAlertManager.detectAndAlertWatchdogStall();
+
     try {
       List<Workflow_Instance__c> latestWatchdogs = [
         SELECT Id

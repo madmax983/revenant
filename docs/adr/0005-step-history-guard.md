@@ -1,4 +1,4 @@
-# ADR 0004: Step-history guard
+# ADR 0005: Step-history guard
 
 - **Status:** Accepted
 - **Date:** 2026-09-28

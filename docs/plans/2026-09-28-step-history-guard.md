@@ -110,4 +110,4 @@ Invariants:
 - `WorkflowStalledService`: the badge flag on stalled rows.
 - `WorkflowEngine`: config values, category constant, `skipErrorRouting` on the fail request.
 - Dashboard: list badge, detail callout, category label.
-- Docs: feature doc, ADR 0004, README, ARCHITECTURE.
+- Docs: feature doc, ADR 0005, README, ARCHITECTURE.
