@@ -95,17 +95,19 @@ public inherited sharing class WorkflowAlertManager {
   }
 
   /**
-   * @description True when alerts are on and at least one channel is set.
-   * @param config The resolved alert config.
+   * @description True when alerts are on and at least one channel is set. The
+   * Readiness panel (#114) uses it too.
+   * @param config The resolved alert config, or null.
    * @return True when the config can send an alert.
    */
   public static Boolean isAlertActionable(Workflow_Alert_Config__mdt config) {
     if (config == null || !config.Enable_Alerts__c) {
       return false;
     }
-    // If email recipients are blank and event publishing is disabled, skip.
-    return String.isNotBlank(config.Email_Recipients__c) ||
-      config.Publish_Alert_Event__c;
+    // Skip when no address is left after the split and event publish is off.
+    return WorkflowAlertEmailBuilder.hasRecipients(
+        config.Email_Recipients__c
+      ) || config.Publish_Alert_Event__c == true;
   }
 
   private static void dispatchAlert(AlertEventRequest request) {

@@ -98,24 +98,24 @@ Keep FIFO in one priority class. Prevent starvation with a bound.
 Four review agents (compile, concurrency, integration, docs) and Codex found
 these problems. The fixes replace parts of the decision above.
 
-| Problem                                                               | Fix                                                                       |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Start paths write the raw override back after insert (null priority). | The builder writes the resolved priority.                                 |
-| Key backfill at the gate stops a legacy backlog.                      | No backfill. Blank keys rank first, in Id order.                          |
-| A plain `RUN_STEP` wake can re-run the step of an admitted instance.  | Admit-only `ConcurrencyAdmissionWake`. Abort the old timer on admit/park. |
-| The ahead query scans the full table under the counter lock.          | Indexed `Admission_Queue__c`, set by the trigger only while waiting.      |
-| Many free slots fill slowly (5 wakes).                                | Wake up to the free slots, max 10, in one Queueable.                      |
-| Wakes fall back to Platform Events and lock the watchdog row.         | No fallback. No wake when the Queueable budget is spent.                  |
-| One deep queue hides other queues on the dashboard (Codex).           | One query per governed workflow, `LIMIT 5`.                               |
-| Flow Signal-or-Start has no priority input.                           | Add the `Priority` input.                                                 |
-| A huge aging value overflows.                                         | Clamp aging to 1–525600.                                                  |
-| Waiting rows from before the upgrade have no queue field (Codex).     | Heartbeat backfill (200 per sweep) and a one-off script.                  |
-| The wake job keeps one savepoint per row (Codex).                     | Release each savepoint in `finally`.                                      |
-| An admit spends the only async Queueable before the wake (Codex).     | Wake before the commit or park.                                           |
-| The wake job locks the counter, then more instance rows (round 2).    | Lock all wake rows first, in Id order.                                    |
-| A parked row that rolls back can join the queue (round 2).            | The trigger clears the marker on `Compensating`/`Cancelling`.             |
-| The old timer is aborted after the new one is scheduled (round 2).    | Abort first. Log a failed wake. Backfill uses `allOrNone = false`.        |
-| The ahead scan has no row cap for a huge ceiling (Codex).             | Cap the scan at 1,000 rows. A full capped scan yields.                    |
-| An aging change mixes keys in one class (Codex).                      | Documented: change aging only with an empty queue. No re-rank.            |
-| Failing rows block the backfill (Codex).                              | Read the next page when a full page fails (max 5). Log failed pages.      |
-| Admin can edit engine fields.                                         | Read-only in both permission sets.                                        |
+| Problem                                                               | Fix                                                                                                       |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Start paths write the raw override back after insert (null priority). | The builder writes the resolved priority.                                                                 |
+| Key backfill at the gate stops a legacy backlog.                      | No backfill. Blank keys rank first, in Id order.                                                          |
+| A plain `RUN_STEP` wake can re-run the step of an admitted instance.  | Admit-only `ConcurrencyAdmissionWake`. Abort the old timer on admit/park.                                 |
+| The ahead query scans the full table under the counter lock.          | Indexed `Admission_Queue__c`, set by the trigger only while waiting.                                      |
+| Many free slots fill slowly (5 wakes).                                | Wake up to the free slots, max 10, in one Queueable.                                                      |
+| Wakes fall back to Platform Events and lock the watchdog row.         | No fallback. No wake when the Queueable budget is spent.                                                  |
+| One deep queue hides other queues on the dashboard (Codex).           | One query per governed workflow, `LIMIT 5`.                                                               |
+| Flow Signal-or-Start has no priority input.                           | Add the `Priority` input.                                                                                 |
+| A huge aging value overflows.                                         | Clamp aging to 1–525600.                                                                                  |
+| Waiting rows from before the upgrade have no queue field (Codex).     | Heartbeat backfill (200 per sweep) and a one-off script.                                                  |
+| The wake job keeps one savepoint per row (Codex).                     | Release each savepoint in `finally`.                                                                      |
+| An admit spends the only async Queueable before the wake (Codex).     | Wake before the commit or park.                                                                           |
+| The wake job locks the counter, then more instance rows (round 2).    | Lock all wake rows first, in Id order.                                                                    |
+| A parked row that rolls back can join the queue (round 2).            | The trigger clears the marker on `Compensating`/`Cancelling`.                                             |
+| The old timer is aborted after the new one is scheduled (round 2).    | Abort first. Log a failed wake. Backfill uses `allOrNone = false`.                                        |
+| The ahead scan has no row cap for a huge ceiling (Codex).             | Cap the scan at 1,000 rows. A full capped scan yields.                                                    |
+| An aging change mixes keys in one class (Codex).                      | Documented: change aging only with an empty queue. No re-rank.                                            |
+| Failing rows block the backfill (Codex).                              | Read the next page when a full page fails (max 5). Log failed pages.                                      |
+| Admin can edit engine fields.                                         | Read-only for Operator. Editable for Admin: the readiness check (#114) needs create access on all fields. |

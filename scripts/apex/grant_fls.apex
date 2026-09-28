@@ -15,54 +15,42 @@ if (existingPs.isEmpty()) {
     delete [SELECT Id FROM FieldPermissions WHERE ParentId = :ps.Id];
 }
 
-// List of custom fields to grant FLS to
-List<String> fieldsToGrant = new List<String>{
-    'Workflow_Instance__c.Compensation_Stack__c',
-    'Workflow_Instance__c.Correlation_Key__c',
-    'Workflow_Instance__c.Current_Step__c',
-    'Workflow_Instance__c.Definition_Version__c',
-    'Workflow_Instance__c.Error_Message__c',
-    'Workflow_Instance__c.Input__c',
-    'Workflow_Instance__c.Output__c',
-    'Workflow_Instance__c.Parent_Instance__c',
-    'Workflow_Instance__c.Previous_Instance__c',
-    'Workflow_Instance__c.Status__c',
-    'Workflow_Instance__c.Workflow_Name__c',
-    'Workflow_Instance__c.Sleep_Until__c',
-    'Workflow_Instance__c.Async_Job_Id__c',
-    'Workflow_Instance__c.Terminal_At__c',
-    'Workflow_Instance__c.Active_Correlation_Key__c',
-    
-    'Workflow_Step_Execution__c.Error_Details__c',
-    'Workflow_Step_Execution__c.Input__c',
-    'Workflow_Step_Execution__c.Output__c',
-    'Workflow_Step_Execution__c.Retry_Count__c',
-    'Workflow_Step_Execution__c.Status__c',
-    'Workflow_Step_Execution__c.Step_Name__c',
-    'Workflow_Step_Execution__c.Workflow_Instance__c',
-    'Workflow_Step_Execution__c.Timeout_At__c',
-    
-    'Workflow_Signal__c.Payload__c',
-    'Workflow_Signal__c.Signal_Name__c',
-    'Workflow_Signal__c.Status__c',
-    'Workflow_Signal__c.Workflow_Instance__c'
+// Grant FLS on every custom data field of the core engine objects. The list comes
+// from describe, so it matches the fields the Readiness panel (#114) checks. Formula,
+// auto-number and required fields take no FLS, so they are skipped. Fields of other
+// packages are skipped too. This script is for a source deploy (no namespace).
+List<Schema.SObjectType> engineObjects = new List<Schema.SObjectType>{
+    Workflow_Instance__c.SObjectType,
+    Workflow_Step_Execution__c.SObjectType,
+    Workflow_Signal__c.SObjectType
 };
+List<FieldPermissions> grants = new List<FieldPermissions>();
+for (Schema.SObjectType objectType : engineObjects) {
+    String objType = objectType.getDescribe().getName();
+    for (Schema.SObjectField field : objectType.getDescribe().fields.getMap().values()) {
+        Schema.DescribeFieldResult d = field.getDescribe();
+        // Skip fields of other packages: after the __c suffix, a remaining "__" marks a
+        // namespace prefix. getLocalName() keeps a foreign prefix here, so it is not used.
+        if (!d.isCustom() || d.isCalculated() || d.isAutoNumber() || !d.isPermissionable()
+            || d.getName().removeEndIgnoreCase('__c').contains('__')) {
+            continue;
+        }
+        grants.add(new FieldPermissions(
+            ParentId = ps.Id,
+            SobjectType = objType,
+            Field = objType + '.' + d.getName(),
+            PermissionsRead = true,
+            PermissionsEdit = true
+        ));
+    }
+}
 
 Integer successCount = 0;
-for (String fld : fieldsToGrant) {
-    String objType = fld.substringBefore('.');
-    FieldPermissions fp = new FieldPermissions(
-        ParentId = ps.Id,
-        SobjectType = objType,
-        Field = fld,
-        PermissionsRead = true,
-        PermissionsEdit = true
-    );
-    try {
-        insert fp;
+for (Database.SaveResult result : Database.insert(grants, false)) {
+    if (result.isSuccess()) {
         successCount++;
-    } catch (Exception ex) {
-        System.debug('Skipped FLS for ' + fld + ': ' + ex.getMessage());
+    } else {
+        System.debug('Skipped FLS: ' + result.getErrors()[0].getMessage());
     }
 }
 System.debug('Successfully inserted ' + successCount + ' FieldPermissions.');
