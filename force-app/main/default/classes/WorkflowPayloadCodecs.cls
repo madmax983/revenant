@@ -31,9 +31,6 @@ public inherited sharing class WorkflowPayloadCodecs {
     '"(\\$attachmentId|\\$codec)"'
   );
 
-  private static final String FAILURE_DATA_PREFIX = '\nfailureData: ';
-  private static final Integer ERROR_DETAILS_LIMIT = 131072;
-
   private static Boolean loaded = false;
   // Null means identity.
   private static PayloadCodec activeCodec;
@@ -136,39 +133,6 @@ public inherited sharing class WorkflowPayloadCodecs {
   public static Boolean mayOffload(String payload) {
     return String.isNotBlank(payload) &&
       (!isIdentity() || payload.length() > 100000);
-  }
-
-  /**
-   * @description Builds `Error_Details__c` for an explicit failure: the reason,
-   * then `failureData` on a second line. With a codec, the failure data is
-   * encoded and offloaded when it is too large. If the value is still longer
-   * than the field, the reason is shortened. The failure data never changes.
-   * The identity codec keeps the legacy value.
-   * @param stepExec the failed step execution (owner and file title)
-   * @param reason the failure reason
-   * @param failureDataJson the author failure data, or null
-   * @return the Error_Details__c value
-   */
-  public static String failureDetails(
-    Workflow_Step_Execution__c stepExec,
-    String reason,
-    String failureDataJson
-  ) {
-    if (failureDataJson == null || isIdentity()) {
-      return failureDataJson == null
-        ? reason
-        : reason + FAILURE_DATA_PREFIX + failureDataJson;
-    }
-    String stored = WorkflowPayloadOffload.savePayloadIfNeeded(
-      stepExec.Workflow_Instance__c,
-      encode(failureDataJson, CodecContext.PayloadKind.STEP_OUTPUT),
-      'Output_Failure_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
-    );
-    Integer room =
-      ERROR_DETAILS_LIMIT -
-      FAILURE_DATA_PREFIX.length() -
-      stored.length();
-    return String.valueOf(reason).left(room) + FAILURE_DATA_PREFIX + stored;
   }
 
   /**

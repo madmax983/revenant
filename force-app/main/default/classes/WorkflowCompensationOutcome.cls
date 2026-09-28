@@ -373,7 +373,7 @@ public inherited sharing class WorkflowCompensationOutcome {
     // resume. Same format as the RETRY-exhausted and thrown-exception paths.
     stepExec.Status__c = 'Failed';
     // failureData is author data, so the payload codec encodes it.
-    stepExec.Error_Details__c = WorkflowPayloadCodecs.failureDetails(
+    stepExec.Error_Details__c = WorkflowFailureDetails.build(
       stepExec,
       result.directive().failureReason,
       result.directive().failureDataJson

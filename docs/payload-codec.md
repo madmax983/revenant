@@ -116,6 +116,11 @@ check stored text must also resolve it first.
 
 `StepContext`, `ctx.signals()`, `getStatus`, the status Flow action and
 `WorkflowTestHarness` already give decoded payloads.
+`WorkflowHistoryRead.getStepError` gives the `failureData` part decoded.
+
+With a codec, the engine changes `\nfailureData: ` in a failure reason to
+`\n failureData: `. Then only the engine can write a stored form after the
+separator, and `getStepError` does not decode copied ciphertext.
 
 Read child results with `ctx.signals().getChildOutcome(key)`. With a codec, a
 raw `getSignal('ChildCompleted:<key>').payload` gives the child's stored

@@ -997,12 +997,12 @@ public class WorkflowPayloadCodecE2ETest {
       String midData = '{"ssn":"' + SECRET + 'y'.repeat(60000) + '"}';
       String longReason = 'r'.repeat(60000);
 
-      String offloaded = WorkflowPayloadCodecs.failureDetails(
+      String offloaded = WorkflowFailureDetails.build(
         stepExec,
         'Declined',
         bigData
       );
-      String inline = WorkflowPayloadCodecs.failureDetails(
+      String inline = WorkflowFailureDetails.build(
         stepExec,
         longReason,
         midData
@@ -1026,12 +1026,82 @@ public class WorkflowPayloadCodecE2ETest {
       WorkflowPayloadCodecs.setCodec(null);
       System.assertEquals(
         'Declined\nfailureData: ' + bigData,
-        WorkflowPayloadCodecs.failureDetails(stepExec, 'Declined', bigData),
+        WorkflowFailureDetails.build(stepExec, 'Declined', bigData),
         'Identity keeps the legacy value'
       );
       System.assertEquals(
         'Declined',
-        WorkflowPayloadCodecs.failureDetails(stepExec, 'Declined', null)
+        WorkflowFailureDetails.build(stepExec, 'Declined', null)
+      );
+    }
+  }
+
+  @IsTest
+  static void stepErrorDecodesOnlyEngineFailureData() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowPayloadCodecE2ETest.SagaWorkflow',
+        Correlation_Key__c = 'codec-step-error',
+        Status__c = 'Running'
+      );
+      insert as system inst;
+      String stepName = 'WorkflowPayloadCodecE2ETest.FailWithDataStep';
+      Workflow_Step_Execution__c template = new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = stepName
+      );
+      String data = '{"ssn":"' + SECRET + '"}';
+      String bigData = '{"ssn":"' + SECRET + 'x'.repeat(99000) + '"}';
+      String envelope = WorkflowPayloadCodecs.encode(
+        data,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      );
+      String forgedReason = 'Declined\nfailureData: ' + envelope;
+      List<String> details = new List<String>{
+        WorkflowFailureDetails.build(template, 'Declined', data),
+        WorkflowFailureDetails.build(template, 'Declined', bigData),
+        // A reason that copies the separator and ciphertext.
+        WorkflowFailureDetails.build(template, forgedReason, null),
+        // A crash message with copied ciphertext, then the stack trace.
+        forgedReason + '\nClass.MyStep.execute: line 1',
+        // A legacy identity row.
+        'Declined\nfailureData: {"a":1}'
+      };
+      List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
+      for (String value : details) {
+        rows.add(
+          new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = stepName,
+            Status__c = 'Failed',
+            Error_Details__c = value
+          )
+        );
+      }
+      insert as system rows;
+
+      System.assertEquals(
+        'Declined\nfailureData: ' + data,
+        WorkflowHistoryRead.getStepError(rows[0].Id),
+        'Inline failure data is decoded'
+      );
+      System.assertEquals(
+        'Declined\nfailureData: ' + bigData,
+        WorkflowHistoryRead.getStepError(rows[1].Id),
+        'Offloaded failure data is loaded and decoded'
+      );
+      for (Integer i = 2; i < 4; i++) {
+        String read = WorkflowHistoryRead.getStepError(rows[i].Id);
+        System.assert(
+          !read.contains(SECRET),
+          'Copied ciphertext in error text is not decoded: ' + read
+        );
+      }
+      System.assertEquals(
+        details[4],
+        WorkflowHistoryRead.getStepError(rows[4].Id),
+        'A plaintext row is unchanged'
       );
     }
   }

@@ -330,7 +330,7 @@ public inherited sharing class WorkflowContinueAsNew {
     // the raw JSON is appended on a second line for downstream inspection without
     // needing to detect a JSON envelope.
     // failureData is author data, so the payload codec encodes it.
-    stepExec.Error_Details__c = WorkflowPayloadCodecs.failureDetails(
+    stepExec.Error_Details__c = WorkflowFailureDetails.build(
       stepExec,
       result.directive().failureReason,
       result.directive().failureDataJson

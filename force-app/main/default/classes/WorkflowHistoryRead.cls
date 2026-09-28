@@ -392,7 +392,8 @@ public inherited sharing class WorkflowHistoryRead {
    * step is in a failure `status` (or a retried row, `attempt` &gt; 0, that may
    * carry error detail from an earlier attempt). It loads the long-text for exactly
    * ONE row, so it stays heap-bounded by construction. Costs 1 SOQL query and zero
-   * DML.
+   * DML. With a payload codec, the `failureData` part is decoded. When it was
+   * offloaded to a file, one more SOQL query loads it.
    * @param executionId Id of the step-execution row
    * ({@link WorkflowEngine.StepHistoryEntry#executionId})
    * @return the recorded error detail, or null when unknown or error-free
@@ -408,6 +409,8 @@ public inherited sharing class WorkflowHistoryRead {
       WITH SYSTEM_MODE
       LIMIT 1
     ];
-    return rows.isEmpty() ? null : rows[0].Error_Details__c;
+    return rows.isEmpty()
+      ? null
+      : WorkflowFailureDetails.resolve(rows[0].Error_Details__c);
   }
 }
