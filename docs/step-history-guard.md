@@ -66,3 +66,9 @@ A parked, paused or stale delivery does not pay: the guard runs after these gate
 1. Filter the dashboard by the category **Step History Limit**. A saga that compensated has no category. Search its error message for `Step history reached`.
 2. Change the workflow: call `StepResult.continueAsNew(...)` at the end of each loop cycle.
 3. Start the work again. A failed instance does not resume past the ceiling.
+
+## Known limits
+
+- One hop that adds more rows than the gap (a wide fan-out) can go from below the warning to the ceiling.
+- A saga at the ceiling ends `Compensated` with a blank category.
+- The dashboard detail pane reads all step rows. It can fail on the heap for a very large history. See issue #261.
