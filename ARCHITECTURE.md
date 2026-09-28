@@ -120,6 +120,10 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WatchdogLiveness` (sweep stamp, stale state), `WatchdogStallDetector`
   (one alert per stall; runs from `WorkflowWatchdog.bootstrap()` and the
   System Doctor read)
+- `WorkflowMetricsPublisher`, `WorkflowMetricsCollector`,
+  `WorkflowMetricsSnapshot` (engine-health `Workflow_Metrics__e` snapshot on
+  each sweep; default off. See
+  [docs/workflow-metrics-event.md](docs/workflow-metrics-event.md))
 
 ## Payload persistence & codec
 
