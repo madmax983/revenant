@@ -12,7 +12,7 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 - `Workflow_Event__e` is `PublishAfterCommit`. A rolled-back transaction publishes nothing. `WorkflowEventTriggerHandler` routes it by `Event_Type__c` in a new transaction (Automated Process user).
 - `Workflow_Log__c.Fire_Key__c` is a unique external Id. `WorkflowStepHistoryGuard` uses it as a once-only anchor.
 - `Messaging.CustomNotification.send(Set<String>)` takes max 500 recipients for each call. A recipient can be a user, group or queue Id. The type Id comes from `SELECT Id FROM CustomNotificationType WHERE DeveloperName = :name`.
-- An Apex test cannot see a sent notification. Tests can not always query `CustomNotificationType`.
+- An Apex test cannot see a sent notification. A test cannot always query `CustomNotificationType`.
 
 ## Brainstorming (options)
 
@@ -26,8 +26,8 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | B6 | Dedup marker in `Workflow_Step_Execution__c.Output__c`. | No. `suspend()` keeps encoded author state there. |
 | B7 | New checkbox on `Workflow_Step_Execution__c`. | No. The issue forbids new fields on data objects. |
 | B8 | Fluent `StepResult.withNotification(WorkflowNotification)` on SUSPEND and WAIT_FOR_APPROVAL results. | Yes. Same style as `withStepState` and `withApprovalTimeout`. |
-| B9 | `WorkflowNotification` builder: `of(title, body)`, `to(Id)`, `to(Set<Id>)`, `toInputField(key)`, `toRecordOwner(recordId)`, `withTarget(recordId)`, `withType(developerName)`. | Yes. Static, input and record-owner recipients. |
-| B10 | Resolve `toInputField` at the SUSPEND from the decoded workflow input in memory. | Yes. No SOQL. The trigger does not see the decoded input. |
+| B9 | `WorkflowNotification` builder: `create(title, body)`, `toRecipient(Id)`, `toRecipients(Set<Id>)`, `toInputKey(key)`, `toRecordOwner(recordId)`, `withTarget(recordId)`, `withNotificationType(developerName)`. (`of` is an Apex reserved word.) | Yes. Static, input and record-owner recipients. |
+| B10 | Resolve `toInputKey` at the SUSPEND from the decoded workflow input in memory. | Yes. No SOQL. The trigger does not see the decoded input. |
 | B11 | Resolve `toRecordOwner` in the event trigger. | Yes. The SOQL is not on the SUSPEND path. |
 | B12 | Default deep link: the workflow instance record. | Yes. `withTarget` sets an author record. |
 | B13 | Ship `CustomNotificationType` `Revenant_Workflow_Notification` in `force-app`. | Yes. It is the default type. The example works with no setup. |
@@ -49,6 +49,12 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | No recipient. | `withNotification` requires a recipient source. An empty result at send time logs `Failed`. |
 | More than 500 recipients. | Send in chunks of 500. |
 | A title or body that is too long. | The builder rejects a title over 250 and a body over 750 characters. |
+| Many NOTIFY events in one trigger batch use too much heap or CPU. The batch fails and loses RESUME events. (Added after review.) | Max 200 NOTIFY events for each pass. Publish the others again. |
+| A replayed NOTIFY event sends again. (Added after review.) | Skip a request whose row is `Sent`. |
+| A recipient Id that is not a user or group fails the send. (Added after review.) | Send only to user and group Ids. |
+| A caller changes the recipient sets after validation. (Added after review.) | The read accessors return copies. |
+| A second `withNotification` call replaces the first. (Added after review.) | Throw. |
+| The example has no approver in the input. (Added after review.) | Fall back to the instance owner. |
 | The admin turns the feature off during a wait. | The trigger checks the toggle again. The row shows `Skipped`. |
 | An author calls `withNotification` on a COMPLETE. | `IllegalArgumentException`. |
 | A test depends on the real send. | Test context captures the request and does not call `send()`. Tests can set the type Id. |
@@ -57,8 +63,8 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 ## Six Thinking Hats
 
 - **White (facts):** The SUSPEND writes one step row. `Workflow_Event__e` is `PublishAfterCommit`. `Fire_Key__c` is unique. A send takes max 500 recipients.
-- **Red (feelings):** Approvers want one clear nudge, not spam. Authors want one line of code.
-- **Black (risks):** Two DML statements on an opted-in SUSPEND. The Automated Process user sends the notification. Tests cannot see delivery.
+- **Red (feelings):** Approvers want one clear notification, not spam. Authors want one line of code.
+- **Black (risks):** Maximum three DML statements on an opted-in SUSPEND. A large trigger batch can use too much heap. The Automated Process user sends the notification. Tests cannot see delivery.
 - **Yellow (benefits):** A turnkey approval inbox nudge. No new object and no new data field. The log row is an audit trail.
 - **Green (ideas):** Owner lookup for queues. A `Sent`/`Failed` state on the log row. A later inbox LWC can read the log rows.
 - **Blue (process):** Plan. RED tests with stubs. GREEN code. REFACTOR. Multi-angle review. Map each AC to evidence.
@@ -72,6 +78,7 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | `n == null` | `IllegalArgumentException` |
 | action not SUSPEND or WAIT_FOR_APPROVAL | `IllegalArgumentException` |
 | `n` has no recipient source | `IllegalArgumentException` |
+| the result already has a notification | `IllegalArgumentException` |
 | else | Stores `n` on `directive().notification`. Returns the result. |
 
 At the SUSPEND (`WorkflowNotifier.request`):
@@ -80,7 +87,8 @@ At the SUSPEND (`WorkflowNotifier.request`):
 |-----------|--------|
 | No notification, or toggle off | Nothing. No DML. |
 | DML budget low | Nothing. |
-| Anchor insert fails (duplicate) | Nothing. The step already notified. |
+| Anchor insert fails (duplicate) | Nothing. The step already has a request. |
+| Anchor insert fails (other error) | One `Notification` error row. |
 | Anchor insert succeeds | Publish one `NOTIFY` event. The row has `Outcome__c = Requested`. |
 | Publish fails | The row changes to `Failed`. The SUSPEND continues. |
 
@@ -88,6 +96,7 @@ In the trigger (`WorkflowNotifier.handleEvents`):
 
 | Condition | Row `Outcome__c` |
 |-----------|------------------|
+| Row is already `Sent` (replay) | No send. No change. |
 | Toggle off | `Skipped` |
 | Type not found | `Failed` |
 | No recipient after resolution | `Failed` |
@@ -98,11 +107,11 @@ In the trigger (`WorkflowNotifier.handleEvents`):
 
 | AC | Test |
 |----|------|
-| Suspend API with recipients, title, body, target | `WorkflowNotificationTest`, `WorkflowNotifierTest.suspendRequestsOneNotification`, `approvalWaitRequestsOneNotification` |
-| Static or data-driven recipients | `inputFieldRecipientsResolvedAtSuspend`, `recordOwnerResolvedAtSend` |
-| Once per logical suspend | `reSuspendDoesNotNotifyAgain`, `rolledBackSuspendLeavesNoAnchor` |
-| Fire-and-forget | `publishFailureDoesNotBlockSuspend`, `lowDmlBudgetSkipsNotify`, `sendFailureIsLogged` |
-| Deep link | `defaultTargetIsInstance`, `authorTargetIsUsed` |
-| Toggle | `toggleOffPublishesNothing`, `toggleOffAtSendSkips` |
+| Suspend API with recipients, title, body, target; no `Messaging` code in author code | `WorkflowNotificationTest`, `WorkflowNotifierTest.suspendRequestsOneNotification`, `approvalWaitRequestsOneNotification`, `timedSuspendAlsoNotifies` |
+| Static or data-driven recipients | `inputFieldRecipientsResolvedAtSuspend`, `recordOwnerResolvedAtSend`, `nonUserRecipientsAreIgnored` |
+| Once per logical suspend | `reSuspendDoesNotNotifyAgain`, `operatorResumeDoesNotNotifyAgain`, `rolledBackSuspendLeavesNoAnchor`, `replayedEventDoesNotSendAgain` |
+| Fire-and-forget | `publishFailureDoesNotBlockSuspend`, `lowDmlBudgetSkipsNotify`, `dmlReserveSkipsNotify`, `sendFailureIsLogged`, `eachRequestInABatchIsIsolated`, `badNotifyDoesNotBlockResumeInSameBatch` |
+| Deep link | `suspendRequestsOneNotification` (default: instance), `authorTargetAndTypeAreUsed` |
+| Toggle | `toggleReadsTheDefaultConfig`, `toggleOffPublishesNothing`, `toggleOffAtSendSkips` |
 | Shipped type | `Revenant_Workflow_Notification.notiftype-meta.xml` |
-| Example | `ApprovalWorkflowExampleTest.testApproverIsNotified` |
+| Example | `ApprovalWorkflowExampleTest.testApproverIsNotified`, `testGateRequestsNotificationForApprover`, `testGateFallsBackToInstanceOwner` |

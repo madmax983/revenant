@@ -6,12 +6,13 @@
  *    `Notify:<stepExecId>`) and publishes one `NOTIFY` `Workflow_Event__e`.
  *    The event is `PublishAfterCommit`: a rolled-back SUSPEND sends nothing.
  *    A second insert for the same step row fails: a re-suspend sends nothing.
- * 2. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
- *    transaction. It resolves the type and the record owners, sends, and sets
- *    the anchor row to `Sent`, `Failed` or `Skipped`.
+ * 2. `WorkflowEventTriggerHandler` gives max {@link maxEventsPerPass} NOTIFY
+ *    events to {@link handleEvents} in a new transaction. It publishes the
+ *    other events again. `handleEvents` resolves the type and the record
+ *    owners, sends, and sets the anchor row to `Sent`, `Failed` or `Skipped`.
  *
- * Fire-and-forget: no method throws. A notify error never stops the SUSPEND
- * or the trigger batch. See docs/approver-notifications.md.
+ * Fire-and-forget: no method throws. A notification error never stops the
+ * SUSPEND or the trigger batch. See docs/approver-notifications.md.
  */
 public inherited sharing class WorkflowNotifier {
   /** @description Workflow_Event__e.Event_Type__c of a notify request. */
@@ -20,7 +21,7 @@ public inherited sharing class WorkflowNotifier {
   public static final String LOG_TYPE = 'Notification';
   /** @description Outcome__c: the SUSPEND published the request. */
   public static final String OUTCOME_REQUESTED = 'Requested';
-  /** @description Outcome__c: the trigger sent the notification. */
+  /** @description Outcome__c: the platform accepted the send. */
   public static final String OUTCOME_SENT = 'Sent';
   /** @description Outcome__c: the request or the send failed. */
   public static final String OUTCOME_FAILED = 'Failed';
@@ -32,8 +33,19 @@ public inherited sharing class WorkflowNotifier {
   private static final String LEVEL_WARN = 'Warn';
   private static final String LEVEL_ERROR = 'Error';
   private static final Integer MAX_MESSAGE_LENGTH = 131000;
-  // DML statements and rows of one request: insert, publish, update.
+  // Largest workflow input that toInputKey parses. A larger parse can hit the
+  // heap limit, and that error stops the SUSPEND.
+  @TestVisible
+  private static Integer maxInputParseLength = 1000000;
+  // Recipients of one Messaging.CustomNotification.send() call.
+  private static final Integer SEND_CHUNK_SIZE = 500;
+  // DML statements and rows of one request: insert, publish, update or log.
   private static final Integer REQUEST_DML = 3;
+  // Recipient types that send() accepts. A queue is a Group.
+  private static final Set<Schema.SObjectType> RECIPIENT_TYPES = new Set<Schema.SObjectType>{
+    User.SObjectType,
+    Group.SObjectType
+  };
 
   // Headroom for DML that runs after the request in the SUSPEND transaction.
   // Same values as WorkflowOutboundEventPublisher.
@@ -41,8 +53,11 @@ public inherited sharing class WorkflowNotifier {
   private static Integer dmlStatementReserve = 10;
   @TestVisible
   private static Integer dmlRowReserve = 20;
+  // NOTIFY events that one trigger pass sends. It bounds heap, CPU and DML.
+  @TestVisible
+  private static Integer eventsPerPass = 200;
 
-  /** @description One captured send (test context only). */
+  /** @description One captured send call (test context only). */
   public class SentNotification {
     /** @description CustomNotificationType Id. */
     public Id typeId;
@@ -56,7 +71,7 @@ public inherited sharing class WorkflowNotifier {
     public Set<String> recipients;
   }
 
-  // Test captures and hooks. Test context records each send and does not
+  // Test captures and hooks. Test context records each send call and does not
   // call Messaging.CustomNotification.send().
   @TestVisible
   private static List<Workflow_Event__e> publishedEvents = new List<Workflow_Event__e>();
@@ -81,6 +96,14 @@ public inherited sharing class WorkflowNotifier {
     return FIRE_KEY_PREFIX + String.valueOf(stepExecId);
   }
 
+  /**
+   * @description Returns the maximum NOTIFY events for one trigger pass.
+   * @return The maximum.
+   */
+  public static Integer maxEventsPerPass() {
+    return eventsPerPass;
+  }
+
   // ─── SUSPEND side ─────────────────────────────────────────────────────────
 
   /**
@@ -102,32 +125,46 @@ public inherited sharing class WorkflowNotifier {
     }
     try {
       if (wouldExceedDmlBudget()) {
-        return; // Drop the best-effort request. Keep the SUSPEND.
+        // No DML is left for a log row.
+        System.debug(
+          LoggingLevel.WARN,
+          'WorkflowNotifier: DML budget low, no request for ' +
+          outcome.stepExec.Id
+        );
+        return;
       }
       String key = fireKey(outcome.stepExec.Id);
-      String payloadJson = JSON.serialize(
-        buildPayload(key, outcome, notification)
-      );
+      Map<String, Object> payload = buildPayload(key, outcome, notification);
       Workflow_Log__c anchor = new Workflow_Log__c(
         Log_Type__c = LOG_TYPE,
         Level__c = LEVEL_INFO,
         Outcome__c = OUTCOME_REQUESTED,
         Fire_Key__c = key,
         Fire_Time__c = Datetime.now(),
-        Message__c = truncate(payloadJson),
+        Message__c = truncate(JSON.serialize(payload)),
         Workflow_Instance__c = outcome.instance.Id,
         Workflow_Name__c = outcome.instance.Workflow_Name__c,
         Correlation_Key__c = outcome.instance.Correlation_Key__c
       );
-      // A duplicate key fails with no exception: this suspend already notified.
-      if (
-        !Database.insert(anchor, false, AccessLevel.SYSTEM_MODE).isSuccess()
-      ) {
-        return;
+      Database.SaveResult sr = Database.insert(
+        anchor,
+        false,
+        AccessLevel.SYSTEM_MODE
+      );
+      if (sr.isSuccess()) {
+        publish(anchor, payload, outcome.instance.Id);
+      } else if (!isDuplicate(sr.getErrors())) {
+        // A duplicate key means that this suspend already has a request.
+        WorkflowLog.error(
+          new WorkflowLog.ErrorEntry(
+              LOG_TYPE,
+              'Anchor insert failed: ' + errorText(sr.getErrors())
+            )
+            .withInstanceId(outcome.instance.Id)
+        );
       }
-      publish(anchor, payloadJson, outcome.instance.Id);
     } catch (Exception ignored) {
-      // Fire-and-forget: a notify error never stops the SUSPEND.
+      // Fire-and-forget: a notification error never stops the SUSPEND.
     }
   }
 
@@ -141,6 +178,15 @@ public inherited sharing class WorkflowNotifier {
       Limits.getLimitDmlRows();
   }
 
+  private static Boolean isDuplicate(List<Database.Error> errors) {
+    for (Database.Error err : errors) {
+      if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private static Map<String, Object> buildPayload(
     String key,
     WorkflowEngine.StepOutcomeContext outcome,
@@ -152,13 +198,13 @@ public inherited sharing class WorkflowNotifier {
     }
     recipients.addAll(
       inputRecipients(
-        notification.inputFields,
+        notification.inputKeys,
         outcome.context?.workflowInputJson
       )
     );
     return new Map<String, Object>{
       'key' => key,
-      'type' => notification.typeName,
+      'type' => notification.notificationType,
       'title' => notification.title,
       'body' => notification.body,
       'target' => notification.targetId != null
@@ -172,11 +218,15 @@ public inherited sharing class WorkflowNotifier {
   // Reads the recipient Ids in the input keys. The input is decoded and in
   // memory: no SOQL. A value that is not an Id is ignored.
   private static Set<String> inputRecipients(
-    Set<String> fields,
+    Set<String> inputKeys,
     String inputJson
   ) {
     Set<String> ids = new Set<String>();
-    if (fields.isEmpty() || String.isBlank(inputJson)) {
+    if (
+      inputKeys.isEmpty() ||
+      String.isBlank(inputJson) ||
+      inputJson.length() > maxInputParseLength
+    ) {
       return ids;
     }
     Object parsed;
@@ -189,8 +239,8 @@ public inherited sharing class WorkflowNotifier {
       return ids;
     }
     Map<String, Object> input = (Map<String, Object>) parsed;
-    for (String field : fields) {
-      Object value = input.get(field);
+    for (String inputKey : inputKeys) {
+      Object value = input.get(inputKey);
       List<Object> values = value instanceof List<Object>
         ? (List<Object>) value
         : new List<Object>{ value };
@@ -215,13 +265,13 @@ public inherited sharing class WorkflowNotifier {
   // Publishes the NOTIFY event. On an error, sets the anchor row to Failed.
   private static void publish(
     Workflow_Log__c anchor,
-    String payloadJson,
+    Map<String, Object> payload,
     Id instanceId
   ) {
     Workflow_Event__e evt = new Workflow_Event__e(
       Event_Type__c = EVENT_TYPE,
       Workflow_Instance_Id__c = String.valueOf(instanceId),
-      Payload__c = payloadJson,
+      Payload__c = JSON.serialize(payload),
       Idempotency_Key__c = anchor.Fire_Key__c
     );
     try {
@@ -241,7 +291,7 @@ public inherited sharing class WorkflowNotifier {
       anchor.Outcome__c = OUTCOME_FAILED;
       anchor.Level__c = LEVEL_ERROR;
       anchor.Message__c = withResult(
-        payloadJson,
+        payload,
         'Publish failed: ' + e.getMessage()
       );
       Database.update(anchor, false, AccessLevel.SYSTEM_MODE);
@@ -252,7 +302,8 @@ public inherited sharing class WorkflowNotifier {
 
   /**
    * @description Sends the notifications of NOTIFY events and sets each
-   * anchor row to Sent, Failed or Skipped. Never throws.
+   * anchor row to Sent, Failed or Skipped. A request whose row is already
+   * Sent is not sent again. Never throws.
    * @param events NOTIFY events from WorkflowEventTriggerHandler.
    */
   public static void handleEvents(List<Workflow_Event__e> events) {
@@ -260,19 +311,14 @@ public inherited sharing class WorkflowNotifier {
       return;
     }
     try {
-      List<Map<String, Object>> requests = parseRequests(events);
+      List<Map<String, Object>> requests = removeSent(parseRequests(events));
       if (requests.isEmpty()) {
         return;
       }
       List<Workflow_Log__c> rows = WorkflowEngine.sendNotifications
         ? sendAll(requests)
         : skipAll(requests);
-      Database.upsert(
-        rows,
-        Workflow_Log__c.Fire_Key__c,
-        false,
-        AccessLevel.SYSTEM_MODE
-      );
+      saveRows(rows);
     } catch (Exception e) {
       WorkflowLog.error(LOG_TYPE, 'Notify batch failed: ' + e.getMessage());
     }
@@ -289,8 +335,6 @@ public inherited sharing class WorkflowNotifier {
           evt.Payload__c
         );
         if (String.isNotBlank((String) req.get('key'))) {
-          req.put('instanceId', evt.Workflow_Instance_Id__c);
-          req.put('json', evt.Payload__c);
           requests.add(req);
         }
       } catch (Exception e) {
@@ -298,6 +342,35 @@ public inherited sharing class WorkflowNotifier {
       }
     }
     return requests;
+  }
+
+  // Removes the requests whose anchor row is already Sent (a replayed event).
+  private static List<Map<String, Object>> removeSent(
+    List<Map<String, Object>> requests
+  ) {
+    if (requests.isEmpty() || Limits.getQueries() >= Limits.getLimitQueries()) {
+      return requests;
+    }
+    Set<String> keys = new Set<String>();
+    for (Map<String, Object> req : requests) {
+      keys.add((String) req.get('key'));
+    }
+    Set<String> sent = new Set<String>();
+    for (Workflow_Log__c row : [
+      SELECT Fire_Key__c
+      FROM Workflow_Log__c
+      WHERE Fire_Key__c IN :keys AND Outcome__c = :OUTCOME_SENT
+      WITH SYSTEM_MODE
+    ]) {
+      sent.add(row.Fire_Key__c.toLowerCase());
+    }
+    List<Map<String, Object>> open = new List<Map<String, Object>>();
+    for (Map<String, Object> req : requests) {
+      if (!sent.contains(((String) req.get('key')).toLowerCase())) {
+        open.add(req);
+      }
+    }
+    return open;
   }
 
   private static List<Workflow_Log__c> skipAll(
@@ -326,7 +399,6 @@ public inherited sharing class WorkflowNotifier {
       typeNames.add((String) req.get('type'));
       ownerRecordIds.addAll(ids(req.get('owners')));
     }
-    ownerRecordIds.remove(null);
     resolveTypeIds(typeNames);
     Map<Id, Id> owners = resolveOwners(ownerRecordIds);
 
@@ -347,51 +419,68 @@ public inherited sharing class WorkflowNotifier {
       if (typeId == null) {
         return failed(req, 'CustomNotificationType not found: ' + typeName);
       }
-      Set<String> recipients = new Set<String>(strings(req.get('recipients')));
+      Set<Id> candidates = ids(req.get('recipients'));
       for (Id recordId : ids(req.get('owners'))) {
-        Id ownerId = owners.get(recordId);
-        if (ownerId != null) {
-          recipients.add(String.valueOf(ownerId));
+        if (owners.containsKey(recordId)) {
+          candidates.add(owners.get(recordId));
         }
       }
+      Set<String> recipients = new Set<String>();
+      for (Id candidate : candidates) {
+        if (RECIPIENT_TYPES.contains(candidate.getSObjectType())) {
+          recipients.add(String.valueOf(candidate));
+        }
+      }
+      Integer ignored = candidates.size() - recipients.size();
       if (recipients.isEmpty()) {
-        return failed(req, 'No recipient resolved');
+        return failed(
+          req,
+          'No recipient resolved (ignored ' + ignored + ' non-user Ids)'
+        );
       }
       deliver(typeId, req, recipients);
       return resultRow(
         req,
         OUTCOME_SENT,
         LEVEL_INFO,
-        'Sent to ' + recipients.size() + ' recipients'
+        'Sent to ' +
+          recipients.size() +
+          ' recipients (ignored ' +
+          ignored +
+          ' non-user Ids)'
       );
     } catch (Exception e) {
       return failed(req, 'Send failed: ' + e.getMessage());
     }
   }
 
-  // Sends in chunks of MAX_RECIPIENTS (the limit of one send call).
+  // Sends in chunks of SEND_CHUNK_SIZE (the limit of one send call).
   private static void deliver(
     Id typeId,
     Map<String, Object> req,
     Set<String> recipients
   ) {
+    Id targetId = Id.valueOf((String) req.get('target'));
+    if (Test.isRunningTest()) {
+      for (Set<String> chunk : chunks(recipients)) {
+        capture(typeId, req, targetId, chunk);
+      }
+      return;
+    }
     Messaging.CustomNotification notification = new Messaging.CustomNotification();
     notification.setNotificationTypeId(typeId);
     notification.setTitle((String) req.get('title'));
     notification.setBody((String) req.get('body'));
-    notification.setTargetId(Id.valueOf((String) req.get('target')));
+    notification.setTargetId(targetId);
     for (Set<String> chunk : chunks(recipients)) {
-      if (Test.isRunningTest()) {
-        capture(typeId, req, chunk);
-      } else {
-        notification.send(chunk);
-      }
+      notification.send(chunk);
     }
   }
 
   private static void capture(
     Id typeId,
     Map<String, Object> req,
+    Id targetId,
     Set<String> chunk
   ) {
     if (throwSendException) {
@@ -403,7 +492,7 @@ public inherited sharing class WorkflowNotifier {
     sent.typeId = typeId;
     sent.title = (String) req.get('title');
     sent.body = (String) req.get('body');
-    sent.targetId = Id.valueOf((String) req.get('target'));
+    sent.targetId = targetId;
     sent.recipients = chunk;
     sentNotifications.add(sent);
   }
@@ -412,7 +501,7 @@ public inherited sharing class WorkflowNotifier {
     List<Set<String>> result = new List<Set<String>>();
     Set<String> current = new Set<String>();
     for (String recipient : recipients) {
-      if (current.size() == WorkflowNotification.MAX_RECIPIENTS) {
+      if (current.size() == SEND_CHUNK_SIZE) {
         result.add(current);
         current = new Set<String>();
       }
@@ -500,6 +589,36 @@ public inherited sharing class WorkflowNotifier {
 
   // ─── Result rows ──────────────────────────────────────────────────────────
 
+  // Upserts the result rows on Fire_Key__c and logs the rows that fail.
+  private static void saveRows(List<Workflow_Log__c> rows) {
+    if (
+      Limits.getDmlStatements() + 2 > Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + rows.size() + 1 > Limits.getLimitDmlRows()
+    ) {
+      return; // The rows stay Requested.
+    }
+    List<String> errors = new List<String>();
+    List<Database.UpsertResult> results = Database.upsert(
+      rows,
+      Workflow_Log__c.Fire_Key__c,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    for (Integer i = 0; i < results.size(); i++) {
+      if (!results[i].isSuccess()) {
+        errors.add(
+          rows[i].Fire_Key__c + ': ' + errorText(results[i].getErrors())
+        );
+      }
+    }
+    if (!errors.isEmpty()) {
+      WorkflowLog.error(
+        LOG_TYPE,
+        'Result row upsert failed: ' + String.join(errors, '; ')
+      );
+    }
+  }
+
   private static Workflow_Log__c failed(
     Map<String, Object> req,
     String reason
@@ -508,36 +627,26 @@ public inherited sharing class WorkflowNotifier {
   }
 
   // The upsert on Fire_Key__c updates the anchor row. When the anchor row is
-  // not there, it inserts a new row.
+  // not there, it inserts a new row. The row does not set the instance lookup:
+  // the instance can be deleted before the send.
   private static Workflow_Log__c resultRow(
     Map<String, Object> req,
     String outcome,
     String level,
     String result
   ) {
-    Workflow_Log__c row = new Workflow_Log__c(
+    return new Workflow_Log__c(
       Fire_Key__c = (String) req.get('key'),
       Log_Type__c = LOG_TYPE,
       Outcome__c = outcome,
       Level__c = level,
-      Message__c = withResult((String) req.get('json'), result)
+      Message__c = withResult(req, result)
     );
-    try {
-      row.Workflow_Instance__c = Id.valueOf((String) req.get('instanceId'));
-    } catch (Exception e) {
-      row.Workflow_Instance__c = null;
-    }
-    return row;
   }
 
-  // Adds the result text to the request JSON.
-  private static String withResult(String payloadJson, String result) {
-    Map<String, Object> message;
-    try {
-      message = (Map<String, Object>) JSON.deserializeUntyped(payloadJson);
-    } catch (Exception e) {
-      message = new Map<String, Object>();
-    }
+  // Returns the request JSON with a result key.
+  private static String withResult(Map<String, Object> req, String result) {
+    Map<String, Object> message = new Map<String, Object>(req);
     message.put('result', result);
     return truncate(JSON.serialize(message));
   }
@@ -547,18 +656,6 @@ public inherited sharing class WorkflowNotifier {
       text.length() > MAX_MESSAGE_LENGTH
       ? text.substring(0, MAX_MESSAGE_LENGTH)
       : text;
-  }
-
-  private static List<String> strings(Object value) {
-    List<String> result = new List<String>();
-    if (value instanceof List<Object>) {
-      for (Object item : (List<Object>) value) {
-        if (item instanceof String) {
-          result.add((String) item);
-        }
-      }
-    }
-    return result;
   }
 
   // Returns the valid Ids in a JSON list. Other values are ignored.

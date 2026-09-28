@@ -7,41 +7,55 @@
 public inherited sharing class WorkflowNotification {
   /** @description Default CustomNotificationType developer name. */
   public static final String DEFAULT_TYPE = 'Revenant_Workflow_Notification';
-  /** @description Max title length. */
+  /** @description Maximum title length. */
   public static final Integer MAX_TITLE_LENGTH = 250;
-  /** @description Max body length. */
+  /** @description Maximum body length. */
   public static final Integer MAX_BODY_LENGTH = 750;
-  /** @description Max static recipients. Also the size of one send. */
-  public static final Integer MAX_RECIPIENTS = 500;
+  /** @description Maximum static recipients. For more, use a group. */
+  public static final Integer MAX_STATIC_RECIPIENTS = 500;
+
+  private final Set<Id> recipients = new Set<Id>();
+  private final Set<String> keys = new Set<String>();
+  private final Set<Id> ownerRecords = new Set<Id>();
 
   /** @description Notification title. */
   public String title { get; private set; }
   /** @description Notification body. */
   public String body { get; private set; }
   /** @description CustomNotificationType developer name. */
-  public String typeName { get; private set; }
+  public String notificationType { get; private set; }
   /** @description Deep-link record. Null: the workflow instance. */
   public Id targetId { get; private set; }
-  /** @description Static recipients (user, group or queue Ids). */
-  public Set<Id> recipientIds { get; private set; }
-  /** @description Workflow input keys that hold recipient Ids. */
-  public Set<String> inputFields { get; private set; }
-  /** @description Records whose owner gets the notification. */
-  public Set<Id> ownerRecordIds { get; private set; }
+
+  /** @description Copy of the static recipients (user, group or queue Ids). */
+  public Set<Id> recipientIds {
+    get {
+      return new Set<Id>(recipients);
+    }
+  }
+  /** @description Copy of the workflow input keys that hold recipient Ids. */
+  public Set<String> inputKeys {
+    get {
+      return new Set<String>(keys);
+    }
+  }
+  /** @description Copy of the records whose owner gets the notification. */
+  public Set<Id> ownerRecordIds {
+    get {
+      return new Set<Id>(ownerRecords);
+    }
+  }
 
   private WorkflowNotification(String title, String body) {
     this.title = title;
     this.body = body;
-    this.typeName = DEFAULT_TYPE;
-    this.recipientIds = new Set<Id>();
-    this.inputFields = new Set<String>();
-    this.ownerRecordIds = new Set<Id>();
+    this.notificationType = DEFAULT_TYPE;
   }
 
   /**
    * @description Makes a notification.
-   * @param title Title. Not blank. Max MAX_TITLE_LENGTH characters.
-   * @param body Body. Not blank. Max MAX_BODY_LENGTH characters.
+   * @param title Title. Not blank. Maximum MAX_TITLE_LENGTH characters.
+   * @param body Body. Not blank. Maximum MAX_BODY_LENGTH characters.
    * @return The notification.
    */
   public static WorkflowNotification create(String title, String body) {
@@ -75,45 +89,46 @@ public inherited sharing class WorkflowNotification {
         'WorkflowNotification.toRecipients: ids must not be null or contain null'
       );
     }
-    Set<Id> merged = new Set<Id>(this.recipientIds);
+    Set<Id> merged = new Set<Id>(recipients);
     merged.addAll(ids);
-    if (merged.size() > MAX_RECIPIENTS) {
+    if (merged.size() > MAX_STATIC_RECIPIENTS) {
       throw new IllegalArgumentException(
-        'WorkflowNotification: max ' +
-          MAX_RECIPIENTS +
-          ' static recipients. Use toInputField for a larger audience.'
+        'WorkflowNotification: maximum ' +
+          MAX_STATIC_RECIPIENTS +
+          ' static recipients. For more, use a public group.'
       );
     }
-    this.recipientIds = merged;
+    recipients.addAll(ids);
     return this;
   }
 
   /**
    * @description Adds the recipients in a top-level workflow input key. The
-   * value is one Id or a list of Ids. The engine reads it at the SUSPEND and
-   * ignores a value that is not an Id.
+   * value is one Id or a list of Ids. The engine reads it at the SUSPEND. It
+   * ignores a value that is not a user or group Id.
    * @param key Input key. Not blank.
    * @return This notification.
    */
-  public WorkflowNotification toInputField(String key) {
+  public WorkflowNotification toInputKey(String key) {
     if (String.isBlank(key)) {
       throw new IllegalArgumentException(
-        'WorkflowNotification.toInputField: key must not be blank'
+        'WorkflowNotification.toInputKey: key must not be blank'
       );
     }
-    this.inputFields.add(key);
+    keys.add(key);
     return this;
   }
 
   /**
    * @description Adds the owner (user or queue) of a record. The engine reads
-   * the owner when it sends.
-   * @param recordId Record Id. Not null. The object must have OwnerId.
+   * the owner when it sends. When the object has no OwnerId, or the record is
+   * not found, the engine ignores it.
+   * @param recordId Record Id. Not null.
    * @return This notification.
    */
   public WorkflowNotification toRecordOwner(Id recordId) {
     requireRecordId(recordId, 'toRecordOwner');
-    this.ownerRecordIds.add(recordId);
+    ownerRecords.add(recordId);
     return this;
   }
 
@@ -133,24 +148,22 @@ public inherited sharing class WorkflowNotification {
    * @param developerName Type developer name. Not blank.
    * @return This notification.
    */
-  public WorkflowNotification withType(String developerName) {
+  public WorkflowNotification withNotificationType(String developerName) {
     if (String.isBlank(developerName)) {
       throw new IllegalArgumentException(
-        'WorkflowNotification.withType: developerName must not be blank'
+        'WorkflowNotification.withNotificationType: developerName must not be blank'
       );
     }
-    this.typeName = developerName;
+    this.notificationType = developerName;
     return this;
   }
 
   /**
    * @description Returns true when the notification has a recipient source.
-   * @return True when a static, input or owner recipient is set.
+   * @return True when a static, input-key or owner recipient is set.
    */
   public Boolean hasRecipientSource() {
-    return !recipientIds.isEmpty() ||
-      !inputFields.isEmpty() ||
-      !ownerRecordIds.isEmpty();
+    return !recipients.isEmpty() || !keys.isEmpty() || !ownerRecords.isEmpty();
   }
 
   private static void requireText(
@@ -162,7 +175,7 @@ public inherited sharing class WorkflowNotification {
       throw new IllegalArgumentException(
         'WorkflowNotification.create: ' +
           name +
-          ' must not be blank and must have max ' +
+          ' must not be blank and must have maximum ' +
           maxLength +
           ' characters'
       );

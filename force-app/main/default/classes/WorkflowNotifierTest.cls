@@ -14,6 +14,9 @@ public class WorkflowNotifierTest {
   private static final Id FAKE_TYPE_ID = UserInfo.getOrganizationId();
   private static final Id OTHER_TYPE_ID = UserInfo.getProfileId();
 
+  // Recipients of one send call in WorkflowNotifier.
+  private static final Integer SEND_CHUNK = 500;
+
   /** @description Executions of WaitStep in this test. */
   public static Integer waitExecutions = 0;
 
@@ -105,7 +108,7 @@ public class WorkflowNotifierTest {
       n.toRecipient(Id.valueOf((String) input.get('recipient')));
     }
     if (input.containsKey('inputField')) {
-      n.toInputField((String) input.get('inputField'));
+      n.toInputKey((String) input.get('inputField'));
     }
     if (input.containsKey('ownerOf')) {
       n.toRecordOwner(Id.valueOf((String) input.get('ownerOf')));
@@ -114,7 +117,7 @@ public class WorkflowNotifierTest {
       n.withTarget(Id.valueOf((String) input.get('target')));
     }
     if (input.containsKey('type')) {
-      n.withType((String) input.get('type'));
+      n.withNotificationType((String) input.get('type'));
     }
     return n;
   }
@@ -252,9 +255,10 @@ public class WorkflowNotifierTest {
       'notify-timed',
       new Map<String, Object>{ 'timed' => true, 'recipient' => userId() }
     );
-    WorkflowTestHarness.Result r = driveAndDeliver(
-      new WorkflowTestHarness(instanceId)
-    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    // Keep the timed wait. Else the harness skips the timer and loops.
+    harness.disableAutoTimeSkip = true;
+    WorkflowTestHarness.Result r = driveAndDeliver(harness);
     Test.stopTest();
 
     Assert.areEqual('Suspended', r.status);
@@ -344,7 +348,7 @@ public class WorkflowNotifierTest {
   static void largeAudienceIsSentInChunks() {
     seedType();
     List<Object> approvers = new List<Object>();
-    for (Integer i = 1; i <= WorkflowNotification.MAX_RECIPIENTS + 1; i++) {
+    for (Integer i = 1; i <= SEND_CHUNK + 1; i++) {
       approvers.add('005' + String.valueOf(i).leftPad(12, '0'));
     }
     Test.startTest();
@@ -360,7 +364,7 @@ public class WorkflowNotifierTest {
 
     Assert.areEqual(2, WorkflowNotifier.sentNotifications.size());
     Assert.areEqual(
-      WorkflowNotification.MAX_RECIPIENTS,
+      SEND_CHUNK,
       WorkflowNotifier.sentNotifications[0].recipients.size()
     );
     Assert.areEqual(1, WorkflowNotifier.sentNotifications[1].recipients.size());
@@ -368,6 +372,80 @@ public class WorkflowNotifierTest {
       WorkflowNotifier.OUTCOME_SENT,
       anchors(instanceId)[0].Outcome__c
     );
+  }
+
+  @IsTest
+  static void nonUserRecipientsAreIgnored() {
+    seedType();
+    Account acct = new Account(Name = 'Not a recipient');
+    insert as system acct;
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-filter',
+      new Map<String, Object>{
+        'inputField' => 'approvers',
+        'approvers' => new List<Object>{ userId(), String.valueOf(acct.Id) }
+      }
+    );
+    driveAndDeliver(new WorkflowTestHarness(instanceId));
+    Test.stopTest();
+
+    Assert.areEqual(
+      new Set<String>{ userId() },
+      WorkflowNotifier.sentNotifications[0].recipients
+    );
+    Assert.isTrue(
+      anchors(instanceId)[0].Message__c.contains('ignored 1'),
+      anchors(instanceId)[0].Message__c
+    );
+  }
+
+  @IsTest
+  static void exactlyOneChunkIsOneCall() {
+    seedType();
+    List<Object> approvers = new List<Object>();
+    for (Integer i = 1; i <= SEND_CHUNK; i++) {
+      approvers.add('005' + String.valueOf(i).leftPad(12, '0'));
+    }
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-one-chunk',
+      new Map<String, Object>{
+        'inputField' => 'approvers',
+        'approvers' => approvers
+      }
+    );
+    driveAndDeliver(new WorkflowTestHarness(instanceId));
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      SEND_CHUNK,
+      WorkflowNotifier.sentNotifications[0].recipients.size()
+    );
+  }
+
+  @IsTest
+  static void oversizedInputIsNotParsed() {
+    seedType();
+    WorkflowNotifier.maxInputParseLength = 10;
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-big-input',
+      new Map<String, Object>{
+        'inputField' => 'approverId',
+        'approverId' => userId()
+      }
+    );
+    WorkflowTestHarness.Result r = driveAndDeliver(
+      new WorkflowTestHarness(instanceId)
+    );
+    Test.stopTest();
+
+    Assert.areEqual('Suspended', r.status);
+    Workflow_Log__c log = anchors(instanceId)[0];
+    Assert.areEqual(WorkflowNotifier.OUTCOME_FAILED, log.Outcome__c);
+    Assert.isTrue(log.Message__c.contains('No recipient'), log.Message__c);
   }
 
   // ----- Deep link and type
@@ -432,6 +510,30 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
+  static void operatorResumeDoesNotNotifyAgain() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-operator-resume',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    driveAndDeliver(harness);
+    Integer firstRuns = waitExecutions;
+
+    // An operator resumes the waiting instance. The step runs again on the
+    // same row and suspends again.
+    WorkflowResumeService.resumeInstance(instanceId, '{}');
+    WorkflowTestHarness.Result again = driveAndDeliver(harness);
+    Test.stopTest();
+
+    Assert.areEqual('Suspended', again.status);
+    Assert.isTrue(waitExecutions > firstRuns, 'The step must run again');
+    Assert.areEqual(1, anchors(instanceId).size());
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+  }
+
+  @IsTest
   static void rolledBackSuspendLeavesNoAnchor() {
     seedType();
     Test.startTest();
@@ -452,6 +554,7 @@ public class WorkflowNotifierTest {
       'A rolled-back SUSPEND sends nothing (PublishAfterCommit)'
     );
 
+    // Static captures do not roll back: publishedEvents keeps the first event.
     // The re-run notifies once.
     WorkflowTestHarness.Result r = driveAndDeliver(
       new WorkflowTestHarness(instanceId)
@@ -505,6 +608,25 @@ public class WorkflowNotifierTest {
     Assert.areEqual('Suspended', r.status);
     Assert.areEqual(0, anchors(instanceId).size());
     Assert.areEqual(0, WorkflowNotifier.publishedEvents.size());
+  }
+
+  @IsTest
+  static void dmlReserveSkipsNotify() {
+    seedType();
+    // The real budget check: no reserve is left.
+    WorkflowNotifier.dmlStatementReserve = Limits.getLimitDmlStatements();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-reserve',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowTestHarness.Result r = driveAndDeliver(
+      new WorkflowTestHarness(instanceId)
+    );
+    Test.stopTest();
+
+    Assert.areEqual('Suspended', r.status);
+    Assert.areEqual(0, anchors(instanceId).size());
   }
 
   @IsTest
@@ -578,6 +700,109 @@ public class WorkflowNotifierTest {
     new WorkflowEventTriggerHandler(events).handleAfterInsert();
     Test.stopTest();
     Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      0,
+      [
+        SELECT COUNT()
+        FROM Workflow_Log__c
+        WHERE Log_Type__c = :WorkflowNotifier.LOG_TYPE
+        WITH SYSTEM_MODE
+      ],
+      'A bad payload writes no row'
+    );
+  }
+
+  @IsTest
+  static void badNotifyDoesNotBlockResumeInSameBatch() {
+    Test.startTest();
+    Id waiting = startWorkflow(
+      'notify-batch-resume',
+      new Map<String, Object>{ 'none' => true }
+    );
+    driveAndDeliver(new WorkflowTestHarness(waiting));
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>{
+      new Workflow_Event__e(
+        Event_Type__c = WorkflowNotifier.EVENT_TYPE,
+        Payload__c = '{"key":"Notify:x","owners":["bad"]}'
+      ),
+      new Workflow_Event__e(
+        Event_Type__c = 'RESUME',
+        Workflow_Instance_Id__c = String.valueOf(waiting),
+        Payload__c = '{}'
+      )
+    };
+    new WorkflowEventTriggerHandler(events).handleAfterInsert();
+    // Read before stopTest: the queued resume job runs the step again.
+    String status = [
+      SELECT Status__c
+      FROM Workflow_Instance__c
+      WHERE Id = :waiting
+      WITH SYSTEM_MODE
+    ]
+    .Status__c;
+    Test.stopTest();
+
+    Assert.areNotEqual(
+      'Suspended',
+      status,
+      'The RESUME in the same batch must run'
+    );
+  }
+
+  @IsTest
+  static void eachRequestInABatchIsIsolated() {
+    seedType();
+    WorkflowNotifier.eventsPerPass = 1;
+    Test.startTest();
+    Id good = startWorkflow(
+      'notify-batch-good',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    Id bad = startWorkflow(
+      'notify-batch-bad',
+      new Map<String, Object>{
+        'recipient' => userId(),
+        'type' => 'No_Such_Type_456'
+      }
+    );
+    WorkflowEngine.runStep(good);
+    WorkflowEngine.runStep(bad);
+    Assert.areEqual(2, WorkflowNotifier.publishedEvents.size());
+    // Pass 1 sends one request and publishes the other again. Pass 2 sends it.
+    Test.getEventBus().deliver();
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(WorkflowNotifier.OUTCOME_SENT, anchors(good)[0].Outcome__c);
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_FAILED,
+      anchors(bad)[0].Outcome__c
+    );
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+  }
+
+  @IsTest
+  static void replayedEventDoesNotSendAgain() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-replay',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    driveAndDeliver(new WorkflowTestHarness(instanceId));
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+
+    WorkflowNotifier.handleEvents(
+      new List<Workflow_Event__e>{ WorkflowNotifier.publishedEvents[0] }
+    );
+    Test.stopTest();
+
+    Assert.areEqual(
+      1,
+      WorkflowNotifier.sentNotifications.size(),
+      'A row that is Sent is not sent again'
+    );
+    Assert.areEqual(1, anchors(instanceId).size());
   }
 
   // ----- Toggle

@@ -23,10 +23,10 @@ private class WorkflowNotificationTest {
   }
 
   // Runs one builder call that must throw.
-  private class Call implements Callable {
+  private class BuilderCall implements Callable {
     private final String kind;
     private final Object arg;
-    public Call(String kind, Object arg) {
+    public BuilderCall(String kind, Object arg) {
       this.kind = kind;
       this.arg = arg;
     }
@@ -43,8 +43,8 @@ private class WorkflowNotificationTest {
         when 'recipients' {
           return n.toRecipients((Set<Id>) arg);
         }
-        when 'inputField' {
-          return n.toInputField((String) arg);
+        when 'inputKey' {
+          return n.toInputKey((String) arg);
         }
         when 'owner' {
           return n.toRecordOwner((Id) arg);
@@ -53,7 +53,7 @@ private class WorkflowNotificationTest {
           return n.withTarget((Id) arg);
         }
         when 'type' {
-          return n.withType((String) arg);
+          return n.withNotificationType((String) arg);
         }
         when 'result' {
           return ((StepResult) arg)
@@ -78,20 +78,26 @@ private class WorkflowNotificationTest {
     WorkflowNotification n = WorkflowNotification.create('Approve', 'Body');
     Assert.areEqual('Approve', n.title);
     Assert.areEqual('Body', n.body);
-    Assert.areEqual(WorkflowNotification.DEFAULT_TYPE, n.typeName);
+    Assert.areEqual(WorkflowNotification.DEFAULT_TYPE, n.notificationType);
     Assert.isNull(n.targetId, 'Default target is the instance (null)');
     Assert.isTrue(n.recipientIds.isEmpty());
-    Assert.isTrue(n.inputFields.isEmpty());
+    Assert.isTrue(n.inputKeys.isEmpty());
     Assert.isTrue(n.ownerRecordIds.isEmpty());
     Assert.isFalse(n.hasRecipientSource());
   }
 
   @IsTest
   static void createRejectsBadTitleAndBody() {
-    assertThrows(new Call('titleBody', new List<String>{ ' ', 'B' }), 'title');
-    assertThrows(new Call('titleBody', new List<String>{ 'T', null }), 'body');
     assertThrows(
-      new Call(
+      new BuilderCall('titleBody', new List<String>{ ' ', 'B' }),
+      'title'
+    );
+    assertThrows(
+      new BuilderCall('titleBody', new List<String>{ 'T', null }),
+      'body'
+    );
+    assertThrows(
+      new BuilderCall(
         'titleBody',
         new List<String>{
           'x'.repeat(WorkflowNotification.MAX_TITLE_LENGTH + 1),
@@ -101,7 +107,7 @@ private class WorkflowNotificationTest {
       'title'
     );
     assertThrows(
-      new Call(
+      new BuilderCall(
         'titleBody',
         new List<String>{
           'T',
@@ -129,15 +135,15 @@ private class WorkflowNotificationTest {
     WorkflowNotification n = WorkflowNotification.create('T', 'B')
       .toRecipient(USER_ID)
       .toRecipients(new Set<Id>{ groupId })
-      .toInputField('approverId')
+      .toInputKey('approverId')
       .toRecordOwner(accountId)
       .withTarget(accountId)
-      .withType('My_Type');
+      .withNotificationType('My_Type');
     Assert.areEqual(new Set<Id>{ USER_ID, groupId }, n.recipientIds);
-    Assert.areEqual(new Set<String>{ 'approverId' }, n.inputFields);
+    Assert.areEqual(new Set<String>{ 'approverId' }, n.inputKeys);
     Assert.areEqual(new Set<Id>{ accountId }, n.ownerRecordIds);
     Assert.areEqual(accountId, n.targetId);
-    Assert.areEqual('My_Type', n.typeName);
+    Assert.areEqual('My_Type', n.notificationType);
     Assert.isTrue(n.hasRecipientSource());
   }
 
@@ -149,9 +155,7 @@ private class WorkflowNotificationTest {
         .hasRecipientSource()
     );
     Assert.isTrue(
-      WorkflowNotification.create('T', 'B')
-        .toInputField('a')
-        .hasRecipientSource()
+      WorkflowNotification.create('T', 'B').toInputKey('a').hasRecipientSource()
     );
     Assert.isTrue(
       WorkflowNotification.create('T', 'B')
@@ -175,37 +179,41 @@ private class WorkflowNotificationTest {
 
   @IsTest
   static void builderRejectsBadArguments() {
-    assertThrows(new Call('recipient', null), 'recipientId');
-    assertThrows(new Call('recipients', null), 'ids');
-    assertThrows(new Call('recipients', new Set<Id>{ null }), 'ids');
-    assertThrows(new Call('inputField', ''), 'key');
-    assertThrows(new Call('owner', null), 'recordId');
-    assertThrows(new Call('target', null), 'recordId');
-    assertThrows(new Call('type', ' '), 'developerName');
+    assertThrows(new BuilderCall('recipient', null), 'recipientId');
+    assertThrows(new BuilderCall('recipients', null), 'ids');
+    assertThrows(new BuilderCall('recipients', new Set<Id>{ null }), 'ids');
+    assertThrows(new BuilderCall('inputKey', ''), 'key');
+    assertThrows(new BuilderCall('owner', null), 'recordId');
+    assertThrows(new BuilderCall('target', null), 'recordId');
+    assertThrows(new BuilderCall('type', ' '), 'developerName');
   }
 
   @IsTest
   static void staticRecipientsAreCapped() {
     Set<Id> ids = new Set<Id>();
-    for (Integer i = 1; i <= WorkflowNotification.MAX_RECIPIENTS; i++) {
+    for (Integer i = 1; i <= WorkflowNotification.MAX_STATIC_RECIPIENTS; i++) {
       ids.add(fakeId('005', i));
     }
     WorkflowNotification n = WorkflowNotification.create('T', 'B')
       .toRecipients(ids);
-    Assert.areEqual(WorkflowNotification.MAX_RECIPIENTS, n.recipientIds.size());
+    Assert.areEqual(
+      WorkflowNotification.MAX_STATIC_RECIPIENTS,
+      n.recipientIds.size()
+    );
+    Set<Id> tooMany = new Set<Id>(ids);
+    tooMany.add(fakeId('005', WorkflowNotification.MAX_STATIC_RECIPIENTS + 1));
     assertThrows(
-      new Call(
-        'recipients',
-        new Set<Id>{ fakeId('005', WorkflowNotification.MAX_RECIPIENTS + 1) }
-      ),
-      String.valueOf(WorkflowNotification.MAX_RECIPIENTS)
+      new BuilderCall('recipients', tooMany),
+      String.valueOf(WorkflowNotification.MAX_STATIC_RECIPIENTS)
     );
     try {
-      n.toRecipient(fakeId('005', WorkflowNotification.MAX_RECIPIENTS + 1));
+      n.toRecipient(
+        fakeId('005', WorkflowNotification.MAX_STATIC_RECIPIENTS + 1)
+      );
       Assert.fail('The 501st recipient must throw');
     } catch (IllegalArgumentException e) {
       Assert.areEqual(
-        WorkflowNotification.MAX_RECIPIENTS,
+        WorkflowNotification.MAX_STATIC_RECIPIENTS,
         n.recipientIds.size()
       );
     }
@@ -237,20 +245,57 @@ private class WorkflowNotificationTest {
       StepResult.sleep(10),
       StepResult.retry(new RetryPolicy(1, (Double) 1.0, 2)),
       StepResult.startChild('W', 'k', null),
+      StepResult.startChildren(
+        new List<StepResult.ChildRequest>{
+          new StepResult.ChildRequest('W', 'k', null)
+        }
+      ),
       StepResult.split(new List<String>{ 'A' }),
       StepResult.continueAsNew(null),
       StepResult.fail('no')
     };
     for (StepResult r : results) {
-      assertThrows(new Call('result', r), 'SUSPEND');
+      assertThrows(new BuilderCall('result', r), 'SUSPEND');
       Assert.isNull(r.directive().notification);
     }
   }
 
   @IsTest
   static void withNotificationRejectsNullAndNoSource() {
-    assertThrows(new Call('nullNotification', StepResult.suspend()), 'null');
-    assertThrows(new Call('noSource', StepResult.suspend()), 'recipient');
+    assertThrows(
+      new BuilderCall('nullNotification', StepResult.suspend()),
+      'null'
+    );
+    assertThrows(
+      new BuilderCall('noSource', StepResult.suspend()),
+      'recipient'
+    );
+  }
+
+  @IsTest
+  static void readAccessorsReturnCopies() {
+    WorkflowNotification n = WorkflowNotification.create('T', 'B')
+      .toRecipient(USER_ID)
+      .toInputKey('a')
+      .toRecordOwner(fakeId('001', 4));
+    n.recipientIds.add(fakeId('00G', 4));
+    n.recipientIds.add(null);
+    n.inputKeys.add('b');
+    n.ownerRecordIds.clear();
+    Assert.areEqual(new Set<Id>{ USER_ID }, n.recipientIds);
+    Assert.areEqual(new Set<String>{ 'a' }, n.inputKeys);
+    Assert.areEqual(1, n.ownerRecordIds.size());
+  }
+
+  @IsTest
+  static void secondNotificationIsRejected() {
+    StepResult r = StepResult.waitForApproval('Gate', null)
+      .withNotification(
+        WorkflowNotification.create('T', 'B').toRecipient(USER_ID)
+      );
+    WorkflowNotification first = r.directive().notification;
+    assertThrows(new BuilderCall('result', r), 'already has a notification');
+    Assert.areEqual(first, r.directive().notification, 'The first one stays');
   }
 
   @IsTest

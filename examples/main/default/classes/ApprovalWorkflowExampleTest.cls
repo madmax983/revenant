@@ -50,6 +50,11 @@ private class ApprovalWorkflowExampleTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String key = KEY_PREFIX + 'notify';
       String approverId = String.valueOf(UserInfo.getUserId());
+      // Any Id: test context does not call send().
+      WorkflowNotifier.typeIds.put(
+        WorkflowNotification.DEFAULT_TYPE,
+        UserInfo.getOrganizationId()
+      );
 
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
@@ -57,7 +62,7 @@ private class ApprovalWorkflowExampleTest {
         key,
         new Map<String, Object>{
           'purchaseAmount' => 500,
-          ApprovalWorkflowExample.APPROVER_FIELD => approverId
+          ApprovalWorkflowExample.APPROVER_KEY => approverId
         }
       );
       WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
@@ -74,9 +79,21 @@ private class ApprovalWorkflowExampleTest {
         WorkflowNotifier.publishedEvents[0].Payload__c.contains(approverId),
         'The request must name the approver'
       );
+      Test.getEventBus().deliver();
       List<Workflow_Log__c> rows = notificationRows(instanceId);
       Assert.areEqual(1, rows.size(), 'One anchor row for the wait');
-      Assert.isTrue(rows[0].Message__c.contains(approverId));
+      Assert.areEqual(WorkflowNotifier.OUTCOME_SENT, rows[0].Outcome__c);
+      Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+      Assert.areEqual(
+        new Set<String>{ approverId },
+        WorkflowNotifier.sentNotifications[0].recipients,
+        'The approver in the input gets the notification'
+      );
+      Assert.areEqual(
+        instanceId,
+        WorkflowNotifier.sentNotifications[0].targetId,
+        'The notification opens the waiting instance'
+      );
 
       WorkflowTestHarness.Result done = harness.injectSignal(
         key,
@@ -101,7 +118,7 @@ private class ApprovalWorkflowExampleTest {
       .workflowInput(
         new Map<String, Object>{
           'purchaseAmount' => 750,
-          ApprovalWorkflowExample.APPROVER_FIELD => UserInfo.getUserId()
+          ApprovalWorkflowExample.APPROVER_KEY => UserInfo.getUserId()
         }
       )
       .build();
@@ -116,10 +133,28 @@ private class ApprovalWorkflowExampleTest {
     WorkflowNotification n = result.directive().notification;
     Assert.isNotNull(n, 'The gate must request a notification');
     Assert.areEqual(
-      new Set<String>{ ApprovalWorkflowExample.APPROVER_FIELD },
-      n.inputFields
+      new Set<String>{ ApprovalWorkflowExample.APPROVER_KEY },
+      n.inputKeys
     );
     Assert.isTrue(n.body.contains('750'), n.body);
+  }
+
+  /**
+   * Issue #123: with no approver in the input, the gate notifies the owner of
+   * the instance (the user who started it).
+   */
+  @IsTest
+  static void testGateFallsBackToInstanceOwner() {
+    StepContext ctx = new StepContextTestBuilder()
+      .workflowInput(new Map<String, Object>{ 'purchaseAmount' => 10 })
+      .build();
+
+    StepResult result = new ApprovalWorkflowExample.RequestApprovalStep()
+      .execute(ctx);
+
+    WorkflowNotification n = result.directive().notification;
+    Assert.isTrue(n.inputKeys.isEmpty());
+    Assert.areEqual(new Set<Id>{ ctx.workflowInstanceId }, n.ownerRecordIds);
   }
 
   /**
@@ -143,7 +178,7 @@ private class ApprovalWorkflowExampleTest {
         key,
         new Map<String, Object>{
           'purchaseAmount' => 500,
-          ApprovalWorkflowExample.APPROVER_FIELD => UserInfo.getUserId()
+          ApprovalWorkflowExample.APPROVER_KEY => UserInfo.getUserId()
         }
       );
       WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
@@ -228,6 +263,10 @@ private class ApprovalWorkflowExampleTest {
 
       // Verify the compensation detail from the append-only audit trail.
       assertReservationReleased(instanceId);
+
+      // Issue #123: no approver in the input. The owner fallback still makes
+      // one request, and the saga is not changed.
+      Assert.areEqual(1, notificationRows(instanceId).size());
     }
   }
 

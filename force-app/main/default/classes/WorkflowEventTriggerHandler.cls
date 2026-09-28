@@ -71,8 +71,25 @@ public inherited sharing class WorkflowEventTriggerHandler {
     } else if (event.Event_Type__c == WorkflowCascadeCancel.EVENT_TYPE) {
       cascadeEvents.add(event);
     } else if (event.Event_Type__c == WorkflowNotifier.EVENT_TYPE) {
-      notifyEvents.add(event);
+      routeNotify(event);
     }
+  }
+
+  // One pass sends max WorkflowNotifier.maxEventsPerPass() notifications.
+  // The other NOTIFY events are published again for a later pass.
+  private void routeNotify(Workflow_Event__e event) {
+    if (notifyEvents.size() < WorkflowNotifier.maxEventsPerPass()) {
+      notifyEvents.add(event);
+      return;
+    }
+    throttledEvents.add(
+      new Workflow_Event__e(
+        Workflow_Instance_Id__c = event.Workflow_Instance_Id__c,
+        Event_Type__c = event.Event_Type__c,
+        Payload__c = event.Payload__c,
+        Idempotency_Key__c = event.Idempotency_Key__c
+      )
+    );
   }
 
   private void routeResume(Workflow_Event__e event) {

@@ -125,7 +125,7 @@ public inherited sharing class StepResultValidator {
     }
     if (!notification.hasRecipientSource()) {
       throw new IllegalArgumentException(
-        'StepResult.withNotification: add a recipient (toRecipient, toInputField or toRecordOwner)'
+        'StepResult.withNotification: add a recipient (toRecipient, toInputKey or toRecordOwner)'
       );
     }
   }

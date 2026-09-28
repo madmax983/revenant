@@ -23,7 +23,7 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
   public static final String DECISION_SIGNAL = 'Approve:' + APPROVAL_KEY;
 
   /** Workflow input key that holds the approver Id (issue #123). */
-  public static final String APPROVER_FIELD = 'approverId';
+  public static final String APPROVER_KEY = 'approverId';
 
   /**
    * @description Declares the ordered step names comprising the approval saga.
@@ -174,8 +174,8 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
         // authorized dashboard/Flow user can approve out of the box; pass a shipped
         // permission such as 'Workflow_Admin' to restrict who may decide.
         //
-        // Issue #123: the engine sends the approver in the workflow input one
-        // bell and mobile notification when this wait commits. No Messaging code.
+        // Issue #123: when this wait commits, the engine sends one bell and
+        // mobile notification to the approver. No Messaging code.
         return StepResult.waitForApproval(APPROVAL_KEY, null)
           .withNotification(approverNotification(ctx));
       }
@@ -189,20 +189,24 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
 
   /**
    * @description Builds the approver notification (issue #123). The recipient
-   * is the Id in the APPROVER_FIELD workflow input key. The deep link opens the
-   * workflow instance.
+   * is the Id in the APPROVER_KEY workflow input key. When the input has no
+   * approver, the recipient is the instance owner (the user who started it).
+   * The deep link opens the workflow instance.
    * @param ctx The step context exposing the workflow input JSON.
    * @return The notification for the approval wait.
    */
   private static WorkflowNotification approverNotification(StepContext ctx) {
-    Object amount = parseJsonMap(ctx.workflowInputJson).get('purchaseAmount');
-    return WorkflowNotification.create(
-        'Purchase approval needed',
-        'Approve or reject a purchase of ' +
-          String.valueOf(amount != null ? amount : 0) +
-          '.'
-      )
-      .toInputField(APPROVER_FIELD);
+    Map<String, Object> input = parseJsonMap(ctx.workflowInputJson);
+    Object amount = input.get('purchaseAmount');
+    WorkflowNotification notification = WorkflowNotification.create(
+      'Purchase approval needed',
+      'Approve or reject a purchase of ' +
+        String.valueOf(amount != null ? amount : 0) +
+        '.'
+    );
+    return input.get(APPROVER_KEY) != null
+      ? notification.toInputKey(APPROVER_KEY)
+      : notification.toRecordOwner(ctx.workflowInstanceId);
   }
 
   /** Terminal step on the approved path. */

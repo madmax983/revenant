@@ -55,8 +55,9 @@ is the concurrency gate that decides whether a step may run now.
 - `WorkflowNotification`, `WorkflowNotifier` — approver notifications (issue
   #123). The SUSPEND and WAIT_FOR_APPROVAL handlers insert one
   `Workflow_Log__c` anchor (unique `Fire_Key__c` `Notify:<stepExecId>`) and
-  publish one `NOTIFY` `Workflow_Event__e`. `WorkflowEventTriggerHandler` sends
-  the Custom Notification. Toggle: `Revenant_Config__mdt.Send_Notifications__c`.
+  publish one `NOTIFY` `Workflow_Event__e`. In the `WorkflowEventTrigger`
+  transaction, `WorkflowNotifier.handleEvents` sends the Custom Notification.
+  Toggle: `Revenant_Config__mdt.Send_Notifications__c`.
 - `WorkflowStepTimeoutConfig`, `WorkflowTimeoutArming`, `WorkflowTimeoutReArm`
 - `ConcurrencyGate` (facade) + `ConcurrencyConfigResolver`,
   `ConcurrencyReconciler`, `ConcurrencyReleaseProcessor`
