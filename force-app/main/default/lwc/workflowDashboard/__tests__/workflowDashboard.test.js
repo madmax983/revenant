@@ -3832,6 +3832,41 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(chainCount(element)).toBe("Showing 3 of 3 generations");
   });
 
+  it("drops cached older pages when a purge shrinks the total", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    getInstanceChain.mockResolvedValue(PAGE_2);
+    chainButton(element, "chain-load-more").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    expect(chainRows(element)).toHaveLength(3);
+
+    // The purge removed OLDER_ID. The total goes from 5 to 4.
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      totalCount: 4,
+      nextCursor: "CURSOR-AFTER-PURGE",
+    });
+    await selectListItem(element, 0);
+
+    expect(chainRows(element).map((r) => r.dataset.id)).toEqual([
+      LIVE_ID,
+      PREV_ID,
+    ]);
+    expect(chainCount(element)).toBe("Showing 2 of 4 generations");
+    expect(chainButton(element, "chain-load-more")).not.toBeNull();
+    getInstanceChain.mockResolvedValue(PAGE_2);
+    chainButton(element, "chain-load-more").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: "CURSOR-AFTER-PURGE",
+    });
+  });
+
   it("reloads the first page when the selected row is stale", async () => {
     arrangeChained();
     const element = await mountAndSelect();
