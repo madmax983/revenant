@@ -655,6 +655,34 @@ private class PayloadCodecRoundTripTest {
     return snap(result, key, new Set<String>());
   }
 
+  // Source: AutoRetryWorkflowExampleTest. Without a receipt outage, the
+  // gateway fails two times and the charge is retried. With a receipt outage,
+  // the receipt fails fast, and the refund reads the charge id from the stored
+  // charge output.
+  private static Snapshot runAutoRetry(
+    PayloadCodec codec,
+    String key,
+    Boolean receiptOutage
+  ) {
+    useCodec(codec);
+    MockFlakyOrderServices.reset();
+    MockFlakyOrderServices.gatewayOutagesLeft = receiptOutage ? 0 : 2;
+    MockFlakyOrderServices.receiptOutagesLeft = receiptOutage ? 1 : 0;
+    Id instanceId = WorkflowEngine.start(
+      'AutoRetryWorkflowExample.OrderSaga',
+      key,
+      new Map<String, Object>{ 'orderId' => 'O-1001', 'amountCents' => 4200 }
+    );
+    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+      .drive();
+    System.assertEquals(
+      1,
+      MockFlakyOrderServices.effectiveCharges,
+      'One effective charge'
+    );
+    return snap(result, key, new Set<String>(), new List<Id>());
+  }
+
   // Source: IdempotentChargeWorkflowExampleTest.
   private static Snapshot runIdempotentCharge(PayloadCodec codec, String key) {
     useCodec(codec);
@@ -1929,6 +1957,44 @@ private class PayloadCodecRoundTripTest {
       Test.stopTest();
 
       System.assertEquals('Completed', identity.status);
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void autoRetryOutageRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runAutoRetry(null, 'CodecAutoRetry_Identity', false);
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runAutoRetry(aes, 'CodecAutoRetry_Aes', false);
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
+      System.assertEquals(
+        3,
+        MockFlakyOrderServices.chargeAttempts,
+        'The AES run retries the charge two times'
+      );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void autoRetryReceiptRefundRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runAutoRetry(null, 'CodecRefund_Identity', true);
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runAutoRetry(aes, 'CodecRefund_Aes', true);
+      Test.stopTest();
+
+      System.assertEquals('Compensated', identity.status);
+      System.assertEquals(
+        'ch_1',
+        MockFlakyOrderServices.lastRefundedChargeId,
+        'The AES refund reads the decoded charge id'
+      );
       assertRoundTrip(identity, encoded, aes);
     }
   }
