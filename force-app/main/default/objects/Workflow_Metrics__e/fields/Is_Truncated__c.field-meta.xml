@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Is_Truncated__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>True when a cap dropped data from the snapshot. All chunks of the snapshot have the same value. The engine also writes a Warn row in Workflow_Log__c.</description>
+    <externalId>false</externalId>
+    <label>Is Truncated</label>
+    <type>Checkbox</type>
+</CustomField>

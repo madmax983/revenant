@@ -5,7 +5,8 @@
  * reconcile, transient-retry-rescue, orphan-reclaim, and stall-detection phases
  * in strict order, then publishes deferred lifecycle events so a best-effort
  * publish can never spend a DML statement a required section needs. Then it
- * writes the liveness stamp (WatchdogLiveness).
+ * publishes the engine-health snapshot (WorkflowMetricsPublisher, default
+ * off) and writes the liveness stamp (WatchdogLiveness).
  *
  * Extracted from WorkflowEngine; the public entry stays on WorkflowEngine as a
  * thin facade so its callers are untouched. All DML and SOQL run in system mode
@@ -101,6 +102,15 @@ public inherited sharing class WorkflowHeartbeatService {
     // and schedule sweeps) is now done, so the best-effort lifecycle publish
     // runs after it with no risk of starving a required update/enqueue of its DML budget.
     WorkflowLifecyclePublisher.publish(watchdogTerminalInstances);
+
+    // 7b. Publish the engine-health snapshot (issue #127). Best effort.
+    // Default off. It reads the previous sweep time as the window start, so
+    // it runs before the liveness stamp.
+    try {
+      WorkflowMetricsPublisher.publishSnapshot(now);
+    } catch (Exception ignored) {
+      // A failed snapshot must not stop the watchdog heartbeat.
+    }
 
     // 8. Write the liveness stamp (issue #113). Only a complete sweep gets
     // here. The write keeps DML free for the step commit and does not throw.

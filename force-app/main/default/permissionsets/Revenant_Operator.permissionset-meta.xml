@@ -156,6 +156,16 @@
         <viewAllRecords>false</viewAllRecords>
     </objectPermissions>
 
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Metrics__e</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+
     <!-- ===== Field permissions: READ ONLY (editable=false) for every field Revenant_Admin
          exposes. Critically Workflow_Instance__c.Compensation_Stack__c (LIFO integrity) and
          all Workflow_Step_Execution__c.* fields (append-only audit) are readable but NOT
@@ -438,6 +448,18 @@
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Lifecycle__e.Workflow_Name__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <!-- Workflow_Metrics__e (subscribe; required fields omitted) -->
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Is_Truncated__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Metrics__e.Metrics_Json__c</field>
         <readable>true</readable>
     </fieldPermissions>
 
