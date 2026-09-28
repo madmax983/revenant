@@ -366,6 +366,28 @@ public class WorkflowAdmissionPriorityTest {
     );
   }
 
+  // Regression: a wake with more than five rows admits each row.
+  @IsTest
+  static void testWakeAdmitsMoreThanFiveRows() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(10, 60);
+    List<Id> rows = newWaitingFlood('m-', 7, 0);
+
+    Test.startTest();
+    new ConcurrencyAdmissionWake(rows).execute(null);
+    Test.stopTest();
+
+    System.assertEquals(
+      7,
+      [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE Id IN :rows AND Concurrency_Slot_Held__c = TRUE
+      ],
+      'Each row in the wake admits'
+    );
+  }
+
   @IsTest
   static void testWakeIsNoOpForAdmittedRow() {
     WorkflowEngine.disableQueueableInTest = true;

@@ -27,6 +27,8 @@ public inherited sharing class ConcurrencyAdmissionWake implements Queueable {
     }
   }
 
+  // Each row gets its own savepoint. The finally block releases it, so that
+  // the job never holds more than one active savepoint.
   private static void admitOne(Id instanceId) {
     Savepoint sp = Database.setSavepoint();
     try {
@@ -34,6 +36,8 @@ public inherited sharing class ConcurrencyAdmissionWake implements Queueable {
     } catch (Exception ignored) {
       // Best effort. The row keeps its retry timer and the watchdog.
       Database.rollback(sp);
+    } finally {
+      Database.releaseSavepoint(sp);
     }
   }
 }
