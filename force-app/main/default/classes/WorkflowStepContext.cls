@@ -59,7 +59,11 @@ public inherited sharing class WorkflowStepContext {
     Integer attempt = stepExec.Retry_Count__c != null
       ? (Integer) stepExec.Retry_Count__c + 1
       : 1;
-    CaptureContext cc = resolveCaptureContext(stepInstance, ctx);
+    CaptureContext cc = resolveCaptureContext(
+      stepInstance,
+      ctx,
+      isTimeoutResume
+    );
 
     StepContext.Builder contextBuilder = new StepContext.Builder()
       .instanceId(ctx.instanceId)
@@ -135,10 +139,12 @@ public inherited sharing class WorkflowStepContext {
   // persisted __maxAttempts (not for a RetryConfigurable step without an
   // auto-retry policy), then RetryConfigurable, then auto-retry policy, then 1.
   // The resolver applies the operator record to the policy (issue #103). An
-  // override record sets the cap immediately.
+  // override record sets the cap immediately, but not for a timeout fallback
+  // run: that run cannot auto-retry, so it stays final.
   private static CaptureContext resolveCaptureContext(
     WorkflowStep stepInstance,
-    WorkflowStepRunner.RunStepContext ctx
+    WorkflowStepRunner.RunStepContext ctx,
+    Boolean isTimeoutResume
   ) {
     String workflowName = ctx.instance.Workflow_Name__c;
     String stepName = ctx.stepExec.Step_Name__c;
@@ -169,11 +175,13 @@ public inherited sharing class WorkflowStepContext {
       (!(stepInstance instanceof RetryConfigurable) ||
       autoRetryPolicy != null) && !configManagedAuto;
     applyCapturedValues(cc, usePersisted, ctx.stepExec);
-    cc.maxAttempts = WorkflowRetryConfigResolver.overrideMaxAttempts(
-      workflowName,
-      stepName,
-      cc.maxAttempts
-    );
+    if (!isTimeoutResume) {
+      cc.maxAttempts = WorkflowRetryConfigResolver.overrideMaxAttempts(
+        workflowName,
+        stepName,
+        cc.maxAttempts
+      );
+    }
     return cc;
   }
 

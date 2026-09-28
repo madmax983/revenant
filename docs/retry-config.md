@@ -139,7 +139,8 @@ and its test `operatorCapsAttemptsInTheMiddleOfAnIncident`.
   record without override shows immediately when `getRetryPolicy()` returns
   null or `fromConfig()`, or when `getAutoRetryPolicy()` returns
   `fromConfig()`. For other steps, the context shows the cap of the last
-  retry outcome.
+  retry outcome. A timeout fallback run cannot auto-retry, so an override
+  record does not raise its cap of 1.
 
 ## Out of Scope
 
