@@ -9,6 +9,9 @@ public inherited sharing class WorkflowDashboardStatusService {
   private static final Integer QUEUE_ROWS_PER_WORKFLOW = 5;
   // SOQL kept free after the queue reads, for the rest of the request.
   private static final Integer QUEUE_QUERY_HEADROOM = 10;
+  // Upper bound on groups in the per-priority aggregate. Salesforce allows at
+  // most 2,000 groups in an aggregate query that cannot page.
+  private static final Integer MAX_PRIORITY_GROUPS = 2000;
 
   /**
    * @description Returns the watchdog/scheduler health snapshot for the dashboard: recent
@@ -356,6 +359,7 @@ public inherited sharing class WorkflowDashboardStatusService {
       WHERE Admission_Queue__c IN :workflowNames
       WITH SYSTEM_MODE
       GROUP BY Admission_Queue__c, Admission_Priority__c
+      LIMIT :MAX_PRIORITY_GROUPS
     ]) {
       String wf = (String) ar.get('wf');
       String defKey = wf.toLowerCase();
