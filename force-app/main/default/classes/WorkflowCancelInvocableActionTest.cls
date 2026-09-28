@@ -854,6 +854,30 @@ private class WorkflowCancelInvocableActionTest {
   }
 
   @IsTest
+  static void testKeyLookupIgnoresCase() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = buildInstance('Order-ABC', 'Suspended');
+      insert inst;
+
+      Test.startTest();
+      WorkflowCancelInvocableAction.CancelResult res = callOne(
+        'order-abc',
+        false,
+        null
+      );
+      Test.stopTest();
+
+      Assert.isTrue(res.found, 'The key matches without case, as in SOQL');
+      Assert.isTrue(res.cancelled, 'The live instance must cancel');
+      Assert.areEqual(
+        'Cancelled',
+        statusOf(inst.Id),
+        'The instance must not keep running'
+      );
+    }
+  }
+
+  @IsTest
   static void testBulkEngineEntryIgnoresNullAndEmpty() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Integer q0 = Limits.getQueries();

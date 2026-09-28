@@ -198,7 +198,8 @@ public inherited sharing class WorkflowStatusInvocableAction {
         buckets.lookupIds.add(parsedId);
       }
       if (String.isNotBlank(raw)) {
-        buckets.reqKeys.add(raw);
+        // Correlation_Key__c matches case-insensitively; Apex maps do not.
+        buckets.reqKeys.add(WorkflowKeys.normalizeKey(raw));
         buckets.lookupKeys.add(raw);
       } else {
         buckets.reqKeys.add(null);
@@ -326,12 +327,13 @@ public inherited sharing class WorkflowStatusInvocableAction {
     if (String.isBlank(inst.Correlation_Key__c)) {
       return;
     }
-    Workflow_Instance__c existing = byKey.get(inst.Correlation_Key__c);
+    String key = WorkflowKeys.normalizeKey(inst.Correlation_Key__c);
+    Workflow_Instance__c existing = byKey.get(key);
     if (
       existing == null ||
       WorkflowStatusChainResolver.isPreferredCandidate(inst, existing)
     ) {
-      byKey.put(inst.Correlation_Key__c, inst);
+      byKey.put(key, inst);
     }
   }
 
