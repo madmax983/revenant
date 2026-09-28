@@ -441,6 +441,16 @@ section for the full contract shape, type-coercion rules, and bulk/Flow behavior
 
 See [docs/definition-change-detection.md](docs/definition-change-detection.md).
 
+## New (additive, non-breaking): `Held` status and per-instance hold
+
+**Issue #119.** No signature changes. Read this if your code switches on `Status__c`.
+
+- `Workflow_Instance__c.Status__c` has a new value: `Held`. It is not terminal. The instance waits for an operator release or a cancel.
+- New fields: `Workflow_Instance__c.Held_At__c`, `Hold_Reason__c` and the formula `Held__c`. They are blank on existing rows.
+- New API: `WorkflowInstanceHold.hold(Id, String)` and `WorkflowInstanceHold.release(Id)`. They are not on the `WorkflowEngine` facade. The dashboard calls them through `WorkflowDashboardCommandController.holdInstance` and `releaseHeldInstance`.
+
+See [docs/instance-hold.md](docs/instance-hold.md).
+
 ## New (additive, non-breaking): `STEP_NON_DETERMINISM` category
 
 **Issue #102.** No signature changes. Read this if your code switches on `Failure_Category__c`.

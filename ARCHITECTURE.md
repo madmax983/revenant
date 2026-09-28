@@ -62,6 +62,8 @@ is the concurrency gate that decides whether a step may run now.
   `WorkflowDefinitionChangeService` — park an instance in `DefinitionChanged`
   when the live `getSteps()` list differs from the list stored at start;
   release a parked instance (issue #89)
+- `WorkflowInstanceHoldGate`, `WorkflowInstanceHold` — park one operator-held
+  instance in `Held` at the next step boundary; hold and release API (issue #119)
 - `WorkflowDeterminismGuard`, `WorkflowDecisionFingerprint` — strict
   determinism mode: record each wait decision with an inputs digest, and fail
   a re-run that changes its decision on equal inputs with
@@ -208,7 +210,8 @@ endpoints moved). All three delegate to `inherited sharing` service classes.
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,
-  `WorkflowMaintenanceCommandService`, `WorkflowSignalCommandService`
+  `WorkflowMaintenanceCommandService`, `WorkflowSignalCommandService`,
+  `WorkflowHoldCommandService` (issue #119)
 
 ## Authoring surface (step-author API)
 
