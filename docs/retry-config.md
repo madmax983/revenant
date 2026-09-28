@@ -136,9 +136,10 @@ and its test `operatorCapsAttemptsInTheMiddleOfAnIncident`.
 - **Delay cap.** The engine caps each delay at 86400 s (1 day), also for a
   very large interval or backoff.
 - **`ctx.isFinalAttempt()`.** An override record shows immediately. A
-  record without override shows immediately when `getRetryPolicy()` or
-  `getAutoRetryPolicy()` returns null or `fromConfig()`. For other steps,
-  the context shows the cap of the last retry outcome.
+  record without override shows immediately when `getRetryPolicy()` returns
+  null or `fromConfig()`, or when `getAutoRetryPolicy()` returns
+  `fromConfig()`. For other steps, the context shows the cap of the last
+  retry outcome.
 
 ## Out of Scope
 

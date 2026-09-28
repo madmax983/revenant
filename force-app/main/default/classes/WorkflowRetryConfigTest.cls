@@ -12,6 +12,7 @@ public class WorkflowRetryConfigTest {
   private static final String AUTHOR = PREFIX + 'AuthorRetryStep';
   private static final String CONFIGURED = PREFIX + 'ConfiguredStep';
   private static final String MANAGED = PREFIX + 'ConfigManagedStep';
+  private static final String THROWING = PREFIX + 'ThrowingStep';
   private static final String RESERVE = PREFIX + 'ReserveStep';
   private static final String BREAK_STEP = PREFIX + 'BreakStep';
 
@@ -19,6 +20,10 @@ public class WorkflowRetryConfigTest {
   public static Map<String, Integer> runs = new Map<String, Integer>();
   /** @description Max attempts that a final-attempt step saw, in order. */
   public static List<Integer> maxAttemptsSeen = new List<Integer>();
+
+  /** @description Transient error that ThrowingStep throws. */
+  public class PartnerDownException extends Exception {
+  }
 
   private static void bump(String stepName) {
     runs.put(
@@ -90,6 +95,17 @@ public class WorkflowRetryConfigTest {
      */
     public override List<String> getSteps() {
       return new List<String>{ CONFIGURED };
+    }
+  }
+
+  /** @description One step that throws, with a fromConfig() auto-retry policy. */
+  public class ThrowingWorkflow extends LinearDef {
+    /**
+     * @description Returns the steps.
+     * @return The step names.
+     */
+    public override List<String> getSteps() {
+      return new List<String>{ THROWING };
     }
   }
 
@@ -201,6 +217,28 @@ public class WorkflowRetryConfigTest {
         return StepResult.fail('Gave up on the final attempt');
       }
       return StepResult.retry(getRetryPolicy());
+    }
+  }
+
+  /** @description Always throws. The operator record sets the auto-retry cap. */
+  public class ThrowingStep implements WorkflowStep, AutoRetryConfigurable {
+    /**
+     * @description Returns the operator-managed auto-retry policy.
+     * @return RetryPolicy.fromConfig().
+     */
+    public RetryPolicy getAutoRetryPolicy() {
+      return RetryPolicy.fromConfig();
+    }
+
+    /**
+     * @description Records the cap it sees, then throws.
+     * @param ctx The step context.
+     * @return Never returns.
+     */
+    public StepResult execute(StepContext ctx) {
+      bump(THROWING);
+      maxAttemptsSeen.add(ctx.retry().maxAttempts);
+      throw new PartnerDownException('HTTP 503 from partner');
     }
   }
 
@@ -436,6 +474,39 @@ public class WorkflowRetryConfigTest {
         'Second delay is 60 s x 3.0: ' + secondDelay
       );
       Test.stopTest();
+    }
+  }
+
+  @IsTest
+  static void configManagedAutoRetryContextSeesRecordChange() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      reset();
+      useRecords(
+        new List<Workflow_Retry_Config__mdt>{
+          rec('ThrowingWorkflow', null, new List<Decimal>{ 1, 1.0, 5 })
+        }
+      );
+      Test.startTest();
+      Id instanceId = start('ThrowingWorkflow', 'RetryCfg_AutoLive');
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.disableAutoTimeSkip = true;
+      harness.drive();
+
+      // The operator lowers the cap. The persisted cap (5) is now stale.
+      useRecords(
+        new List<Workflow_Retry_Config__mdt>{
+          rec('ThrowingWorkflow', null, new List<Decimal>{ 1, 1.0, 2 })
+        }
+      );
+      WorkflowTestHarness.Result result = harness.fireRetry(THROWING);
+      Test.stopTest();
+
+      Assert.areEqual('Failed', result.status, 'New cap applies');
+      Assert.areEqual(
+        new List<Integer>{ 5, 2 },
+        maxAttemptsSeen,
+        'Context shows the new record value, not the persisted cap'
+      );
     }
   }
 

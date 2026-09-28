@@ -160,9 +160,14 @@ public inherited sharing class WorkflowStepContext {
         .maximumAttempts;
     }
     // With an auto-retry policy, the persisted value is from the policy of the
-    // last retry, so it wins over RetryConfigurable (issue #101).
+    // last retry, so it wins over RetryConfigurable (issue #101). A
+    // fromConfig() auto-retry policy reads the record again, so a persisted
+    // value is stale (issue #103).
+    Boolean configManagedAuto =
+      autoRetryPolicy != null && autoRetryPolicy.isFromConfig();
     Boolean usePersisted =
-      !(stepInstance instanceof RetryConfigurable) || autoRetryPolicy != null;
+      (!(stepInstance instanceof RetryConfigurable) ||
+      autoRetryPolicy != null) && !configManagedAuto;
     applyCapturedValues(cc, usePersisted, ctx.stepExec);
     cc.maxAttempts = WorkflowRetryConfigResolver.overrideMaxAttempts(
       workflowName,
