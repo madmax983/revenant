@@ -12,3 +12,6 @@ test-results/
 
 # Node dependencies
 node_modules/
+
+# Jest coverage output
+coverage/
