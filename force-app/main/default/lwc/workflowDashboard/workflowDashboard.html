@@ -448,9 +448,14 @@
                                             </template>
                                         </div>
                                     </template>
-                                    <template if:false={hasScheduleHealthRows}>
+                                    <template if:true={scheduleHealthAllClear}>
                                         <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center" data-id="schedule-health-empty">
-                                            All enabled schedules fired on time. No last fire failed.
+                                            No schedule is overdue. No last fire failed.
+                                        </div>
+                                    </template>
+                                    <template if:true={scheduleHealthUnavailable}>
+                                        <div class="panel-card slds-p-around_medium slds-text-color_error slds-text-align_center" data-id="schedule-health-unavailable">
+                                            Schedule health is not available.
                                         </div>
                                     </template>
                                 </div>

@@ -1843,6 +1843,13 @@ export default class WorkflowDashboard extends LightningElement {
     return (this.doctorData && this.doctorData.scheduleHealth) || {};
   }
 
+  // False when the read failed or sent no data. Then the panel must not
+  // show a healthy state.
+  get scheduleHealthAvailable() {
+    const health = this.scheduleHealth;
+    return health.error !== true && Array.isArray(health.rows);
+  }
+
   get scheduleHealthRows() {
     return (this.scheduleHealth.rows || []).map((row) => ({
       ...row,
@@ -1851,10 +1858,24 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get hasScheduleHealthRows() {
-    return this.scheduleHealthRows.length > 0;
+    return (
+      this.scheduleHealthAvailable &&
+      (this.scheduleHealth.rows || []).length > 0
+    );
+  }
+
+  get scheduleHealthAllClear() {
+    return this.scheduleHealthAvailable && !this.hasScheduleHealthRows;
+  }
+
+  get scheduleHealthUnavailable() {
+    return !this.scheduleHealthAvailable;
   }
 
   get scheduleHealthSummary() {
+    if (!this.scheduleHealthAvailable) {
+      return "";
+    }
     const health = this.scheduleHealth;
     return `${health.overdueCount || 0} overdue · ${health.failedCount || 0} last fire failed`;
   }
@@ -1866,14 +1887,13 @@ export default class WorkflowDashboard extends LightningElement {
   scheduleHealthDetail(row) {
     const parts = [];
     if (row.overdue) {
-      let text = "Expected";
-      if (row.nextFireWindow) {
-        text += ` ${this.formatDateTime(row.nextFireWindow)}`;
-      }
-      if (row.lapsedMinutes != null) {
-        text += ` (${row.lapsedMinutes} min late)`;
-      }
-      parts.push(`${text}.`);
+      const late =
+        row.lapsedMinutes != null ? `${row.lapsedMinutes} min late` : "Late";
+      parts.push(
+        row.nextFireWindow
+          ? `Expected ${this.formatDateTime(row.nextFireWindow)} (${late}).`
+          : `${late}.`,
+      );
     }
     if (row.lastFireFailed) {
       parts.push(`Last outcome: ${row.lastOutcome}.`);

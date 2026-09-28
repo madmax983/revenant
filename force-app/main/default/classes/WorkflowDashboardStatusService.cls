@@ -106,12 +106,12 @@ public inherited sharing class WorkflowDashboardStatusService {
   }
 
   // Schedule health (issue #126). Each read calculates it. The read sends no
-  // alert. An error returns an empty map.
+  // alert. An error returns error = true.
   private static Map<String, Object> scheduleHealthMap() {
     try {
       return ScheduleHealth.summary();
     } catch (Exception ignored) {
-      return new Map<String, Object>();
+      return new Map<String, Object>{ 'error' => true };
     }
   }
 

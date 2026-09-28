@@ -191,7 +191,7 @@ export default class WorkflowScheduleManager extends LightningElement {
 
   // Schedule health (#126). The server calculates the flags on each read.
   healthLabel(s) {
-    if (s.healthStatus === "PAUSED") return "Paused";
+    if (s.healthStatus === "DISABLED") return "Disabled";
     if (s.overdue && s.lastFireFailed) return "Overdue; last fire failed";
     if (s.overdue) return "Overdue";
     if (s.lastFireFailed) return "Last fire failed";

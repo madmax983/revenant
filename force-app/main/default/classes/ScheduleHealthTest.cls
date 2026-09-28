@@ -87,7 +87,7 @@ private class ScheduleHealthTest {
 
     Assert.isFalse(a.overdue);
     Assert.isFalse(a.lastFireFailed);
-    Assert.areEqual(ScheduleHealth.STATUS_PAUSED, a.status);
+    Assert.areEqual(ScheduleHealth.STATUS_DISABLED, a.status);
   }
 
   @IsTest
@@ -344,7 +344,7 @@ private class ScheduleHealthTest {
       }
     );
     insertSchedule(
-      'HPaused',
+      'HDisabled',
       new Map<String, Object>{
         'Enabled__c' => false,
         'Next_Fire_Window__c' => past,
@@ -474,8 +474,8 @@ private class ScheduleHealthTest {
         byName.get('HHealthy').get('healthStatus')
       );
       Assert.areEqual(
-        ScheduleHealth.STATUS_PAUSED,
-        byName.get('HPaused').get('healthStatus')
+        ScheduleHealth.STATUS_DISABLED,
+        byName.get('HDisabled').get('healthStatus')
       );
       Assert.areEqual(
         ScheduleHealth.STATUS_OK,

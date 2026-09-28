@@ -249,7 +249,7 @@ describe("c-workflow-schedule-manager health column (#126)", () => {
   it("labels each health state", async () => {
     const element = await mountWith([
       row("ok", { healthStatus: "OK" }),
-      row("paused", { healthStatus: "PAUSED", Enabled__c: false }),
+      row("disabled", { healthStatus: "DISABLED", Enabled__c: false }),
       row("late", { healthStatus: "OVERDUE", overdue: true }),
       row("failed", { healthStatus: "FAILED", lastFireFailed: true }),
       row("both", {
@@ -265,7 +265,7 @@ describe("c-workflow-schedule-manager health column (#126)", () => {
     );
     expect(labels).toEqual({
       ok: "OK",
-      paused: "Paused",
+      disabled: "Disabled",
       late: "Overdue",
       failed: "Last fire failed",
       both: "Overdue; last fire failed",

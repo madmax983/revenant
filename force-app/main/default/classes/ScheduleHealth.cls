@@ -17,8 +17,8 @@ public inherited sharing class ScheduleHealth {
   /** @description Enabled, no problem found. */
   public static final String STATUS_OK = 'OK';
   /** @description Disabled. Never reported. */
-  public static final String STATUS_PAUSED = 'PAUSED';
-  /** @description The window lapsed and the schedule did not fire. */
+  public static final String STATUS_DISABLED = 'DISABLED';
+  /** @description The window is past and the schedule did not fire. */
   public static final String STATUS_OVERDUE = 'OVERDUE';
   /** @description The last fire recorded a failure outcome. */
   public static final String STATUS_FAILED = 'FAILED';
@@ -42,7 +42,7 @@ public inherited sharing class ScheduleHealth {
   public class Assessment {
     /** @description The assessed schedule. */
     public Workflow_Schedule__c schedule;
-    /** @description OK, PAUSED, OVERDUE or FAILED. OVERDUE wins over FAILED. */
+    /** @description OK, PAUSED, OVERDUE or FAILED. OVERDUE has priority over FAILED. */
     public String status = STATUS_OK;
     /** @description True when the schedule is overdue. */
     public Boolean overdue = false;
@@ -110,7 +110,7 @@ public inherited sharing class ScheduleHealth {
     Assessment a = new Assessment();
     a.schedule = sched;
     if (sched.Enabled__c != true) {
-      a.status = STATUS_PAUSED;
+      a.status = STATUS_DISABLED;
       return a;
     }
     a.lastFireFailed = FAILED_OUTCOMES.contains(sched.Last_Outcome__c);

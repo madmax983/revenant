@@ -3484,9 +3484,40 @@ describe("c-workflow-dashboard schedule health (#126)", () => {
     expect(query(element, "schedule-health-truncated")).not.toBeNull();
   });
 
-  it("shows the empty state when the server sends no schedule health", async () => {
+  it("shows unavailable, not healthy, when the server sends no schedule health", async () => {
     const element = await openDoctorWith(undefined);
 
-    expect(query(element, "schedule-health-empty")).not.toBeNull();
+    expect(query(element, "schedule-health-unavailable")).not.toBeNull();
+    expect(query(element, "schedule-health-empty")).toBeNull();
+    expect(query(element, "schedule-health-summary").textContent).toBe("");
+  });
+
+  it("shows unavailable, not healthy, when the server read fails", async () => {
+    const element = await openDoctorWith({ error: true });
+
+    expect(query(element, "schedule-health-unavailable")).not.toBeNull();
+    expect(query(element, "schedule-health-empty")).toBeNull();
+  });
+
+  it("leaves out the expected time when the cursor is blank", async () => {
+    const element = await openDoctorWith({
+      overdueCount: 1,
+      failedCount: 0,
+      rows: [
+        {
+          id: "a09",
+          name: "NoCursor",
+          workflowName: "W",
+          overdue: true,
+          lastFireFailed: false,
+          nextFireWindow: null,
+          lapsedMinutes: 12,
+        },
+      ],
+    });
+
+    const text = query(element, "schedule-health-row").textContent;
+    expect(text).toContain("12 min late.");
+    expect(text).not.toContain("Expected");
   });
 });
