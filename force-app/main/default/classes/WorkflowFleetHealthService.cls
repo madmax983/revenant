@@ -47,7 +47,7 @@ public inherited sharing class WorkflowFleetHealthService {
     'Compensated',
     'Cancelled'
   };
-  // DefinitionChanged is a parked, active status (#89).
+  // DefinitionChanged (#89) and Held (#119) are parked, active statuses.
   private static final Set<String> IN_FLIGHT_STATUSES = new Set<String>{
     'Running',
     'Suspended',
@@ -55,7 +55,8 @@ public inherited sharing class WorkflowFleetHealthService {
     'Compensating',
     'Cancelling',
     'Pending',
-    'DefinitionChanged'
+    'DefinitionChanged',
+    'Held'
   };
 
   /**

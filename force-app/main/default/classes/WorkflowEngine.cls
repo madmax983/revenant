@@ -25,6 +25,10 @@ global inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator toggle (Revenant_Config__mdt.Publish_Metrics_Events__c, issue
+  // #127): when true each watchdog sweep publishes Workflow_Metrics__e.
+  // Default: off.
+  public static Boolean publishMetricsEvents = false;
   // Operator toggle (Revenant_Config__mdt.Send_Notifications__c, issue #123):
   // when true the engine sends the Custom Notification of a waiting step.
   public static Boolean sendNotifications = true;
@@ -89,7 +93,9 @@ global inherited sharing class WorkflowEngine {
     // returns the live paused instance rather than a stale terminal row in the window.
     'Paused',
     // A definition-change park (issue #89) is in-flight and resumes on release.
-    'DefinitionChanged'
+    'DefinitionChanged',
+    // An operator hold (issue #119) is in flight and resumes on release.
+    'Held'
   };
 
   // Upper bound on rows read by a single dedup lookup, so a hot correlation key
@@ -141,6 +147,7 @@ global inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
+          Publish_Metrics_Events__c,
           Send_Notifications__c,
           Cascade_Cancel_Children_On_Failure__c,
           Dedup_Window_Minutes__c,
@@ -166,6 +173,7 @@ global inherited sharing class WorkflowEngine {
         if (configs[0].Publish_Lifecycle_Events__c != null) {
           publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
         }
+        publishMetricsEvents = configs[0].Publish_Metrics_Events__c == true;
         if (configs[0].Send_Notifications__c != null) {
           sendNotifications = configs[0].Send_Notifications__c;
         }

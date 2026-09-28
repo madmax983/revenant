@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Metrics_Json__c</fullName>
+    <description>JSON object {"definitions":[...]} with one row for each workflow definition in this chunk. Parse it with WorkflowMetricsSnapshot.parse(). Contract: docs/workflow-metrics-event.md.</description>
+    <externalId>false</externalId>
+    <label>Metrics JSON</label>
+    <length>131072</length>
+    <type>LongTextArea</type>
+    <visibleLines>6</visibleLines>
+</CustomField>

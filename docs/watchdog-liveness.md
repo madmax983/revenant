@@ -22,7 +22,9 @@ flowchart LR
    `Last_Sweep_At__c` and `Cadence_Minutes__c` to the org-default row of the
    `Watchdog_Liveness__c` hierarchy custom setting. A sweep that throws does
    not write. The heartbeat does not write when fewer than 11 DML statements
-   are free. The write does not throw.
+   are free. The write does not throw. The metrics snapshot
+   ([workflow-metrics-event.md](workflow-metrics-event.md)) uses the previous
+   stamp as its window start, so it runs before this write.
 2. **State.** Each read calculates the state. No record keeps it.
 
    | Condition                                | State     |

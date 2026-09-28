@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Window_Start__c</fullName>
+    <description>Start of the window for the InWindow counts (not included). This is the time of the previous complete sweep.</description>
+    <externalId>false</externalId>
+    <label>Window Start</label>
+    <required>true</required>
+    <type>DateTime</type>
+</CustomField>
