@@ -3,68 +3,86 @@
  * start (or debounce) Revenant workflow instances, translating declarative
  * requests into WorkflowEngine or WorkflowDebouncer calls.
  */
-public inherited sharing class WorkflowStartInvocableAction {
+global inherited sharing class WorkflowStartInvocableAction {
+  /**
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
+   */
+  private WorkflowStartInvocableAction() {
+    // No state to set.
+  }
+
   /**
    * @description Invocable input describing one workflow to start: its name,
    * correlation key, optional input/attributes JSON, and optional debounce window.
    */
-  public class StartRequest {
+  global class StartRequest {
     @InvocableVariable(label='Workflow Name' required=true)
-    public String workflowName;
+    global String workflowName;
 
     @InvocableVariable(label='Correlation Key' required=true)
-    public String correlationKey;
+    global String correlationKey;
 
     @InvocableVariable(label='Input JSON')
-    public String inputJson;
+    global String inputJson;
 
     @InvocableVariable(label='Attributes JSON')
-    public String attributesJson;
+    global String attributesJson;
 
     @InvocableVariable(
       label='Causation ID'
       description='Optional causation or trace identifier linking this instance to the upstream instance/event.'
     )
-    public String causationId;
+    global String causationId;
 
     @InvocableVariable(
       label='Priority'
       description='Optional admission priority, 0 to 9. The gate admits a higher value sooner under a concurrency ceiling. Blank uses the configured priority. Debounced starts ignore this value.'
     )
-    public Integer priority;
+    global Integer priority;
 
     @InvocableVariable(label='Debounce Seconds')
-    public Integer debounceSeconds;
+    global Integer debounceSeconds;
 
     @InvocableVariable(label='Max Wait Seconds')
-    public Integer maxWaitSeconds;
+    global Integer maxWaitSeconds;
   }
 
   /**
    * @description Invocable output for one start request, carrying the resulting
    * workflow instance Id and whether it was newly created or deduplicated.
    */
-  public class StartResult {
+  global class StartResult {
+    /**
+     * @description Keeps construction in the package namespace. Without an
+     * explicit constructor, a global class gets a global default
+     * constructor (issue #122).
+     */
+    public StartResult() {
+      // No state to set.
+    }
+
     @InvocableVariable(label='Workflow Instance ID')
-    public Id workflowInstanceId;
+    global Id workflowInstanceId;
 
     @InvocableVariable(
       label='Is New'
       description='True if a new instance was started; false if an existing instance was returned for a deduplicated (already-seen) correlation key.'
     )
-    public Boolean isNew;
+    global Boolean isNew;
 
     @InvocableVariable(
       label='Is Valid'
       description='True when the start input satisfied the workflow\'s declared input contract (or the workflow declares none) and the start proceeded; false when validation rejected the input, in which case Validation Error explains why and no instance was started. Branch a Flow Decision on this.'
     )
-    public Boolean isValid;
+    global Boolean isValid;
 
     @InvocableVariable(
       label='Validation Error'
       description='When Is Valid is false, a readable, field-level enumeration of every input-contract violation; null on success.'
     )
-    public String validationError;
+    global String validationError;
   }
 
   @InvocableMethod(
@@ -83,7 +101,7 @@ public inherited sharing class WorkflowStartInvocableAction {
    * @param requests The list of start requests, one per Flow invocation row.
    * @return A list of results aligned by index to the input requests.
    */
-  public static List<StartResult> startWorkflow(List<StartRequest> requests) {
+  global static List<StartResult> startWorkflow(List<StartRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return new List<StartResult>();
     }

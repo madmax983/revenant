@@ -3,7 +3,8 @@
  * here so the trigger itself stays a thin delegate (AvoidLogicInTrigger). Events are
  * classified in-order, resume/signal requests are executed in bulk, and any throttled
  * overflow is republished in a single EventBus.publish call. `CASCADE_CANCEL` events
- * go to WorkflowCascadeCancel (issue #94).
+ * go to WorkflowCascadeCancel (issue #94). This handler ignores `NOTIFY` events:
+ * `WorkflowNotifyTrigger` handles them in its own transaction (issue #123).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and

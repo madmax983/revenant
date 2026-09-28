@@ -7,7 +7,7 @@
  * produce() at most once per (instance, step, key); on every subsequent
  * re-execution it returns the durably recorded result without calling produce().
  */
-public interface CaptureProducer {
+global interface CaptureProducer {
   /**
    * @description Produces the non-deterministic value to capture durably. The
    * engine invokes this at most once per (instance, step, key); thereafter the

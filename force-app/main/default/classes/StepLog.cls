@@ -6,7 +6,16 @@
  * nested on StepContext (StepContext.Breadcrumb / StepContext.Level) so existing
  * references keep compiling.
  */
-public inherited sharing class StepLog {
+global inherited sharing class StepLog {
+  /**
+   * @description Keeps construction in the package namespace. Without an
+   * explicit constructor, a global class gets a global default
+   * constructor (issue #122).
+   */
+  public StepLog() {
+    // No state to set.
+  }
+
   /** Maximum number of breadcrumb entries retained before logs are discarded. */
   private static final Integer MAX_LOG_ENTRIES = 100;
   /** Maximum character length of a single breadcrumb message. */
@@ -20,7 +29,7 @@ public inherited sharing class StepLog {
    * @param level The severity level (INFO, WARN, or ERROR).
    * @param message The log message.
    */
-  public void log(StepContext.Level level, String message) {
+  global void log(StepContext.Level level, String message) {
     this.log(level, message, null);
   }
 
@@ -33,7 +42,7 @@ public inherited sharing class StepLog {
    * @param message The log message.
    * @param logContext Context data as key-value pairs to be appended to the log.
    */
-  public void log(
+  global void log(
     StepContext.Level level,
     String message,
     Map<String, Object> logContext

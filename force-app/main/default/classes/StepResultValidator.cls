@@ -100,4 +100,33 @@ public inherited sharing class StepResultValidator {
       }
     }
   }
+
+  /**
+   * @description Validates StepResult.withNotification (issue #123). Only a SUSPEND or WAIT_FOR_APPROVAL result can carry a notification. The notification must not be null and must have a recipient source.
+   * @param action The action of the result.
+   * @param notification The notification to add.
+   */
+  public static void requireNotifiable(
+    StepResult.ActionType action,
+    WorkflowNotification notification
+  ) {
+    if (
+      action != StepResult.ActionType.SUSPEND &&
+      action != StepResult.ActionType.WAIT_FOR_APPROVAL
+    ) {
+      throw new IllegalArgumentException(
+        'StepResult.withNotification: only a SUSPEND or WAIT_FOR_APPROVAL result can carry a notification'
+      );
+    }
+    if (notification == null) {
+      throw new IllegalArgumentException(
+        'StepResult.withNotification: notification must not be null'
+      );
+    }
+    if (!notification.hasRecipientSource()) {
+      throw new IllegalArgumentException(
+        'StepResult.withNotification: add a recipient (toRecipient, toInputKey or toRecordOwner)'
+      );
+    }
+  }
 }

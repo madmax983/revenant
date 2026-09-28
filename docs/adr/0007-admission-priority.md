@@ -1,4 +1,4 @@
-# ADR 0006: Admission priority for the concurrency ceiling
+# ADR 0007: Admission priority for the concurrency ceiling
 
 - **Status:** Accepted
 - **Date:** 2026-09-28

@@ -90,7 +90,7 @@ Keep FIFO in one priority class. Prevent starvation with a bound.
    dashboard Apex test, Jest test.
 2. GREEN: fields, permission sets, resolver, stamp, gate, start API, Flow,
    dashboard.
-3. REFACTOR: format, docs (`concurrency-limits.md`, ADR 0006, README).
+3. REFACTOR: format, docs (`concurrency-limits.md`, ADR 0007, README).
 4. Review with agents. Fix findings. AC evidence table.
 
 ## Review changes
