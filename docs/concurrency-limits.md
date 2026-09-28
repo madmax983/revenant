@@ -1,7 +1,7 @@
 # Concurrency Limits — capping in-flight instances per workflow
 
 Revenant treats **concurrency** (a ceiling on simultaneously in-flight work) as a
-primitive distinct from **rate/throttle** (`RateLimiter`, events per unit time) and from
+primitive distinct from **rate/throttle** ([`RateLimiter`](rate-limiting.md), events per unit time) and from
 **get-or-start dedup** (#10). A concurrency limit caps how many instances of a workflow
 definition may be *running at once*, so a bursty start — a 10k-record trigger, a Cursor
 fan-out — is throttled to a safe in-flight ceiling instead of stampeding fragile

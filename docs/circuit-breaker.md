@@ -1,7 +1,7 @@
 # Circuit Breaker — fast-failing a fleet when a dependency is down
 
 Revenant treats a **circuit breaker** (reacting to the *health* of a shared
-dependency) as a primitive distinct from **rate/throttle** (`RateLimiter`, events per
+dependency) as a primitive distinct from **rate/throttle** ([`RateLimiter`](rate-limiting.md), events per
 unit time), **concurrency** (`Concurrency_Config__mdt`, a ceiling on simultaneously
 in-flight instances per workflow), and **per-step retry** (`RetryPolicy`, backoff for
 one step's own transient failures). A breaker watches how often a shared dependency —
