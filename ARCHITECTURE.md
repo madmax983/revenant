@@ -66,6 +66,9 @@ is the concurrency gate that decides whether a step may run now.
   determinism mode: record each wait decision with an inputs digest, and fail
   a re-run that changes its decision on equal inputs with
   `STEP_NON_DETERMINISM` (issue #102)
+- `WorkflowStepHistoryGuard` — counts the step rows of an instance with one
+  `COUNT()`. Warns at a soft threshold. Fails with `STEP_HISTORY_LIMIT` at the
+  ceiling (issue #112)
 
 ## Signal claim, consume & routing
 

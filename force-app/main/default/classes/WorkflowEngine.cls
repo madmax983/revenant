@@ -30,6 +30,11 @@ public inherited sharing class WorkflowEngine {
   // when true, a step that makes a different routing decision on a re-run with
   // the same inputs fails. Default: off.
   public static Boolean strictDeterminism = false;
+  // Operator settings (Revenant_Config__mdt, issue #112): step-history warn
+  // threshold and ceiling, in rows per instance. 0 turns a check off.
+  // WorkflowStepHistoryGuard.resolve clamps the values.
+  public static Integer stepHistoryWarnThreshold = 5000;
+  public static Integer stepHistoryCeiling = 10000;
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -38,6 +43,7 @@ public inherited sharing class WorkflowEngine {
   public static final String CAT_COMPENSATION_FAILED = 'COMPENSATION_FAILED';
   public static final String CAT_EXPLICIT_FAIL = 'EXPLICIT_FAIL';
   public static final String CAT_STEP_NON_DETERMINISM = 'STEP_NON_DETERMINISM';
+  public static final String CAT_STEP_HISTORY_LIMIT = 'STEP_HISTORY_LIMIT';
   public static final String CAT_UNKNOWN = 'UNKNOWN';
 
   // Get-or-start dedup window in minutes. Redelivered starts whose correlation
@@ -128,7 +134,9 @@ public inherited sharing class WorkflowEngine {
           Stale_Threshold_Minutes__c,
           Reclaim_Threshold_Minutes__c,
           Payload_Codec__c,
-          Strict_Determinism__c
+          Strict_Determinism__c,
+          Step_History_Warn_Threshold__c,
+          Step_History_Ceiling__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -162,6 +170,13 @@ public inherited sharing class WorkflowEngine {
         }
         payloadCodecClass = configs[0].Payload_Codec__c;
         strictDeterminism = configs[0].Strict_Determinism__c == true;
+        if (configs[0].Step_History_Warn_Threshold__c != null) {
+          stepHistoryWarnThreshold = configs[0]
+            .Step_History_Warn_Threshold__c.intValue();
+        }
+        if (configs[0].Step_History_Ceiling__c != null) {
+          stepHistoryCeiling = configs[0].Step_History_Ceiling__c.intValue();
+        }
       }
     } catch (Exception ignored) {
       // Configuration metadata is optional; fall back to defaults on any read failure.
@@ -762,6 +777,9 @@ public inherited sharing class WorkflowEngine {
     public String errorMessage;
     public String failureCategory;
     public Integer attemptCount;
+    // True skips error routing (#90). The step-history ceiling (issue #112)
+    // sets it: the error step cannot run past the guard.
+    public Boolean skipErrorRouting = false;
   }
 
   /**

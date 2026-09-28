@@ -39,26 +39,41 @@ public inherited sharing class WorkflowParallelJoin {
     proceedToJoin(outcome, activeParallelSteps, latestExecByStep);
   }
 
-  // Load the latest step execution per active parallel step.
+  // Load the latest step execution per active parallel step. Read the Ids of
+  // all visits first, then the payload of the latest visits only. A loop over
+  // a parallel block adds visits, so the first read grows with history
+  // (issue #112).
   private static Map<String, Workflow_Step_Execution__c> loadLatestParallelExecs(
     Id instanceId,
     List<String> activeParallelSteps
   ) {
-    List<Workflow_Step_Execution__c> parallelExecs = [
-      SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c
+    Map<String, Id> latestIdByStep = new Map<String, Id>();
+    for (Workflow_Step_Execution__c pe : [
+      SELECT Id, Step_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instanceId
         AND Step_Name__c IN :activeParallelSteps
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
-    ];
+    ]) {
+      if (!latestIdByStep.containsKey(pe.Step_Name__c)) {
+        latestIdByStep.put(pe.Step_Name__c, pe.Id);
+      }
+    }
 
     Map<String, Workflow_Step_Execution__c> latestExecByStep = new Map<String, Workflow_Step_Execution__c>();
-    for (Workflow_Step_Execution__c pe : parallelExecs) {
-      if (!latestExecByStep.containsKey(pe.Step_Name__c)) {
-        latestExecByStep.put(pe.Step_Name__c, pe);
-      }
+    if (latestIdByStep.isEmpty()) {
+      return latestExecByStep;
+    }
+    List<Id> latestIds = latestIdByStep.values();
+    for (Workflow_Step_Execution__c pe : [
+      SELECT Step_Name__c, Status__c, Output__c, CPU_Time_Ms__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id IN :latestIds
+      WITH SYSTEM_MODE
+    ]) {
+      latestExecByStep.put(pe.Step_Name__c, pe);
     }
     return latestExecByStep;
   }

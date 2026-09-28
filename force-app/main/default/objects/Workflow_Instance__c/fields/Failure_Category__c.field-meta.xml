@@ -42,6 +42,11 @@
                 <label>Step Non-Determinism</label>
             </value>
             <value>
+                <fullName>STEP_HISTORY_LIMIT</fullName>
+                <default>false</default>
+                <label>Step History Limit</label>
+            </value>
+            <value>
                 <fullName>UNKNOWN</fullName>
                 <default>false</default>
                 <label>Unknown</label>
