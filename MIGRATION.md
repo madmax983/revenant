@@ -451,6 +451,17 @@ See [docs/definition-change-detection.md](docs/definition-change-detection.md).
 
 See [docs/strict-determinism.md](docs/strict-determinism.md).
 
+## New (additive): step-history guard and `STEP_HISTORY_LIMIT` category
+
+**Issue #112.** No signature changes. The guard is on by default. Read this if you run a loop without Continue-As-New, or if your code switches on `Failure_Category__c`.
+
+- `Workflow_Instance__c.Failure_Category__c` has a new value: `STEP_HISTORY_LIMIT` (label "Step History Limit").
+- New config fields: `Revenant_Config__mdt.Step_History_Warn_Threshold__c` (default 5000) and `Step_History_Ceiling__c` (default 10000). An instance with 10,000 step rows now fails. Before, it failed later with a governor error. Set a value to `0` to turn a check off.
+- New additive field: `WorkflowEngine.FailInstanceRequest.skipErrorRouting` (default `false`).
+- Each hop does one more SOQL. A test that drives many hops in one transaction uses one more SOQL for each hop. To turn the guard off in a test, set `WorkflowEngine.stepHistoryWarnThreshold` and `WorkflowEngine.stepHistoryCeiling` to `0`.
+
+See [docs/step-history-guard.md](docs/step-history-guard.md).
+
 ---
 
 ## 9. New (additive, non-breaking): `WorkflowInstanceQuery.findInstances`

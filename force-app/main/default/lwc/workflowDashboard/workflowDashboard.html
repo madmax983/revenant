@@ -295,6 +295,9 @@
                                                             <template if:true={inst.stalled}>
                                                                 <span class={inst.stalledBadgeClass} style="margin-right: 8px;">STALLED</span>
                                                             </template>
+                                                            <template if:true={inst.stepHistoryWarning}>
+                                                                <span class="badge badge-yellow" style="margin-right: 8px;" data-id="step-history-badge" title="Step history is large. Change this workflow to use Continue-As-New.">LONG HISTORY<span class="slds-assistive-text">: step history is large. Change this workflow to use Continue-As-New.</span></span>
+                                                            </template>
                                                             <template if:true={inst.waitingOn}>
                                                                 <span class={inst.waitingOnBadgeClass} style="margin-right: 8px;">{inst.waitingOn}</span>
                                                             </template>
@@ -1567,6 +1570,13 @@
                                                     <li key={comp.key} class="slds-text-body_small">{comp.name}</li>
                                                 </template>
                                             </ul>
+                                        </div>
+                                    </template>
+                                    <template if:true={selectedInst.stepHistoryWarning}>
+                                        <div class="slds-col slds-size_1-of-1 slds-p-bottom_small" data-id="step-history-warning">
+                                            <div class="slds-text-title text-orange">Long Step History</div>
+                                            <div class="slds-text-body_regular">{selectedInst.stepHistoryWarning.message}</div>
+                                            <div class="slds-text-body_small slds-text-color_weak" data-id="step-history-warning-date">First seen: {selectedInst.stepHistoryWarning.formattedDate}</div>
                                         </div>
                                     </template>
                                     <template if:true={isDefinitionChanged}>
