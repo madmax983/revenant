@@ -52,6 +52,28 @@ public inherited sharing class WorkflowFailureDetails {
   }
 
   /**
+   * @description Replaces failure data that is in an offload file. The reason
+   * does not change. The archive uses it, because the purge deletes the file.
+   * @param details the stored Error_Details__c value
+   * @param replacement the text to put in place of the offload marker
+   * @return the new value, or null when no failure data is offloaded
+   */
+  public static String replaceOffloadedData(
+    String details,
+    String replacement
+  ) {
+    Integer at = details == null ? -1 : details.lastIndexOf(SEPARATOR);
+    if (
+      at < 0 ||
+      !details.substring(at + SEPARATOR.length())
+        .startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX)
+    ) {
+      return null;
+    }
+    return details.left(at) + SEPARATOR + replacement;
+  }
+
+  /**
    * @description Decodes the failure data that {@link #build} wrote. The value
    * after the last separator is decoded only when it is a stored form. Other
    * text does not change. With the identity codec, the value does not change.

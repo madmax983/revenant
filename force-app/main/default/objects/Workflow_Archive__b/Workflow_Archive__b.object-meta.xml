@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>Archived history of purged terminal workflow instances. Sequence 0 is the instance row. Sequence 1 and up are the step rows, in execution order. Written by BigObjectArchiveSink.</description>
+    <label>Workflow Archive</label>
+    <pluralLabel>Workflow Archives</pluralLabel>
+</CustomObject>

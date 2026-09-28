@@ -111,7 +111,11 @@ public inherited sharing class WorkflowStallDetector {
           'Compensating',
           'Cancelling'
         )
-        AND Workflow_Name__c NOT IN ('WatchdogWorkflow', 'CleanupWorkflow')
+        AND Workflow_Name__c NOT IN (
+          'WatchdogWorkflow',
+          'CleanupWorkflow',
+          'ArchiveWorkflow'
+        )
         AND (Status__c != 'Suspended'
         OR Sleep_Until__c = NULL
         OR Sleep_Until__c <= :now)

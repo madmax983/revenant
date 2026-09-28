@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Failure_Category__c</fullName>
+    <description>Instance failure category. Instance row only.</description>
+    <externalId>false</externalId>
+    <label>Failure Category</label>
+    <length>255</length>
+    <required>false</required>
+    <type>Text</type>
+</CustomField>

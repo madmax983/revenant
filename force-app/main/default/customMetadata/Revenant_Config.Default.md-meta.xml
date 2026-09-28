@@ -3,6 +3,10 @@
     <label>Default</label>
     <protected>false</protected>
     <values>
+        <field>Archive_Enabled__c</field>
+        <value xsi:type="xsd:boolean">false</value>
+    </values>
+    <values>
         <field>Cascade_Cancel_Children_On_Failure__c</field>
         <value xsi:type="xsd:boolean">true</value>
     </values>

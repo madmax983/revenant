@@ -2,9 +2,10 @@
  * @description Document ownership and purge helper for CleanupWorkflow. Given the
  * candidate workflow instances selected for a purge batch, it indexes their
  * ContentDocuments and links, decides which files are engine-owned and unshared and
- * therefore safe to delete, deletes those files, and returns the bounded chunk of
- * instances (and their ids) for the caller to finish deleting. Extracted from
- * CleanupWorkflow.PurgeOldInstancesStep to keep that step within complexity limits.
+ * therefore safe to delete, and returns the bounded chunk of instances (and their
+ * ids). {@link #planChunk} does SOQL only, so the archive can copy the chunk
+ * before {@link #deleteDocuments} deletes the files. Used by
+ * {@link WorkflowArchiveSweep}.
  */
 public inherited sharing class CleanupDocumentPurger {
   // Title prefixes that mark a ContentDocument as engine-owned and therefore safe to
@@ -26,15 +27,13 @@ public inherited sharing class CleanupDocumentPurger {
   };
 
   /**
-   * @description Indexes the documents of the candidate instances, selects the bounded
-   * chunk of instances to purge along with their engine-owned unshared documents, and
-   * deletes those documents. The returned chunk carries the instances and instance ids
-   * for the caller to finish deleting the associated signals and instances.
-   * @param candidateInstances The terminal instances selected for this purge batch.
-   * @return The bounded chunk of instances to purge; its qualified documents have
-   * already been deleted.
+   * @description Selects the bounded chunk of instances to purge and their
+   * engine-owned unshared documents. SOQL only: it deletes nothing, so the
+   * archive can copy the chunk first.
+   * @param candidateInstances The terminal instances selected for this batch.
+   * @return The bounded chunk. Its documents are not deleted yet.
    */
-  public static PurgeChunk purgeInstanceDocuments(
+  public static PurgeChunk planChunk(
     List<Workflow_Instance__c> candidateInstances
   ) {
     // 1-3. Map documents to candidate instances, select those documents, and query
@@ -44,12 +43,16 @@ public inherited sharing class CleanupDocumentPurger {
 
     // 4. Build chunk of instances to process in this transaction, bounding file
     //    deletes to 100 max.
-    PurgeChunk chunk = buildPurgeChunk(candidateInstances, docIndex);
+    return buildPurgeChunk(candidateInstances, docIndex);
+  }
 
+  /**
+   * @description Deletes the documents that {@link #planChunk} selected.
+   * @param chunk The planned chunk.
+   */
+  public static void deleteDocuments(PurgeChunk chunk) {
     // 5. Delete qualified documents
     deleteQualifiedDocs(chunk.finalDocIdsToDelete);
-
-    return chunk;
   }
 
   // ── Document mapping ─────────────────────────────────────────────────────────
