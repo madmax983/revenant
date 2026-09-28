@@ -29,7 +29,11 @@ flowchart LR
   before each chunk.
 - An instance is not archived and not purged when it has more than 500 step
   rows, or when its copy alone passes a quarter of the heap. The run output
-  lists it in `skippedInstanceIds`. Later batches of the run skip it.
+  lists it in `skippedInstanceIds` (at most 2000 Ids).
+- A cursor (`CreatedDate`, `Id`) moves past the leading instances that a
+  batch purged or skipped. The next batch starts after the cursor, so skipped
+  instances cannot block newer ones. Each run starts again at the oldest
+  instance.
 - The sweep reads the rows. It never changes a `Workflow_Step_Execution__c`
   row. `Compensation_Stack__c` and `Terminal_At__c` do not change.
 - The sweep runs as a workflow, not on the orchestrator hot path.

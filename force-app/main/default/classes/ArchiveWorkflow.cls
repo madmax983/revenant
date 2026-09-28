@@ -49,10 +49,15 @@ public inherited sharing class ArchiveWorkflow implements WorkflowDefinition {
     /** @description True when archival was off, so nothing ran. */
     public Boolean archivalDisabled = false;
     /**
-     * @description Instances with too many step rows to archive. They stay in
-     * primary storage. See {@link WorkflowArchiveSweep}.
+     * @description Instances too large to archive, at most
+     * {@link WorkflowArchiveSweep#MAX_SKIPPED_IDS}. They stay in primary
+     * storage. See {@link WorkflowArchiveSweep}.
      */
     public List<Id> skippedInstanceIds = new List<Id>();
+    /** @description Sweep cursor time. Null before the first move. */
+    public Datetime cursorCreatedDate;
+    /** @description Sweep cursor Id. */
+    public Id cursorId;
   }
 
   /**
@@ -82,18 +87,22 @@ public inherited sharing class ArchiveWorkflow implements WorkflowDefinition {
         WorkflowArchive.archiveAfterDays(),
         WorkflowArchiveSweep.MAX_ARCHIVE_BATCH_SIZE
       );
-      params.excludeIds.addAll(state.skippedInstanceIds);
+      WorkflowArchiveSweep.resumeAt(
+        params,
+        state.cursorCreatedDate,
+        state.cursorId
+      );
       WorkflowArchiveSweep.BatchResult batch = WorkflowArchiveSweep.runBatch(
         params,
         WorkflowArchive.sink()
       );
       state.archivedCount += batch.purgedCount;
-      Boolean hasMore = WorkflowArchiveSweep.recordSkips(
-        params,
-        batch,
-        state.skippedInstanceIds
-      );
-      if (hasMore) {
+      if (batch.cursorId != null) {
+        state.cursorCreatedDate = batch.cursorCreatedDate;
+        state.cursorId = batch.cursorId;
+      }
+      WorkflowArchiveSweep.reportSkips(batch, state.skippedInstanceIds);
+      if (batch.hasMore) {
         return StepResult.yield(JSON.serialize(state));
       }
       return StepResult.complete(null, state);

@@ -37,10 +37,14 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
   public class PurgeState {
     public Integer deletedCount;
     /**
-     * @description With archival on: instances too large to archive. They stay
-     * in primary storage. Null when none were skipped.
+     * @description With archival on: instances too large to archive, at most
+     * 2000. They stay in primary storage. Null when none were skipped.
      */
     public List<Id> skippedInstanceIds;
+    /** @description With archival on: sweep cursor time. Null before the first move. */
+    public Datetime cursorCreatedDate;
+    /** @description With archival on: sweep cursor Id. */
+    public Id cursorId;
   }
 
   // inherited sharing: the step runs in the engine's (caller's) context. Every SOQL
@@ -78,26 +82,27 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
       WorkflowArchiveSink sink = WorkflowArchive.isEnabled()
         ? WorkflowArchive.sink()
         : null;
-      if (state.skippedInstanceIds != null) {
-        params.excludeIds.addAll(state.skippedInstanceIds);
-      }
+      WorkflowArchiveSweep.resumeAt(
+        params,
+        state.cursorCreatedDate,
+        state.cursorId
+      );
       WorkflowArchiveSweep.BatchResult batch = WorkflowArchiveSweep.runBatch(
         params,
         sink
       );
       state.deletedCount += batch.purgedCount;
-      Boolean hasMore = batch.hasMore;
+      if (batch.cursorId != null) {
+        state.cursorCreatedDate = batch.cursorCreatedDate;
+        state.cursorId = batch.cursorId;
+      }
       if (!batch.skippedInstanceIds.isEmpty()) {
         if (state.skippedInstanceIds == null) {
           state.skippedInstanceIds = new List<Id>();
         }
-        hasMore = WorkflowArchiveSweep.recordSkips(
-          params,
-          batch,
-          state.skippedInstanceIds
-        );
+        WorkflowArchiveSweep.reportSkips(batch, state.skippedInstanceIds);
       }
-      if (hasMore) {
+      if (batch.hasMore) {
         return StepResult.yield(JSON.serialize(state));
       }
       return StepResult.complete(null, state);

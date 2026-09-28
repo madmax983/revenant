@@ -79,7 +79,7 @@ found issues. We fixed them:
 
 - `CleanupWorkflow`'s step is now a `CalloutStep`. Before, the default Big
   Object sink failed there, because `insertImmediate` follows callout rules.
-- Heap bound for each batch, a step bound for each instance, and a skip list.
+- Heap bound for each batch, a step bound for each instance, and a cursor.
   Before, one large instance could stop the sweep.
 - Step counts use `COUNT() ... LIMIT` for each instance, so they use few
   query rows.
@@ -92,6 +92,9 @@ found issues. We fixed them:
   details now load 10 rows at a time with a heap check. An instance whose
   copy alone passes a quarter of the heap is skipped. The CSV sink inserts
   one file at a time.
+- Codex review: a capped skip list could stop a run behind more than 2000
+  skipped instances. A cursor (`CreatedDate`, `Id`) now moves past each
+  purged or skipped instance. The skip list is only a report.
 - The dropped marker cannot make `Error_Details__c` too long.
 - Error messages do not echo payload text.
 - The Admin permission set has read access only on the Big Objects.

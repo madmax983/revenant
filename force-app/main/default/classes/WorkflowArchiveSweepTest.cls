@@ -48,20 +48,11 @@ private class WorkflowArchiveSweepTest {
       first.skippedInstanceIds,
       'Big is named'
     );
-    System.assertEquals(true, first.hasMore, 'Skip means look again');
+    System.assertEquals(false, first.hasMore, 'Both handled');
+    System.assertEquals(small.Id, first.cursorId, 'Cursor after both');
     System.assertEquals(true, exists(big.Id), 'Big stays in primary');
     System.assertEquals(null, sink.store.get(big.Id), 'Big not archived');
     System.assertEquals(false, exists(small.Id), 'Small purged');
-
-    List<Id> skipped = new List<Id>();
-    WorkflowArchiveSweep.recordSkips(p, first, skipped);
-    WorkflowArchiveSweep.BatchResult second = WorkflowArchiveSweep.runBatch(
-      p,
-      sink
-    );
-    System.assertEquals(0, second.purgedCount, 'Nothing left');
-    System.assertEquals(false, second.hasMore, 'Sweep ends');
-    System.assertEquals(1, skipped.size(), 'Skip recorded');
   }
 
   @IsTest
@@ -122,6 +113,20 @@ private class WorkflowArchiveSweepTest {
     );
     System.assertEquals(true, result.hasMore, 'One remains');
     System.assertEquals(20, sink.store.size(), 'Archived what it purged');
+
+    // All rows share one CreatedDate, so the cursor must order by Id too.
+    WorkflowArchiveSweep.Params next = params(200);
+    WorkflowArchiveSweep.resumeAt(
+      next,
+      result.cursorCreatedDate,
+      result.cursorId
+    );
+    WorkflowArchiveSweep.BatchResult last = WorkflowArchiveSweep.runBatch(
+      next,
+      sink
+    );
+    System.assertEquals(1, last.purgedCount, 'The last one');
+    System.assertEquals(21, sink.store.size(), 'All archived');
   }
 
   @IsTest
@@ -143,7 +148,7 @@ private class WorkflowArchiveSweepTest {
   }
 
   @IsTest
-  static void archiveWorkflowCarriesSkipsAcrossBatches() {
+  static void archiveWorkflowReportsSkipsAndCursor() {
     WorkflowArchiveSweep.maxStepRows = 1;
     WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
     WorkflowArchive.configure(true, sink);
@@ -159,29 +164,16 @@ private class WorkflowArchiveSweepTest {
       .workflowInputJson('{"archiveAfterDays":30}')
       .build();
 
-    StepResult first = new ArchiveWorkflow.ArchiveOldInstancesStep()
+    StepResult result = new ArchiveWorkflow.ArchiveOldInstancesStep()
       .execute(ctx);
-    StepContext next = new StepContextTestBuilder()
-      .workflowName('ArchiveWorkflow')
-      .stepName('ArchiveWorkflow.ArchiveOldInstancesStep')
-      .workflowInputJson('{"archiveAfterDays":30}')
-      .stepStateJson(first.directive().stepStateJson)
-      .build();
-    StepResult second = new ArchiveWorkflow.ArchiveOldInstancesStep()
-      .execute(next);
 
     System.assertEquals(
-      StepResult.ActionType.YIELD,
-      first.directive().action,
-      'Look again after a skip'
-    );
-    System.assertEquals(
       StepResult.ActionType.COMPLETE,
-      second.directive().action,
-      'Skip is excluded, so the run ends'
+      result.directive().action,
+      'The skip is behind the cursor, so the run ends'
     );
     ArchiveWorkflow.ArchiveState state = (ArchiveWorkflow.ArchiveState) JSON.deserialize(
-      second.directive().outputJson,
+      result.directive().outputJson,
       ArchiveWorkflow.ArchiveState.class
     );
     System.assertEquals(
@@ -189,37 +181,53 @@ private class WorkflowArchiveSweepTest {
       state.skippedInstanceIds,
       'Output names the skip'
     );
+    System.assertEquals(big.Id, state.cursorId, 'Cursor moved past it');
     System.assertEquals(true, exists(big.Id), 'Kept in primary');
   }
 
   @IsTest
-  static void fullSkipListEndsTheRun() {
+  static void skippedInstancesCannotBlockNewerOnes() {
     WorkflowArchiveSweep.maxStepRows = 1;
     WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
     Workflow_Instance__c big = WorkflowArchiveTestSink.insertInstance(
       'Completed',
       'big',
-      40
+      50
     );
     WorkflowArchiveTestSink.insertSteps(big.Id, new List<String>{ 'A', 'B' });
+    Workflow_Instance__c small = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'small',
+      40
+    );
+    // The report is already full, as after 2000 skips.
     List<Id> skipped = new List<Id>();
     for (Integer i = 0; i < WorkflowArchiveSweep.MAX_SKIPPED_IDS; i++) {
       skipped.add(TestIdFactory.generate(Workflow_Instance__c.SObjectType));
     }
-    WorkflowArchiveSweep.Params p = params(20);
+    WorkflowArchiveSweep.Params p = params(1);
 
-    WorkflowArchiveSweep.BatchResult batch = WorkflowArchiveSweep.runBatch(
+    WorkflowArchiveSweep.BatchResult first = WorkflowArchiveSweep.runBatch(
+      p,
+      sink
+    );
+    WorkflowArchiveSweep.reportSkips(first, skipped);
+    WorkflowArchiveSweep.resumeAt(p, first.cursorCreatedDate, first.cursorId);
+    WorkflowArchiveSweep.BatchResult second = WorkflowArchiveSweep.runBatch(
       p,
       sink
     );
 
-    System.assertEquals(true, batch.hasMore, 'The batch alone asks again');
+    System.assertEquals(0, first.purgedCount, 'Big skipped');
+    System.assertEquals(true, first.hasMore, 'Batch was full');
     System.assertEquals(
-      false,
-      WorkflowArchiveSweep.recordSkips(p, batch, skipped),
-      'No room for the skip, so the run ends instead of a loop'
+      WorkflowArchiveSweep.MAX_SKIPPED_IDS,
+      skipped.size(),
+      'Report stays capped'
     );
-    System.assertEquals(true, exists(big.Id), 'Kept in primary');
+    System.assertEquals(1, second.purgedCount, 'Cursor reaches small');
+    System.assertEquals(false, exists(small.Id), 'Small purged');
+    System.assertEquals(true, exists(big.Id), 'Big kept');
   }
 
   @IsTest

@@ -16,8 +16,11 @@
  * new instance starts only below a sixth of the heap. The first instance
  * always goes, so the sweep moves forward. An instance with more than 500
  * step rows, or whose copy alone passes a quarter of the heap, is not
- * archived and not purged. The batch result names it, and the next batches
- * skip it.
+ * archived and not purged. The batch result names it.
+ *
+ * With archival, a cursor (`CreatedDate`, `Id`) moves past the leading
+ * candidates that the batch purged or skipped. The next batch starts after
+ * the cursor, so skipped instances cannot block the sweep.
  */
 public inherited sharing class WorkflowArchiveSweep {
   /** @description Maximum instances in one batch without archival. */
@@ -26,8 +29,16 @@ public inherited sharing class WorkflowArchiveSweep {
   public static final Integer MAX_ARCHIVE_BATCH_SIZE = 20;
   /** @description Maximum step rows in one archive batch and one instance. */
   public static final Integer MAX_ARCHIVE_STEP_ROWS = 500;
-  /** @description Maximum Ids that a run keeps as skipped. */
+  /** @description Maximum skipped Ids that a run reports. */
   public static final Integer MAX_SKIPPED_IDS = 2000;
+
+  private static final List<String> TERMINAL_STATUSES = new List<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled',
+    'ContinuedAsNew'
+  };
 
   @TestVisible
   private static Integer maxStepRows = MAX_ARCHIVE_STEP_ROWS;
@@ -43,8 +54,10 @@ public inherited sharing class WorkflowArchiveSweep {
     public Integer ageDays;
     /** @description Requested batch size. */
     public Integer batchSize;
-    /** @description Instances that earlier batches skipped. */
-    public Set<Id> excludeIds = new Set<Id>();
+    /** @description Cursor: start after this creation time. Null: oldest. */
+    public Datetime afterCreatedDate;
+    /** @description Cursor: start after this Id at `afterCreatedDate`. */
+    public Id afterId;
   }
 
   /**
@@ -57,6 +70,10 @@ public inherited sharing class WorkflowArchiveSweep {
     public Boolean hasMore = false;
     /** @description Instances too large to archive. Kept in primary storage. */
     public List<Id> skippedInstanceIds = new List<Id>();
+    /** @description Archive cursor after this batch, or null when it did not move. */
+    public Datetime cursorCreatedDate;
+    /** @description Archive cursor Id after this batch, or null. */
+    public Id cursorId;
   }
 
   /**
@@ -115,7 +132,7 @@ public inherited sharing class WorkflowArchiveSweep {
     List<Workflow_Instance__c> candidates = queryCandidates(
       Datetime.now().addDays(-p.ageDays),
       limitSize,
-      p.excludeIds
+      p
     );
     if (candidates.isEmpty()) {
       return result;
@@ -124,9 +141,11 @@ public inherited sharing class WorkflowArchiveSweep {
     if (sink == null) {
       chunk = CleanupDocumentPurger.planChunk(candidates);
     } else {
+      Set<Id> handled = new Set<Id>();
       Map<Id, WorkflowArchiveRecord> records = snapshotWithinBounds(
         candidates,
-        result
+        result,
+        handled
       );
       chunk = CleanupDocumentPurger.planChunk(
         selectInOrder(candidates, records.keySet())
@@ -138,44 +157,77 @@ public inherited sharing class WorkflowArchiveSweep {
       if (!toWrite.isEmpty()) {
         sink.write(toWrite);
       }
+      handled.addAll(chunk.instanceIdsToPurge);
+      purge(chunk, result);
+      Integer done = moveCursor(candidates, handled, result);
+      result.hasMore =
+        done > 0 &&
+        (candidates.size() > done ||
+        candidates.size() == limitSize);
+      return result;
     }
-    CleanupDocumentPurger.deleteDocuments(chunk);
-    deleteInstances(chunk);
-    result.purgedCount = chunk.instancesToPurge.size();
+    purge(chunk, result);
     // More can remain when this batch did not take every candidate, or when
-    // the query filled the batch. A batch that only found known skips stops.
+    // the query filled the batch.
     result.hasMore =
-      (result.purgedCount > 0 || !result.skippedInstanceIds.isEmpty()) &&
-      (candidates.size() > result.purgedCount ||
-      candidates.size() == limitSize);
+      candidates.size() > result.purgedCount ||
+      candidates.size() == limitSize;
     return result;
   }
 
-  /**
-   * @description Adds a batch's skipped Ids to the run's exclude set, up to
-   * {@link #MAX_SKIPPED_IDS}.
-   * @param p the run input
-   * @param batch the batch result
-   * @param skipped the run's skipped Ids, updated in place
-   * @return true when the run must yield for another batch. A batch that
-   *         purged nothing and recorded no new skip ends the run, so a full
-   *         skip list cannot loop.
-   */
-  public static Boolean recordSkips(
-    Params p,
-    BatchResult batch,
-    List<Id> skipped
+  private static void purge(
+    CleanupDocumentPurger.PurgeChunk chunk,
+    BatchResult result
   ) {
-    Integer added = 0;
-    for (Id instanceId : batch.skippedInstanceIds) {
-      if (skipped.size() >= MAX_SKIPPED_IDS) {
+    CleanupDocumentPurger.deleteDocuments(chunk);
+    deleteInstances(chunk);
+    result.purgedCount = chunk.instancesToPurge.size();
+  }
+
+  // Moves the cursor past the leading candidates that are handled (purged,
+  // skipped or gone). Returns how many it passed.
+  private static Integer moveCursor(
+    List<Workflow_Instance__c> candidates,
+    Set<Id> handled,
+    BatchResult result
+  ) {
+    Integer done = 0;
+    for (Workflow_Instance__c inst : candidates) {
+      if (!handled.contains(inst.Id)) {
         break;
       }
-      skipped.add(instanceId);
-      p.excludeIds.add(instanceId);
-      added++;
+      result.cursorCreatedDate = inst.CreatedDate;
+      result.cursorId = inst.Id;
+      done++;
     }
-    return batch.hasMore && (batch.purgedCount > 0 || added > 0);
+    return done;
+  }
+
+  /**
+   * @description Adds a batch's skipped Ids to the run report, up to
+   * {@link #MAX_SKIPPED_IDS}. The report does not steer the sweep. The
+   * cursor does.
+   * @param batch the batch result
+   * @param skipped the run's skipped Ids, updated in place
+   */
+  public static void reportSkips(BatchResult batch, List<Id> skipped) {
+    for (Id instanceId : batch.skippedInstanceIds) {
+      if (skipped.size() >= MAX_SKIPPED_IDS) {
+        return;
+      }
+      skipped.add(instanceId);
+    }
+  }
+
+  /**
+   * @description Sets the cursor of the next batch from run state.
+   * @param p the run input
+   * @param createdDate the cursor time, or null
+   * @param instanceId the cursor Id, or null
+   */
+  public static void resumeAt(Params p, Datetime createdDate, Id instanceId) {
+    p.afterCreatedDate = createdDate;
+    p.afterId = instanceId;
   }
 
   // Copies candidates in order until a bound is hit. The first archivable
@@ -183,7 +235,8 @@ public inherited sharing class WorkflowArchiveSweep {
   // passes the instance heap limit, is skipped.
   private static Map<Id, WorkflowArchiveRecord> snapshotWithinBounds(
     List<Workflow_Instance__c> candidates,
-    BatchResult result
+    BatchResult result,
+    Set<Id> handled
   ) {
     Map<Id, WorkflowArchiveRecord> records = new Map<Id, WorkflowArchiveRecord>();
     Integer batchHeap = Limits.getLimitHeapSize() / 6;
@@ -198,6 +251,7 @@ public inherited sharing class WorkflowArchiveSweep {
       );
       if (steps > maxStepRows) {
         result.skippedInstanceIds.add(inst.Id);
+        handled.add(inst.Id);
         continue;
       }
       if (
@@ -212,7 +266,10 @@ public inherited sharing class WorkflowArchiveSweep {
           new Set<Id>{ inst.Id },
           instanceHeap
         );
-        if (!built.isEmpty()) {
+        if (built.isEmpty()) {
+          // Deleted since the query. Nothing to archive.
+          handled.add(inst.Id);
+        } else {
           records.put(inst.Id, built[0]);
           stepsUsed += steps;
         }
@@ -222,6 +279,7 @@ public inherited sharing class WorkflowArchiveSweep {
           break;
         }
         result.skippedInstanceIds.add(inst.Id);
+        handled.add(inst.Id);
       }
     }
     return records;
@@ -263,23 +321,31 @@ public inherited sharing class WorkflowArchiveSweep {
   private static List<Workflow_Instance__c> queryCandidates(
     Datetime threshold,
     Integer limitSize,
-    Set<Id> excludeIds
+    Params p
   ) {
+    Datetime afterDate = p.afterCreatedDate;
+    Id afterId = p.afterId;
+    if (afterDate == null || afterId == null) {
+      return [
+        SELECT Id, CreatedDate
+        FROM Workflow_Instance__c
+        WHERE Status__c IN :TERMINAL_STATUSES AND CreatedDate < :threshold
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+        LIMIT :limitSize
+      ];
+    }
     return [
-      SELECT Id
+      SELECT Id, CreatedDate
       FROM Workflow_Instance__c
       WHERE
-        Status__c IN (
-          'Completed',
-          'Failed',
-          'Compensated',
-          'Cancelled',
-          'ContinuedAsNew'
-        )
+        Status__c IN :TERMINAL_STATUSES
         AND CreatedDate < :threshold
-        AND Id NOT IN :excludeIds
+        AND (CreatedDate > :afterDate
+        OR (CreatedDate = :afterDate
+        AND Id > :afterId))
       WITH SYSTEM_MODE
-      ORDER BY CreatedDate ASC
+      ORDER BY CreatedDate ASC, Id ASC
       LIMIT :limitSize
     ];
   }
