@@ -124,7 +124,10 @@ export default class AsyncCapacityPanel extends LightningElement {
         label: m.label,
         isElastic: m.elastic === true,
         usageLabel: `${formatCount(m.used)} / ${formatCount(m.limit)}`,
-        percentLabel: hasPercent ? `${m.percent}%` : MISSING,
+        // A capped read gives a lower bound.
+        percentLabel: hasPercent
+          ? `${m.capped === true ? "≥ " : ""}${m.percent}%`
+          : MISSING,
         barValue: hasPercent ? Math.min(Number(m.percent), 100) : 0,
         statusLabel: status.label,
         badgeClass: status.badgeClass,

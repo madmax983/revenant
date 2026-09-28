@@ -60,7 +60,11 @@ The panel also shows these counts. They have no status:
   batch job counts the chunk. A batch job that did not start has
   `TotalJobItems` = 0, so it counts 1. The value is then too low.
 - The read counts max 2,000 jobs. When more jobs are pending, the panel says
-  so, and the real values are higher. Batch jobs are read first.
+  so, and the real values are higher. Batch jobs are read first. The panel
+  shows the pending executions percent as a lower bound ("≥ 2%"). When the
+  lower bound is below the critical threshold, the status is **Unknown**,
+  because the real value can be Critical. When the lower bound is at or above
+  the critical threshold, the status is **Critical**.
 - Batch jobs in `Preparing` are not counted.
 
 ## Status
@@ -68,12 +72,12 @@ The panel also shows these counts. They have no status:
 Percent = used / limit × 100, rounded half up to 2 places. The status uses
 the percent that the panel shows.
 
-| Status       | Rule                                                            | What to do                                                                                                                       |
-| ------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| **Healthy**  | percent < warn                                                  | No action is necessary.                                                                                                          |
-| **Degraded** | warn ≤ percent < crit                                           | Find the jobs that use async capacity (**Setup → Apex Jobs**). Start fewer new instances. Move batch work to a later time.       |
-| **Critical** | percent ≥ crit                                                  | Pause definitions that are not critical. Stop or move batch jobs. When capacity is normal again, look for orphaned instances.    |
-| **Unknown**  | No limit, a limit of 0 or less, or a failed `AsyncApexJob` read | Capacity data is not available. Examine the org limits (`sf org list limits`) and **Setup → Apex Jobs**. Unknown is not Healthy. |
+| Status       | Rule                                                                                      | What to do                                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Healthy**  | percent < warn                                                                            | No action is necessary.                                                                                                          |
+| **Degraded** | warn ≤ percent < crit                                                                     | Find the jobs that use async capacity (**Setup → Apex Jobs**). Start fewer new instances. Move batch work to a later time.       |
+| **Critical** | percent ≥ crit                                                                            | Pause definitions that are not critical. Stop or move batch jobs. When capacity is normal again, look for orphaned instances.    |
+| **Unknown**  | No limit, a limit of 0 or less, a failed `AsyncApexJob` read, or a capped read below crit | Capacity data is not available. Examine the org limits (`sf org list limits`) and **Setup → Apex Jobs**. Unknown is not Healthy. |
 
 - When no daily executions are left, the pending executions metric is Unknown. The
   daily metric is then Critical.

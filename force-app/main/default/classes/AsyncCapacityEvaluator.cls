@@ -205,6 +205,10 @@ public inherited sharing class AsyncCapacityEvaluator {
     List<String> statuses = new List<String>();
     for (Map<String, Object> m : metrics) {
       String status = classify((Decimal) m.get('percent'), t);
+      // A capped read gives a lower bound. Only Critical is proven.
+      if (m.get('capped') == true && status != STATUS_CRITICAL) {
+        status = STATUS_UNKNOWN;
+      }
       m.put('status', status);
       statuses.add(status);
     }

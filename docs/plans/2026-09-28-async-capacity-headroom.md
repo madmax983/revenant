@@ -153,3 +153,10 @@ Four review agents (Apex, LWC, security and acceptance criteria, docs):
 - Fix: one row query (max 2,001 rows) replaces the grouped `COUNT`. A batch
   job counts 1 for each chunk that is left, plus 1. A grouped `SUM()` has no
   row cap, and a second SOQL breaks the budget of the issue.
+
+## Review Round 4 (Codex)
+
+- Finding: a capped read (more than 2,000 jobs) is a lower bound, but the
+  panel gave it a normal status. A real Critical backlog showed Healthy.
+- Fix: a capped read below the critical threshold gives Unknown. At or above
+  it, Critical stays. The panel shows the percent as "≥ n%".

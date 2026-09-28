@@ -507,4 +507,62 @@ private class AsyncCapacityEvaluatorTest {
       ((Map<String, Object>) result.get('jobCounts')).get('capped')
     );
   }
+
+  @IsTest
+  static void cappedLowBacklogIsUnknownNotHealthy() {
+    // 100,000 Queueables pending, but the read counts only 2,000.
+    AsyncCapacityEvaluator.Reading r = reading(150000, 250000, 0);
+    r.queued = 2000;
+    r.pendingExecutions = 2000;
+    r.jobsCapped = true;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Map<String, Object> backlog = metricFor(
+      result,
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(2.00, backlog.get('percent'), 'Lower bound');
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      backlog.get('status'),
+      'A capped read cannot prove Healthy'
+    );
+    Assert.areNotEqual(
+      AsyncCapacityEvaluator.STATUS_HEALTHY,
+      result.get('status')
+    );
+    Assert.areEqual(false, result.get('chainAtRisk'));
+  }
+
+  @IsTest
+  static void cappedDegradedLowerBoundIsUnknown() {
+    AsyncCapacityEvaluator.Reading r = reading(247000, 250000, 0);
+    r.queued = 2000;
+    r.pendingExecutions = 2500;
+    r.jobsCapped = true;
+    Map<String, Object> backlog = metricFor(
+      AsyncCapacityEvaluator.evaluate(r, defaults()),
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(83.33, backlog.get('percent'));
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      backlog.get('status'),
+      'The real value can be Critical'
+    );
+  }
+
+  @IsTest
+  static void cappedCriticalLowerBoundStaysCritical() {
+    AsyncCapacityEvaluator.Reading r = reading(248000, 250000, 0);
+    r.queued = 2000;
+    r.pendingExecutions = 2000;
+    r.jobsCapped = true;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_CRITICAL,
+      metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status'),
+      'The lower bound already proves Critical'
+    );
+    Assert.areEqual(true, result.get('chainAtRisk'));
+  }
 }

@@ -392,4 +392,31 @@ describe("c-async-capacity-panel", () => {
       "first 2,000 jobs",
     );
   });
+
+  it("marks a capped metric percent as a lower bound", async () => {
+    const element = await render(
+      envelope({
+        status: "UNKNOWN",
+        metrics: [
+          {
+            key: "BACKLOG",
+            label: "Pending executions vs executions left",
+            used: 2000,
+            limit: 100000,
+            percent: 2,
+            status: "UNKNOWN",
+            capped: true,
+          },
+        ],
+      }),
+    );
+    const row = q(element, "capacity-metric");
+    expect(row.textContent).toContain("≥ 2%");
+    expect(q(element, "metric-status").textContent).toBe("Unknown");
+  });
+
+  it("shows an exact percent when the metric is not capped", async () => {
+    const element = await render(envelope());
+    expect(q(element, "capacity-metric").textContent).not.toContain("≥");
+  });
 });
