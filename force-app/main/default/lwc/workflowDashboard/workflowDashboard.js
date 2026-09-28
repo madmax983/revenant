@@ -2630,6 +2630,69 @@ export default class WorkflowDashboard extends LightningElement {
     };
   }
 
+  // Schedule health (#126). The server calculates it on each read.
+  get scheduleHealth() {
+    return (this.doctorData && this.doctorData.scheduleHealth) || {};
+  }
+
+  // False when the read failed or sent no data. Then the panel must not
+  // show a healthy state.
+  get scheduleHealthAvailable() {
+    const health = this.scheduleHealth;
+    return health.error !== true && Array.isArray(health.rows);
+  }
+
+  get scheduleHealthRows() {
+    return (this.scheduleHealth.rows || []).map((row) => ({
+      ...row,
+      detail: this.scheduleHealthDetail(row),
+    }));
+  }
+
+  get hasScheduleHealthRows() {
+    return (
+      this.scheduleHealthAvailable &&
+      (this.scheduleHealth.rows || []).length > 0
+    );
+  }
+
+  get scheduleHealthAllClear() {
+    return this.scheduleHealthAvailable && !this.hasScheduleHealthRows;
+  }
+
+  get scheduleHealthUnavailable() {
+    return !this.scheduleHealthAvailable;
+  }
+
+  get scheduleHealthSummary() {
+    if (!this.scheduleHealthAvailable) {
+      return "";
+    }
+    const health = this.scheduleHealth;
+    return `${health.overdueCount || 0} overdue · ${health.failedCount || 0} last fire failed`;
+  }
+
+  get scheduleHealthTruncated() {
+    return this.scheduleHealth.truncated === true;
+  }
+
+  scheduleHealthDetail(row) {
+    const parts = [];
+    if (row.overdue) {
+      const late =
+        row.lapsedMinutes != null ? `${row.lapsedMinutes} min late` : "Late";
+      parts.push(
+        row.nextFireWindow
+          ? `Expected ${this.formatDateTime(row.nextFireWindow)} (${late}).`
+          : `${late}.`,
+      );
+    }
+    if (row.lastFireFailed) {
+      parts.push(`Last outcome: ${row.lastOutcome}.`);
+    }
+    return parts.join(" ");
+  }
+
   get hasConcurrencyRows() {
     return this.concurrencyRows && this.concurrencyRows.length > 0;
   }

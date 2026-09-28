@@ -16,8 +16,8 @@ public inherited sharing class WorkflowDashboardStatusService {
   /**
    * @description Returns the watchdog/scheduler health snapshot for the dashboard: recent
    * watchdog jobs, scheduled-job and sleeping-instance counts, pending timeouts, engine
-   * config, paused definitions, async-apex limit usage, Platform Event headroom, and
-   * watchdog liveness.
+   * config, paused definitions, async-apex limit usage, Platform Event headroom,
+   * watchdog liveness, and schedule health.
    * @return A map of the watchdog status fields consumed by the status panel.
    */
   public static Map<String, Object> watchdogStatus() {
@@ -72,7 +72,8 @@ public inherited sharing class WorkflowDashboardStatusService {
         'pendingTimeouts' => pendingTimeouts,
         'config' => config,
         'pausedDefinitions' => pausedDefs,
-        'liveness' => livenessMap()
+        'liveness' => livenessMap(),
+        'scheduleHealth' => scheduleHealthMap()
       };
       Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
       result.putAll(readAsyncLimits(limitsMap));
@@ -125,6 +126,16 @@ public inherited sharing class WorkflowDashboardStatusService {
       return new Map<String, Object>{
         'state' => WatchdogLiveness.STATE_UNKNOWN
       };
+    }
+  }
+
+  // Schedule health (issue #126). Each read calculates it. The read sends no
+  // alert. An error returns error = true.
+  private static Map<String, Object> scheduleHealthMap() {
+    try {
+      return ScheduleHealth.summary();
+    } catch (Exception ignored) {
+      return new Map<String, Object>{ 'error' => true };
     }
   }
 
