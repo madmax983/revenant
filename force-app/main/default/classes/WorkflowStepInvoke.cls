@@ -56,11 +56,22 @@ public inherited sharing class WorkflowStepInvoke {
     outcome.result = result;
     outcome.context = context;
     outcome.thrownError = ctx.thrownError;
-    outcome.divergence = WorkflowDeterminismGuard.verify(
+    String divergence = WorkflowDeterminismGuard.verify(
       determinismInputs,
       ctx,
       result
     );
+    // An input can arrive after the snapshot and before the step reads it.
+    // Then the new decision is legal: do not report it.
+    if (
+      divergence != null &&
+      !determinismInputs.equals(
+        WorkflowDeterminismGuard.captureInputs(ctx, context, prevOutput)
+      )
+    ) {
+      divergence = null;
+    }
+    outcome.divergence = divergence;
     WorkflowStepOutcome.handleStepResult(outcome);
   }
 

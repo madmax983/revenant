@@ -26,6 +26,9 @@ public inherited sharing class WorkflowDeterminismGuard {
   // large backlog cannot use up the query-row limit.
   @TestVisible
   private static Integer maxLiveSignals = 2000;
+  // Max child instances the guard reads, for the same reason.
+  @TestVisible
+  private static Integer maxChildren = 2000;
 
   /**
    * @description Digests the inputs of a step run. Call before execute(), so
@@ -33,8 +36,8 @@ public inherited sharing class WorkflowDeterminismGuard {
    * @param ctx The run context with the step row.
    * @param context The hydrated step context.
    * @param prevOutput The stored previous step output.
-   * @return The inputs digest, UNKNOWN_INPUTS for a live-signal backlog over
-   * the cap, or null when strict mode is off.
+   * @return The inputs digest, UNKNOWN_INPUTS for live signals or children
+   * over the cap, or null when strict mode is off.
    */
   public static String captureInputs(
     WorkflowStepRunner.RunStepContext ctx,
@@ -76,15 +79,20 @@ public inherited sharing class WorkflowDeterminismGuard {
     for (Workflow_Signal__c sig : live) {
       parts.add(sig.Id + '|' + sig.Status__c);
     }
-    for (AggregateResult row : [
-      SELECT Status__c childStatus, COUNT(Id) total
+    Integer childCap = maxChildren + 1;
+    List<Workflow_Instance__c> children = [
+      SELECT Status__c
       FROM Workflow_Instance__c
       WHERE Parent_Instance__c = :instanceId
       WITH SYSTEM_MODE
-      GROUP BY Status__c
       ORDER BY Status__c
-    ]) {
-      parts.add('child|' + row.get('childStatus') + '|' + row.get('total'));
+      LIMIT :childCap
+    ];
+    if (children.size() > maxChildren) {
+      return UNKNOWN_INPUTS;
+    }
+    for (Workflow_Instance__c child : children) {
+      parts.add('child|' + child.Status__c);
     }
     // JSON keeps each part apart: no part can look like two parts.
     return WorkflowDecisionFingerprint.digest(JSON.serialize(parts));

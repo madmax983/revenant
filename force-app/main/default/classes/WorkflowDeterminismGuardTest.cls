@@ -240,6 +240,35 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
+  static void captureInputsGivesUnknownOverTheChildCap() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      WorkflowDeterminismGuard.maxChildren = 1;
+      Workflow_Instance__c parent = insertInstance();
+      List<Workflow_Instance__c> children = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 2; i++) {
+        children.add(
+          new Workflow_Instance__c(
+            Workflow_Name__c = 'GuardTestChild',
+            Status__c = 'Running',
+            Correlation_Key__c = 'GuardCap-' +
+              i +
+              '-' +
+              Crypto.getRandomInteger(),
+            Parent_Instance__c = parent.Id
+          )
+        );
+      }
+      insert children;
+      Assert.areEqual(
+        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
+        digestOf(rowContext(parent.Id), contextFor(parent.Id)),
+        'Children over the cap give unknown inputs'
+      );
+    }
+  }
+
+  @IsTest
   static void captureInputsTellsNullFromTheTextNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;

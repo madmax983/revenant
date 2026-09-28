@@ -22,8 +22,8 @@ decision.
    reads it in the existing static config query.
 2. When the mode is on, digest the step inputs before `execute()`: the
    stored step input, previous output and step state, the attempt, the
-   timeout-resume flag, the live signals (Id and status) and the child status
-   counts. Two SOQL queries.
+   timeout-resume flag, the live signals (Id and status) and the child
+   statuses. Two SOQL queries.
 3. Build a decision text from routing data only. Each value is JSON. Sort
    split and child targets.
 4. Record a wait decision and its inputs digest in the new field
@@ -32,11 +32,14 @@ decision.
    it is a divergence. `RETRY`, `SLEEP`, `YIELD` and a thrown error are not
    decisions: keep the record. Clear the record when the inputs changed and
    the decision is not a wait.
-6. Handle a divergence in the outcome seam, after the re-lock and the stale
+6. Before a divergence, read the inputs again. An input that arrived during
+   the run makes the new decision legal. Over 2000 live signals or children,
+   the inputs are unknown: no compare, keep the record.
+7. Handle a divergence in the outcome seam, after the re-lock and the stale
    guard, before the dispatch. Fail the step row, write an Error log row
    (`StepNonDeterminism`) and call `failWorkflowInstance` with the new
    category `STEP_NON_DETERMINISM`.
-7. Clear the record on an operator retry, a parallel re-drive, a
+8. Clear the record on an operator retry, a parallel re-drive, a
    definition-change release and a run with the mode off. A resume payload
    is step state, so it changes the inputs. A resume without a payload keeps
    the record.

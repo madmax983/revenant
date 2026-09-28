@@ -51,6 +51,8 @@ Thus, the only durable decision that a later run can contradict is a wait decisi
 | Two different child lists give the same text. | Each value is JSON. |
 | A new signal arrives and the step moves on. The guard fails it. | The signal status counts change. The guard does not compare. |
 | A signal arrives during the run. The guard records it but the step did not see it. | Take the inputs digest before `execute()`. The next run then has other inputs, so no compare. |
+| A signal arrives after the digest, and the step sees it. | Before a divergence, read the inputs again. When they changed, do not report. |
+| The child query counts all children. | Read max 2000 children. Over the cap: unknown inputs. |
 | A parallel branch claims signals, then suspends. | The suspend handler rolls back the claim. Counts are equal again. This is correct: nothing new arrived. |
 | A sibling branch consumes a signal. | Counts change. No compare. Safe. |
 | A `once()` value makes the second run differ. | Captures are not inputs. The captured value is the same, so the decision is the same. |

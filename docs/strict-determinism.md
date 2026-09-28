@@ -46,8 +46,9 @@ When the mode is off, the engine does no SOQL and no extra DML statement for it.
 
 When the mode is on, each step run costs:
 
-- Two SOQL queries: the live signals, and the child status counts.
-- One query row for each live signal (`Received` or `Processing`), max 2001, and each child instance, also a closed child.
+- Two SOQL queries: the live signals, and the child statuses.
+- One query row for each live signal (`Received` or `Processing`) and each child instance, also a closed child. Max 2001 rows for each query.
+- Before it reports a divergence, the engine reads the inputs again (two more SOQL queries).
 - One SHA-256 digest of the stored inputs.
 
 ## What the engine records
@@ -67,7 +68,7 @@ The step inputs are:
 - `ctx.attempt` and the timeout-resume flag.
 - The live signals of the instance (`Received` or `Processing`): Id and status. Signals carry approvals and child outcomes.
 - Each value is a typed JSON value. Thus a null value and the text `null` are different inputs.
-- The status counts of the child instances.
+- The statuses of the child instances.
 
 Captures are not inputs. A `once()` value is stable by contract.
 
@@ -145,4 +146,5 @@ Correct the step code before you retry. A deploy of changed step code can change
 - The engine does not check `compensate()`.
 - With a payload codec, each wait that writes step state writes new stored state. The engine then compares less often.
 - An approval, child or timed wait writes step state. The first duplicate run after it has new inputs. The engine compares from the second duplicate run.
-- An instance with more than 2000 live signals has unknown inputs. The engine does not compare that run and keeps the record.
+- An instance with more than 2000 live signals or 2000 children has unknown inputs. The engine does not compare that run and keeps the record.
+- An input can arrive during the run. Before it reports a divergence, the engine reads the inputs again. When they changed, it does not report.

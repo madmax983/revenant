@@ -219,6 +219,15 @@ public class WorkflowStrictDeterminismTest {
             null
           );
         }
+        when 'raceSignal' {
+          // A signal arrives after the input snapshot, then the step sees it.
+          insert new Workflow_Signal__c(
+            Workflow_Instance__c = ctx.workflowInstanceId,
+            Signal_Name__c = 'Late',
+            Status__c = 'Received'
+          );
+          return StepResult.complete(OTHER, null);
+        }
         when 'captured' {
           String tier = (String) ctx.captures()
             .once('tier', new TierProducer());
@@ -650,6 +659,24 @@ public class WorkflowStrictDeterminismTest {
         'Completed',
         load(instId).Status__c,
         'A resume payload lets the step make a new decision'
+      );
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
+    }
+  }
+
+  @IsTest
+  static void signalAfterTheSnapshotIsNotDivergence() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRun(GateWorkflow.class.getName(), 'wait');
+      mode = 'raceSignal';
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+
+      Assert.areEqual(
+        1,
+        rows(instId, OTHER).size(),
+        'A signal that arrives during the run allows a new decision'
       );
       Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
     }
