@@ -25,6 +25,40 @@
  * AcquireTokenStep instead of using the engine's built-in RetryPolicy.
  */
 public inherited sharing class ThrottledCalloutWorkflowExample {
+  /** @description Rate_Limit_Config__mdt DeveloperName for the bucket. */
+  public static final String INTEGRATION_KEY = 'ThrottledService';
+  /** @description API endpoint. Use a Named Credential in production. */
+  public static final String ENDPOINT = 'https://httpbin.org/post';
+  /** @description Sleep for an HTTP 429 with no valid Retry-After value. */
+  public static final Integer DEFAULT_RETRY_AFTER_SECONDS = 60;
+  /** @description Longest sleep for one HTTP 429. */
+  public static final Integer MAX_RETRY_AFTER_SECONDS = 3600;
+
+  /** @description Sends the HTTP request. Tests replace it with a fake. */
+  public interface Transport {
+    /**
+     * @description Sends one request.
+     * @param req The request to send.
+     * @return The response.
+     */
+    HttpResponse send(HttpRequest req);
+  }
+
+  /** @description Production transport. It makes a real callout. */
+  public class HttpTransport implements Transport {
+    /**
+     * @description Sends the request with Http.send.
+     * @param req The request to send.
+     * @return The response.
+     */
+    public HttpResponse send(HttpRequest req) {
+      return new Http().send(req);
+    }
+  }
+
+  @TestVisible
+  private static Transport transport = new HttpTransport();
+
   public static Integer calloutAttempts = 0;
   public static Integer successfulCallouts = 0;
   private static Set<String> processedKeys = new Set<String>();

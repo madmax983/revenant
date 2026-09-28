@@ -1215,7 +1215,7 @@ private class PayloadCodecRoundTripTest {
   // limiter state.
   private static Snapshot runThrottledCallout(PayloadCodec codec, String key) {
     useCodec(codec);
-    ThrottledCalloutWorkflowExample.reset();
+    MockThrottledApi.reset();
     RateLimiter.mockConfigs.put(
       'ThrottledService',
       (Rate_Limit_Config__mdt) JSON.deserialize(
@@ -1251,8 +1251,8 @@ private class PayloadCodecRoundTripTest {
 
     harness.disableAutoTimeSkip = false;
     WorkflowTestHarness.Result done = harness.drive();
-    System.assertEquals(2, ThrottledCalloutWorkflowExample.successfulCallouts);
-    System.assertEquals(2, ThrottledCalloutWorkflowExample.calloutAttempts);
+    System.assertEquals(2, MockThrottledApi.effects);
+    System.assertEquals(2, MockThrottledApi.calls);
     return snap(done, key, new Set<String>(), new List<Id>());
   }
 
