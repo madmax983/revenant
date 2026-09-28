@@ -565,4 +565,55 @@ private class AsyncCapacityEvaluatorTest {
     );
     Assert.areEqual(true, result.get('chainAtRisk'));
   }
+
+  @IsTest
+  static void unsizedBatchMakesALowerBound() {
+    // One batch job in Holding. Its start method did not run, so its size is not known.
+    AsyncCapacityEvaluator.Reading r = reading(1000, 250000, 1);
+    r.pendingExecutions = 1;
+    r.unsizedBatches = 1;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Map<String, Object> backlog = metricFor(
+      result,
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(true, backlog.get('lowerBound'));
+    Assert.areEqual(false, backlog.get('capped'));
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      backlog.get('status'),
+      'A batch with no size cannot prove Healthy'
+    );
+    Assert.areEqual(false, result.get('chainAtRisk'));
+    Assert.areEqual(
+      1,
+      ((Map<String, Object>) result.get('jobCounts')).get('unsizedBatches')
+    );
+  }
+
+  @IsTest
+  static void unsizedBatchWithCriticalLowerBoundStaysCritical() {
+    AsyncCapacityEvaluator.Reading r = reading(249000, 250000, 1);
+    r.pendingExecutions = 1000;
+    r.unsizedBatches = 1;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_CRITICAL,
+      metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status')
+    );
+    Assert.areEqual(true, result.get('chainAtRisk'));
+  }
+
+  @IsTest
+  static void exactReadIsNotALowerBound() {
+    Map<String, Object> backlog = metricFor(
+      AsyncCapacityEvaluator.evaluate(reading(1000, 250000, 0), defaults()),
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(false, backlog.get('lowerBound'));
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_HEALTHY,
+      backlog.get('status')
+    );
+  }
 }

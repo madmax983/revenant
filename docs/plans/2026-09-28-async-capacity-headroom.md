@@ -160,3 +160,12 @@ Four review agents (Apex, LWC, security and acceptance criteria, docs):
   panel gave it a normal status. A real Critical backlog showed Healthy.
 - Fix: a capped read below the critical threshold gives Unknown. At or above
   it, Critical stays. The panel shows the percent as "≥ n%".
+
+## Review Round 5 (Codex)
+
+- Finding: a batch job in `Holding` or `Queued` has `TotalJobItems` = 0. It
+  counts 1 execution, but it can later need many. The panel can show
+  Healthy.
+- Fix: a batch job with no size makes the value a lower bound, the same as a
+  capped read. Only Critical is proven. The panel shows how many batch jobs
+  have no size.

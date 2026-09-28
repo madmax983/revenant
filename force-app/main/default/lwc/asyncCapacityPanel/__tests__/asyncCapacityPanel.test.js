@@ -419,4 +419,41 @@ describe("c-async-capacity-panel", () => {
     const element = await render(envelope());
     expect(q(element, "capacity-metric").textContent).not.toContain("≥");
   });
+
+  it("marks a lower-bound metric percent when batch jobs have no size", async () => {
+    const element = await render(
+      envelope({
+        status: "UNKNOWN",
+        metrics: [
+          {
+            key: "BACKLOG",
+            label: "Pending executions vs executions left",
+            used: 1,
+            limit: 249000,
+            percent: 0,
+            status: "UNKNOWN",
+            capped: false,
+            lowerBound: true,
+          },
+        ],
+        jobCounts: {
+          holding: 1,
+          queued: 0,
+          processing: 0,
+          total: 1,
+          pendingExecutions: 1,
+          capped: false,
+          unsizedBatches: 1,
+          flexQueueLimit: 100,
+        },
+      }),
+    );
+    expect(q(element, "capacity-metric").textContent).toContain("≥ 0%");
+    expect(q(element, "capacity-unsized").textContent).toContain("1 batch job");
+  });
+
+  it("hides the unsized note when all batch jobs have a size", async () => {
+    const element = await render(envelope());
+    expect(q(element, "capacity-unsized")).toBeNull();
+  });
 });

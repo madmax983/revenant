@@ -87,6 +87,8 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer pendingExecutions;
     /** @description True when the job read stopped at its row cap. */
     public Boolean jobsCapped = false;
+    /** @description Batch jobs that did not start, so their chunk count is not known. */
+    public Integer unsizedBatches = 0;
   }
 
   /**
@@ -168,11 +170,11 @@ public inherited sharing class AsyncCapacityEvaluator {
    */
   public static String worst(List<String> statuses) {
     String result = null;
+    Integer highest = -1;
     for (String s : statuses) {
-      if (!RANK.containsKey(s)) {
-        continue;
-      }
-      if (result == null || RANK.get(s) > RANK.get(result)) {
+      Integer rank = RANK.get(s);
+      if (rank != null && rank > highest) {
+        highest = rank;
         result = s;
       }
     }
@@ -198,6 +200,7 @@ public inherited sharing class AsyncCapacityEvaluator {
       executionsLeft(r)
     );
     backlog.put('capped', r.jobsCapped);
+    backlog.put('lowerBound', isLowerBound(r));
     List<Map<String, Object>> metrics = new List<Map<String, Object>>{
       daily,
       backlog
@@ -205,8 +208,8 @@ public inherited sharing class AsyncCapacityEvaluator {
     List<String> statuses = new List<String>();
     for (Map<String, Object> m : metrics) {
       String status = classify((Decimal) m.get('percent'), t);
-      // A capped read gives a lower bound. Only Critical is proven.
-      if (m.get('capped') == true && status != STATUS_CRITICAL) {
+      // A lower bound can prove Critical only.
+      if (m.get('lowerBound') == true && status != STATUS_CRITICAL) {
         status = STATUS_UNKNOWN;
       }
       m.put('status', status);
@@ -240,6 +243,12 @@ public inherited sharing class AsyncCapacityEvaluator {
   // Holding + Queued + Processing. Null when the job read failed.
   private static Integer pendingJobs(Reading r) {
     return r.jobsKnown ? r.holding + r.queued + r.processing : null;
+  }
+
+  // True when pending executions is a lower bound: the read hit its cap, or a batch
+  // job did not start and its chunk count is not known.
+  private static Boolean isLowerBound(Reading r) {
+    return r.jobsCapped || r.unsizedBatches > 0;
   }
 
   // Executions the pending jobs need. Falls back to the job count.
@@ -279,6 +288,7 @@ public inherited sharing class AsyncCapacityEvaluator {
         'total' => null,
         'pendingExecutions' => null,
         'capped' => false,
+        'unsizedBatches' => null,
         'flexQueueLimit' => FLEX_QUEUE_LIMIT
       };
     }
@@ -290,6 +300,7 @@ public inherited sharing class AsyncCapacityEvaluator {
       'total' => total,
       'pendingExecutions' => pendingExecutions(r),
       'capped' => r.jobsCapped,
+      'unsizedBatches' => r.unsizedBatches,
       'flexQueueLimit' => FLEX_QUEUE_LIMIT
     };
   }

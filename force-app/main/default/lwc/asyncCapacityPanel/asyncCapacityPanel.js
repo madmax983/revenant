@@ -124,9 +124,11 @@ export default class AsyncCapacityPanel extends LightningElement {
         label: m.label,
         isElastic: m.elastic === true,
         usageLabel: `${formatCount(m.used)} / ${formatCount(m.limit)}`,
-        // A capped read gives a lower bound.
+        // A capped read or a batch job with no size gives a lower bound.
         percentLabel: hasPercent
-          ? `${m.capped === true ? "≥ " : ""}${m.percent}%`
+          ? `${m.lowerBound === true || m.capped === true ? "≥ " : ""}${
+              m.percent
+            }%`
           : MISSING,
         barValue: hasPercent ? Math.min(Number(m.percent), 100) : 0,
         statusLabel: status.label,
@@ -158,6 +160,16 @@ export default class AsyncCapacityPanel extends LightningElement {
 
   get isJobsCapped() {
     return !!(this.data.jobCounts && this.data.jobCounts.capped === true);
+  }
+
+  get unsizedBatchesLabel() {
+    const count = Number((this.data.jobCounts || {}).unsizedBatches) || 0;
+    if (count <= 0) {
+      return null;
+    }
+    const jobs =
+      count === 1 ? "1 batch job" : `${formatCount(count)} batch jobs`;
+    return `${jobs} did not start. The chunk count is not known, so the pending executions are a lower bound.`;
   }
 
   get thresholdLabel() {

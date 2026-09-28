@@ -103,6 +103,7 @@ public inherited sharing class WorkflowAsyncCapacityService {
         JOB_PROCESSING => 0
       };
       Integer executions = 0;
+      Integer unsized = 0;
       Integer counted = Math.min(jobs.size(), JOB_SCAN_LIMIT);
       for (Integer i = 0; i < counted; i++) {
         AsyncApexJob job = jobs[i];
@@ -112,12 +113,16 @@ public inherited sharing class WorkflowAsyncCapacityService {
           job.TotalJobItems,
           job.JobItemsProcessed
         );
+        if (isUnsizedBatch(job.JobType, job.TotalJobItems)) {
+          unsized++;
+        }
       }
       r.holding = byStatus.get(JOB_HOLDING);
       r.queued = byStatus.get(JOB_QUEUED);
       r.processing = byStatus.get(JOB_PROCESSING);
       r.pendingExecutions = executions;
       r.jobsCapped = jobs.size() > JOB_SCAN_LIMIT;
+      r.unsizedBatches = unsized;
       r.jobsKnown = true;
     } catch (Exception ex) {
       r.jobsKnown = false;
@@ -148,6 +153,12 @@ public inherited sharing class WorkflowAsyncCapacityService {
       return Math.max(total - done, 0) + 1;
     }
     return 1;
+  }
+
+  // A batch job whose start method did not run has TotalJobItems 0 or null. Its chunk
+  // count is not known, so its executions are a lower bound.
+  private static Boolean isUnsizedBatch(String jobType, Integer totalItems) {
+    return jobType == 'BatchApex' && (totalItems == null || totalItems == 0);
   }
 
   // Custom metadata getInstance costs no SOQL.

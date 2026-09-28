@@ -64,6 +64,9 @@
                         The counts include the first 2,000 jobs only. The real values are higher.
                     </div>
                 </template>
+                <template if:true={unsizedBatchesLabel}>
+                    <div data-id="capacity-unsized" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{unsizedBatchesLabel}</div>
+                </template>
                 <div data-id="capacity-action" class="slds-text-body_small slds-m-top_x-small">{actionText}</div>
                 <div data-id="capacity-thresholds" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{thresholdLabel}</div>
                 <template if:true={isInvalidConfig}>
