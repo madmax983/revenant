@@ -8,7 +8,16 @@
  * SOQL run in system mode so the engine can drive workflows regardless of the
  * invoking user's object permissions.
  */
-public inherited sharing class WorkflowEngine {
+global inherited sharing class WorkflowEngine {
+  /**
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
+   */
+  private WorkflowEngine() {
+    // No state to set.
+  }
+
   public static Set<Id> resumedInstanceIds = new Set<Id>();
   public static Boolean disableQueueableInTest = false;
   public static Integer watchdogDelayMinutes = 10;
@@ -204,18 +213,18 @@ public inherited sharing class WorkflowEngine {
    * operations. Distinguishes engine-originated errors from arbitrary step
    * exceptions.
    */
-  public class WorkflowException extends Exception {
+  global class WorkflowException extends Exception {
   }
 
   /**
    * Outcome of a get-or-start admission decision. Distinguishes a brand-new
    * instance from an existing instance returned for a deduplicated redelivery.
    */
-  public class StartResult {
-    public Id instanceId;
+  global class StartResult {
+    global Id instanceId { get; private set; }
     // true when a new instance was inserted; false when an existing instance
     // was returned (deduped active or recently-terminal redelivery).
-    public Boolean isNew;
+    global Boolean isNew { get; private set; }
 
     /**
      * @description Builds an admission result for an existing (deduplicated)
@@ -245,26 +254,26 @@ public inherited sharing class WorkflowEngine {
    * read-only to callers (private setters); the engine's read layer populates
    * them once via the all-arguments constructor.
    */
-  public class WorkflowStatus {
+  global class WorkflowStatus {
     /** @description Salesforce Id of the workflow instance. */
-    public Id instanceId { get; private set; }
+    global Id instanceId { get; private set; }
     /** @description Developer name of the workflow definition. */
-    public String definitionName { get; private set; }
+    global String definitionName { get; private set; }
     /** @description Correlation key the instance was started with. */
-    public String correlationKey { get; private set; }
+    global String correlationKey { get; private set; }
     /** @description Current lifecycle status of the instance. */
-    public String status { get; private set; }
+    global String status { get; private set; }
     /** @description True when the status is a terminal outcome. */
-    public Boolean isTerminal { get; private set; }
+    global Boolean isTerminal { get; private set; }
     /** @description Failure message for a failed instance; null otherwise. */
-    public String errorMessage { get; private set; }
+    global String errorMessage { get; private set; }
     /**
      * @description Fully rehydrated output for terminal instances; null for
      * in-flight instances.
      */
-    public String output { get; private set; }
+    global String output { get; private set; }
     /** @description Causation Id linking this run to the event that caused it. */
-    public String causationId { get; private set; }
+    global String causationId { get; private set; }
 
     /**
      * @description Builds a fully-populated status DTO from a queried instance
@@ -293,7 +302,7 @@ public inherited sharing class WorkflowEngine {
 
   /**
    * Stable read-only DTO for a single step execution in an instance's timeline.
-   * A forever-public API contract: v1 is metadata-only (no per-step input/output
+   * A stable in-package contract (not global; see docs/global-api.md): v1 is metadata-only (no per-step input/output
    * payload bodies). All fields are read-only to callers (private setters); the
    * read layer populates them once via the constructor.
    */
@@ -449,7 +458,7 @@ public inherited sharing class WorkflowEngine {
    * @param input start input payload passed to the first step
    * @return Id of the new or deduplicated existing instance
    */
-  public static Id start(
+  global static Id start(
     String workflowName,
     String correlationKey,
     Object input
@@ -463,7 +472,7 @@ public inherited sharing class WorkflowEngine {
    * @param request the start request describing the instance to get-or-start
    * @return Id of the new or deduplicated existing instance
    */
-  public static Id start(StartRequest request) {
+  global static Id start(StartRequest request) {
     return WorkflowStartService.startOne(request);
   }
 
@@ -475,7 +484,7 @@ public inherited sharing class WorkflowEngine {
    * @param input start input payload passed to the first step
    * @return a StartResult carrying the instance Id and whether it was newly created
    */
-  public static StartResult startOrGet(
+  global static StartResult startOrGet(
     String workflowName,
     String correlationKey,
     Object input
@@ -493,7 +502,7 @@ public inherited sharing class WorkflowEngine {
    * @param request the start request describing the instance to get-or-start
    * @return a StartResult carrying the instance Id and whether it was newly created
    */
-  public static StartResult startOrGet(StartRequest request) {
+  global static StartResult startOrGet(StartRequest request) {
     return WorkflowStartService.startOrGetOne(request);
   }
 
@@ -503,14 +512,14 @@ public inherited sharing class WorkflowEngine {
    * input (as an Object or pre-serialized JSON), and optional parent reference,
    * searchable attributes and causation id.
    */
-  public class StartRequest {
+  global class StartRequest {
     public String workflowName;
     public String correlationKey;
     public Object input;
     public String inputJson;
     public Id parentInstanceId;
     public Map<String, String> attributes;
-    public String causationId;
+    global String causationId;
 
     /**
      * @description Builds a minimal start request.
@@ -518,7 +527,7 @@ public inherited sharing class WorkflowEngine {
      * @param correlationKey dedup/correlation key
      * @param input start input payload
      */
-    public StartRequest(
+    global StartRequest(
       String workflowName,
       String correlationKey,
       Object input
@@ -533,7 +542,7 @@ public inherited sharing class WorkflowEngine {
      * @param attributesArg searchable key/value attributes
      * @return this request, for call chaining
      */
-    public StartRequest withAttributes(Map<String, String> attributesArg) {
+    global StartRequest withAttributes(Map<String, String> attributesArg) {
       this.attributes = attributesArg;
       return this;
     }
@@ -584,7 +593,7 @@ public inherited sharing class WorkflowEngine {
    * correlation key or Id and carries the signal name, payload and optional
    * dedup/idempotency keys for effectively-once delivery.
    */
-  public class SignalRequest {
+  global class SignalRequest {
     public String keyOrId;
     public String signalName;
     public String payload;
@@ -597,7 +606,7 @@ public inherited sharing class WorkflowEngine {
      * @param signalName name of the signal
      * @param payload signal payload
      */
-    public SignalRequest(String keyOrId, String signalName, String payload) {
+    global SignalRequest(String keyOrId, String signalName, String payload) {
       this.keyOrId = keyOrId;
       this.signalName = signalName;
       this.payload = payload;
@@ -608,7 +617,7 @@ public inherited sharing class WorkflowEngine {
      * @param dedupKeyArg routing-level dedup key
      * @return this request, for call chaining
      */
-    public SignalRequest withDedupKey(String dedupKeyArg) {
+    global SignalRequest withDedupKey(String dedupKeyArg) {
       this.dedupKey = dedupKeyArg;
       return this;
     }
@@ -618,7 +627,7 @@ public inherited sharing class WorkflowEngine {
      * @param idempotencyKeyArg per-delivery idempotency key
      * @return this request, for call chaining
      */
-    public SignalRequest withIdempotencyKey(String idempotencyKeyArg) {
+    global SignalRequest withIdempotencyKey(String idempotencyKeyArg) {
       this.idempotencyKey = idempotencyKeyArg;
       return this;
     }
@@ -670,7 +679,7 @@ public inherited sharing class WorkflowEngine {
    * @param requests the start requests to process
    * @return instance Ids index-aligned with requests (null per null request)
    */
-  public static List<Id> start(List<StartRequest> requests) {
+  global static List<Id> start(List<StartRequest> requests) {
     return WorkflowStartService.startBulk(requests);
   }
 
@@ -681,7 +690,7 @@ public inherited sharing class WorkflowEngine {
    * @param requests the start requests to process
    * @return StartResults index-aligned with requests (null per null request)
    */
-  public static List<StartResult> startOrGet(List<StartRequest> requests) {
+  global static List<StartResult> startOrGet(List<StartRequest> requests) {
     return WorkflowStartService.startOrGetBulk(requests);
   }
 
@@ -830,7 +839,7 @@ public inherited sharing class WorkflowEngine {
    * @param signalName name of the signal to deliver
    * @param payload signal payload
    */
-  public static void signal(String keyOrId, String signalName, String payload) {
+  global static void signal(String keyOrId, String signalName, String payload) {
     WorkflowSignalRouter.routeSignalRequest(
       new SignalRequest(keyOrId, signalName, payload)
     );
@@ -847,7 +856,7 @@ public inherited sharing class WorkflowEngine {
    * @param req the signal request (keyOrId, signalName, payload and optional
    * idempotencyKey); when idempotencyKey is null, at-least-once behavior applies
    */
-  public static void signal(SignalRequest req) {
+  global static void signal(SignalRequest req) {
     WorkflowSignalRouter.routeSignalRequest(req);
   }
 
@@ -859,7 +868,7 @@ public inherited sharing class WorkflowEngine {
    * forward signals, insert the rows, then wake and enqueue.
    * @param requests the signal requests to deliver
    */
-  public static void signal(List<SignalRequest> requests) {
+  global static void signal(List<SignalRequest> requests) {
     WorkflowSignalBatch.routeSignalBatch(requests);
   }
 
@@ -868,7 +877,7 @@ public inherited sharing class WorkflowEngine {
    * jobs WITHOUT running saga compensations.
    * @param instanceId Id of the target instance to cancel (with its active descendants)
    */
-  public static void cancel(Id instanceId) {
+  global static void cancel(Id instanceId) {
     cancelInstance(instanceId, false);
   }
 
@@ -940,7 +949,7 @@ public inherited sharing class WorkflowEngine {
    * @description Filter + pagination criteria for
    * {@link WorkflowInstanceQuery#findInstances}. Every field is optional; an
    * all-null/empty criteria (or a null argument) matches all instances. This is a
-   * forever-public API contract, so the shape is deliberately minimal and each
+   * stable in-package contract (not global), so the shape is deliberately minimal and each
    * field's null/empty semantics are fixed here.
    */
   public class InstanceCriteria {
@@ -1011,7 +1020,7 @@ public inherited sharing class WorkflowEngine {
    * row returned by {@link WorkflowInstanceQuery#findInstances}. Deliberately omits
    * the heavy long-text payloads (`Input__c` / `Output__c` / `Progress__c`): fetch a
    * terminal instance's full output per-Id via
-   * {@link WorkflowStatusRead#getStatus}. A forever-public read contract; all fields
+   * {@link WorkflowStatusRead#getStatus}. A stable read contract; all fields
    * are read-only to callers (private setters), populated once via the projecting
    * constructor.
    */
@@ -1062,8 +1071,8 @@ public inherited sharing class WorkflowEngine {
    * the ordered summaries plus the keyset cursor for the next page. Callers page
    * until `hasMore` is false (equivalently, `nextCursor` is null). No exact total
    * is exposed: an unbounded, deeply-paged result set cannot be counted within a
-   * constant SOQL/heap budget, so callers walk pages instead. A forever-public
-   * contract; fields are read-only to callers (private setters).
+   * constant SOQL/heap budget, so callers walk pages instead. A stable in-package
+   * contract (not global); fields are read-only to callers (private setters).
    */
   public class InstancePage {
     /**
