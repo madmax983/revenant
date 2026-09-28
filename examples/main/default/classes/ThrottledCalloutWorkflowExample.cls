@@ -188,7 +188,8 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
 
   // HTTP 429: the API refuses more requests now. Sleep for Retry-After. Do not
   // fail. once() keeps the time of the first 429 across sleeps and retries.
-  // If the API still returns 429 after MAX_REMOTE_THROTTLE_SECONDS, fail.
+  // If the API still returns 429 after MAX_REMOTE_THROTTLE_SECONDS, fail. A
+  // sleep does not go past that deadline.
   private static StepResult remoteThrottle(StepContext ctx, HttpResponse res) {
     Long firstMs = Long.valueOf(
       (String) ctx.captures().once(FIRST_THROTTLE_KEY, new NowProducer())
@@ -199,7 +200,10 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
         'Throttled API returned HTTP 429 for ' + waitedSeconds + ' s'
       );
     }
-    return StepResult.sleep(retryAfterSeconds(res));
+    Long remaining = MAX_REMOTE_THROTTLE_SECONDS - waitedSeconds;
+    return StepResult.sleep(
+      Math.max(1, Math.min(retryAfterSeconds(res), remaining.intValue()))
+    );
   }
 
   /**
