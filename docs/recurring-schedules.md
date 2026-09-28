@@ -159,8 +159,8 @@ An enabled 0-slot schedule that does not fire within one sweep interval of
 its window shows as **Overdue**. A schedule whose `Last_Outcome__c` is
 `Error`, `Invalid cron` or `Invalid time zone` shows as **Last fire failed**.
 The manager's **Health** column and System Doctor show both. Each problem
-sends one alert when a `Workflow_Alert_Config__mdt` is set. A disabled
-schedule shows as **Paused** and is never reported. See
+sends one alert when an enabled `Workflow_Alert_Config__mdt` record exists.
+A disabled schedule shows as **Disabled**. The engine never reports it. See
 [schedule-health.md](schedule-health.md).
 
 ## Disabling / deleting a schedule

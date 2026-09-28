@@ -220,8 +220,13 @@ private class ScheduleHealthTest {
   @IsTest
   static void springForwardGivesNoFalsePositive() {
     // "0 2 * * *" in New York on 2026-03-08: 02:00 local does not exist.
-    // The engine fires at the gap boundary, 03:00 EDT = 07:00 UTC.
-    Datetime cursor = Datetime.newInstanceGmt(2026, 3, 8, 7, 0, 0);
+    // The engine (#109) fires at the gap boundary, 03:00 EDT = 07:00 UTC.
+    Datetime cursor = SalesforceCronTranslator.nextWindow(
+      '0 2 * * *',
+      Datetime.newInstanceGmt(2026, 3, 7, 7, 0, 0),
+      'America/New_York'
+    );
+    Assert.areEqual(Datetime.newInstanceGmt(2026, 3, 8, 7, 0, 0), cursor);
     Workflow_Schedule__c sched = row(
       new Map<String, Object>{
         'Cron_Expression__c' => '0 2 * * *',
@@ -239,8 +244,13 @@ private class ScheduleHealthTest {
   @IsTest
   static void fallBackUsesRealElapsedTime() {
     // "30 1 * * *" in New York on 2026-11-01: 01:30 occurs two times. The
-    // engine fires on the first (01:30 EDT = 05:30 UTC).
-    Datetime cursor = Datetime.newInstanceGmt(2026, 11, 1, 5, 30, 0);
+    // engine (#109) fires on the first (01:30 EDT = 05:30 UTC).
+    Datetime cursor = SalesforceCronTranslator.nextWindow(
+      '30 1 * * *',
+      Datetime.newInstanceGmt(2026, 10, 31, 5, 30, 0),
+      'America/New_York'
+    );
+    Assert.areEqual(Datetime.newInstanceGmt(2026, 11, 1, 5, 30, 0), cursor);
     Workflow_Schedule__c sched = row(
       new Map<String, Object>{
         'Cron_Expression__c' => '30 1 * * *',
@@ -297,6 +307,63 @@ private class ScheduleHealthTest {
     Assert.areEqual('Invalid cron', m.get('lastOutcome'));
     Assert.areEqual(T0, m.get('nextFireWindow'));
     Assert.areEqual(30, m.get('lapsedMinutes'));
+  }
+
+  @IsTest
+  static void windowAfterTheLastSweepIsNotOverdue() {
+    Workflow_Schedule__c sched = row(
+      new Map<String, Object>{
+        'Next_Fire_Window__c' => T0,
+        'LastModifiedDate' => T0.addHours(-1)
+      }
+    );
+    Datetime now = T0.addMinutes(15);
+
+    // No sweep ran after the window: the next sweep can still fire it.
+    Assert.isFalse(
+      ScheduleHealth.assess(
+          sched,
+          new ScheduleHealthClock(now, GRACE, T0.addMinutes(-1))
+        )
+        .overdue
+    );
+    // A sweep ran after the window and did not fire it.
+    Assert.isTrue(
+      ScheduleHealth.assess(
+          sched,
+          new ScheduleHealthClock(now, GRACE, T0.addMinutes(11))
+        )
+        .overdue
+    );
+  }
+
+  @IsTest
+  static void readClockUsesTheLastSweepOnlyWhenHealthy() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = GRACE;
+      insert new Watchdog_Liveness__c(
+        SetupOwnerId = UserInfo.getOrganizationId(),
+        Last_Sweep_At__c = T0,
+        Cadence_Minutes__c = GRACE
+      );
+
+      WorkflowEngine.mockNow = T0.addMinutes(5);
+      ScheduleHealthClock healthy = ScheduleHealthClock.forRead();
+      Assert.areEqual(T0, healthy.sweptAt);
+      Assert.areEqual(GRACE, healthy.graceMinutes);
+
+      WorkflowEngine.mockNow = T0.addHours(2);
+      ScheduleHealthClock stale = ScheduleHealthClock.forRead();
+      Assert.areEqual(T0.addHours(2), stale.sweptAt, 'STALE uses now');
+    }
+  }
+
+  @IsTest
+  static void clockTreatsBlankValuesSafely() {
+    ScheduleHealthClock clock = new ScheduleHealthClock(T0, null, null);
+
+    Assert.areEqual(0, clock.graceMinutes);
+    Assert.areEqual(T0, clock.sweptAt);
   }
 
   // ── SOQL finder and summary ───────────────────────────────────────────
@@ -366,8 +433,7 @@ private class ScheduleHealthTest {
       insertMixedSchedules();
 
       List<ScheduleHealth.Assessment> found = ScheduleHealth.findUnhealthy(
-        System.now().addMinutes(30),
-        GRACE
+        new ScheduleHealthClock(System.now().addMinutes(30), GRACE, null)
       );
 
       Map<String, String> statusByName = new Map<String, String>();
@@ -397,7 +463,9 @@ private class ScheduleHealthTest {
       );
 
       Assert.isTrue(
-        ScheduleHealth.findUnhealthy(System.now().addMinutes(30), GRACE)
+        ScheduleHealth.findUnhealthy(
+            new ScheduleHealthClock(System.now().addMinutes(30), GRACE, null)
+          )
           .isEmpty()
       );
     }
@@ -421,10 +489,49 @@ private class ScheduleHealthTest {
   }
 
   @IsTest
+  static void summaryHidesWindowsThatNoSweepSaw() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = GRACE;
+      insertSchedule(
+        'HNotSwept',
+        new Map<String, Object>{
+          'Next_Fire_Window__c' => System.now().addHours(-2)
+        }
+      );
+      // The last sweep ran before the row was saved.
+      insert new Watchdog_Liveness__c(
+        SetupOwnerId = UserInfo.getOrganizationId(),
+        Last_Sweep_At__c = System.now().addMinutes(-1),
+        Cadence_Minutes__c = GRACE
+      );
+      WorkflowEngine.mockNow = System.now().addMinutes(15);
+
+      Assert.areEqual(0, ScheduleHealth.summary().get('overdueCount'));
+    }
+  }
+
+  @IsTest
+  static void summaryMarksACutList() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = GRACE;
+      insertMixedSchedules();
+      WorkflowEngine.mockNow = System.now().addMinutes(30);
+      ScheduleHealth.maxDisplayRows = 1;
+
+      Map<String, Object> summary = ScheduleHealth.summary();
+
+      Assert.areEqual(true, summary.get('truncated'));
+      Assert.areEqual(1, ((List<Object>) summary.get('rows')).size());
+      Assert.areEqual(1, summary.get('overdueCount'));
+      Assert.areEqual(1, summary.get('failedCount'));
+    }
+  }
+
+  @IsTest
   static void graceIsOneSweepInterval() {
     WorkflowEngine.watchdogDelayMinutes = 4;
 
-    Assert.areEqual(4, ScheduleHealth.graceMinutes());
+    Assert.areEqual(4, ScheduleHealthClock.sweepIntervalMinutes());
   }
 
   @IsTest

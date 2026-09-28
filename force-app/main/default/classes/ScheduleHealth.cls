@@ -4,12 +4,13 @@
  * does no SOQL and no DML. The dashboard, the schedule manager and
  * ScheduleHealthAlerter use the same rules.
  *
- * Overdue: enabled, not dedicated, and now − reference > one sweep
- * interval, and Last_Fired_Window__c is before Next_Fire_Window__c.
- * Reference = the later of Next_Fire_Window__c and LastModifiedDate. The
- * rule compares UTC instants, so DST and zone offsets have no effect.
- * Dedicated schedules are not checked for overdue: their CronTrigger uses
- * the time zone of the user who armed it, not Time_Zone__c.
+ * Overdue: enabled, not dedicated, Last_Fired_Window__c is before
+ * Next_Fire_Window__c, now − reference > one sweep interval, and a sweep
+ * ran at or after the reference. Reference = the later of
+ * Next_Fire_Window__c and LastModifiedDate. The rule compares UTC instants,
+ * so DST and zone offsets have no effect. Dedicated schedules are not
+ * checked for overdue: their CronTrigger uses the time zone of the user who
+ * armed it, not Time_Zone__c.
  *
  * Last fire failed: enabled, and Last_Outcome__c is a failure outcome.
  */
@@ -30,11 +31,18 @@ public inherited sharing class ScheduleHealth {
     'Invalid time zone'
   };
 
+  /** @description Fire log outcomes that end a failure streak. */
+  public static final Set<String> GOOD_OUTCOMES = new Set<String>{
+    'Started',
+    'Skipped'
+  };
+
   /** @description Maximum rows that findUnhealthy() reads. */
   public static final Integer MAX_ROWS = 200;
 
   /** @description Maximum rows that summary() returns for display. */
-  public static final Integer MAX_DISPLAY_ROWS = 50;
+  @TestVisible
+  private static Integer maxDisplayRows = 50;
 
   /**
    * @description Health of one schedule at one point in time.
@@ -42,7 +50,7 @@ public inherited sharing class ScheduleHealth {
   public class Assessment {
     /** @description The assessed schedule. */
     public Workflow_Schedule__c schedule;
-    /** @description OK, PAUSED, OVERDUE or FAILED. OVERDUE has priority over FAILED. */
+    /** @description OK, DISABLED, OVERDUE or FAILED. OVERDUE has priority over FAILED. */
     public String status = STATUS_OK;
     /** @description True when the schedule is overdue. */
     public Boolean overdue = false;
@@ -74,30 +82,9 @@ public inherited sharing class ScheduleHealth {
   }
 
   /**
-   * @description Returns the current time. Uses WorkflowEngine.mockNow when a
-   * test sets it.
-   * @return The evaluation time.
-   */
-  public static Datetime now() {
-    return WorkflowEngine.mockNow != null
-      ? WorkflowEngine.mockNow
-      : System.now();
-  }
-
-  /**
-   * @description Returns one sweep interval in minutes: the larger of the
-   * recorded and the configured watchdog cadence. Costs 0 SOQL.
-   * @return The grace period in minutes.
-   */
-  public static Integer graceMinutes() {
-    return WatchdogLiveness.evaluateNow().cadenceMinutes;
-  }
-
-  /**
-   * @description Assesses one schedule. Does no SOQL and no DML.
-   * @param sched The schedule. Needs Enabled__c, Dedicated_Slot__c,
-   * Next_Fire_Window__c, Last_Fired_Window__c, Last_Outcome__c and
-   * LastModifiedDate.
+   * @description Assesses one schedule with a sweep at "now". Does no SOQL
+   * and no DML.
+   * @param sched The schedule.
    * @param now The evaluation time.
    * @param graceMinutes One sweep interval in minutes.
    * @return The assessment.
@@ -107,6 +94,21 @@ public inherited sharing class ScheduleHealth {
     Datetime now,
     Integer graceMinutes
   ) {
+    return assess(sched, new ScheduleHealthClock(now, graceMinutes, now));
+  }
+
+  /**
+   * @description Assesses one schedule. Does no SOQL and no DML.
+   * @param sched The schedule. Needs Enabled__c, Dedicated_Slot__c,
+   * Next_Fire_Window__c, Last_Fired_Window__c, Last_Outcome__c and
+   * LastModifiedDate.
+   * @param clock The time values.
+   * @return The assessment.
+   */
+  public static Assessment assess(
+    Workflow_Schedule__c sched,
+    ScheduleHealthClock clock
+  ) {
     Assessment a = new Assessment();
     a.schedule = sched;
     if (sched.Enabled__c != true) {
@@ -115,9 +117,9 @@ public inherited sharing class ScheduleHealth {
     }
     a.lastFireFailed = FAILED_OUTCOMES.contains(sched.Last_Outcome__c);
     a.reference = reference(sched);
-    if (isOverdue(a, now, graceMinutes)) {
+    if (isOverdue(a, clock)) {
       a.overdue = true;
-      a.lapsedMinutes = ((now.getTime() - a.reference.getTime()) / 60000L)
+      a.lapsedMinutes = ((clock.now.getTime() - a.reference.getTime()) / 60000L)
         .intValue();
     }
     if (a.overdue) {
@@ -141,13 +143,14 @@ public inherited sharing class ScheduleHealth {
     return edited;
   }
 
-  private static Boolean isOverdue(
-    Assessment a,
-    Datetime now,
-    Integer graceMinutes
-  ) {
+  private static Boolean isOverdue(Assessment a, ScheduleHealthClock clock) {
     Workflow_Schedule__c sched = a.schedule;
-    if (sched.Dedicated_Slot__c == true || a.reference == null || now == null) {
+    if (
+      sched.Dedicated_Slot__c == true ||
+      a.reference == null ||
+      clock.now == null ||
+      a.reference > clock.sweptAt
+    ) {
       return false;
     }
     Datetime cursor = sched.Next_Fire_Window__c;
@@ -155,32 +158,27 @@ public inherited sharing class ScheduleHealth {
     if (cursor != null && fired != null && fired >= cursor) {
       return false;
     }
-    Long graceMs = 60000L * (graceMinutes == null ? 0 : graceMinutes);
-    return now.getTime() - a.reference.getTime() > graceMs;
+    Long graceMs = 60000L * clock.graceMinutes;
+    return clock.now.getTime() - a.reference.getTime() > graceMs;
   }
 
   /**
    * @description Reads the enabled schedules that can be overdue or failed,
    * then assesses each. Returns only the unhealthy ones. One SOQL query.
-   * @param now The evaluation time.
-   * @param graceMinutes One sweep interval in minutes.
+   * @param clock The time values.
    * @return Unhealthy assessments, oldest cursor first.
    */
-  public static List<Assessment> findUnhealthy(
-    Datetime now,
-    Integer graceMinutes
-  ) {
-    return keepUnhealthy(queryCandidates(now, graceMinutes), now, graceMinutes);
+  public static List<Assessment> findUnhealthy(ScheduleHealthClock clock) {
+    return keepUnhealthy(queryCandidates(clock), clock);
   }
 
   private static List<Assessment> keepUnhealthy(
     List<Workflow_Schedule__c> candidates,
-    Datetime now,
-    Integer graceMinutes
+    ScheduleHealthClock clock
   ) {
     List<Assessment> result = new List<Assessment>();
     for (Workflow_Schedule__c sched : candidates) {
-      Assessment a = assess(sched, now, graceMinutes);
+      Assessment a = assess(sched, clock);
       if (a.overdue || a.lastFireFailed) {
         result.add(a);
       }
@@ -190,10 +188,9 @@ public inherited sharing class ScheduleHealth {
 
   // The SOQL filter is a superset of the rules. assess() decides.
   private static List<Workflow_Schedule__c> queryCandidates(
-    Datetime now,
-    Integer graceMinutes
+    ScheduleHealthClock clock
   ) {
-    Datetime cutoff = now.addMinutes(-graceMinutes);
+    Datetime cutoff = clock.now.addMinutes(-clock.graceMinutes);
     Integer maxRows = MAX_ROWS;
     return [
       SELECT
@@ -223,31 +220,62 @@ public inherited sharing class ScheduleHealth {
 
   /**
    * @description Returns the System Doctor summary: counts, grace and up to
-   * MAX_DISPLAY_ROWS rows. One SOQL query.
+   * 50 rows. Uses ScheduleHealthClock.forRead(). One SOQL query.
    * @return Map with overdueCount, failedCount, graceMinutes, truncated and rows.
    */
   public static Map<String, Object> summary() {
-    Integer grace = graceMinutes();
-    Datetime evalAt = now();
-    List<Workflow_Schedule__c> candidates = queryCandidates(evalAt, grace);
-    List<Assessment> found = keepUnhealthy(candidates, evalAt, grace);
+    ScheduleHealthClock clock = ScheduleHealthClock.forRead();
+    List<Workflow_Schedule__c> candidates = queryCandidates(clock);
+    List<Assessment> found = keepUnhealthy(candidates, clock);
     Integer overdueCount = 0;
     Integer failedCount = 0;
     List<Map<String, Object>> rows = new List<Map<String, Object>>();
     for (Assessment a : found) {
       overdueCount += a.overdue ? 1 : 0;
       failedCount += a.lastFireFailed ? 1 : 0;
-      if (rows.size() < MAX_DISPLAY_ROWS) {
+      if (rows.size() < maxDisplayRows) {
         rows.add(a.toMap());
       }
     }
     return new Map<String, Object>{
       'overdueCount' => overdueCount,
       'failedCount' => failedCount,
-      'graceMinutes' => grace,
+      'graceMinutes' => clock.graceMinutes,
       'truncated' => candidates.size() >= MAX_ROWS ||
       found.size() > rows.size(),
       'rows' => rows
     };
+  }
+
+  /**
+   * @description Returns the time of the last Started or Skipped fire log for
+   * each failed schedule. One aggregate query, only when a failed schedule
+   * exists.
+   * @param found The assessments.
+   * @return Last good fire time by schedule Id.
+   */
+  public static Map<Id, Datetime> lastGoodFireBySchedule(
+    List<Assessment> found
+  ) {
+    Set<Id> failedIds = new Set<Id>();
+    for (Assessment a : found) {
+      if (a.lastFireFailed) {
+        failedIds.add(a.schedule.Id);
+      }
+    }
+    Map<Id, Datetime> result = new Map<Id, Datetime>();
+    if (failedIds.isEmpty()) {
+      return result;
+    }
+    for (AggregateResult row : [
+      SELECT Schedule__c sid, MAX(CreatedDate) lastGood
+      FROM Workflow_Log__c
+      WHERE Schedule__c IN :failedIds AND Outcome__c IN :GOOD_OUTCOMES
+      WITH SYSTEM_MODE
+      GROUP BY Schedule__c
+    ]) {
+      result.put((Id) row.get('sid'), (Datetime) row.get('lastGood'));
+    }
+    return result;
   }
 }

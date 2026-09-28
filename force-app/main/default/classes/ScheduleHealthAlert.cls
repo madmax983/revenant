@@ -78,14 +78,18 @@ public inherited sharing class ScheduleHealthAlert {
 
   /**
    * @description Builds a failed-fire alert. Key: schedule Id + outcome +
-   * last window. Each new failed window gives a new key.
+   * time of the last good fire. The key stays the same while the schedule
+   * keeps the same failure, so a failure streak sends one alert. A good fire
+   * starts a new streak.
    * @param a The assessment. a.lastFireFailed must be true.
    * @param config The resolved alert config.
+   * @param lastGoodFireAt Time of the last Started or Skipped fire log, or null.
    * @return The alert.
    */
   public static ScheduleHealthAlert forFailed(
     ScheduleHealth.Assessment a,
-    Workflow_Alert_Config__mdt config
+    Workflow_Alert_Config__mdt config,
+    Datetime lastGoodFireAt
   ) {
     ScheduleHealthAlert alert = new ScheduleHealthAlert(a, config);
     alert.overdue = false;
@@ -95,7 +99,7 @@ public inherited sharing class ScheduleHealthAlert {
       ':' +
       a.schedule.Last_Outcome__c +
       ':' +
-      millis(a.schedule.Last_Fired_Window__c);
+      millis(lastGoodFireAt);
     alert.message =
       describe(a.schedule) +
       ' last fire failed. Last outcome: ' +

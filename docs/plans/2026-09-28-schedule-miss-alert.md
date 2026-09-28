@@ -26,23 +26,23 @@ for each problem.
 
 ## Brainstorming (options)
 
-| #   | Idea                                                                              | Keep?                                                                   |
-| --- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| B1  | Pure classifier `ScheduleHealth` (0 SOQL, 0 DML).                                 | Yes. Dashboard, manager and alerter use the same rule.                  |
-| B2  | Overdue = now − cursor > one sweep interval.                                      | Yes. The AC gives this rule.                                            |
-| B3  | Use the later of the cursor and `LastModifiedDate` as the reference.              | Yes. A schedule enabled outside the UI gets one interval of grace.      |
-| B4  | A blank cursor uses `LastModifiedDate`.                                           | Yes. The sweep seeds a cursor in one interval. A blank one is a miss.   |
-| B5  | Include dedicated schedules in the overdue check.                                 | No. Their cursor is not in the zone of the `CronTrigger`. False alerts. |
-| B6  | Include dedicated schedules in the failed check.                                  | Yes. Their outcome field is correct.                                    |
-| B7  | Detect in the heartbeat, after Sweep 3.                                           | Yes. 0 new job slots. The sweep fires due rows first.                   |
-| B8  | Add a new scheduled detector.                                                     | No. The AC forbids a new slot.                                          |
-| B9  | Keep dedup on the schedule row.                                                   | No. A write changes `LastModifiedDate` and races the sweep.             |
-| B10 | Claim each problem with a `Workflow_Log__c` row and a unique key.                 | Yes. One alert per problem, also under a race.                          |
-| B11 | Key overdue by schedule + cursor; key failed by schedule + outcome + last window. | Yes. A new window or a new failure gives a new key.                     |
-| B12 | Config: workflow `DeveloperName`, then `Default`.                                 | Yes. The AC gives this convention.                                      |
-| B13 | Add a CMDT grace field.                                                           | No. The AC fixes the grace at one interval. No new schema.              |
-| B14 | Auto refire the missed window.                                                    | No. Out of scope.                                                       |
-| B15 | Show a Health column in the schedule manager.                                     | Yes. Same classifier. 0 new SOQL.                                       |
+| #   | Idea                                                                              | Keep?                                                                     |
+| --- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| B1  | Pure classifier `ScheduleHealth` (0 SOQL, 0 DML).                                 | Yes. Dashboard, manager and alerter use the same rule.                    |
+| B2  | Overdue = now − cursor > one sweep interval.                                      | Yes. The acceptance criteria give this rule.                              |
+| B3  | Use the later of the cursor and `LastModifiedDate` as the reference.              | Yes. A schedule enabled outside the UI gets one interval of grace.        |
+| B4  | A blank cursor uses `LastModifiedDate`.                                           | Yes. The sweep seeds a cursor in one interval. A blank one is a miss.     |
+| B5  | Include dedicated schedules in the overdue check.                                 | No. Their cursor is not in the zone of the `CronTrigger`. False alerts.   |
+| B6  | Include dedicated schedules in the failed check.                                  | Yes. Their outcome field is correct.                                      |
+| B7  | Detect in the heartbeat, after Sweep 3.                                           | Yes. 0 new job slots. The sweep fires due rows first.                     |
+| B8  | Add a new scheduled detector.                                                     | No. The acceptance criteria forbid a new slot.                            |
+| B9  | Keep dedup on the schedule row.                                                   | No. A write changes `LastModifiedDate` and races the sweep.               |
+| B10 | Claim each problem with a `Workflow_Log__c` row and a unique key.                 | Yes. One alert per problem, also under a race.                            |
+| B11 | Key overdue by schedule + cursor; key failed by schedule + outcome + last window. | Yes. A new window or a new failure gives a new key.                       |
+| B12 | Config: workflow `DeveloperName`, then `Default`.                                 | Yes. The acceptance criteria give this convention.                        |
+| B13 | Add a CMDT grace field.                                                           | No. The acceptance criteria fix the grace at one interval. No new schema. |
+| B14 | Auto refire the missed window.                                                    | No. Out of scope.                                                         |
+| B15 | Show a Health column in the schedule manager.                                     | Yes. Same classifier. 0 new SOQL.                                         |
 
 ## Reverse Brainstorming (how to make it fail)
 
@@ -65,8 +65,8 @@ for each problem.
 
 - **White (facts):** Cursor fields exist. Cadence 1–10 min, default 10. The
   sweep batch is 50 rows. Email: 10 invocations per transaction.
-- **Red (feel):** Operators trust a quiet schedule. One false page makes
-  them ignore the signal. One page per problem, not per sweep.
+- **Red (feel):** Operators trust a quiet schedule. One false alert can make
+  operators ignore all alerts. Send one alert per problem, not per sweep.
 - **Black (risk):** The watchdog can be dead. Then no heartbeat runs and
   this check does not run. #113 covers that case. Cleanup can delete a claim
   and cause a second page. A backlog of more than 50 due rows can cause a
@@ -75,8 +75,9 @@ for each problem.
   dashboard and the manager show it. No new job slot and no new schema.
 - **Green (ideas):** Put the alert history in the schedule's **View Logs**
   (`Schedule__c` on the claim row, `Outcome__c = Overdue` or `Fire failed`).
-- **Blue (process):** Spec, RED, GREEN, REFACTOR. Then agent review. Then map
-  each AC to evidence.
+- **Blue (process):** Write the spec. Write a failing test. Make it pass.
+  Clean up the code. Then do an agent review. Then map each acceptance
+  criterion to evidence.
 
 ## Spec
 
@@ -90,7 +91,7 @@ Per schedule `s`, at time `now`, grace `g` = cadence minutes:
 
 - `ref` = later of `Next_Fire_Window__c` and `LastModifiedDate`. A blank
   cursor uses `LastModifiedDate`.
-- Status: `PAUSED`, `OVERDUE`, `FAILED` or `OK`. `OVERDUE` wins when both
+- Status: `PAUSED`, `OVERDUE`, `FAILED` or `OK`. `OVERDUE` has priority when both
   flags are true. The flags stay separate.
 - Invariant: a disabled schedule has no flag.
 - Invariant: the alerter writes only `Workflow_Log__c` rows.
@@ -100,6 +101,7 @@ Per schedule `s`, at time `now`, grace `g` = cadence minutes:
 ## Design
 
 - `ScheduleHealth`: `assess()`, `findUnhealthy()`, `summary()`.
+- `ScheduleHealthClock`: now, one sweep interval, last sweep time.
 - `ScheduleHealthAlert`: key, message, claim row, event, email for one
   problem.
 - `ScheduleHealthAlerter.detectAndAlert(now)`: find, claim, send, release.
@@ -124,3 +126,18 @@ Per schedule `s`, at time `now`, grace `g` = cadence minutes:
   email escape, email null cases.
 - Dashboard Apex: `scheduleHealth` key. Manager Apex: health fields.
 - Jest: doctor panel badges and empty state. Manager Health column.
+
+## Review Changes
+
+Four review agents (Apex correctness, acceptance criteria, test reliability,
+security/UI/docs) found these problems. The code now fixes them:
+
+- A failing schedule sent an alert on each failed window. The failed key
+  now uses the last good fire, so a failure streak sends one alert.
+- A dashboard read between two sweeps showed a false overdue. A read now
+  uses the last sweep time of a healthy watchdog (`ScheduleHealthClock`).
+- A cron edit made in Setup left a past cursor. The sweep now reseeds it.
+- A failed read showed a healthy panel. It now shows "not available".
+- A claim stayed when the send threw. Release now runs in `finally`.
+- The read-only test compared `SystemModstamp` (whole seconds). It now
+  compares field values and the DML statement count.

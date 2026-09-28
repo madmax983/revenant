@@ -5,8 +5,8 @@
  * rows. It never writes instance, step or schedule rows. Does not throw.
  *
  * Dedup: a Workflow_Log__c row with a unique Fire_Key__c claims each
- * problem (see ScheduleHealthAlert for the keys). A problem that stays
- * sends no second alert. When no channel sends the alert, the claim is
+ * problem (see ScheduleHealthAlert for the keys). A missed window or a
+ * failure streak sends one alert. When no channel sends the alert, the claim is
  * deleted, so a later sweep tries again.
  *
  * Config: Workflow_Alert_Config__mdt for the schedule's workflow, then
@@ -15,8 +15,11 @@
 public inherited sharing class ScheduleHealthAlerter {
   // Claim insert, event publish and claim release.
   private static final Integer DML_NEEDED = 3;
-  // Candidate query and claim query.
-  private static final Integer SOQL_NEEDED = 2;
+  // Rows: one claim, one event and one release for each alert.
+  private static final Integer ROWS_PER_ALERT = 3;
+  private static final String LOG_SOURCE = 'ScheduleHealthAlert';
+  // Candidate query, last good fire query and claim query.
+  private static final Integer SOQL_NEEDED = 3;
 
   /** @description Maximum alerts for one sweep. The next sweep sends the rest. */
   @TestVisible
@@ -32,22 +35,32 @@ public inherited sharing class ScheduleHealthAlerter {
    * @return The number of alerts sent.
    */
   public static Integer detectAndAlert(Datetime now) {
+    Integer sent = 0;
     try {
       if (now == null || !hasBudget()) {
         return 0;
       }
-      Integer grace = ScheduleHealth.graceMinutes();
+      ScheduleHealthClock clock = ScheduleHealthClock.forSweep(now);
       List<ScheduleHealthAlert> alerts = unclaimed(
-        buildAlerts(ScheduleHealth.findUnhealthy(now, grace), grace)
+        buildAlerts(ScheduleHealth.findUnhealthy(clock), clock.graceMinutes)
       );
       if (alerts.isEmpty()) {
         return 0;
       }
       alerts = claim(alerts);
-      dispatch(alerts);
-      return release(alerts);
-    } catch (Exception ignored) {
-      return 0;
+      try {
+        dispatch(alerts);
+      } finally {
+        // Release runs also when dispatch throws, so no claim stays unsent.
+        sent = release(alerts);
+      }
+      return sent;
+    } catch (Exception ex) {
+      WorkflowLog.error(
+        LOG_SOURCE,
+        'Schedule health alert failed: ' + ex.getMessage()
+      );
+      return sent;
     }
   }
 
@@ -56,6 +69,9 @@ public inherited sharing class ScheduleHealthAlerter {
     Integer grace
   ) {
     List<ScheduleHealthAlert> alerts = new List<ScheduleHealthAlert>();
+    Map<Id, Datetime> lastGoodFire = ScheduleHealth.lastGoodFireBySchedule(
+      found
+    );
     for (ScheduleHealth.Assessment a : found) {
       Workflow_Alert_Config__mdt config = configFor(a.schedule);
       if (!WorkflowAlertManager.isAlertActionable(config)) {
@@ -65,7 +81,13 @@ public inherited sharing class ScheduleHealthAlerter {
         alerts.add(ScheduleHealthAlert.forOverdue(a, config, grace));
       }
       if (a.lastFireFailed) {
-        alerts.add(ScheduleHealthAlert.forFailed(a, config));
+        alerts.add(
+          ScheduleHealthAlert.forFailed(
+            a,
+            config,
+            lastGoodFire.get(a.schedule.Id)
+          )
+        );
       }
     }
     return alerts;
@@ -185,7 +207,7 @@ public inherited sharing class ScheduleHealthAlerter {
     Integer soql = SOQL_NEEDED + WatchdogLiveness.DML_RESERVE;
     return !forceBudgetExhausted &&
       Limits.getDmlStatements() + dml <= Limits.getLimitDmlStatements() &&
-      Limits.getDmlRows() + 2 * maxAlertsPerSweep + dml <=
+      Limits.getDmlRows() + ROWS_PER_ALERT * maxAlertsPerSweep + dml <=
       Limits.getLimitDmlRows() &&
       Limits.getQueries() + soql <= Limits.getLimitQueries();
   }

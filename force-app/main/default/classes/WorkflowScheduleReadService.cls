@@ -54,16 +54,11 @@ public inherited sharing class WorkflowScheduleReadService {
     }
 
     // Schedule health (issue #126). Same rules as System Doctor. 0 SOQL.
-    Datetime healthNow = ScheduleHealth.now();
-    Integer grace = ScheduleHealth.graceMinutes();
+    ScheduleHealthClock clock = ScheduleHealthClock.forRead();
 
     List<Map<String, Object>> result = new List<Map<String, Object>>();
     for (Workflow_Schedule__c s : schedules) {
-      ScheduleHealth.Assessment health = ScheduleHealth.assess(
-        s,
-        healthNow,
-        grace
-      );
+      ScheduleHealth.Assessment health = ScheduleHealth.assess(s, clock);
       result.add(
         new Map<String, Object>{
           'Id' => s.Id,

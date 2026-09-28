@@ -3492,6 +3492,13 @@ describe("c-workflow-dashboard schedule health (#126)", () => {
     expect(query(element, "schedule-health-summary").textContent).toBe("");
   });
 
+  it("shows unavailable, not healthy, for an empty map", async () => {
+    const element = await openDoctorWith({});
+
+    expect(query(element, "schedule-health-unavailable")).not.toBeNull();
+    expect(query(element, "schedule-health-empty")).toBeNull();
+  });
+
   it("shows unavailable, not healthy, when the server read fails", async () => {
     const element = await openDoctorWith({ error: true });
 

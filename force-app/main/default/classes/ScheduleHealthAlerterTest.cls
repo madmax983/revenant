@@ -191,11 +191,9 @@ private class ScheduleHealthAlerterTest {
       Assert.areEqual(ScheduleHealthAlert.REASON_FAILED, evt.Alert_Reason__c);
       Assert.isTrue(evt.Error_Message__c.contains('Error'));
       List<Workflow_Log__c> logs = claims();
+      // No Started or Skipped fire log exists, so the streak key ends in 0.
       Assert.areEqual(
-        'ScheduleFailed:' +
-          sched.Id +
-          ':Error:' +
-          sched.Last_Fired_Window__c.getTime(),
+        'ScheduleFailed:' + sched.Id + ':Error:0',
         logs[0].Fire_Key__c
       );
       Assert.areEqual(ScheduleHealthAlert.OUTCOME_FAILED, logs[0].Outcome__c);
@@ -280,6 +278,8 @@ private class ScheduleHealthAlerterTest {
   static void noConfigSendsNothing() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       setUp();
+      // A null mock hides any Default record in the org.
+      WorkflowAlertManager.mockConfigs.put('Default', null);
       insertOverdue('NoConfig');
 
       Assert.areEqual(0, ScheduleHealthAlerter.detectAndAlert(later()));
@@ -433,48 +433,176 @@ private class ScheduleHealthAlerterTest {
         Retry_Count__c = 0
       );
       insert step;
-      Datetime instStamp = [
-        SELECT SystemModstamp
-        FROM Workflow_Instance__c
-        WHERE Id = :inst.Id
-      ]
-      .SystemModstamp;
-      Datetime stepStamp = [
-        SELECT SystemModstamp
-        FROM Workflow_Step_Execution__c
-        WHERE Id = :step.Id
-      ]
-      .SystemModstamp;
       Integer stepCount = [SELECT COUNT() FROM Workflow_Step_Execution__c];
       Integer instCount = [SELECT COUNT() FROM Workflow_Instance__c];
+      Integer dmlBefore = Limits.getDmlStatements();
 
       Assert.areEqual(1, ScheduleHealthAlerter.detectAndAlert(later()));
 
       Assert.areEqual(
-        instStamp,
-        [SELECT SystemModstamp FROM Workflow_Instance__c WHERE Id = :inst.Id]
-        .SystemModstamp
+        2,
+        Limits.getDmlStatements() - dmlBefore,
+        'Only the claim insert and the event publish'
+      );
+      Workflow_Schedule__c after = [
+        SELECT
+          Next_Fire_Window__c,
+          Last_Fired_Window__c,
+          Last_Outcome__c,
+          Enabled__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :sched.Id
+      ];
+      Assert.areEqual(sched.Next_Fire_Window__c, after.Next_Fire_Window__c);
+      Assert.areEqual(sched.Last_Fired_Window__c, after.Last_Fired_Window__c);
+      Assert.areEqual(sched.Last_Outcome__c, after.Last_Outcome__c);
+      Assert.isTrue(after.Enabled__c);
+      Assert.areEqual(
+        'Failed',
+        [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
+        .Status__c
       );
       Assert.areEqual(
-        stepStamp,
-        [
-          SELECT SystemModstamp
-          FROM Workflow_Step_Execution__c
-          WHERE Id = :step.Id
-        ]
-        .SystemModstamp
-      );
-      Assert.areEqual(
-        sched.SystemModstamp,
-        [SELECT SystemModstamp FROM Workflow_Schedule__c WHERE Id = :sched.Id]
-        .SystemModstamp,
-        'The detector does not write the schedule row'
+        'Failed',
+        [SELECT Status__c FROM Workflow_Step_Execution__c WHERE Id = :step.Id]
+        .Status__c
       );
       Assert.areEqual(
         stepCount,
         [SELECT COUNT() FROM Workflow_Step_Execution__c]
       );
       Assert.areEqual(instCount, [SELECT COUNT() FROM Workflow_Instance__c]);
+    }
+  }
+
+  @IsTest
+  static void failureStreakSendsOneAlert() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      enableDefaultAlerts();
+      Workflow_Schedule__c sched = insertFailed('Streak');
+      Assert.areEqual(1, ScheduleHealthAlerter.detectAndAlert(later()));
+
+      // The next window also fails with the same outcome.
+      update new Workflow_Schedule__c(
+        Id = sched.Id,
+        Last_Fired_Window__c = System.now()
+      );
+      Assert.areEqual(
+        0,
+        ScheduleHealthAlerter.detectAndAlert(later().addHours(1)),
+        'A failure streak sends one alert'
+      );
+
+      // A good fire ends the streak. The next failure is a new problem.
+      insert new Workflow_Log__c(
+        Fire_Key__c = 'StreakKey_1:Started',
+        Log_Type__c = 'ScheduleFire',
+        Outcome__c = 'Started',
+        Schedule__c = sched.Id
+      );
+      Assert.areEqual(
+        1,
+        ScheduleHealthAlerter.detectAndAlert(later().addHours(2))
+      );
+      Assert.areEqual(2, claims().size());
+    }
+  }
+
+  @IsTest
+  static void failedPublishReleasesAnEventOnlyClaim() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      WorkflowAlertManager.mockConfigs.put('Default', alertConfig(null, true));
+      WorkflowAlertManager.forceDmlBudgetExhausted = true;
+      insertOverdue('NoPublish');
+
+      Assert.areEqual(0, ScheduleHealthAlerter.detectAndAlert(later()));
+      Assert.areEqual(0, claims().size(), 'The claim is released');
+    }
+  }
+
+  @IsTest
+  static void sentEmailKeepsTheClaimWhenPublishFails() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      enableDefaultAlerts();
+      WorkflowAlertManager.forceDmlBudgetExhausted = true;
+      insertOverdue('EmailOnly');
+
+      Assert.areEqual(1, ScheduleHealthAlerter.detectAndAlert(later()));
+      Assert.areEqual(1, WorkflowAlertManager.sentEmailsCount);
+      Assert.areEqual(1, claims().size());
+    }
+  }
+
+  @IsTest
+  static void eachRecipientListGetsOneEmail() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      WorkflowAlertManager.mockConfigs.put(
+        TEST_WF_DEV_NAME,
+        alertConfig('a@test.com', false)
+      );
+      WorkflowAlertManager.mockConfigs.put(
+        'OtherFlow',
+        alertConfig('b@test.com', false)
+      );
+      insertOverdue('ListA1');
+      insertOverdue('ListA2');
+      insertSchedule(
+        'ListB',
+        new Map<String, Object>{
+          'Workflow_Name__c' => 'OtherFlow',
+          'Next_Fire_Window__c' => System.now().addHours(-2)
+        }
+      );
+
+      Assert.areEqual(3, ScheduleHealthAlerter.detectAndAlert(later()));
+      Assert.areEqual(2, WorkflowAlertManager.sentEmailsCount);
+    }
+  }
+
+  @IsTest
+  static void nullTimeSendsNothing() {
+    Assert.areEqual(0, ScheduleHealthAlerter.detectAndAlert(null));
+  }
+
+  @IsTest
+  static void heartbeatReseedsACursorLeftByASetupEdit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      enableDefaultAlerts();
+      WorkflowEngine.disableQueueableInTest = true;
+      // The cron was edited in Setup: the last window is handled, but the
+      // cursor still points to a past window of the old cron.
+      String cron = '0 0 1 1 *';
+      Workflow_Schedule__c sched = insertSchedule(
+        'SetupEdit',
+        new Map<String, Object>{
+          'Cron_Expression__c' => cron,
+          'Last_Fired_Window__c' => WorkflowCronEvaluator.previousFireTime(
+            cron,
+            System.now()
+          ),
+          'Last_Outcome__c' => 'Started',
+          'Next_Fire_Window__c' => System.now().addHours(-1)
+        }
+      );
+      WorkflowEngine.mockNow = later();
+
+      Test.startTest();
+      WorkflowEngine.processWatchdogHeartbeat();
+      Test.stopTest();
+
+      Assert.areEqual(0, claims().size(), 'A healthy schedule is not reported');
+      Datetime cursor = [
+        SELECT Next_Fire_Window__c
+        FROM Workflow_Schedule__c
+        WHERE Id = :sched.Id
+      ]
+      .Next_Fire_Window__c;
+      Assert.isTrue(cursor > System.now(), 'The sweep reseeds the cursor');
     }
   }
 

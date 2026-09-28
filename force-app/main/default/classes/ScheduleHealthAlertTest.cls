@@ -104,7 +104,7 @@ private class ScheduleHealthAlertTest {
   }
 
   @IsTest
-  static void failedAlertKeysOnOutcomeAndLastWindow() {
+  static void failedAlertKeysOnOutcomeAndLastGoodFire() {
     ScheduleHealth.Assessment a = assessed(
       new Map<String, Object>{
         'Next_Fire_Window__c' => T0.addDays(1),
@@ -114,11 +114,20 @@ private class ScheduleHealthAlertTest {
       T0
     );
 
-    ScheduleHealthAlert alert = ScheduleHealthAlert.forFailed(a, config());
+    Datetime lastGood = T0.addDays(-2);
+    ScheduleHealthAlert alert = ScheduleHealthAlert.forFailed(
+      a,
+      config(),
+      lastGood
+    );
 
     Assert.areEqual(
-      'ScheduleFailed:' + SCHED_ID + ':Error:' + T0.getTime(),
+      'ScheduleFailed:' + SCHED_ID + ':Error:' + lastGood.getTime(),
       alert.key
+    );
+    Assert.isTrue(
+      alert.message.contains('Last window: 2026-09-28 02:00 UTC'),
+      alert.message
     );
     Assert.isFalse(alert.overdue);
     Assert.isTrue(alert.message.contains('Last outcome: Error'));
@@ -133,7 +142,7 @@ private class ScheduleHealthAlertTest {
   }
 
   @IsTest
-  static void failedKeyUsesZeroWhenNoWindowFired() {
+  static void failedKeyUsesZeroWithoutAGoodFire() {
     ScheduleHealth.Assessment a = assessed(
       new Map<String, Object>{
         'Next_Fire_Window__c' => T0.addDays(1),
@@ -144,7 +153,7 @@ private class ScheduleHealthAlertTest {
 
     Assert.areEqual(
       'ScheduleFailed:' + SCHED_ID + ':Invalid cron:0',
-      ScheduleHealthAlert.forFailed(a, config()).key
+      ScheduleHealthAlert.forFailed(a, config(), null).key
     );
   }
 
@@ -159,7 +168,7 @@ private class ScheduleHealthAlertTest {
     );
     List<ScheduleHealthAlert> alerts = new List<ScheduleHealthAlert>{
       ScheduleHealthAlert.forOverdue(a, config(), 10),
-      ScheduleHealthAlert.forFailed(a, config())
+      ScheduleHealthAlert.forFailed(a, config(), null)
     };
 
     Messaging.SingleEmailMessage mail = ScheduleHealthAlert.buildEmail(
@@ -192,5 +201,57 @@ private class ScheduleHealthAlertTest {
       )
     );
     Assert.isNull(ScheduleHealthAlert.buildEmail(null, alerts));
+  }
+
+  private static Workflow_Alert_Config__mdt emailConfig(String recipients) {
+    return (Workflow_Alert_Config__mdt) JSON.deserialize(
+      JSON.serialize(
+        new Map<String, Object>{
+          'Enable_Alerts__c' => true,
+          'Email_Recipients__c' => recipients
+        }
+      ),
+      Workflow_Alert_Config__mdt.class
+    );
+  }
+
+  @IsTest
+  static void groupsAlertsByRecipientList() {
+    ScheduleHealth.Assessment a = assessed(
+      new Map<String, Object>{ 'Next_Fire_Window__c' => T0 },
+      T0.addHours(1)
+    );
+    List<ScheduleHealthAlert> alerts = new List<ScheduleHealthAlert>{
+      ScheduleHealthAlert.forOverdue(a, emailConfig('a@test.com'), 10),
+      ScheduleHealthAlert.forFailed(a, emailConfig('a@test.com'), null),
+      ScheduleHealthAlert.forOverdue(a, emailConfig('b@test.com'), 10),
+      ScheduleHealthAlert.forOverdue(a, config(), 10)
+    };
+
+    Map<String, List<ScheduleHealthAlert>> groups = ScheduleHealthAlert.groupByRecipients(
+      alerts
+    );
+
+    Assert.areEqual(2, groups.size(), 'An alert with no recipient is left out');
+    Assert.areEqual(2, groups.get('a@test.com').size());
+    Assert.areEqual(1, groups.get('b@test.com').size());
+  }
+
+  @IsTest
+  static void markAllSentMarksEachAlert() {
+    ScheduleHealth.Assessment a = assessed(
+      new Map<String, Object>{ 'Next_Fire_Window__c' => T0 },
+      T0.addHours(1)
+    );
+    List<ScheduleHealthAlert> alerts = new List<ScheduleHealthAlert>{
+      ScheduleHealthAlert.forOverdue(a, config(), 10),
+      ScheduleHealthAlert.forFailed(a, config(), null)
+    };
+    Assert.isFalse(alerts[0].sent);
+
+    ScheduleHealthAlert.markAllSent(alerts);
+
+    Assert.isTrue(alerts[0].sent);
+    Assert.isTrue(alerts[1].sent);
   }
 }

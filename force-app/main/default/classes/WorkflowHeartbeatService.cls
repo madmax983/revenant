@@ -5,8 +5,7 @@
  * alert, concurrency-reconcile, transient-retry-rescue, orphan-reclaim, and
  * stall-detection phases in strict order, then publishes deferred lifecycle
  * events so a best-effort publish can never spend a DML statement a required
- * section needs. Then it
- * writes the liveness stamp (WatchdogLiveness).
+ * section needs. Then it writes the liveness stamp (WatchdogLiveness).
  *
  * Extracted from WorkflowEngine; the public entry stays on WorkflowEngine as a
  * thin facade so its callers are untouched. All DML and SOQL run in system mode
@@ -65,11 +64,11 @@ public inherited sharing class WorkflowHeartbeatService {
 
     // 3c. Alert on overdue or failed schedules (issue #126). It runs after
     // the schedule sweep, so a row that this sweep fired is not reported.
-    // Read only for instances, steps and schedules. Best effort.
+    // It does not write instance, step or schedule rows.
     try {
       WorkflowAlertManager.detectAndAlertScheduleHealth(now);
     } catch (Exception ignored) {
-      // A failure here must not stop the watchdog heartbeat.
+      // An error here must not stop the watchdog heartbeat.
     }
 
     // 4. Reconcile concurrency slot counters. Recomputes each configured
