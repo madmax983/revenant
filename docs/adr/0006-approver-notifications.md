@@ -12,10 +12,10 @@ A step that waits for a human signal tells nobody. The author must write a notif
 
 1. Author API: `StepResult.withNotification(WorkflowNotification)` on a SUSPEND or WAIT_FOR_APPROVAL result. `WorkflowNotification` has static, input-key and record-owner recipients, a target and a type. A second call on the same result throws.
 2. Dedup anchor: one `Workflow_Log__c` row, key `Notify:<stepExecId>` in the unique `Fire_Key__c`. Insert with `allOrNone = false`. A logical suspend is one step row.
-3. Transport: one `NOTIFY` `Workflow_Event__e` (`PublishAfterCommit`), published only when the anchor insert succeeds. The existing event trigger gives max 200 events to `WorkflowNotifier.handleEvents` for each pass and publishes the other events again.
+3. Transport: one `NOTIFY` `Workflow_Event__e` (`PublishAfterCommit`) with only the key, published only when the anchor insert succeeds. The existing event trigger gives max 200 events to `WorkflowNotifier.handleEvents`, last in the transaction, and publishes the other events again.
 4. The notify call is the last call in the SUSPEND and WAIT_FOR_APPROVAL handlers. It checks the DML budget and catches all errors.
 5. Resolve input keys at the SUSPEND (decoded input, in memory). Resolve record owners in the trigger.
-6. The trigger sets the anchor row to `Sent`, `Failed` or `Skipped` with one upsert on `Fire_Key__c`. It does not send a request whose row is already `Sent`. It sends only to user and group Ids.
+6. The trigger reads the request from the `Requested` anchor row, not from the event. A replay, a copy or a forged event sends nothing. It makes max 10 send calls in a pass (the Apex limit for notification calls) and publishes the rest again. It sends only to user and group Ids. It updates each row to `Sent`, `Failed` or `Skipped`.
 7. Toggle: `Revenant_Config__mdt.Send_Notifications__c` (default on). Ship `CustomNotificationType` `Revenant_Workflow_Notification`.
 
 ## Consequences
@@ -35,5 +35,6 @@ A step that waits for a human signal tells nobody. The author must write a notif
 - A marker in `Workflow_Step_Execution__c.Output__c`: `suspend()` keeps encoded author state there.
 - A checkbox on `Workflow_Step_Execution__c`: a new data field.
 - Notify on SLEEP, YIELD and START_CHILD: no human waits there.
+- The request in the event payload: a user with publish access can forge it. The anchor row is written only by the engine.
 - A `ctx.notifications()` accessor, as `ctx.events()`: the notification belongs to one suspend, not to the step run.
 - The approval key in the fire key: a plain `suspend()` has no key. Keep one rule: one step row, one notification.

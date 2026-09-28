@@ -65,15 +65,16 @@ sequenceDiagram
     end
     Engine-->>Bus: The commit delivers the event
     Bus->>Notifier: New transaction (WorkflowEventTrigger)
-    Notifier->>Notifier: Resolve type and owners, send in chunks of 500
+    Notifier->>Log: Read the Requested anchor rows of the keys
+    Notifier->>Notifier: Resolve type and owners, send in chunks of 500 (max 10 calls)
     Notifier->>Log: Upsert on Fire_Key__c: Sent, Failed or Skipped
 ```
 
 1. The SUSPEND handler writes the step row and the instance. Then, last, it calls `WorkflowNotifier.request`.
-2. `request` inserts one anchor row in `Workflow_Log__c` (`Log_Type__c = Notification`, `Outcome__c = Requested`). The key is `Notify:<stepExecId>` in the unique `Fire_Key__c`. The insert uses `allOrNone = false`.
-3. When the insert succeeds, `request` publishes one `NOTIFY` `Workflow_Event__e`.
+2. `request` inserts one anchor row in `Workflow_Log__c` (`Log_Type__c = Notification`, `Outcome__c = Requested`). The key is `Notify:<stepExecId>` in the unique `Fire_Key__c`. `Message__c` holds the request. The insert uses `allOrNone = false`.
+3. When the insert succeeds, `request` publishes one `NOTIFY` `Workflow_Event__e`. The event holds only the key (`Idempotency_Key__c`).
 4. `WorkflowEventTriggerHandler` gives max 200 `NOTIFY` events to `WorkflowNotifier.handleEvents` in a new transaction. It publishes the other `NOTIFY` events again for a later pass.
-5. `handleEvents` runs last in the trigger, after all steps that can throw. It sends the notification. It sets the anchor row to `Sent`, `Failed` or `Skipped`. It sends one time for each key in a pass. It does not send a request whose row is already `Sent`.
+5. `handleEvents` runs last in the trigger, after all steps that can throw. It reads the request from the `Requested` anchor row of each key, not from the event. An event with no such row sends nothing: a replay, a copy or a forged event. It makes max 10 send calls in a pass and publishes the other requests again. It sets each row to `Sent`, `Failed` or `Skipped`.
 
 ## One time for each logical suspend
 
@@ -84,7 +85,8 @@ A logical suspend is one `Workflow_Step_Execution__c` row. A resume uses the sam
 | `execute()` runs again before the SUSPEND commits (rollback, retry, crash) | The anchor row and the event roll back. The engine sends nothing. The next run sends one time. |
 | A signal wakes the step and it suspends again on the same row | The anchor insert fails on the duplicate key. The engine sends nothing. |
 | An operator resume on the same row | The engine sends nothing. |
-| The platform delivers the `NOTIFY` event again | The row is `Sent`, or the copy is in the same pass. The engine sends nothing. |
+| The platform delivers the `NOTIFY` event again | The row is not `Requested`, or the copy is in the same pass. The engine sends nothing. |
+| A user publishes a forged `NOTIFY` event | No `Requested` row has its key. The engine sends nothing. With a real key, the engine sends the content of the row, not of the event. |
 | A new visit of the step (a loop) | A new row. One new notification. |
 
 You do not supply a dedup token.
@@ -105,7 +107,7 @@ A step that waits again on the same row with a new notification (for example, a 
 |-------|---------|
 | `Requested` | The SUSPEND published the request. The trigger did not run yet. |
 | `Sent` | The platform accepted the send. It does not prove delivery. |
-| `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, or the error. |
+| `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, too many recipients, a request that is not readable, or the error. |
 | `Skipped` | `Send_Notifications__c` was off at send time. |
 
 `Message__c` holds the request as JSON. After the send, it also has a `result` key.
@@ -136,11 +138,11 @@ On a SUSPEND with a notification:
 
 A SUSPEND with no notification costs nothing.
 
-In the trigger, for each pass: one SOQL for rows that are already `Sent`, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, and one upsert.
+In the trigger, for each pass: one SOQL for the anchor rows, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, one update, max 10 send calls, and one publish for the requests that wait for a later pass.
 
 ## Data
 
-- The title, body and recipient Ids are plaintext in `Workflow_Event__e.Payload__c` and `Workflow_Log__c.Message__c`. The payload codec does not encode them. Do not put sensitive data in the title or the body.
+- The title, body and recipient Ids are plaintext in `Workflow_Log__c.Message__c`. The payload codec does not encode them. Do not put sensitive data in the title or the body. The event holds only the key.
 - `CleanupWorkflow` does not delete the anchor rows. When it deletes the instance, the row stays with a blank instance lookup. Each logical suspend with a notification adds one row. Delete old rows with your own retention job.
 
 ## Testing
@@ -154,6 +156,7 @@ These members are `@TestVisible private`. In your own tests, read `result.direct
 - The notification opens the instance or the target record, not a decision screen. Use a Flow screen, a quick action or the Signal Workflow invocable action to publish the decision.
 - When a matching signal is already buffered, the step resumes at once. The approver still gets the notification.
 - A send to more than 500 recipients uses more than one call. When a later call fails, the row is `Failed`, but the earlier recipients got the notification.
-- `Payload__c` holds max 131,072 characters. A `toInputKey` list of more than approximately 6,000 Ids makes the publish fail (`Failed`). For a large audience, use a public group.
+- One request can send to max 5,000 recipients (10 calls of 500). Else the row is `Failed`. For a larger audience, use a public group.
+- `Message__c` holds max 131,000 characters. A `toInputKey` list of more than approximately 6,000 Ids makes the request not readable (`Failed`). For a large audience, use a public group.
 - The engine does not parse a workflow input of more than 1,000,000 characters for `toInputKey`. Then the input gives no recipient.
 - Salesforce limits custom notifications for each org and each hour (10,000). Over the limit, the platform can drop a notification. The row can still be `Sent`.

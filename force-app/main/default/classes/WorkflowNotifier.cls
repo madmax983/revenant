@@ -3,13 +3,16 @@
  *
  * 1. {@link request} runs last in the SUSPEND and WAIT_FOR_APPROVAL handlers.
  *    It inserts one anchor `Workflow_Log__c` row (unique `Fire_Key__c`
- *    `Notify:<stepExecId>`) and publishes one `NOTIFY` `Workflow_Event__e`.
- *    The event is `PublishAfterCommit`: a rolled-back SUSPEND sends nothing.
- *    A second insert for the same step row fails: a re-suspend sends nothing.
+ *    `Notify:<stepExecId>`). The row holds the request. Then it publishes one
+ *    `NOTIFY` `Workflow_Event__e` with the key in `Idempotency_Key__c`. The
+ *    event is `PublishAfterCommit`: a rolled-back SUSPEND sends nothing. A
+ *    second insert for the same step row fails: a re-suspend sends nothing.
  * 2. `WorkflowEventTriggerHandler` gives max {@link maxEventsPerPass} NOTIFY
- *    events to {@link handleEvents} in a new transaction. It publishes the
- *    other events again. `handleEvents` resolves the type and the record
- *    owners, sends, and sets the anchor row to `Sent`, `Failed` or `Skipped`.
+ *    events to {@link handleEvents}, last in the trigger transaction.
+ *    `handleEvents` reads the request from each `Requested` anchor row, not
+ *    from the event. An event with no such row sends nothing. It sends max
+ *    {@link maxSendCallsPerPass} send calls and publishes the rest again. It
+ *    sets each row to `Sent`, `Failed` or `Skipped`.
  *
  * Fire-and-forget: no method throws. A notification error never stops the
  * SUSPEND or the trigger batch. See docs/approver-notifications.md.
@@ -53,9 +56,13 @@ public inherited sharing class WorkflowNotifier {
   private static Integer dmlStatementReserve = 10;
   @TestVisible
   private static Integer dmlRowReserve = 20;
-  // NOTIFY events that one trigger pass sends. It bounds heap, CPU and DML.
+  // NOTIFY events that one trigger pass reads. It bounds heap, CPU and DML.
   @TestVisible
   private static Integer eventsPerPass = 200;
+  // send() calls in one pass. Apex allows max 10 notification calls in one
+  // transaction, and that LimitException cannot be caught.
+  @TestVisible
+  private static Integer sendCallsPerPass = 10;
 
   /** @description One captured send call (test context only). */
   public class SentNotification {
@@ -102,6 +109,14 @@ public inherited sharing class WorkflowNotifier {
    */
   public static Integer maxEventsPerPass() {
     return eventsPerPass;
+  }
+
+  /**
+   * @description Returns the maximum send() calls for one trigger pass.
+   * @return The maximum.
+   */
+  public static Integer maxSendCallsPerPass() {
+    return sendCallsPerPass;
   }
 
   // ─── SUSPEND side ─────────────────────────────────────────────────────────
@@ -262,24 +277,20 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
-  // Publishes the NOTIFY event. On an error, sets the anchor row to Failed.
+  // Publishes the NOTIFY event. The event holds only the key: the trigger
+  // reads the request from the anchor row. On an error, sets the row to Failed.
   private static void publish(
     Workflow_Log__c anchor,
     Map<String, Object> payload,
     Id instanceId
   ) {
-    Workflow_Event__e evt = new Workflow_Event__e(
-      Event_Type__c = EVENT_TYPE,
-      Workflow_Instance_Id__c = String.valueOf(instanceId),
-      Payload__c = JSON.serialize(payload),
-      Idempotency_Key__c = anchor.Fire_Key__c
-    );
     try {
       if (Test.isRunningTest() && throwPublishException) {
         throw new WorkflowEngine.WorkflowException(
           'Simulated EventBus.publish failure'
         );
       }
+      Workflow_Event__e evt = notifyEvent(anchor.Fire_Key__c, instanceId);
       Database.SaveResult sr = EventBus.publish(evt);
       if (!sr.isSuccess()) {
         throw new WorkflowEngine.WorkflowException(errorText(sr.getErrors()));
@@ -298,12 +309,31 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
+  private static Workflow_Event__e notifyEvent(String key, Id instanceId) {
+    return new Workflow_Event__e(
+      Event_Type__c = EVENT_TYPE,
+      Workflow_Instance_Id__c = String.valueOf(instanceId),
+      Idempotency_Key__c = key
+    );
+  }
+
   // ─── Trigger side ─────────────────────────────────────────────────────────
 
+  // One open request: its anchor row and the request that the row holds.
+  private class OpenRequest {
+    public Workflow_Log__c anchor;
+    public Map<String, Object> req;
+    public OpenRequest(Workflow_Log__c anchor, Map<String, Object> req) {
+      this.anchor = anchor;
+      this.req = req;
+    }
+  }
+
   /**
-   * @description Sends the notifications of NOTIFY events and sets each
-   * anchor row to Sent, Failed or Skipped. A request whose row is already
-   * Sent is not sent again. Never throws.
+   * @description Sends the notifications of NOTIFY events. Reads each request
+   * from its `Requested` anchor row, so an event with no such row (a replay,
+   * a copy or a forged event) sends nothing. Sets each row to Sent, Failed or
+   * Skipped. Never throws.
    * @param events NOTIFY events from WorkflowEventTriggerHandler.
    */
   public static void handleEvents(List<Workflow_Event__e> events) {
@@ -311,117 +341,123 @@ public inherited sharing class WorkflowNotifier {
       return;
     }
     try {
-      List<Map<String, Object>> requests = removeSent(parseRequests(events));
-      if (requests.isEmpty()) {
+      List<Workflow_Log__c> anchors = openAnchors(events);
+      if (anchors.isEmpty()) {
         return;
       }
-      List<Workflow_Log__c> rows = WorkflowEngine.sendNotifications
-        ? sendAll(requests)
-        : skipAll(requests);
-      saveRows(rows);
+      List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
+      if (WorkflowEngine.sendNotifications) {
+        deferred = sendAll(anchors);
+      } else {
+        for (Workflow_Log__c anchor : anchors) {
+          setResult(
+            anchor,
+            null,
+            OUTCOME_SKIPPED,
+            LEVEL_WARN,
+            'Send_Notifications__c is off'
+          );
+        }
+      }
+      saveRows(anchors, deferred);
+      publishAgain(deferred);
     } catch (Exception e) {
       WorkflowLog.error(LOG_TYPE, 'Notify batch failed: ' + e.getMessage());
     }
   }
 
-  // Parses each event payload. A bad payload is skipped.
-  private static List<Map<String, Object>> parseRequests(
+  // Reads the Requested anchor rows of the event keys. One SOQL. One row for
+  // each key, so copies of one event in the batch give one request.
+  private static List<Workflow_Log__c> openAnchors(
     List<Workflow_Event__e> events
   ) {
-    List<Map<String, Object>> requests = new List<Map<String, Object>>();
-    for (Workflow_Event__e evt : events) {
-      try {
-        Map<String, Object> req = (Map<String, Object>) JSON.deserializeUntyped(
-          evt.Payload__c
-        );
-        if (String.isNotBlank((String) req.get('key'))) {
-          requests.add(req);
-        }
-      } catch (Exception e) {
-        continue; // Not a request from the engine: skip.
-      }
-    }
-    return requests;
-  }
-
-  // Removes the requests whose anchor row is already Sent (a replayed event)
-  // and the copies of a request in the same batch.
-  private static List<Map<String, Object>> removeSent(
-    List<Map<String, Object>> requests
-  ) {
-    if (requests.isEmpty() || Limits.getQueries() >= Limits.getLimitQueries()) {
-      return requests;
-    }
     Set<String> keys = new Set<String>();
-    for (Map<String, Object> req : requests) {
-      keys.add((String) req.get('key'));
-    }
-    Set<String> sent = new Set<String>();
-    for (Workflow_Log__c row : [
-      SELECT Fire_Key__c
-      FROM Workflow_Log__c
-      WHERE Fire_Key__c IN :keys AND Outcome__c = :OUTCOME_SENT
-      WITH SYSTEM_MODE
-    ]) {
-      sent.add(row.Fire_Key__c.toLowerCase());
-    }
-    // Keep one request for each key: the batch can hold copies of one event.
-    List<Map<String, Object>> open = new List<Map<String, Object>>();
-    for (Map<String, Object> req : requests) {
-      String key = ((String) req.get('key')).toLowerCase();
-      if (!sent.contains(key)) {
-        open.add(req);
-        sent.add(key);
+    for (Workflow_Event__e evt : events) {
+      String key = evt.Idempotency_Key__c;
+      if (String.isNotBlank(key) && key.startsWith(FIRE_KEY_PREFIX)) {
+        keys.add(key);
       }
     }
-    return open;
-  }
-
-  private static List<Workflow_Log__c> skipAll(
-    List<Map<String, Object>> requests
-  ) {
-    List<Workflow_Log__c> rows = new List<Workflow_Log__c>();
-    for (Map<String, Object> req : requests) {
-      rows.add(
-        resultRow(
-          req,
-          OUTCOME_SKIPPED,
-          LEVEL_WARN,
-          'Send_Notifications__c is off'
-        )
-      );
+    if (keys.isEmpty() || Limits.getQueries() >= Limits.getLimitQueries()) {
+      return new List<Workflow_Log__c>();
     }
-    return rows;
+    return [
+      SELECT Id, Fire_Key__c, Message__c, Workflow_Instance__c
+      FROM Workflow_Log__c
+      WHERE
+        Fire_Key__c IN :keys
+        AND Log_Type__c = :LOG_TYPE
+        AND Outcome__c = :OUTCOME_REQUESTED
+      WITH SYSTEM_MODE
+    ];
   }
 
-  private static List<Workflow_Log__c> sendAll(
-    List<Map<String, Object>> requests
-  ) {
+  // Sends the requests in a send-call budget. Returns the rows to send in a
+  // later pass. Sets the result on each other row.
+  private static List<Workflow_Log__c> sendAll(List<Workflow_Log__c> anchors) {
+    List<OpenRequest> requests = new List<OpenRequest>();
     Set<String> typeNames = new Set<String>();
     Set<Id> ownerRecordIds = new Set<Id>();
-    for (Map<String, Object> req : requests) {
-      typeNames.add((String) req.get('type'));
+    for (Workflow_Log__c anchor : anchors) {
+      Map<String, Object> req = readRequest(anchor);
+      if (req == null) {
+        setResult(
+          anchor,
+          null,
+          OUTCOME_FAILED,
+          LEVEL_ERROR,
+          'The request in Message__c is not readable'
+        );
+        continue;
+      }
+      requests.add(new OpenRequest(anchor, req));
+      if (req.get('type') instanceof String) {
+        typeNames.add((String) req.get('type'));
+      }
       ownerRecordIds.addAll(ids(req.get('owners')));
     }
     resolveTypeIds(typeNames);
     Map<Id, Id> owners = resolveOwners(ownerRecordIds);
 
-    List<Workflow_Log__c> rows = new List<Workflow_Log__c>();
-    for (Map<String, Object> req : requests) {
-      rows.add(sendOne(req, owners));
+    List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
+    Integer callsLeft = sendCallsPerPass;
+    for (OpenRequest open : requests) {
+      Integer used = sendOne(open, owners, callsLeft);
+      if (used < 0) {
+        deferred.add(open.anchor);
+      } else {
+        callsLeft -= used;
+      }
     }
-    return rows;
+    return deferred;
   }
 
-  private static Workflow_Log__c sendOne(
-    Map<String, Object> req,
-    Map<Id, Id> owners
+  private static Map<String, Object> readRequest(Workflow_Log__c anchor) {
+    try {
+      Map<String, Object> req = (Map<String, Object>) JSON.deserializeUntyped(
+        anchor.Message__c
+      );
+      return anchor.Fire_Key__c.equalsIgnoreCase((String) req.get('key'))
+        ? req
+        : null;
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  // Sends one request. Returns the send calls it used, or -1 when the calls
+  // left are not sufficient (send it in a later pass).
+  private static Integer sendOne(
+    OpenRequest open,
+    Map<Id, Id> owners,
+    Integer callsLeft
   ) {
+    Map<String, Object> req = open.req;
     try {
       String typeName = (String) req.get('type');
       Id typeId = typeIds.get(typeName);
       if (typeId == null) {
-        return failed(req, 'CustomNotificationType not found: ' + typeName);
+        return failed(open, 'CustomNotificationType not found: ' + typeName);
       }
       Set<Id> candidates = ids(req.get('recipients'));
       for (Id recordId : ids(req.get('owners'))) {
@@ -438,12 +474,25 @@ public inherited sharing class WorkflowNotifier {
       Integer ignored = candidates.size() - recipients.size();
       if (recipients.isEmpty()) {
         return failed(
-          req,
+          open,
           'No recipient resolved (ignored ' + ignored + ' non-user Ids)'
         );
       }
-      deliver(typeId, req, recipients);
-      return resultRow(
+      List<Set<String>> chunks = chunks(recipients);
+      if (chunks.size() > sendCallsPerPass) {
+        return failed(
+          open,
+          'Too many recipients: max ' +
+            (sendCallsPerPass * SEND_CHUNK_SIZE) +
+            '. Use a public group.'
+        );
+      }
+      if (chunks.size() > callsLeft) {
+        return -1;
+      }
+      deliver(typeId, req, chunks);
+      setResult(
+        open.anchor,
         req,
         OUTCOME_SENT,
         LEVEL_INFO,
@@ -453,20 +502,21 @@ public inherited sharing class WorkflowNotifier {
           ignored +
           ' non-user Ids)'
       );
+      return chunks.size();
     } catch (Exception e) {
-      return failed(req, 'Send failed: ' + e.getMessage());
+      return failed(open, 'Send failed: ' + e.getMessage());
     }
   }
 
-  // Sends in chunks of SEND_CHUNK_SIZE (the limit of one send call).
+  // Sends one call for each chunk of SEND_CHUNK_SIZE recipients.
   private static void deliver(
     Id typeId,
     Map<String, Object> req,
-    Set<String> recipients
+    List<Set<String>> chunks
   ) {
     Id targetId = Id.valueOf((String) req.get('target'));
     if (Test.isRunningTest()) {
-      for (Set<String> chunk : chunks(recipients)) {
+      for (Set<String> chunk : chunks) {
         capture(typeId, req, targetId, chunk);
       }
       return;
@@ -476,7 +526,7 @@ public inherited sharing class WorkflowNotifier {
     notification.setTitle((String) req.get('title'));
     notification.setBody((String) req.get('body'));
     notification.setTargetId(targetId);
-    for (Set<String> chunk : chunks(recipients)) {
+    for (Set<String> chunk : chunks) {
       notification.send(chunk);
     }
   }
@@ -593,18 +643,30 @@ public inherited sharing class WorkflowNotifier {
 
   // ─── Result rows ──────────────────────────────────────────────────────────
 
-  // Upserts the result rows on Fire_Key__c and logs the rows that fail.
-  private static void saveRows(List<Workflow_Log__c> rows) {
+  // Updates the rows that have a result and logs the rows that fail. A
+  // deferred row stays Requested.
+  private static void saveRows(
+    List<Workflow_Log__c> anchors,
+    List<Workflow_Log__c> deferred
+  ) {
+    Set<Id> deferredIds = new Map<Id, Workflow_Log__c>(deferred).keySet();
+    List<Workflow_Log__c> rows = new List<Workflow_Log__c>();
+    for (Workflow_Log__c anchor : anchors) {
+      if (!deferredIds.contains(anchor.Id)) {
+        rows.add(anchor);
+      }
+    }
     if (
-      Limits.getDmlStatements() + 2 > Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + rows.size() + 1 > Limits.getLimitDmlRows()
+      rows.isEmpty() ||
+      Limits.getDmlStatements() + 3 > Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + rows.size() + deferred.size() + 1 >
+      Limits.getLimitDmlRows()
     ) {
       return; // The rows stay Requested.
     }
     List<String> errors = new List<String>();
-    List<Database.UpsertResult> results = Database.upsert(
+    List<Database.SaveResult> results = Database.update(
       rows,
-      Workflow_Log__c.Fire_Key__c,
       false,
       AccessLevel.SYSTEM_MODE
     );
@@ -618,34 +680,44 @@ public inherited sharing class WorkflowNotifier {
     if (!errors.isEmpty()) {
       WorkflowLog.error(
         LOG_TYPE,
-        'Result row upsert failed: ' + String.join(errors, '; ')
+        'Result row update failed: ' + String.join(errors, '; ')
       );
     }
   }
 
-  private static Workflow_Log__c failed(
-    Map<String, Object> req,
-    String reason
-  ) {
-    return resultRow(req, OUTCOME_FAILED, LEVEL_ERROR, reason);
+  // Publishes the deferred requests again for a later pass.
+  private static void publishAgain(List<Workflow_Log__c> deferred) {
+    if (deferred.isEmpty()) {
+      return;
+    }
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>();
+    for (Workflow_Log__c anchor : deferred) {
+      events.add(notifyEvent(anchor.Fire_Key__c, anchor.Workflow_Instance__c));
+    }
+    EventBus.publish(events);
   }
 
-  // The upsert on Fire_Key__c updates the anchor row. When the anchor row is
-  // not there, it inserts a new row. The row does not set the instance lookup:
-  // the instance can be deleted before the send.
-  private static Workflow_Log__c resultRow(
+  private static Integer failed(OpenRequest open, String reason) {
+    setResult(open.anchor, open.req, OUTCOME_FAILED, LEVEL_ERROR, reason);
+    return 0;
+  }
+
+  // Sets the result on the anchor row. The message keeps the request.
+  private static void setResult(
+    Workflow_Log__c anchor,
     Map<String, Object> req,
     String outcome,
     String level,
     String result
   ) {
-    return new Workflow_Log__c(
-      Fire_Key__c = (String) req.get('key'),
-      Log_Type__c = LOG_TYPE,
-      Outcome__c = outcome,
-      Level__c = level,
-      Message__c = withResult(req, result)
-    );
+    anchor.Outcome__c = outcome;
+    anchor.Level__c = level;
+    if (req == null) {
+      req = readRequest(anchor);
+    }
+    anchor.Message__c = req != null
+      ? withResult(req, result)
+      : truncate(result + '\n' + anchor.Message__c);
   }
 
   // Returns the request JSON with a result key.

@@ -398,6 +398,133 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
+  static void forgedEventWithNoAnchorSendsNothing() {
+    seedType();
+    List<Workflow_Event__e> events = new List<Workflow_Event__e>{
+      new Workflow_Event__e(
+        Event_Type__c = WorkflowNotifier.EVENT_TYPE,
+        Idempotency_Key__c = WorkflowNotifier.fireKey(UserInfo.getUserId()),
+        Payload__c = '{"type":"Revenant_Workflow_Notification","title":"x",' +
+          '"body":"y","recipients":["' +
+          userId() +
+          '"]}'
+      ),
+      new Workflow_Event__e(
+        Event_Type__c = WorkflowNotifier.EVENT_TYPE,
+        Idempotency_Key__c = 'someCorrelationKey:Started'
+      )
+    };
+    Test.startTest();
+    new WorkflowEventTriggerHandler(events).handleAfterInsert();
+    Test.stopTest();
+
+    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Log__c WITH SYSTEM_MODE],
+      'A forged event writes no row'
+    );
+  }
+
+  @IsTest
+  static void forgedPayloadIsIgnored() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-forged-payload',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(instanceId);
+    String key = WorkflowNotifier.publishedEvents[0].Idempotency_Key__c;
+    // Same key, forged content: the engine reads the anchor row, not this.
+    WorkflowNotifier.handleEvents(
+      new List<Workflow_Event__e>{
+        new Workflow_Event__e(
+          Event_Type__c = WorkflowNotifier.EVENT_TYPE,
+          Idempotency_Key__c = key,
+          Payload__c = '{"key":"' +
+            key +
+            '","title":"Forged","body":"x",' +
+            '"recipients":["' +
+            String.valueOf(UserInfo.getProfileId()) +
+            '"]}'
+        )
+      }
+    );
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      'Approve order',
+      WorkflowNotifier.sentNotifications[0].title
+    );
+    Assert.areEqual(
+      new Set<String>{ userId() },
+      WorkflowNotifier.sentNotifications[0].recipients
+    );
+  }
+
+  @IsTest
+  static void sendBudgetDefersTheRest() {
+    seedType();
+    WorkflowNotifier.sendCallsPerPass = 1;
+    Test.startTest();
+    Id first = startWorkflow(
+      'notify-budget-1',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    Id second = startWorkflow(
+      'notify-budget-2',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(first);
+    WorkflowEngine.runStep(second);
+    Test.getEventBus().deliver();
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size(), 'Pass 1');
+    // Pass 2 gets the request that pass 1 published again.
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(2, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SENT,
+      anchors(first)[0].Outcome__c
+    );
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SENT,
+      anchors(second)[0].Outcome__c
+    );
+  }
+
+  @IsTest
+  static void tooManyRecipientsForOnePassFails() {
+    seedType();
+    WorkflowNotifier.sendCallsPerPass = 1;
+    List<Object> approvers = new List<Object>();
+    for (Integer i = 1; i <= SEND_CHUNK + 1; i++) {
+      approvers.add('005' + String.valueOf(i).leftPad(12, '0'));
+    }
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-too-many',
+      new Map<String, Object>{
+        'inputField' => 'approvers',
+        'approvers' => approvers
+      }
+    );
+    driveAndDeliver(new WorkflowTestHarness(instanceId));
+    Test.stopTest();
+
+    Workflow_Log__c log = anchors(instanceId)[0];
+    Assert.areEqual(WorkflowNotifier.OUTCOME_FAILED, log.Outcome__c);
+    Assert.isTrue(
+      log.Message__c.contains('Too many recipients'),
+      log.Message__c
+    );
+    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+  }
+
+  @IsTest
   static void nonUserRecipientsAreIgnored() {
     seedType();
     Account acct = new Account(Name = 'Not a recipient');

@@ -50,7 +50,9 @@ When a step suspends to wait for a human signal, the engine sends a native Custo
 | More than 500 recipients. | Send in chunks of 500. |
 | A title or body that is too long. | The builder rejects a title over 250 and a body over 750 characters. |
 | Many NOTIFY events in one trigger batch use too much heap or CPU. The batch fails and loses RESUME events. (Added after review.) | Max 200 NOTIFY events for each pass. Publish the others again. |
-| A replayed NOTIFY event sends again. (Added after review.) | Skip a request whose row is `Sent`. |
+| A replayed NOTIFY event sends again. (Added after review.) | Read the request from the `Requested` anchor row, not from the event. |
+| A forged `NOTIFY` event sends attacker content. (Codex review.) | Same: the engine writes the anchor row. The event holds only the key. |
+| More than 10 send calls in one trigger transaction hit an uncatchable limit. (Codex review.) | Max 10 send calls for each pass. Publish the rest again. |
 | A recipient Id that is not a user or group fails the send. (Added after review.) | Send only to user and group Ids. |
 | A caller changes the recipient sets after validation. (Added after review.) | The read accessors return copies. |
 | A second `withNotification` call replaces the first. (Added after review.) | Throw. |
@@ -96,7 +98,8 @@ In the trigger (`WorkflowNotifier.handleEvents`):
 
 | Condition | Row `Outcome__c` |
 |-----------|------------------|
-| Row is already `Sent` (replay) | No send. No change. |
+| No `Requested` row for the key (replay, copy, forged event) | No send. No change. |
+| Send calls for this pass used | The request waits. The trigger publishes it again. |
 | Toggle off | `Skipped` |
 | Type not found | `Failed` |
 | No recipient after resolution | `Failed` |
@@ -109,8 +112,8 @@ In the trigger (`WorkflowNotifier.handleEvents`):
 |----|------|
 | Suspend API with recipients, title, body, target; no `Messaging` code in author code | `WorkflowNotificationTest`, `WorkflowNotifierTest.suspendRequestsOneNotification`, `approvalWaitRequestsOneNotification`, `timedSuspendAlsoNotifies` |
 | Static or data-driven recipients | `inputFieldRecipientsResolvedAtSuspend`, `recordOwnerResolvedAtSend`, `nonUserRecipientsAreIgnored` |
-| Once per logical suspend | `reSuspendDoesNotNotifyAgain`, `operatorResumeDoesNotNotifyAgain`, `rolledBackSuspendLeavesNoAnchor`, `replayedEventDoesNotSendAgain` |
-| Fire-and-forget | `publishFailureDoesNotBlockSuspend`, `lowDmlBudgetSkipsNotify`, `dmlReserveSkipsNotify`, `sendFailureIsLogged`, `eachRequestInABatchIsIsolated`, `badNotifyDoesNotBlockResumeInSameBatch` |
+| Once per logical suspend | `reSuspendDoesNotNotifyAgain`, `operatorResumeDoesNotNotifyAgain`, `rolledBackSuspendLeavesNoAnchor`, `replayedEventDoesNotSendAgain`, `copiesInOneBatchSendOnce`, `forgedEventWithNoAnchorSendsNothing`, `forgedPayloadIsIgnored` |
+| Fire-and-forget | `publishFailureDoesNotBlockSuspend`, `lowDmlBudgetSkipsNotify`, `dmlReserveSkipsNotify`, `sendFailureIsLogged`, `eachRequestInABatchIsIsolated`, `badNotifyDoesNotBlockResumeInSameBatch`, `sendBudgetDefersTheRest`, `tooManyRecipientsForOnePassFails` |
 | Deep link | `suspendRequestsOneNotification` (default: instance), `authorTargetAndTypeAreUsed` |
 | Toggle | `toggleReadsTheDefaultConfig`, `toggleOffPublishesNothing`, `toggleOffAtSendSkips` |
 | Shipped type | `Revenant_Workflow_Notification.notiftype-meta.xml` |

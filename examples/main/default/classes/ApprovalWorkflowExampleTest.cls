@@ -75,10 +75,6 @@ private class ApprovalWorkflowExampleTest {
         WorkflowNotifier.publishedEvents.size(),
         'One notify request for the approval wait'
       );
-      Assert.isTrue(
-        WorkflowNotifier.publishedEvents[0].Payload__c.contains(approverId),
-        'The request must name the approver'
-      );
       Test.getEventBus().deliver();
       List<Workflow_Log__c> rows = notificationRows(instanceId);
       Assert.areEqual(1, rows.size(), 'One anchor row for the wait');
