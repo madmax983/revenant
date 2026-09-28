@@ -142,7 +142,7 @@ public inherited sharing class WorkflowInstanceHold {
     inst.Held_At__c = null;
     inst.Hold_Reason__c = null;
     if (parked) {
-      inst.Status__c = 'Running';
+      unpark(inst);
     }
     Database.update(inst, true, AccessLevel.SYSTEM_MODE);
     WorkflowLog.warn(
@@ -186,6 +186,18 @@ public inherited sharing class WorkflowInstanceHold {
     );
   }
 
+  // A run that waits for a concurrency slot must not be Running without one.
+  // It goes back to Suspended and the admission gate takes it. Sleep_Until__c
+  // lets the watchdog drive it again if the enqueue is lost.
+  private static void unpark(Workflow_Instance__c inst) {
+    if (inst.Concurrency_Parked__c && !inst.Concurrency_Slot_Held__c) {
+      inst.Status__c = 'Suspended';
+      inst.Sleep_Until__c = Datetime.now();
+      return;
+    }
+    inst.Status__c = 'Running';
+  }
+
   // Locks the instance. Returns null when it does not exist.
   private static Workflow_Instance__c lock(Id instanceId) {
     if (instanceId == null) {
@@ -197,6 +209,9 @@ public inherited sharing class WorkflowInstanceHold {
         Status__c,
         Workflow_Name__c,
         Current_Step__c,
+        Compensation_Stack__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c,
         Held_At__c,
         Hold_Reason__c
       FROM Workflow_Instance__c
@@ -218,7 +233,11 @@ public inherited sharing class WorkflowInstanceHold {
     if (TERMINAL_STATUSES.contains(inst.Status__c)) {
       return Outcome.REJECTED_TERMINAL;
     }
-    if (COMPENSATING_STATUSES.contains(inst.Status__c)) {
+    // A compensation step that waits leaves the status Suspended or Running.
+    if (
+      COMPENSATING_STATUSES.contains(inst.Status__c) ||
+      WorkflowStepAdmission.isLiveCompensation(inst)
+    ) {
       return Outcome.REJECTED_COMPENSATING;
     }
     if (WorkflowPauseGate.isEngineWorkflow(inst.Workflow_Name__c)) {

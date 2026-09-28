@@ -46,7 +46,11 @@ sequenceDiagram
 3. The park writes no step row. It does not change `Current_Step__c`, `Compensation_Stack__c` or the signals.
 4. `release` of a parked instance sets `Running`, re-arms step timeouts and enqueues the parked step (or each open parallel branch). A completed step does not run again.
 
-A hold on a `Suspended` instance waits. When a signal, sleep or retry wakes it, the gate parks it. The signal stays `Received`. The step reads it after release.
+A hold on a `Suspended` instance waits. When a signal, sleep or retry wakes it, the gate parks it. The signal stays `Received`. The step reads it after release. The watchdog does not route a held timed wait to its fallback step. After release, the next heartbeat routes it.
+
+A parallel branch that ran before the park can finish. Its result is kept. A branch that suspends, sleeps or retries keeps the `Held` status. Release starts each open branch.
+
+Release of a run that waits for a concurrency slot sets `Suspended`. The admission gate then decides.
 
 The runner reads the formula field `Held__c`. DML ignores formula fields, so a step outcome cannot overwrite a hold that an operator made while the step ran.
 
@@ -72,3 +76,7 @@ The runner reads the formula field `Held__c`. DML ignores formula fields, so a s
 - A hold applies to the forward path only. It does not stop compensation.
 - A hold applies to one instance. It does not hold child instances.
 - A hold has no timer. Only `release` or cancel ends it.
+- The execution deadline (`Deadline_At__c`) does not stop during a hold. After release, the watchdog can fail a run that is past its deadline. A definition pause has the same limit.
+- A park cancels the scheduled jobs of the instance. After release, a parked timed wait starts its timeout again. A parked branch sleep or backoff ends early.
+- Release starts each branch that is not complete. A branch that runs at that time can get a second delivery. The step-execution lock stops a second run of a finished step.
+- Hold rejects a rollback, also a rollback step that waits in `Suspended`.

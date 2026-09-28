@@ -98,7 +98,7 @@ public inherited sharing class WorkflowStepSuspension {
       : null;
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
@@ -135,7 +135,7 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     instance.Sleep_Until__c = DateTime.now()
       .addSeconds(result.directive().sleepDurationSeconds);
     instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
@@ -185,7 +185,7 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
@@ -241,7 +241,7 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,
@@ -295,7 +295,7 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
-    instance.Status__c = 'Suspended';
+    instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
       instance.Id,

@@ -259,6 +259,27 @@ public class WorkflowInstanceHoldTest {
     }
   }
 
+  /**
+   * @description Step with a declared timeout.
+   */
+  public class TimedStep implements WorkflowStep, TimeoutConfigurable {
+    /**
+     * @description Completes.
+     * @param ctx The step context.
+     * @return A COMPLETE result.
+     */
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'OutTimed');
+    }
+    /**
+     * @description Returns the step timeout.
+     * @return 300 seconds.
+     */
+    public Integer getTimeoutSeconds() {
+      return 300;
+    }
+  }
+
   // ============================================================
   // HELPERS
   // ============================================================
@@ -1045,15 +1066,16 @@ public class WorkflowInstanceHoldTest {
       new WorkflowTimeoutJob(inst.Id, STEP_B).executeInternal();
       Test.stopTest();
       System.assertEquals('Running', load(inst.Id).Status__c, 'Not failed');
+      Workflow_Step_Execution__c step = [
+        SELECT Status__c, Timeout_At__c
+        FROM Workflow_Step_Execution__c
+        WHERE Workflow_Instance__c = :inst.Id
+      ];
+      System.assertEquals('Pending', step.Status__c, 'The step stays Pending');
       System.assertEquals(
-        'Pending',
-        [
-          SELECT Status__c
-          FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c = :inst.Id
-        ]
-        .Status__c,
-        'The step stays Pending'
+        null,
+        step.Timeout_At__c,
+        'The deadline is cleared. Release arms it again.'
       );
     }
   }
@@ -1100,6 +1122,280 @@ public class WorkflowInstanceHoldTest {
       );
       Test.stopTest();
       System.assertEquals(1, stats.get('active'), 'Held counts as active');
+    }
+  }
+
+  // ============================================================
+  // 11. REVIEW REGRESSIONS
+  // ============================================================
+
+  @IsTest
+  static void testGateOnUnheldInstanceCostsNoSoqlOrDml() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'Running',
+        Current_Step__c = STEP_B
+      );
+      Test.startTest();
+      Integer q0 = Limits.getQueries();
+      Integer d0 = Limits.getDmlStatements();
+      Boolean stopped = WorkflowInstanceHoldGate.parkIfHeld(inst);
+      Integer q1 = Limits.getQueries();
+      Integer d1 = Limits.getDmlStatements();
+      Test.stopTest();
+      System.assertEquals(false, stopped, 'A run that is not held goes on');
+      System.assertEquals(q0, q1, 'The gate adds no SOQL');
+      System.assertEquals(d0, d1, 'The gate adds no DML');
+    }
+  }
+
+  // Review finding: a branch that ran before the park must not undo it.
+  @IsTest
+  static void testWaitOutcomeKeepsHeldPark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c held = insertInstance(WF, 'Held', WAIT_STEP);
+      Workflow_Instance__c live = insertInstance(WF, 'Running', WAIT_STEP);
+      Test.startTest();
+      for (
+        Workflow_Instance__c inst : new List<Workflow_Instance__c>{ held, live }
+      ) {
+        Workflow_Step_Execution__c exec = new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst.Id,
+          Step_Name__c = WAIT_STEP,
+          Status__c = 'Running',
+          Retry_Count__c = 0
+        );
+        insert exec;
+        WorkflowEngine.StepOutcomeContext outcome = new WorkflowEngine.StepOutcomeContext();
+        outcome.instance = [
+          SELECT Id, Status__c, Correlation_Key__c, Current_Step__c
+          FROM Workflow_Instance__c
+          WHERE Id = :inst.Id
+        ];
+        outcome.stepExec = exec;
+        outcome.result = StepResult.suspend();
+        outcome.isParallel = false;
+        WorkflowStepSuspension.handleSuspendOutcome(outcome);
+      }
+      Test.stopTest();
+      System.assertEquals('Held', load(held.Id).Status__c, 'Park is kept');
+      System.assertEquals(
+        'Suspended',
+        load(live.Id).Status__c,
+        'A run that is not parked suspends as before'
+      );
+    }
+  }
+
+  // Review finding: the sleep sweep must not route a held timed wait to its
+  // fallback step. After release, the next heartbeat routes it.
+  @IsTest
+  static void testSleepSweepWaitsForReleaseOfTimedWait() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertInstance(
+        SIGNAL_WF,
+        'Suspended',
+        WAIT_STEP
+      );
+      inst.Held_At__c = Datetime.now();
+      inst.Sleep_Until__c = Datetime.now().addMinutes(-1);
+      update inst;
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = WAIT_STEP,
+        Status__c = 'Pending',
+        Retry_Count__c = 0,
+        Output__c = '{"$timeoutStep":"' + STEP_C + '"}'
+      );
+      Test.startTest();
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      Workflow_Instance__c whileHeld = load(inst.Id);
+      Integer rowsWhileHeld = rows(inst.Id).size();
+      WorkflowInstanceHold.release(inst.Id);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      Test.stopTest();
+
+      System.assertEquals('Suspended', whileHeld.Status__c, 'Not woken');
+      System.assertEquals(WAIT_STEP, whileHeld.Current_Step__c, 'Not routed');
+      System.assertEquals(1, rowsWhileHeld, 'No fallback row while held');
+      Workflow_Instance__c released = load(inst.Id);
+      System.assertEquals(STEP_C, released.Current_Step__c, 'Routed later');
+      System.assertEquals('Running', released.Status__c, 'Woken later');
+    }
+  }
+
+  @IsTest
+  static void testHoldRejectsSuspendedCompensation() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = insertInstance(
+        WF,
+        'Suspended',
+        STEP_A + '_Compensate'
+      );
+      inst.Compensation_Stack__c = JSON.serialize(new List<String>{ STEP_A });
+      update inst;
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = STEP_A + '_Compensate',
+        Status__c = 'Pending',
+        Retry_Count__c = 0
+      );
+      Test.startTest();
+      WorkflowInstanceHold.HoldResult result = WorkflowInstanceHold.hold(
+        inst.Id,
+        'x'
+      );
+      Test.stopTest();
+      System.assertEquals(
+        WorkflowInstanceHold.Outcome.REJECTED_COMPENSATING,
+        result.outcome,
+        'A waiting rollback is rejected'
+      );
+      System.assertEquals(false, load(inst.Id).Held__c, 'Not held');
+    }
+  }
+
+  // Review finding: release must not make a run Running with no slot.
+  @IsTest
+  static void testReleaseKeepsSlotlessRunSuspended() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = insertInstance(WF, 'Held', STEP_A);
+      inst.Concurrency_Parked__c = true;
+      update inst;
+      Test.startTest();
+      WorkflowInstanceHold.release(inst.Id);
+      Test.stopTest();
+      Workflow_Instance__c after = load(inst.Id);
+      System.assertEquals('Suspended', after.Status__c, 'Admission decides');
+      System.assertNotEquals(null, after.Sleep_Until__c, 'Watchdog backstop');
+    }
+  }
+
+  @IsTest
+  static void testReleaseReArmsStepTimeout() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      String timed = 'WorkflowInstanceHoldTest.TimedStep';
+      Workflow_Instance__c inst = insertInstance(WF, 'Held', timed);
+      Workflow_Step_Execution__c exec = new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = timed,
+        Status__c = 'Pending',
+        Retry_Count__c = 0
+      );
+      insert exec;
+      Test.startTest();
+      WorkflowInstanceHold.release(inst.Id);
+      Test.stopTest();
+      System.assertNotEquals(
+        null,
+        [
+          SELECT Timeout_At__c
+          FROM Workflow_Step_Execution__c
+          WHERE Id = :exec.Id
+        ]
+        .Timeout_At__c,
+        'Release arms the step deadline again'
+      );
+    }
+  }
+
+  @IsTest
+  static void testParkAbortsScheduledJobs() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = insertInstance(WF, 'Running', STEP_B);
+      inst.Held_At__c = Datetime.now();
+      update inst;
+      String jobName = 'WorkflowSleep_' + inst.Id + '_test';
+      Test.startTest();
+      System.schedule(
+        jobName,
+        '0 0 0 1 1 ? 2099',
+        new WorkflowTimeoutJob(inst.Id, STEP_B)
+      );
+      Workflow_Instance__c loaded = [
+        SELECT Id, Status__c, Held__c
+        FROM Workflow_Instance__c
+        WHERE Id = :inst.Id
+      ];
+      Boolean stopped = WorkflowInstanceHoldGate.parkIfHeld(loaded);
+      Test.stopTest();
+      System.assertEquals(true, stopped, 'The gate parks');
+      System.assertEquals(
+        0,
+        [SELECT COUNT() FROM CronTrigger WHERE CronJobDetail.Name = :jobName],
+        'The park aborts the sleep job'
+      );
+    }
+  }
+
+  @IsTest
+  static void testHeldRunOnPausedDefinitionParksAsHeld() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRunFirstHop(key('PauseOrder'));
+      WorkflowInstanceHold.hold(instId, 'x');
+      WorkflowPauseGate.pauseDefinition(WF, 'order test');
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+      System.assertEquals('Held', load(instId).Status__c, 'Hold parks first');
+    }
+  }
+
+  @IsTest
+  static void testTriggerClearsHoldOffForwardPath() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c failed = insertInstance(WF, 'Running', STEP_B);
+      Workflow_Instance__c comp = insertInstance(WF, 'Running', STEP_B);
+      Workflow_Instance__c live = insertInstance(WF, 'Running', STEP_B);
+      for (
+        Workflow_Instance__c inst : new List<Workflow_Instance__c>{
+          failed,
+          comp,
+          live
+        }
+      ) {
+        inst.Held_At__c = Datetime.now();
+      }
+      update new List<Workflow_Instance__c>{ failed, comp, live };
+      Test.startTest();
+      failed.Status__c = 'Failed';
+      comp.Status__c = 'Compensating';
+      live.Status__c = 'Suspended';
+      update new List<Workflow_Instance__c>{ failed, comp, live };
+      Test.stopTest();
+      System.assertEquals(false, load(failed.Id).Held__c, 'Failed clears');
+      System.assertEquals(false, load(comp.Id).Held__c, 'Rollback clears');
+      System.assertEquals(true, load(live.Id).Held__c, 'Forward path keeps');
+    }
+  }
+
+  @IsTest
+  static void testContinueAsNewWithoutHoldDoesNotHold() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Test.startTest();
+      Id instId = WorkflowEngine.start(
+        'WorkflowDefinitionChangeTest.LoopWorkflow',
+        key('CanFree'),
+        null
+      );
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+      System.assertEquals(
+        false,
+        [
+          SELECT Held__c
+          FROM Workflow_Instance__c
+          WHERE Previous_Instance__c = :instId
+        ]
+        .Held__c,
+        'A successor of a run that is not held is not held'
+      );
     }
   }
 
