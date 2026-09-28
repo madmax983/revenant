@@ -70,10 +70,10 @@ The Pub/Sub API and CometD send Number fields as doubles (for example `1.0`).
 | `cancelling`             | integer       | Instances in `Cancelling` now.                                                                  |
 | `compensating`           | integer       | Instances in `Compensating` now.                                                                |
 | `compensationFailed`     | integer       | Instances in `CompensationFailed` now.                                                          |
-| `completedInWindow`      | integer       | Instances that became `Completed` in the window.                                                |
-| `failedInWindow`         | integer       | Instances that became `Failed` in the window.                                                   |
-| `compensatedInWindow`    | integer       | Instances that became `Compensated` in the window.                                              |
-| `cancelledInWindow`      | integer       | Instances that became `Cancelled` in the window.                                                |
+| `completedInWindow`      | integer       | Instances that became `Completed` in the window and are still `Completed`.                      |
+| `failedInWindow`         | integer       | Instances that became `Failed` in the window and are still `Failed`.                            |
+| `compensatedInWindow`    | integer       | Instances that became `Compensated` in the window and are still `Compensated`.                  |
+| `cancelledInWindow`      | integer       | Instances that became `Cancelled` in the window and are still `Cancelled`.                      |
 | `oldestActiveAgeSeconds` | integer, null | Age of the oldest instance that has one of the eight statuses above. See the rules.             |
 
 Rules:
@@ -104,6 +104,11 @@ Rules:
     engine writes a `Warn` row.
   - The liveness stamp write failed. Then the next window starts at the older
     stamp and overlaps the previous window.
+- The InWindow counts read the current instance row. An instance that
+  became terminal in the window and then started again (for example with
+  `retryWorkflow()` or `resumePastStep()`) before the snapshot is not in the
+  count. For a count of each terminal transition, subscribe to
+  `Workflow_Lifecycle__e`. It sends one event for each transition.
 - The window length changes. Send the InWindow values as counts with an
   interval, not as gauges.
 - A transaction can commit a terminal status near the window end, after the

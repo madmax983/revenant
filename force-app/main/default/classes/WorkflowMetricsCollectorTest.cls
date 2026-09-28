@@ -199,6 +199,25 @@ private class WorkflowMetricsCollectorTest {
     }
   }
 
+  // Contract: an InWindow count reads the current row. A failed instance
+  // that runs again before the snapshot is active, not failed.
+  @IsTest
+  static void restartedInstanceLeavesTheWindowCount() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = System.now();
+      Workflow_Instance__c inst = seed('Acme.A', 'Failed');
+      update new Workflow_Instance__c(Id = inst.Id, Status__c = 'Running');
+
+      WorkflowMetricsSnapshot.DefinitionMetrics a = byName(
+          WorkflowMetricsCollector.collect(now.addHours(-1), now.addMinutes(1))
+        )
+        .get('Acme.A');
+
+      Assert.areEqual(0, a.failedInWindow);
+      Assert.areEqual(1, a.running);
+    }
+  }
+
   @IsTest
   static void defaultGroupCapFitsTheAggregateLimit() {
     Assert.isTrue(

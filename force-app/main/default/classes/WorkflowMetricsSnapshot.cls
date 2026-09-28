@@ -14,6 +14,8 @@ public inherited sharing class WorkflowMetricsSnapshot {
   /**
    * @description Metrics of one workflow definition. Counts are never null.
    * The InWindow counts are for the window (Window_Start__c, Snapshot_At__c].
+   * They count instances that reached the status in the window and are still
+   * in it at the snapshot.
    */
   public class DefinitionMetrics {
     /** @description Value of Workflow_Name__c. */
@@ -34,13 +36,13 @@ public inherited sharing class WorkflowMetricsSnapshot {
     public Integer compensating = 0;
     /** @description Instances in CompensationFailed. */
     public Integer compensationFailed = 0;
-    /** @description Instances that became Completed in the window. */
+    /** @description Instances now Completed that became Completed in the window. */
     public Integer completedInWindow = 0;
-    /** @description Instances that became Failed in the window. */
+    /** @description Instances now Failed that became Failed in the window. */
     public Integer failedInWindow = 0;
-    /** @description Instances that became Compensated in the window. */
+    /** @description Instances now Compensated that became Compensated in the window. */
     public Integer compensatedInWindow = 0;
-    /** @description Instances that became Cancelled in the window. */
+    /** @description Instances now Cancelled that became Cancelled in the window. */
     public Integer cancelledInWindow = 0;
     /**
      * @description Age in seconds of the oldest active instance. Null when
