@@ -113,9 +113,9 @@ public inherited sharing class WorkflowTimeoutJob implements Schedulable {
   private Boolean shouldHoldForPause(Workflow_Instance__c instance) {
     Boolean pauseCandidate = (instance.Status__c == 'Pending' ||
     instance.Status__c == 'Running');
-    // An operator hold (issue #119) that waits for the gate gets the same rule.
+    // An operator hold (issue #119) that waits for the gate uses the same rule.
     Boolean parkPending =
-      instance.Held__c ||
+      instance.Held__c == true ||
       (WorkflowPauseGate.anyPaused() &&
       WorkflowPauseGate.isDefinitionPaused(instance.Workflow_Name__c));
     if (!pauseCandidate || !parkPending) {

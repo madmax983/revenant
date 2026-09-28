@@ -19,7 +19,7 @@ private class WorkflowDashboardHoldTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRunFirstHop('DashHold-' + Datetime.now().getTime());
-      String outcome = WorkflowDashboardCommandController.holdInstance(
+      Map<String, String> outcome = WorkflowDashboardCommandController.holdInstance(
         instId,
         'look at payload'
       );
@@ -28,7 +28,11 @@ private class WorkflowDashboardHoldTest {
       );
       Test.stopTest();
 
-      System.assertEquals('HELD', outcome, 'Hold returns the outcome name');
+      System.assertEquals(
+        'HELD',
+        outcome.get('outcome'),
+        'Hold returns the outcome name'
+      );
       Workflow_Instance__c inst = (Workflow_Instance__c) details.get(
         'instance'
       );
@@ -72,11 +76,15 @@ private class WorkflowDashboardHoldTest {
       Id instId = startAndRunFirstHop('DashRel-' + Datetime.now().getTime());
       WorkflowDashboardCommandController.holdInstance(instId, 'x');
       WorkflowEngine.runStep(instId);
-      String outcome = WorkflowDashboardCommandController.releaseHeldInstance(
+      Map<String, String> outcome = WorkflowDashboardCommandController.releaseHeldInstance(
         instId
       );
       Test.stopTest();
-      System.assertEquals('RELEASED', outcome, 'Release returns the outcome');
+      System.assertEquals(
+        'RELEASED',
+        outcome.get('outcome'),
+        'Release returns the outcome'
+      );
       System.assertEquals(
         'Running',
         [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :instId]
@@ -96,15 +104,78 @@ private class WorkflowDashboardHoldTest {
       );
       insert inst;
       Test.startTest();
-      String outcome = WorkflowDashboardCommandController.holdInstance(
+      Map<String, String> outcome = WorkflowDashboardCommandController.holdInstance(
         inst.Id,
         'x'
       );
       Test.stopTest();
       System.assertEquals(
         'REJECTED_TERMINAL',
-        outcome,
+        outcome.get('outcome'),
         'A terminal run is rejected without an exception'
+      );
+    }
+  }
+
+  @IsTest
+  static void testDetailsReportHoldable() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c done = new Workflow_Instance__c(
+        Workflow_Name__c = WF,
+        Status__c = 'Completed',
+        Correlation_Key__c = 'DashHoldable-' + Datetime.now().getTime()
+      );
+      insert done;
+      Test.startTest();
+      Id liveId = startAndRunFirstHop(
+        'DashHoldLive-' + Datetime.now().getTime()
+      );
+      Object live = WorkflowDashboardController.getInstanceDetails(liveId)
+        .get('holdable');
+      Object finished = WorkflowDashboardController.getInstanceDetails(done.Id)
+        .get('holdable');
+      Test.stopTest();
+      System.assertEquals(true, live, 'A running instance can be held');
+      System.assertEquals(false, finished, 'A finished instance cannot');
+    }
+  }
+
+  @IsTest
+  static void testHeldFilterFindsWaitingHold() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id waitingId = startAndRunFirstHop(
+        'DashHoldWait-' + Datetime.now().getTime()
+      );
+      startAndRunFirstHop('DashHoldFree-' + Datetime.now().getTime());
+      WorkflowInstanceHold.hold(waitingId, 'x');
+      WorkflowDashboardController.InstanceQuery query = new WorkflowDashboardController.InstanceQuery();
+      query.workflowName = WF;
+      query.status = 'Held';
+      List<Map<String, Object>> page = WorkflowDashboardController.getFilteredInstances(
+        query
+      );
+      Test.stopTest();
+      System.assertEquals(1, page.size(), 'Only the held instance');
+      System.assertEquals(waitingId, page[0].get('Id'), 'The waiting hold');
+    }
+  }
+
+  @IsTest
+  static void testActionReturnsOperatorMessage() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRunFirstHop(
+        'DashHoldMsg-' + Datetime.now().getTime()
+      );
+      Map<String, String> result = WorkflowDashboardCommandController.releaseHeldInstance(
+        instId
+      );
+      Test.stopTest();
+      System.assertEquals('NOT_HELD', result.get('outcome'), 'No-op');
+      System.assert(
+        String.isNotBlank(result.get('message')),
+        'The toast has readable text'
       );
     }
   }

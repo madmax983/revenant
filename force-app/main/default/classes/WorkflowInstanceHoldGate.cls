@@ -24,8 +24,8 @@ public inherited sharing class WorkflowInstanceHoldGate {
   /**
    * @description Parks the instance when it is held. Returns true when the
    * caller must stop the delivery.
-   * @param instance The instance being driven (loaded without a lock, with
-   * Status__c and Held__c).
+   * @param instance The instance that the runner drives (loaded without a
+   * lock, with Status__c, Workflow_Name__c and Held__c).
    * @return True when the instance is parked (now or before).
    */
   public static Boolean parkIfHeld(Workflow_Instance__c instance) {
@@ -33,6 +33,11 @@ public inherited sharing class WorkflowInstanceHoldGate {
       return true; // Stale delivery. Only release moves a parked instance.
     }
     if (instance.Held__c != true) {
+      return false;
+    }
+    // Hold rejects engine workflows. A hold set by direct DML must not park the
+    // watchdog either.
+    if (WorkflowPauseGate.isEngineWorkflow(instance.Workflow_Name__c)) {
       return false;
     }
     return park(instance);

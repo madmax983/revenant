@@ -16,49 +16,52 @@ Let an operator stop one workflow instance at its next step boundary, then let i
 - Continue-As-New marks the old instance `ContinuedAsNew` and inserts a new one.
 - This container has no Salesforce org. Apex tests cannot run here. Prettier parses Apex. Jest runs the LWC tests.
 
-## Brainstorming (options)
+## Brainstorm (options)
 
-| #   | Idea                                                                                                                                                 | Keep?                                                                                                            |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| B1  | Status `Held` only. Hold sets it at once.                                                                                                            | No. A step can be in flight. Its outcome writes `Running` and the hold is lost.                                  |
-| B2  | Fields only. Status does not change.                                                                                                                 | No. A parked `Running` row looks like an orphan. The watchdog re-drives it each sweep.                           |
-| B3  | Fields keep the hold. The gate sets status `Held` when the chain stops.                                                                              | Yes. The fields are the request. The status is the park.                                                         |
-| B4  | Separate hold object, keyed by instance Id.                                                                                                          | No. One more SOQL on each hop.                                                                                   |
-| B5  | Reuse `WorkflowPauseGate` with an instance key.                                                                                                      | No. AC 1 forbids it.                                                                                             |
-| B6  | Stored fields `Held_At__c` and `Hold_Reason__c`. Formula checkbox `Held__c` = `Held_At__c` is set. The runner loads only the formula.                | Yes. No SOQL on the hot path. An outcome update cannot overwrite a hold made during the step.                    |
-| B7  | Gate after the definition-change gate, before the pause gate.                                                                                        | Yes. A changed definition parks first. A hold never reads pause state.                                           |
-| B8  | Park: lock `FOR UPDATE`, check the hold again, abort scheduled jobs, set `Held`, clear sleep markers, write one log row. No step row.                | Yes. Same as the #89 park, without the marker row.                                                               |
-| B9  | Release of a parked instance: clear the hold, set `Running`, re-arm timeouts, enqueue. Release of a hold that did not park yet: clear the hold only. | Yes. No second driver.                                                                                           |
-| B10 | Outcome enum, no exception for expected states.                                                                                                      | Yes. AC 6 and AC 7.                                                                                              |
-| B18 | API on `WorkflowEngine`.                                                                                                                             | No. PMD `ExcessivePublicCount`: 21 of 20. Use `WorkflowInstanceHold`, the same as `WorkflowPauseGate` for pause. |
-| B11 | Reject a hold on an engine workflow.                                                                                                                 | Yes. A held watchdog stops the engine.                                                                           |
-| B12 | Reject a hold on `Compensating`, `Cancelling`, `CompensationFailed`.                                                                                 | Yes. The gate is on the forward path only. The hold would have no effect.                                        |
-| B13 | Trigger clears the hold when the status leaves the forward path.                                                                                     | Yes. A cancelled or failed row never shows as held.                                                              |
-| B14 | Continue-As-New copies the hold to the successor.                                                                                                    | Yes. A loop at a Continue-As-New boundary must stay held.                                                        |
-| B15 | Release the concurrency slot at park.                                                                                                                | No. `Paused`, `DefinitionChanged` and sleeps keep the slot. A new mid-flow admission path is a risk. Documented. |
-| B16 | Dashboard: status filter, badge, panel with reason and held-since, Hold and Release buttons.                                                         | Yes. AC 8.                                                                                                       |
-| B17 | Bulk hold, timed release.                                                                                                                            | No. Out of scope.                                                                                                |
+| #   | Idea                                                                                                                                                 | Keep?                                                                                                                     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| B1  | Status `Held` only. Hold sets it at once.                                                                                                            | No. A step can be in flight. Its outcome writes `Running` and the hold is lost.                                           |
+| B2  | Fields only. Status does not change.                                                                                                                 | No. A parked `Running` row looks like an orphan. The watchdog re-drives it each sweep.                                    |
+| B3  | Fields keep the hold. The gate sets status `Held` when the chain stops.                                                                              | Yes. The fields are the request. The status is the park.                                                                  |
+| B4  | Separate hold object, keyed by instance Id.                                                                                                          | No. One more SOQL on each hop.                                                                                            |
+| B5  | Reuse `WorkflowPauseGate` with an instance key.                                                                                                      | No. AC 1 forbids it.                                                                                                      |
+| B6  | Stored fields `Held_At__c` and `Hold_Reason__c`. Formula checkbox `Held__c` = `Held_At__c` is set. The runner loads only the formula.                | Yes. No SOQL on the hot path. An outcome update cannot overwrite a hold made during the step.                             |
+| B7  | Gate after the definition-change gate, before the pause gate.                                                                                        | Yes. A changed definition parks first. A hold never reads pause state.                                                    |
+| B8  | Park: lock `FOR UPDATE`, check the hold again, abort scheduled jobs, set `Held`, clear sleep markers, write one log row. No step row.                | Yes. Same as the #89 park, without the marker row.                                                                        |
+| B9  | Release of a parked instance: clear the hold, set `Running`, re-arm timeouts, enqueue. Release of a hold that did not park yet: clear the hold only. | Yes. No second driver.                                                                                                    |
+| B10 | Outcome enum, no exception for expected states.                                                                                                      | Yes. AC 6 and AC 7.                                                                                                       |
+| B11 | Reject a hold on an engine workflow.                                                                                                                 | Yes. A held watchdog stops the engine.                                                                                    |
+| B12 | Reject a hold on `Compensating`, `Cancelling`, `CompensationFailed`.                                                                                 | Yes. The gate is on the forward path only. The hold would have no effect.                                                 |
+| B13 | Trigger clears the hold when the status leaves the forward path.                                                                                     | Yes. A cancelled or failed row never shows as held.                                                                       |
+| B14 | Continue-As-New copies the hold to the successor.                                                                                                    | Yes. A loop at a Continue-As-New boundary must stay held.                                                                 |
+| B15 | Release the concurrency slot at park.                                                                                                                | No. `Paused`, `DefinitionChanged` and sleeps keep the slot. A new mid-flow admission path is a risk. The docs state this. |
+| B16 | Dashboard: status filter, badge, panel with reason and held-since, Hold and Release buttons.                                                         | Yes. AC 8.                                                                                                                |
+| B17 | Bulk hold, timed release.                                                                                                                            | No. Out of scope.                                                                                                         |
+| B18 | API on `WorkflowEngine`.                                                                                                                             | No. PMD `ExcessivePublicCount`: 21 of 20. Use `WorkflowInstanceHold`, the same as `WorkflowPauseGate` for pause.          |
 
-## Reverse Brainstorming (how can this fail?)
+## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                               | Prevention                                                                                                                                                      |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| An outcome update writes an old hold value back.          | The runner loads only the formula `Held__c`. DML ignores it.                                                                                                    |
-| Release enqueues a second driver while the chain is live. | Release enqueues only from status `Held`.                                                                                                                       |
-| The gate and release race.                                | Both lock the instance. The gate checks `Held_At__c` again under the lock.                                                                                      |
-| The watchdog re-drives a held row as an orphan.           | Status `Held` is not `Running`.                                                                                                                                 |
-| A stall alert fires for a parked row.                     | `Held` is not a stall status.                                                                                                                                   |
-| A signal is lost while held.                              | `Held` is in the signal lookup lists. The signal stays `Received`.                                                                                              |
-| A timeout fails a held step.                              | Park aborts scheduled jobs. The sweep skips `Held` parents. The timeout job and sweep keep a `Pending` step while the hold waits for the gate. Release re-arms. |
-| The hold escapes through Continue-As-New.                 | Copy the hold to the successor.                                                                                                                                 |
-| A hold stops the watchdog.                                | Reject engine workflows.                                                                                                                                        |
-| A hold on a terminal row writes `Terminal_At__c`.         | Reject before any DML.                                                                                                                                          |
-| A cancelled row still shows as held.                      | The trigger clears the hold.                                                                                                                                    |
-| Dedup starts a second run while one is held.              | `Held` is an active status. The key stays reserved.                                                                                                             |
-| A parallel branch overwrites the park.                    | The parallel join keeps `Held`.                                                                                                                                 |
-| The test harness loops on a held row.                     | `Held` is a parked status in the harness.                                                                                                                       |
-| A long reason fails the update.                           | Truncate to 255 characters.                                                                                                                                     |
-| A user with no operator permission holds a row.           | The dashboard endpoint checks `Workflow_Operator_Action`.                                                                                                       |
+| Way to fail                                                 | Prevention                                                                                                                                                      |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| An outcome update writes an old hold value back.            | The runner loads only the formula `Held__c`. DML ignores it.                                                                                                    |
+| Release enqueues a second driver while the chain is live.   | Release enqueues only from status `Held`.                                                                                                                       |
+| The gate and release race.                                  | Both lock the instance. The gate checks `Held_At__c` again under the lock.                                                                                      |
+| The watchdog re-drives a held row as an orphan.             | Status `Held` is not `Running`.                                                                                                                                 |
+| A stall alert fires for a parked row.                       | `Held` is not a stall status.                                                                                                                                   |
+| A signal is lost while held.                                | `Held` is in the signal lookup lists. The signal stays `Received`.                                                                                              |
+| A timeout fails a held step.                                | Park aborts scheduled jobs. The sweep skips `Held` parents. The timeout job and sweep keep a `Pending` step while the hold waits for the gate. Release re-arms. |
+| The hold escapes through Continue-As-New.                   | Copy the hold to the successor.                                                                                                                                 |
+| A hold stops the watchdog.                                  | Reject engine workflows.                                                                                                                                        |
+| A hold on a terminal row writes `Terminal_At__c`.           | Reject before any DML.                                                                                                                                          |
+| A cancelled row still shows as held.                        | The trigger clears the hold.                                                                                                                                    |
+| Dedup starts a second run while one is held.                | `Held` is an active status. The key stays reserved.                                                                                                             |
+| A parallel branch overwrites the park.                      | The parallel join keeps `Held`. A step that waits keeps `Held` (review finding).                                                                                |
+| The watchdog routes a held timed wait to its fallback step. | The sleep sweep skips a held instance (review finding).                                                                                                         |
+| Release makes a run `Running` with no concurrency slot.     | Release sets `Suspended`. The admission gate decides (review finding).                                                                                          |
+| Direct DML holds the watchdog.                              | The gate never parks an engine workflow (review finding).                                                                                                       |
+| The test harness loops on a held row.                       | `Held` is a parked status in the harness.                                                                                                                       |
+| A long reason fails the update.                             | Truncate to 255 characters.                                                                                                                                     |
+| A user with no operator permission holds a row.             | The dashboard endpoint checks `Workflow_Operator_Action`.                                                                                                       |
 
 ## Six Thinking Hats
 
@@ -100,11 +103,12 @@ Gate `parkIfHeld(instance)`:
 | other         | true      | hold cleared                          | continue   |
 | other         | true      | not `Pending`, `Running`, `Suspended` | stop       |
 | other         | true      | held, parkable                        | park, stop |
+| other         | true      | engine workflow (not read)            | continue   |
 
 ## Tasks
 
-1. RED: `WorkflowInstanceHoldTest` (Apex) and jest tests. Stubs compile, tests fail.
-2. GREEN: fields, picklist value, gate, service, engine API, status lists, trigger, Continue-As-New, timeouts, stall, dashboard.
+1. RED: `WorkflowInstanceHoldTest` (Apex) and jest tests. The API does not exist yet, so the tests fail.
+2. GREEN: fields, picklist value, gate, public API (`WorkflowInstanceHold`), status lists, trigger, Continue-As-New, timeouts, dashboard.
 3. REFACTOR: shared engine-workflow check, docs, ADR 0006.
 4. Review from several angles. Fix findings.
 5. Map each AC to evidence.

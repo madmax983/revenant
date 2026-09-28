@@ -5,12 +5,13 @@
  *
  * `hold` records the hold on one instance. It does not change the status: the
  * gate in `WorkflowInstanceHoldGate` parks the instance at the next step
- * boundary, so a step that runs now is not stopped. `release` clears the hold.
+ * boundary. If a step runs when the operator holds the instance, the step
+ * finishes. `release` clears the hold.
  * When the instance is parked, release sets `Running`, re-arms the step
  * timeouts and enqueues the step (or each open parallel branch). Both calls
  * lock the instance. Expected states return an outcome, not an exception.
  * Neither call reads or writes pause state or schedules a job. All DML and
- * SOQL run in system mode. Callers own the permission checks.
+ * SOQL run in system mode. The caller must check permissions.
  */
 public inherited sharing class WorkflowInstanceHold {
   private static final Map<Outcome, String> MESSAGES = new Map<Outcome, String>{
@@ -86,8 +87,8 @@ public inherited sharing class WorkflowInstanceHold {
 
   /**
    * @description Holds one instance. The instance stops at its next step
-   * boundary. A step that runs now finishes. Siblings and the definition pause
-   * state do not change. A second hold is a no-op.
+   * boundary. If a step runs now, the step finishes. Other instances and the
+   * definition pause state do not change. A second hold is a no-op.
    * @param instanceId Id of the instance to hold
    * @param reason operator reason, or blank; truncated to 255 characters
    * @return the outcome; terminal, compensating and engine-workflow instances
@@ -196,6 +197,18 @@ public inherited sharing class WorkflowInstanceHold {
       return;
     }
     inst.Status__c = 'Running';
+  }
+
+  /**
+   * @description Tells if hold accepts the instance: it is on the forward
+   * path, it is not a rollback, and it is not an engine workflow. The
+   * dashboard shows Hold only when this is true.
+   * @param inst the instance, with Id, Status__c, Workflow_Name__c and
+   * Compensation_Stack__c
+   * @return true when hold can accept the instance
+   */
+  public static Boolean isHoldable(Workflow_Instance__c inst) {
+    return rejection(inst) == null;
   }
 
   // Locks the instance. Returns null when it does not exist.

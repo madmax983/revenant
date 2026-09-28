@@ -127,20 +127,20 @@ public inherited sharing class WorkflowDashboardCommandController {
    * boundary (issue #119).
    * @param instanceId The instance to hold.
    * @param reason The operator reason, or blank.
-   * @return The WorkflowInstanceHold.Outcome name, for example HELD or REJECTED_TERMINAL.
+   * @return The outcome name ('outcome', for example HELD) and the text ('message').
    */
   @AuraEnabled
-  public static String holdInstance(Id instanceId, String reason) {
+  public static Map<String, String> holdInstance(Id instanceId, String reason) {
     return WorkflowHoldCommandService.holdInstance(instanceId, reason);
   }
 
   /**
    * @description Operator action to release a held instance (issue #119).
    * @param instanceId The instance to release.
-   * @return The WorkflowInstanceHold.Outcome name, for example RELEASED or NOT_HELD.
+   * @return The outcome name ('outcome', for example RELEASED) and the text ('message').
    */
   @AuraEnabled
-  public static String releaseHeldInstance(Id instanceId) {
+  public static Map<String, String> releaseHeldInstance(Id instanceId) {
     return WorkflowHoldCommandService.releaseHeldInstance(instanceId);
   }
 

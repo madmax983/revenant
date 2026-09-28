@@ -97,15 +97,6 @@ const ASYNC_LIMITS = {
   HEAP: 12000000,
 };
 
-// Issue #119: statuses on the forward path that an operator can hold.
-const HOLDABLE_STATUSES = [
-  "Pending",
-  "Running",
-  "Suspended",
-  "Paused",
-  "DefinitionChanged",
-];
-
 export default class WorkflowDashboard extends LightningElement {
   instances = [];
   filteredInstances = [];
@@ -120,8 +111,9 @@ export default class WorkflowDashboard extends LightningElement {
   loadingDetails = false;
   successor = null;
   approvalComments = "";
-  // Issue #119: reason typed before Hold.
+  // Issue #119: reason typed before Hold, and the instance it is for.
   holdReason = "";
+  holdReasonInstanceId = null;
   modalOpen = false;
   searchTerm = "";
   viewingDoctor = false;
@@ -484,10 +476,22 @@ export default class WorkflowDashboard extends LightningElement {
     return this.isHeld && this.selectedInst.Status__c !== "Held";
   }
 
-  // Hold applies to the forward path only.
+  get holdReasonLabel() {
+    return (this.selectedInst && this.selectedInst.Hold_Reason__c) || "None";
+  }
+
+  // A hold on a Paused or DefinitionChanged instance does not end that park.
+  get isHeldWithOtherPark() {
+    return (
+      this.isHeld &&
+      (this.selectedInst.Status__c === "Paused" ||
+        this.selectedInst.Status__c === "DefinitionChanged")
+    );
+  }
+
+  // The engine decides: forward path only, no rollback, no engine workflow.
   get canHold() {
-    if (!this.selectedInst || this.isHeld) return false;
-    return HOLDABLE_STATUSES.includes(this.selectedInst.Status__c);
+    return !!this.selectedInst && !this.isHeld && this.selectedInst.holdable;
   }
 
   get definitionChange() {
@@ -1054,8 +1058,6 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
-    // Issue #119: a typed hold reason belongs to one instance.
-    this.holdReason = "";
     this.filterInstancesList();
     this.loadDetails(true);
   }
@@ -1070,8 +1072,6 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
-    // Issue #119: a typed hold reason belongs to one instance.
-    this.holdReason = "";
     this.filterInstancesList();
     this.loadDetails(true);
   }
@@ -1137,6 +1137,7 @@ export default class WorkflowDashboard extends LightningElement {
           attributes: result.attributes || [],
           definitionChange: this.mapDefinitionChange(result.definitionChange),
           heldSinceFormatted: this.formatDateTime(inst.Held_At__c),
+          holdable: result.holdable === true,
           // Issue #112: { message, createdDate, formattedDate } or null.
           stepHistoryWarning: result.stepHistoryWarning
             ? {
@@ -2674,6 +2675,14 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleHoldReasonChange(event) {
     this.holdReason = event.target.value;
+    this.holdReasonInstanceId = this.selectedInstanceId;
+  }
+
+  // Issue #119: a typed reason belongs to the instance it was typed for.
+  get holdReasonValue() {
+    return this.holdReasonInstanceId === this.selectedInstanceId
+      ? this.holdReason
+      : "";
   }
 
   // Issue #119: hold one instance at its next step boundary.
@@ -2681,25 +2690,21 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadingDetails = true;
     holdInstance({
       instanceId: this.selectedInstanceId,
-      reason: this.holdReason,
+      reason: this.holdReasonValue,
     })
-      .then((outcome) => {
-        if (outcome === "HELD" || outcome === "ALREADY_HELD") {
-          this.showToast(
-            "Success",
-            "The instance stops at its next step boundary.",
-            "success",
-          );
+      .then((result) => {
+        const held = result.outcome === "HELD";
+        this.showToast(
+          held ? "Success" : "Warning",
+          result.message,
+          held ? "success" : "warning",
+        );
+        if (held) {
           this.holdReason = "";
-        } else {
-          this.showToast(
-            "Warning",
-            "The engine did not hold the instance: " + outcome,
-            "warning",
-          );
         }
         this.refreshInstances();
         this.loadDetails(true);
+        this.startPolling();
       })
       .catch((error) => {
         this.showToast(
@@ -2717,13 +2722,12 @@ export default class WorkflowDashboard extends LightningElement {
   handleReleaseHold() {
     this.loadingDetails = true;
     releaseHeldInstance({ instanceId: this.selectedInstanceId })
-      .then((outcome) => {
+      .then((result) => {
+        const released = result.outcome === "RELEASED";
         this.showToast(
-          outcome === "RELEASED" ? "Success" : "Warning",
-          outcome === "RELEASED"
-            ? "The instance continues from the step where it stopped."
-            : "The instance is not held: " + outcome,
-          outcome === "RELEASED" ? "success" : "warning",
+          released ? "Success" : "Warning",
+          result.message,
+          released ? "success" : "warning",
         );
         this.refreshInstances();
         this.loadDetails(true);

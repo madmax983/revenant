@@ -63,7 +63,10 @@ public inherited sharing class WorkflowInstanceListService {
     if (String.isNotBlank(workflowName)) {
       whereBody += ' AND Workflow_Name__c = :workflowName';
     }
-    if (String.isNotBlank(status)) {
+    if (status == WorkflowInstanceHoldGate.STATUS) {
+      // Issue #119: the Held filter also finds a hold that waits to park.
+      whereBody += ' AND (Status__c = :status OR Held_At__c != NULL)';
+    } else if (String.isNotBlank(status)) {
       whereBody += ' AND Status__c = :status';
     }
     if (String.isNotBlank(failureCategory)) {
@@ -211,7 +214,10 @@ public inherited sharing class WorkflowInstanceListService {
     if (String.isNotBlank(workflowName)) {
       whereBody += ' AND Workflow_Name__c = :workflowName';
     }
-    if (String.isNotBlank(status)) {
+    if (status == WorkflowInstanceHoldGate.STATUS) {
+      // Issue #119: the Held filter also finds a hold that waits to park.
+      whereBody += ' AND (Status__c = :status OR Held_At__c != NULL)';
+    } else if (String.isNotBlank(status)) {
       whereBody += ' AND Status__c = :status';
     }
     if (String.isNotBlank(searchTerm)) {

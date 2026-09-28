@@ -1318,7 +1318,7 @@ public class WorkflowInstanceHoldTest {
         new WorkflowTimeoutJob(inst.Id, STEP_B)
       );
       Workflow_Instance__c loaded = [
-        SELECT Id, Status__c, Held__c
+        SELECT Id, Status__c, Workflow_Name__c, Held__c
         FROM Workflow_Instance__c
         WHERE Id = :inst.Id
       ];
@@ -1395,6 +1395,75 @@ public class WorkflowInstanceHoldTest {
         ]
         .Held__c,
         'A successor of a run that is not held is not held'
+      );
+    }
+  }
+
+  @IsTest
+  static void testGateNeverParksEngineWorkflow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c watchdog = insertInstance(
+        'WatchdogWorkflow',
+        'Running',
+        'WatchdogStep'
+      );
+      watchdog.Held_At__c = Datetime.now(); // Direct DML, not the API.
+      update watchdog;
+      Test.startTest();
+      Boolean stopped = WorkflowInstanceHoldGate.parkIfHeld(
+        [
+          SELECT Id, Status__c, Workflow_Name__c, Held__c
+          FROM Workflow_Instance__c
+          WHERE Id = :watchdog.Id
+        ]
+      );
+      Test.stopTest();
+      System.assertEquals(false, stopped, 'The watchdog runs on');
+      System.assertEquals('Running', load(watchdog.Id).Status__c, 'Not parked');
+    }
+  }
+
+  // AC 4: release puts the parked chain back on the queue.
+  @IsTest
+  static void testReleaseEnqueuesParkedChain() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = false;
+      Workflow_Instance__c inst = insertInstance(WF, 'Held', STEP_B);
+      // No Test.stopTest(): the job must stay queued, not run.
+      Integer before = Limits.getQueueableJobs();
+      WorkflowInstanceHold.release(inst.Id);
+      System.assertEquals(
+        before + 1,
+        Limits.getQueueableJobs(),
+        'Release enqueues one orchestrator'
+      );
+    }
+  }
+
+  // AC 9 with a step timeout: park and release add no scheduled job.
+  @IsTest
+  static void testTimedStepHoldAddsNoScheduledJob() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      String timed = 'WorkflowInstanceHoldTest.TimedStep';
+      Workflow_Instance__c inst = insertInstance(WF, 'Running', timed);
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = timed,
+        Status__c = 'Pending',
+        Retry_Count__c = 0
+      );
+      WorkflowTimeoutScheduler.scheduleTimeoutJobIfNeeded(inst.Id, timed);
+      Integer jobsBefore = [SELECT COUNT() FROM CronTrigger];
+      Test.startTest();
+      WorkflowInstanceHold.hold(inst.Id, 'x');
+      WorkflowEngine.runStep(inst.Id);
+      WorkflowInstanceHold.release(inst.Id);
+      Integer jobsAfter = [SELECT COUNT() FROM CronTrigger];
+      Test.stopTest();
+      System.assert(
+        jobsAfter <= jobsBefore,
+        'No extra scheduled job: ' + jobsBefore + ' then ' + jobsAfter
       );
     }
   }

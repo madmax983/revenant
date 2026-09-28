@@ -296,7 +296,7 @@
                                                                 <span class={inst.stalledBadgeClass} style="margin-right: 8px;">STALLED</span>
                                                             </template>
                                                             <template if:true={inst.isHoldWaiting}>
-                                                                <span class="badge badge-cyan" style="margin-right: 8px;" data-id="held-marker" title="Held. The instance stops at its next step boundary.">HOLD WAITING</span>
+                                                                <span class="badge badge-cyan" style="margin-right: 8px;" data-id="held-marker" title="Held. The instance stops at its next step boundary.">HOLD WAITING<span class="slds-assistive-text">: held. The instance stops at its next step boundary.</span></span>
                                                             </template>
                                                             <template if:true={inst.stepHistoryWarning}>
                                                                 <span class="badge badge-yellow" style="margin-right: 8px;" data-id="step-history-badge" title="Step history is large. Change this workflow to use Continue-As-New.">LONG HISTORY<span class="slds-assistive-text">: step history is large. Change this workflow to use Continue-As-New.</span></span>
@@ -1354,7 +1354,7 @@
                                                  variant="label-hidden"
                                                  placeholder="Hold reason (optional)"
                                                  max-length="255"
-                                                 value={holdReason}
+                                                 value={holdReasonValue}
                                                  onchange={handleHoldReasonChange}
                                                  class="slds-m-right_x-small">
                                              </lightning-input>
@@ -1566,14 +1566,19 @@
                                         <div class="slds-col slds-size_1-of-1 slds-p-bottom_small" data-id="hold-panel">
                                             <div class="slds-text-title text-cyan">Held</div>
                                             <div class="slds-text-body_regular slds-m-bottom_x-small">
-                                                An operator held this instance. No step runs until an operator releases it. Siblings continue.
+                                                An operator held this instance. No step runs until an operator releases it. Other instances of the definition continue.
                                             </div>
-                                            <template if:true={isHoldWaiting}>
-                                                <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small" data-id="hold-waiting">
-                                                    The instance stops at its next step boundary. A step that runs now finishes.
+                                            <template if:true={isHeldWithOtherPark}>
+                                                <div class="slds-text-body_small slds-m-bottom_x-small" data-id="hold-other-park">
+                                                    This instance is also paused or stopped for a definition change. Release Hold removes only the hold.
                                                 </div>
                                             </template>
-                                            <div class="slds-text-body_small" data-id="hold-reason">Reason: {selectedInst.Hold_Reason__c}</div>
+                                            <template if:true={isHoldWaiting}>
+                                                <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small" data-id="hold-waiting">
+                                                    The instance stops at its next step boundary. If a step runs now, the step finishes.
+                                                </div>
+                                            </template>
+                                            <div class="slds-text-body_small" data-id="hold-reason">Reason: {holdReasonLabel}</div>
                                             <div class="slds-text-body_small slds-text-color_weak" data-id="hold-since">Held since: {selectedInst.heldSinceFormatted}</div>
                                         </div>
                                     </template>

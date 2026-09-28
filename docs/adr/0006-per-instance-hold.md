@@ -6,20 +6,22 @@
 
 ## Context
 
-An operator can cancel one instance or pause one definition. Cancel is destructive. A definition pause stops all sibling instances. An operator needs to stop one instance at a safe point and then let it continue.
+An operator can cancel one instance or pause one definition. Cancel is destructive. A definition pause stops all sibling instances. An operator needs to stop one instance at a step boundary and then let it continue from the same step.
 
 ## Decision
 
-1. API: `WorkflowInstanceHold.hold(instanceId, reason)` and `WorkflowInstanceHold.release(instanceId)`. Each returns a `HoldResult` with an `Outcome`. Expected states do not throw. `WorkflowEngine` is at the PMD `ExcessivePublicCount` limit (19 of 20). The definition pause API is also outside `WorkflowEngine`, on `WorkflowPauseGate`.
+1. API: `WorkflowInstanceHold.hold(instanceId, reason)` and `WorkflowInstanceHold.release(instanceId)`. Each returns a `HoldResult` with an `Outcome`. The calls do not throw an exception for an expected state. `WorkflowEngine` is at the PMD `ExcessivePublicCount` limit (19 of 20). The definition pause API is also outside `WorkflowEngine`, on `WorkflowPauseGate`.
 2. Schema on `Workflow_Instance__c`: `Held_At__c` (DateTime), `Hold_Reason__c` (Text 255), formula checkbox `Held__c` (`Held_At__c` is set), and the status value `Held`.
 3. Hold writes only `Held_At__c` and `Hold_Reason__c`. It does not change the status.
 4. `WorkflowInstanceHoldGate.parkIfHeld` runs in `WorkflowStepRunner` after the definition-change gate and before the pause gate. On a held instance it locks the row, aborts the scheduled jobs, and sets status `Held`. It writes no step row.
 5. The runner loads only the formula `Held__c`. DML ignores formula fields, so an outcome update cannot overwrite a hold made during a step.
-6. Release from `Held`: clear the hold, set `Running`, re-arm step timeouts, enqueue the step (or each open parallel branch). Release before the park: clear the hold only.
+6. Release from `Held`: clear the hold, set `Running` (`Suspended` for a run that waits for a concurrency slot), re-arm step timeouts, enqueue the step (or each open parallel branch). Release before the park: clear the hold only.
 7. `Held` joins the park status lists of `Paused` and `DefinitionChanged`.
 8. The trigger clears the hold when the status leaves the forward path.
 9. Continue-As-New copies the hold to the successor.
 10. Hold rejects terminal, compensating and engine-workflow instances.
+11. A step that waits (suspend, sleep, retry, child, approval) keeps the `Held` status. A branch that ran before the park cannot undo it.
+12. The sleep sweep skips a held instance. A held timed wait does not route to its fallback step until release.
 
 ## Consequences
 
@@ -29,10 +31,11 @@ An operator can cancel one instance or pause one definition. Cancel is destructi
 - Held rows keep their correlation key.
 - A hold does not apply to compensation or to child instances.
 - The schema change is additive: three fields and one picklist value.
+- Continue-As-New does one more SOQL query for a workflow that is not an engine workflow.
 
 ## Rejected Options
 
-- Status `Held` set at once by `hold`: an in-flight step outcome writes `Running` and loses the hold.
+- `hold` sets status `Held` immediately: the outcome of a step that runs writes `Running` and loses the hold.
 - Fields only, no status: a parked `Running` row looks like an orphan to the watchdog.
 - A separate hold object: one more SOQL on each hop.
 - An instance key in `WorkflowPauseGate`: the issue forbids it.

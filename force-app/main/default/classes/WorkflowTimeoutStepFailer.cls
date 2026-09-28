@@ -80,7 +80,7 @@ public inherited sharing class WorkflowTimeoutStepFailer {
   ) {
     if (
       (parent.Status__c == 'Pending' || parent.Status__c == 'Running') &&
-      (parent.Held__c ||
+      (parent.Held__c == true ||
       (WorkflowPauseGate.anyPaused() &&
       WorkflowPauseGate.isDefinitionPaused(parent.Workflow_Name__c)))
     ) {
