@@ -13,6 +13,9 @@
  * permissions.
  */
 public inherited sharing class WorkflowHeartbeatService {
+  // Rows put into the admission queue per heartbeat (issue #132).
+  private static final Integer QUEUE_BACKFILL_ROWS = 200;
+
   /**
    * @description Evaluates and resumes suspended workflows that have exceeded
    * their sleep time, and terminates active steps that have exceeded their
@@ -71,6 +74,14 @@ public inherited sharing class WorkflowHeartbeatService {
       ConcurrencyGate.reconcileAll();
     } catch (Exception ignored) {
       // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 4a. Issue #132: put waiting rows from before admission priority into the
+    // indexed admission queue, so that the gate sees them.
+    try {
+      ConcurrencyAdmissionOrder.backfillQueue(QUEUE_BACKFILL_ROWS);
+    } catch (Exception ignored) {
+      // Best-effort backfill; a failure here must not abort the watchdog heartbeat.
     }
 
     // 4b. Reconcile circuit breakers: flip every Open breaker whose open duration

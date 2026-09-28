@@ -35,6 +35,11 @@ public inherited sharing class ConcurrencyAdmissionOrder {
 
   private static final Long MS_PER_MINUTE = 60000L;
 
+  // Test seam: skips the queue sync, so a test can make a row from before
+  // this feature (a waiting row with a blank queue field).
+  @TestVisible
+  private static Boolean skipQueueSync = false;
+
   /**
    * @description Returns the priority for a new instance: the clamped
    * override, else the clamped config value, else MIN_PRIORITY.
@@ -130,7 +135,39 @@ public inherited sharing class ConcurrencyAdmissionOrder {
    * @param row The Workflow_Instance__c row that is saved.
    */
   public static void syncQueueField(Workflow_Instance__c row) {
+    if (skipQueueSync) {
+      return;
+    }
     row.Admission_Queue__c = isWaiting(row) ? row.Workflow_Name__c : null;
+  }
+
+  /**
+   * @description Sets `Admission_Queue__c` on waiting rows from before this
+   * feature. Until then the gate does not see them. The watchdog heartbeat
+   * calls it. An admin can also run it once after deploy.
+   * @param maxRows The maximum number of rows to fix in one call.
+   * @return The number of rows fixed.
+   */
+  public static Integer backfillQueue(Integer maxRows) {
+    List<Workflow_Instance__c> rows = [
+      SELECT Id, Workflow_Name__c
+      FROM Workflow_Instance__c
+      WHERE
+        Admission_Queue__c = NULL
+        AND Concurrency_Parked__c = TRUE
+        AND Concurrency_Slot_Held__c = FALSE
+        AND Status__c IN :WAITING_STATUSES
+      WITH SYSTEM_MODE
+      ORDER BY Id ASC
+      LIMIT :maxRows
+    ];
+    for (Workflow_Instance__c row : rows) {
+      row.Admission_Queue__c = row.Workflow_Name__c;
+    }
+    if (!rows.isEmpty()) {
+      Database.update(rows, true, AccessLevel.SYSTEM_MODE);
+    }
+    return rows.size();
   }
 
   /**

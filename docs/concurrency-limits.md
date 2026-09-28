@@ -158,9 +158,11 @@ effect. A large window lets low-priority work wait longer.
   gate visit is a new start or a retry timer (30–45 s). Under a large burst,
   the timers fall back to the watchdog, and the cycle is longer.
 - A row from before this feature has no key. It ranks first. Such rows go in
-  Id order among themselves. The gate does not write a key on them. A row
-  from before this feature gets `Admission_Queue__c` at its next save (for
-  example, its next park).
+  Id order among themselves. The gate does not write a key on them.
+- A waiting row from before this feature also has a blank
+  `Admission_Queue__c`. The gate does not see it until the field is set. The
+  watchdog heartbeat sets it on 200 rows per sweep. To set it at once after
+  deploy, run `scripts/apex/backfill_admission_queue.apex` until it prints 0.
 - The feature adds no scheduled job class and no Platform Event. A yield is
   a normal park: it schedules one retry timer, as a park does.
 - With one priority class, a candidate can now yield to an older waiting

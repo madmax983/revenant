@@ -210,6 +210,43 @@ public class ConcurrencyAdmissionOrderTest {
   }
 
   @IsTest
+  static void testBackfillQueueFindsRowsFromBeforeFeature() {
+    ConcurrencyAdmissionOrder.skipQueueSync = true;
+    Workflow_Instance__c legacy = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'queue-legacy-1',
+      Concurrency_Parked__c = true
+    );
+    Workflow_Instance__c running = new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Running',
+      Correlation_Key__c = 'queue-legacy-2',
+      Concurrency_Slot_Held__c = true
+    );
+    insert new List<Workflow_Instance__c>{ legacy, running };
+    ConcurrencyAdmissionOrder.skipQueueSync = false;
+
+    Test.startTest();
+    Integer fixed = ConcurrencyAdmissionOrder.backfillQueue(200);
+    Integer again = ConcurrencyAdmissionOrder.backfillQueue(200);
+    Test.stopTest();
+
+    System.assertEquals(1, fixed, 'Only the waiting row is fixed');
+    System.assertEquals(0, again, 'A second call has nothing to fix');
+    System.assertEquals(
+      WF,
+      [
+        SELECT Admission_Queue__c
+        FROM Workflow_Instance__c
+        WHERE Id = :legacy.Id
+      ]
+      .Admission_Queue__c,
+      'The waiting row is in the queue'
+    );
+  }
+
+  @IsTest
   static void testTerminalRowLeavesQueue() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = WF,

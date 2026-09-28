@@ -18,7 +18,7 @@ Under a full ceiling, parked instances retry on their own timers. The first time
 6. The gate reads the order only when a slot is free: one query, up to the number of free slots, under the counter lock. The candidate gets a slot only if fewer instances rank ahead than slots are free. If not, the candidate parks again (it yields).
 7. The gate wakes the instances ahead (max 10) with one admit-only Queueable, `ConcurrencyAdmissionWake`. It runs the gates of a normal delivery up to admission, and never runs a step. The gate does not wake when the Queueable budget is spent.
 8. An admit or a park aborts the old retry timer of the candidate.
-9. A row from before this feature has no key. It ranks first, in Id order among such rows. The gate does not write a key.
+9. A row from before this feature has no key. It ranks first, in Id order among such rows. The gate does not write a key. The watchdog heartbeat puts waiting rows from before this feature into `Admission_Queue__c` (200 per sweep). A script does the same at once after deploy.
 10. The System Doctor concurrency panel shows the count per priority class and the next five waiting instances, with position and priority. It uses one query per governed workflow.
 
 ## Consequences

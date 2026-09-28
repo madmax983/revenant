@@ -109,4 +109,6 @@ these problems. The fixes replace parts of the decision above.
 | One deep queue hides other queues on the dashboard (Codex).           | One query per governed workflow, `LIMIT 5`.                               |
 | Flow Signal-or-Start has no priority input.                           | Add the `Priority` input.                                                 |
 | A huge aging value overflows.                                         | Clamp aging to 1–525600.                                                  |
+| Waiting rows from before the upgrade have no queue field (Codex).     | Heartbeat backfill (200 per sweep) and a one-off script.                  |
+| The wake job keeps one savepoint per row (Codex).                     | Release each savepoint in `finally`.                                      |
 | Admin can edit engine fields.                                         | Read-only in both permission sets.                                        |
