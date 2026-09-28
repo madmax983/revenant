@@ -28,9 +28,10 @@ asks for a Big Object tier. Some orgs want other cold stores, for example S3.
    any delete.
 7. Offloaded payloads are dropped. The archive keeps a `$archiveDropped`
    marker and a count.
-8. Bound each batch: 20 instances, 500 step rows, a quarter of the heap. An
-   instance with more steps stays in primary storage, and the run output
-   names it.
+8. Bound each batch: 20 instances, 500 step rows, and a heap check before
+   each instance and each chunk of 10 error details. An instance with more
+   steps, or one whose copy alone passes a quarter of the heap, stays in
+   primary storage. The run output names it.
 9. The CSV sink finds files only by two `ContentVersion` fields that no
    permission set can edit. So a user cannot plant a trusted file.
 

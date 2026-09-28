@@ -221,4 +221,29 @@ private class WorkflowArchiveSweepTest {
     );
     System.assertEquals(true, exists(big.Id), 'Kept in primary');
   }
+
+  @IsTest
+  static void instanceOverHeapLimitIsSkippedAndKept() {
+    WorkflowArchiveSweep.instanceHeapLimit = 1;
+    WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
+    Workflow_Instance__c big = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'big',
+      40
+    );
+
+    WorkflowArchiveSweep.BatchResult batch = WorkflowArchiveSweep.runBatch(
+      params(20),
+      sink
+    );
+
+    System.assertEquals(0, batch.purgedCount, 'Nothing purged');
+    System.assertEquals(
+      new List<Id>{ big.Id },
+      batch.skippedInstanceIds,
+      'Named as skipped'
+    );
+    System.assertEquals(true, exists(big.Id), 'Kept in primary');
+    System.assertEquals(0, sink.writeCalls, 'Nothing written');
+  }
 }

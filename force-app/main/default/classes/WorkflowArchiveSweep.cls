@@ -12,10 +12,12 @@
  * If `write` throws, step 3 does not run. A retry writes the same records
  * again. The sink contract makes that safe.
  *
- * Archive bounds for each batch: at most 20 instances, 500 step rows and a
- * quarter of the heap. The first instance always goes, so the sweep moves
- * forward. An instance with more than 500 step rows is not archived and not
- * purged. The batch result names it, and the next batches skip it.
+ * Archive bounds for each batch: at most 20 instances and 500 step rows. A
+ * new instance starts only below a sixth of the heap. The first instance
+ * always goes, so the sweep moves forward. An instance with more than 500
+ * step rows, or whose copy alone passes a quarter of the heap, is not
+ * archived and not purged. The batch result names it, and the next batches
+ * skip it.
  */
 public inherited sharing class WorkflowArchiveSweep {
   /** @description Maximum instances in one batch without archival. */
@@ -29,6 +31,9 @@ public inherited sharing class WorkflowArchiveSweep {
 
   @TestVisible
   private static Integer maxStepRows = MAX_ARCHIVE_STEP_ROWS;
+  // Null means a quarter of the heap limit.
+  @TestVisible
+  private static Integer instanceHeapLimit;
 
   /**
    * @description Parsed sweep input.
@@ -174,13 +179,17 @@ public inherited sharing class WorkflowArchiveSweep {
   }
 
   // Copies candidates in order until a bound is hit. The first archivable
-  // candidate always goes. An instance over the step bound is skipped.
+  // candidate always goes. An instance over the step bound, or one that alone
+  // passes the instance heap limit, is skipped.
   private static Map<Id, WorkflowArchiveRecord> snapshotWithinBounds(
     List<Workflow_Instance__c> candidates,
     BatchResult result
   ) {
     Map<Id, WorkflowArchiveRecord> records = new Map<Id, WorkflowArchiveRecord>();
-    Integer heapBudget = Limits.getLimitHeapSize() / 4;
+    Integer batchHeap = Limits.getLimitHeapSize() / 6;
+    Integer instanceHeap = instanceHeapLimit != null
+      ? instanceHeapLimit
+      : Limits.getLimitHeapSize() / 4;
     Integer stepsUsed = 0;
     for (Workflow_Instance__c inst : candidates) {
       Integer steps = WorkflowArchiveSnapshot.countSteps(
@@ -194,16 +203,25 @@ public inherited sharing class WorkflowArchiveSweep {
       if (
         !records.isEmpty() &&
         (stepsUsed + steps > maxStepRows ||
-        Limits.getHeapSize() > heapBudget)
+        Limits.getHeapSize() > batchHeap)
       ) {
         break;
       }
-      List<WorkflowArchiveRecord> built = WorkflowArchiveSnapshot.build(
-        new Set<Id>{ inst.Id }
-      );
-      if (!built.isEmpty()) {
-        records.put(inst.Id, built[0]);
-        stepsUsed += steps;
+      try {
+        List<WorkflowArchiveRecord> built = WorkflowArchiveSnapshot.build(
+          new Set<Id>{ inst.Id },
+          instanceHeap
+        );
+        if (!built.isEmpty()) {
+          records.put(inst.Id, built[0]);
+          stepsUsed += steps;
+        }
+      } catch (WorkflowArchiveSnapshot.TooLargeException e) {
+        if (!records.isEmpty()) {
+          // Too large next to others. The next batch tries it alone.
+          break;
+        }
+        result.skippedInstanceIds.add(inst.Id);
       }
     }
     return records;

@@ -22,11 +22,14 @@ flowchart LR
 - The sweep selects `Completed`, `Failed`, `Compensated`, `Cancelled` and
   `ContinuedAsNew` instances that were created more than N days ago. The
   oldest go first.
-- A batch has at most 20 instances, 500 step rows and a quarter of the heap.
-  The first instance always goes, so the sweep moves forward.
-- An instance with more than 500 step rows is not archived and not purged.
-  The run output lists it in `skippedInstanceIds`. Later batches of the run
-  skip it.
+- A batch has at most 20 instances and 500 step rows. A new instance starts
+  only below a sixth of the heap. The first instance always goes, so the
+  sweep moves forward.
+- The copy loads step error details 10 rows at a time and checks the heap
+  before each chunk.
+- An instance is not archived and not purged when it has more than 500 step
+  rows, or when its copy alone passes a quarter of the heap. The run output
+  lists it in `skippedInstanceIds`. Later batches of the run skip it.
 - The sweep reads the rows. It never changes a `Workflow_Step_Execution__c`
   row. `Compensation_Stack__c` and `Terminal_At__c` do not change.
 - The sweep runs as a workflow, not on the orchestrator hot path.

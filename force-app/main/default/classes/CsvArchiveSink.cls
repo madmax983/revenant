@@ -48,25 +48,21 @@ public inherited sharing class CsvArchiveSink implements WorkflowArchiveSink {
     ]) {
       byId.remove(existing.Revenant_Archive_Instance_Id__c);
     }
-    List<ContentVersion> files = new List<ContentVersion>();
     Id library = byId.isEmpty() ? null : libraryId();
+    // One file for each insert, so the heap holds one CSV at a time.
     for (WorkflowArchiveRecord r : byId.values()) {
       String title = titleFor(r.instanceId, r.correlationKey);
-      files.add(
-        new ContentVersion(
-          Title = title,
-          PathOnClient = title + '.csv',
-          VersionData = Blob.valueOf(WorkflowArchiveCsv.toCsv(r)),
-          FirstPublishLocationId = library,
-          Revenant_Archive_Instance_Id__c = r.instanceId,
-          Revenant_Archive_Key_Hash__c = WorkflowArchive.hashCorrelationKey(
-            r.correlationKey
-          )
+      ContentVersion file = new ContentVersion(
+        Title = title,
+        PathOnClient = title + '.csv',
+        VersionData = Blob.valueOf(WorkflowArchiveCsv.toCsv(r)),
+        FirstPublishLocationId = library,
+        Revenant_Archive_Instance_Id__c = r.instanceId,
+        Revenant_Archive_Key_Hash__c = WorkflowArchive.hashCorrelationKey(
+          r.correlationKey
         )
       );
-    }
-    if (!files.isEmpty()) {
-      insert as system files;
+      insert as system file;
     }
   }
 

@@ -248,4 +248,51 @@ private class WorkflowArchiveSnapshotTest {
       'Cap'
     );
   }
+
+  @IsTest
+  static void errorDetailsLoadInChunksAndKeepOrder() {
+    Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
+      'Failed',
+      'k',
+      40
+    );
+    List<String> names = new List<String>();
+    for (Integer i = 0; i < WorkflowArchiveSnapshot.ERROR_CHUNK_ROWS + 3; i++) {
+      names.add('S' + i);
+    }
+    List<Workflow_Step_Execution__c> steps = WorkflowArchiveTestSink.insertSteps(
+      inst.Id,
+      names
+    );
+    for (Integer i = 0; i < steps.size(); i++) {
+      steps[i].Error_Details__c = 'error ' + i;
+    }
+    update steps;
+
+    WorkflowArchiveRecord r = WorkflowArchiveSnapshot.build(
+      new Set<Id>{ inst.Id }
+    )[0];
+
+    System.assertEquals(names.size(), r.steps.size(), 'All steps');
+    for (Integer i = 0; i < r.steps.size(); i++) {
+      System.assertEquals('S' + i, r.steps[i].stepName, 'Order');
+      System.assertEquals('error ' + i, r.steps[i].errorDetails, 'Error text');
+    }
+  }
+
+  @IsTest
+  static void buildStopsAtHeapLimit() {
+    Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'k',
+      40
+    );
+    Boolean threw = false;
+    try {
+      WorkflowArchiveSnapshot.build(new Set<Id>{ inst.Id }, 1);
+    } catch (WorkflowArchiveSnapshot.TooLargeException e) {
+      threw = true;
+    }
+    System.assert(threw, 'A copy over the heap limit stops');
+  }
 }

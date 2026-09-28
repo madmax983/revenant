@@ -3,14 +3,42 @@
  * archive sweep. SOQL only: it never changes a row. Step facts come from
  * {@link WorkflowEngine.StepHistoryEntry}, so the archive matches
  * `getHistory`.
+ *
+ * Heap: it loads step error details in chunks of {@link #ERROR_CHUNK_ROWS}
+ * rows, and checks the heap before each chunk.
  */
 public inherited sharing class WorkflowArchiveSnapshot {
+  /** @description Step rows in one error-details query. */
+  public static final Integer ERROR_CHUNK_ROWS = 10;
+
   /**
-   * @description Builds one record for each instance Id.
+   * @description Thrown when a copy passes its heap limit. The instance is
+   * too large for one batch.
+   */
+  public class TooLargeException extends Exception {
+  }
+
+  /**
+   * @description Builds one record for each instance Id. No heap limit.
    * @param instanceIds the instances to copy
    * @return the records. Unknown Ids are absent.
    */
   public static List<WorkflowArchiveRecord> build(Set<Id> instanceIds) {
+    return build(instanceIds, null);
+  }
+
+  /**
+   * @description Builds one record for each instance Id, and stops at a heap
+   * limit.
+   * @param instanceIds the instances to copy
+   * @param heapLimit the heap size to stop at, or null for no limit
+   * @return the records. Unknown Ids are absent.
+   * @throws TooLargeException when the heap passes `heapLimit`
+   */
+  public static List<WorkflowArchiveRecord> build(
+    Set<Id> instanceIds,
+    Integer heapLimit
+  ) {
     List<WorkflowArchiveRecord> out = new List<WorkflowArchiveRecord>();
     if (instanceIds == null || instanceIds.isEmpty()) {
       return out;
@@ -39,7 +67,8 @@ public inherited sharing class WorkflowArchiveSnapshot {
       byId.put(inst.Id, r);
       out.add(r);
     }
-    addSteps(byId);
+    checkHeap(heapLimit);
+    addSteps(byId, heapLimit);
     return out;
   }
 
@@ -77,11 +106,18 @@ public inherited sharing class WorkflowArchiveSnapshot {
   }
 
   // Same order as WorkflowHistoryRead, so the sequence matches getHistory.
-  private static void addSteps(Map<Id, WorkflowArchiveRecord> byId) {
+  // The step query leaves out Error_Details__c. Error details load in small
+  // chunks, with a heap check before each chunk.
+  private static void addSteps(
+    Map<Id, WorkflowArchiveRecord> byId,
+    Integer heapLimit
+  ) {
     if (byId.isEmpty()) {
       return;
     }
     Set<Id> ids = byId.keySet();
+    Map<Id, WorkflowArchiveRecord.Step> stepById = new Map<Id, WorkflowArchiveRecord.Step>();
+    Map<Id, WorkflowArchiveRecord> recordByStep = new Map<Id, WorkflowArchiveRecord>();
     for (Workflow_Step_Execution__c row : [
       SELECT
         Id,
@@ -89,7 +125,6 @@ public inherited sharing class WorkflowArchiveSnapshot {
         Step_Name__c,
         Status__c,
         Retry_Count__c,
-        Error_Details__c,
         CreatedDate,
         LastModifiedDate
       FROM Workflow_Step_Execution__c
@@ -109,9 +144,45 @@ public inherited sharing class WorkflowArchiveSnapshot {
       s.attempt = e.attempt;
       s.startedAt = e.startedAt;
       s.endedAt = e.endedAt;
-      s.errorDetails = keepOrDropError(row.Error_Details__c, r);
       r.steps.add(s);
       r.stepCount = r.steps.size();
+      stepById.put(row.Id, s);
+      recordByStep.put(row.Id, r);
+    }
+    addErrorDetails(stepById, recordByStep, heapLimit);
+  }
+
+  private static void addErrorDetails(
+    Map<Id, WorkflowArchiveRecord.Step> stepById,
+    Map<Id, WorkflowArchiveRecord> recordByStep,
+    Integer heapLimit
+  ) {
+    List<Id> pending = new List<Id>(stepById.keySet());
+    Integer next = 0;
+    while (next < pending.size()) {
+      checkHeap(heapLimit);
+      Set<Id> chunk = new Set<Id>();
+      while (next < pending.size() && chunk.size() < ERROR_CHUNK_ROWS) {
+        chunk.add(pending[next++]);
+      }
+      for (Workflow_Step_Execution__c row : [
+        SELECT Id, Error_Details__c
+        FROM Workflow_Step_Execution__c
+        WHERE Id IN :chunk
+        WITH SYSTEM_MODE
+      ]) {
+        stepById.get(row.Id).errorDetails = keepOrDropError(
+          row.Error_Details__c,
+          recordByStep.get(row.Id)
+        );
+      }
+    }
+    checkHeap(heapLimit);
+  }
+
+  private static void checkHeap(Integer heapLimit) {
+    if (heapLimit != null && Limits.getHeapSize() > heapLimit) {
+      throw new TooLargeException('Archive copy passed the heap limit');
     }
   }
 

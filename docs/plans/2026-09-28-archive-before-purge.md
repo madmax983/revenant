@@ -88,6 +88,10 @@ found issues. We fixed them:
 - Reads load one instance or one file at a time.
 - Codex review: correlation key lookup is not case-sensitive, as in
   `Correlation_Key__c`. The key hash uses the lower-case key.
+- Codex review (P1): the step bound did not bound payload size. Error
+  details now load 10 rows at a time with a heap check. An instance whose
+  copy alone passes a quarter of the heap is skipped. The CSV sink inserts
+  one file at a time.
 - The dropped marker cannot make `Error_Details__c` too long.
 - Error messages do not echo payload text.
 - The Admin permission set has read access only on the Big Objects.
