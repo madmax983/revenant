@@ -4346,6 +4346,49 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     });
   });
 
+  it("restarts paging when an add hides a purge (same total)", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    getInstanceChain.mockResolvedValue(PAGE_2);
+    chainButton(element, "chain-load-more").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    expect(chainRows(element)).toHaveLength(3);
+
+    // One new generation, and a purge removed OLDER_ID: the total stays 5.
+    const NEW_ID = "a0G000000000030";
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      totalCount: 5,
+      nextCursor: "CURSOR-CHURN",
+      generations: [
+        {
+          instanceId: NEW_ID,
+          instanceName: "WI-0030",
+          generation: 5,
+          status: "Running",
+        },
+        { ...PAGE_1.generations[0], generation: 4 },
+      ],
+    });
+    await selectListItem(element, 0);
+
+    expect(chainRows(element).map((r) => r.dataset.id)).toEqual([
+      NEW_ID,
+      LIVE_ID,
+    ]);
+    getInstanceChain.mockResolvedValue(PAGE_2);
+    chainButton(element, "chain-load-more").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: "CURSOR-CHURN",
+    });
+  });
+
   it("restarts paging when page 1 does not overlap the cached rows", async () => {
     arrangeChained();
     const element = await mountAndSelect();

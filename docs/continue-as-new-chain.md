@@ -83,7 +83,7 @@ Open an instance that has a previous or a next run. The detail pane shows **Cont
 - "Showing X of N generations". `N+` when the total is capped.
 - Click the generation name (or press Enter on it) to open the step timeline of that generation. The list stays.
 - **Show older generations** gets the next page. **Try again** reads the chain again after an error.
-- Each poll refreshes the first page. New generations, and a late `compensate()` instance, show. Older pages that you loaded stay. After an error, only **Try again** reads again.
+- Each poll refreshes the first page. New generations, and a late `compensate()` instance, show. Older pages that you loaded stay when the lists join exactly: the first page contains a loaded row, and the new total is the old total plus the new rows. Else (for example after a purge) the list starts again from the first page. After an error, only **Try again** reads again.
 
 An instance with no previous and no next run shows no section and makes no extra call.
 
