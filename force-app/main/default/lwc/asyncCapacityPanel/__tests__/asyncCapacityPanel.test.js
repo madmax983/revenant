@@ -28,15 +28,21 @@ function envelope(overrides = {}) {
         status: "HEALTHY",
       },
       {
-        key: "FLEX_QUEUE",
-        label: "Apex flex queue (Holding)",
-        used: 3,
-        limit: 100,
-        percent: 3,
+        key: "BACKLOG",
+        label: "Pending jobs vs executions left",
+        used: 9,
+        limit: 249000,
+        percent: 0,
         status: "HEALTHY",
       },
     ],
-    jobCounts: { holding: 3, queued: 5, processing: 1, total: 9 },
+    jobCounts: {
+      holding: 3,
+      queued: 5,
+      processing: 1,
+      total: 9,
+      flexQueueLimit: 100,
+    },
     ...overrides,
   };
 }
@@ -133,10 +139,10 @@ describe("c-async-capacity-panel", () => {
             status: "DEGRADED",
           },
           {
-            key: "FLEX_QUEUE",
-            label: "Apex flex queue (Holding)",
+            key: "BACKLOG",
+            label: "Pending jobs vs executions left",
             used: null,
-            limit: 100,
+            limit: 40000,
             percent: null,
             status: "UNKNOWN",
           },
@@ -159,7 +165,7 @@ describe("c-async-capacity-panel", () => {
   it("renders the job counts", async () => {
     const element = await render(envelope());
     const jobs = q(element, "capacity-jobs").textContent;
-    expect(jobs).toContain("Holding 3");
+    expect(jobs).toContain("Flex queue (Holding) 3 / 100");
     expect(jobs).toContain("Queued 5");
     expect(jobs).toContain("Processing 1");
     expect(jobs).toContain("Total 9");
@@ -318,5 +324,33 @@ describe("c-async-capacity-panel", () => {
 
     const element = await render(new Error("boom"));
     expect(q(element, "capacity-error").getAttribute("role")).toBe("alert");
+  });
+
+  it("marks the daily row when the org has an elastic limit", async () => {
+    const element = await render(
+      envelope({
+        metrics: [
+          {
+            key: "DAILY_ASYNC",
+            label: "Daily async Apex executions",
+            used: 250000,
+            limit: 500000,
+            percent: 50,
+            status: "HEALTHY",
+            elastic: true,
+          },
+        ],
+      }),
+    );
+    expect(q(element, "capacity-metric").textContent).toContain(
+      "Elastic limit",
+    );
+  });
+
+  it("does not mark the daily row without an elastic limit", async () => {
+    const element = await render(envelope());
+    expect(q(element, "capacity-metric").textContent).not.toContain(
+      "Elastic limit",
+    );
   });
 });

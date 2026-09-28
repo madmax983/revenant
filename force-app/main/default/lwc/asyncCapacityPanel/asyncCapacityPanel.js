@@ -122,6 +122,7 @@ export default class AsyncCapacityPanel extends LightningElement {
       return {
         key: m.key || `metric-${index}`,
         label: m.label,
+        isElastic: m.elastic === true,
         usageLabel: `${formatCount(m.used)} / ${formatCount(m.limit)}`,
         percentLabel: hasPercent ? `${m.percent}%` : MISSING,
         barValue: hasPercent ? Math.min(Number(m.percent), 100) : 0,
@@ -136,7 +137,12 @@ export default class AsyncCapacityPanel extends LightningElement {
     if (isMissing(jobs.total)) {
       return "AsyncApexJob counts are not available.";
     }
-    return `Holding ${formatCount(jobs.holding)} · Queued ${formatCount(
+    const flexLimit = isMissing(jobs.flexQueueLimit)
+      ? 100
+      : jobs.flexQueueLimit;
+    return `Flex queue (Holding) ${formatCount(jobs.holding)} / ${formatCount(
+      flexLimit,
+    )} · Queued ${formatCount(
       jobs.queued,
     )} · Processing ${formatCount(jobs.processing)} · Total ${formatCount(
       jobs.total,

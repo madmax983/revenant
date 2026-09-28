@@ -236,20 +236,20 @@ private class AsyncCapacityEvaluatorTest {
     Assert.areEqual(250000, daily.get('limit'));
     Assert.areEqual(0.40, daily.get('percent'));
 
-    Map<String, Object> flex = metricFor(
-      result,
-      AsyncCapacityEvaluator.METRIC_FLEX_QUEUE
+    Assert.areEqual(false, daily.get('elastic'));
+
+    Map<String, Object> jobs = (Map<String, Object>) result.get('jobCounts');
+    Assert.areEqual(3, jobs.get('holding'));
+    Assert.areEqual(
+      AsyncCapacityEvaluator.FLEX_QUEUE_LIMIT,
+      jobs.get('flexQueueLimit')
     );
-    Assert.areEqual(3, flex.get('used'));
-    Assert.areEqual(AsyncCapacityEvaluator.FLEX_QUEUE_LIMIT, flex.get('limit'));
-    Assert.areEqual(3.00, flex.get('percent'));
-    Assert.areEqual(AsyncCapacityEvaluator.STATUS_HEALTHY, flex.get('status'));
   }
 
   @IsTest
   static void degradedReadingHasNoChainRisk() {
     Map<String, Object> result = AsyncCapacityEvaluator.evaluate(
-      reading(1000, 250000, 85),
+      reading(210000, 250000, 0),
       defaults()
     );
     Assert.areEqual(
@@ -270,16 +270,57 @@ private class AsyncCapacityEvaluatorTest {
       dailyCritical.get('status')
     );
     Assert.areEqual(true, dailyCritical.get('chainAtRisk'));
+  }
 
-    Map<String, Object> flexCritical = AsyncCapacityEvaluator.evaluate(
+  @IsTest
+  static void fullFlexQueueDoesNotFlagChainRisk() {
+    // Queueables do not enter the flex queue. A full flex queue cannot block the handoff.
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(
       reading(10, 250000, 100),
       defaults()
     );
     Assert.areEqual(
-      AsyncCapacityEvaluator.STATUS_CRITICAL,
-      flexCritical.get('status')
+      AsyncCapacityEvaluator.STATUS_HEALTHY,
+      result.get('status')
     );
-    Assert.areEqual(true, flexCritical.get('chainAtRisk'));
+    Assert.areEqual(false, result.get('chainAtRisk'));
+    Map<String, Object> jobs = (Map<String, Object>) result.get('jobCounts');
+    Assert.areEqual(100, jobs.get('holding'));
+  }
+
+  @IsTest
+  static void elasticLimitIsTheDailyLimit() {
+    // Base limit 250,000 is spent. The elastic limit 500,000 gives more capacity.
+    AsyncCapacityEvaluator.Reading r = reading(250000, 250000, 0);
+    r.dailyElasticLimit = 500000;
+    r.queued = 10;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Map<String, Object> daily = metricFor(
+      result,
+      AsyncCapacityEvaluator.METRIC_DAILY_ASYNC
+    );
+    Assert.areEqual(500000, daily.get('limit'));
+    Assert.areEqual(50.00, daily.get('percent'));
+    Assert.areEqual(true, daily.get('elastic'));
+    Assert.areEqual(AsyncCapacityEvaluator.STATUS_HEALTHY, daily.get('status'));
+    Map<String, Object> backlog = metricFor(
+      result,
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(250000, backlog.get('limit'), 'Elastic limit minus used');
+    Assert.areEqual(false, result.get('chainAtRisk'));
+  }
+
+  @IsTest
+  static void zeroElasticLimitIsIgnored() {
+    AsyncCapacityEvaluator.Reading r = reading(1000, 250000, 0);
+    r.dailyElasticLimit = 0;
+    Map<String, Object> daily = metricFor(
+      AsyncCapacityEvaluator.evaluate(r, defaults()),
+      AsyncCapacityEvaluator.METRIC_DAILY_ASYNC
+    );
+    Assert.areEqual(250000, daily.get('limit'));
+    Assert.areEqual(false, daily.get('elastic'));
   }
 
   @IsTest
@@ -297,8 +338,9 @@ private class AsyncCapacityEvaluatorTest {
     Assert.isNull(jobs.get('total'), 'Unknown job counts stay null');
     Assert.areEqual(
       AsyncCapacityEvaluator.STATUS_UNKNOWN,
-      metricFor(result, AsyncCapacityEvaluator.METRIC_FLEX_QUEUE).get('status')
+      metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status')
     );
+    Assert.areEqual(2, ((List<Object>) result.get('metrics')).size());
   }
 
   @IsTest
@@ -351,7 +393,7 @@ private class AsyncCapacityEvaluatorTest {
       AsyncCapacityEvaluator.STATUS_HEALTHY,
       backlog.get('status')
     );
-    Assert.areEqual(3, ((List<Object>) result.get('metrics')).size());
+    Assert.areEqual(2, ((List<Object>) result.get('metrics')).size());
   }
 
   @IsTest

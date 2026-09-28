@@ -1,9 +1,9 @@
 /**
  * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
  * thresholds, calculates percentages and gives each metric a status. Metrics: daily
- * executions (used / limit), flex queue (Holding / 100) and pending jobs (Holding +
- * Queued + Processing) / daily executions left. It does no SOQL, no DML and reads no
- * clock.
+ * executions (used / limit) and pending jobs (Holding + Queued + Processing) / daily
+ * executions left. Both gate the Queueable chain. The flex queue (Holding / 100) is a
+ * count only: Queueables do not enter it. It does no SOQL, no DML and reads no clock.
  */
 public inherited sharing class AsyncCapacityEvaluator {
   /** @description Percent is below the warn threshold. */
@@ -24,8 +24,6 @@ public inherited sharing class AsyncCapacityEvaluator {
 
   /** @description Key of the daily async Apex executions metric. */
   public static final String METRIC_DAILY_ASYNC = 'DAILY_ASYNC';
-  /** @description Key of the Apex flex queue metric. */
-  public static final String METRIC_FLEX_QUEUE = 'FLEX_QUEUE';
   /** @description Key of the pending jobs vs daily executions left metric. */
   public static final String METRIC_BACKLOG = 'BACKLOG';
 
@@ -40,7 +38,6 @@ public inherited sharing class AsyncCapacityEvaluator {
   // Display label of each metric.
   private static final Map<String, String> LABELS = new Map<String, String>{
     METRIC_DAILY_ASYNC => 'Daily async Apex executions',
-    METRIC_FLEX_QUEUE => 'Apex flex queue (Holding)',
     METRIC_BACKLOG => 'Pending jobs vs executions left'
   };
 
@@ -73,6 +70,8 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer dailyUsed;
     /** @description Daily async Apex executions limit. */
     public Integer dailyLimit;
+    /** @description Elastic daily limit, or null when the org has none. */
+    public Integer dailyElasticLimit;
     /** @description AsyncApexJob rows in Holding (the flex queue). */
     public Integer holding;
     /** @description AsyncApexJob rows in Queued. */
@@ -180,10 +179,14 @@ public inherited sharing class AsyncCapacityEvaluator {
    * @return A map with status, chainAtRisk, thresholds, metrics and jobCounts.
    */
   public static Map<String, Object> evaluate(Reading r, Thresholds t) {
-    Integer holding = r.jobsKnown ? r.holding : null;
+    Map<String, Object> daily = metric(
+      METRIC_DAILY_ASYNC,
+      r.dailyUsed,
+      dailyLimit(r)
+    );
+    daily.put('elastic', usesElastic(r));
     List<Map<String, Object>> metrics = new List<Map<String, Object>>{
-      metric(METRIC_DAILY_ASYNC, r.dailyUsed, r.dailyLimit),
-      metric(METRIC_FLEX_QUEUE, holding, FLEX_QUEUE_LIMIT),
+      daily,
       metric(METRIC_BACKLOG, pendingJobs(r), executionsLeft(r))
     };
     List<String> statuses = new List<String>();
@@ -222,13 +225,24 @@ public inherited sharing class AsyncCapacityEvaluator {
     return r.jobsKnown ? r.holding + r.queued + r.processing : null;
   }
 
+  // True when the org has an elastic limit above 0. StepGovernor uses the same rule.
+  private static Boolean usesElastic(Reading r) {
+    return r.dailyElasticLimit != null && r.dailyElasticLimit > 0;
+  }
+
+  // The elastic limit when the org has one, else the base daily limit.
+  private static Integer dailyLimit(Reading r) {
+    return usesElastic(r) ? r.dailyElasticLimit : r.dailyLimit;
+  }
+
   // Daily limit minus daily used. Null when the daily values are not known.
   // A value of 0 or less gives no percent (Unknown). The daily metric is then Critical.
   private static Integer executionsLeft(Reading r) {
-    if (r.dailyUsed == null || r.dailyLimit == null) {
+    Integer limitValue = dailyLimit(r);
+    if (r.dailyUsed == null || limitValue == null) {
       return null;
     }
-    return r.dailyLimit - r.dailyUsed;
+    return limitValue - r.dailyUsed;
   }
 
   private static Map<String, Object> jobCounts(Reading r) {
@@ -237,7 +251,8 @@ public inherited sharing class AsyncCapacityEvaluator {
         'holding' => null,
         'queued' => null,
         'processing' => null,
-        'total' => null
+        'total' => null,
+        'flexQueueLimit' => FLEX_QUEUE_LIMIT
       };
     }
     Integer total = pendingJobs(r);
@@ -245,7 +260,8 @@ public inherited sharing class AsyncCapacityEvaluator {
       'holding' => r.holding,
       'queued' => r.queued,
       'processing' => r.processing,
-      'total' => total
+      'total' => total,
+      'flexQueueLimit' => FLEX_QUEUE_LIMIT
     };
   }
 }

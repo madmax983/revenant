@@ -48,7 +48,7 @@ private class WorkflowAsyncCapacityServiceTest {
       ) {
         Assert.isTrue(result.containsKey(key), 'Missing key ' + key);
       }
-      Assert.areEqual(3, ((List<Object>) result.get('metrics')).size());
+      Assert.areEqual(2, ((List<Object>) result.get('metrics')).size());
     }
   }
 
@@ -62,8 +62,13 @@ private class WorkflowAsyncCapacityServiceTest {
       );
       Map<String, System.OrgLimit> limitsMap = System.OrgLimits.getMap();
       if (limitsMap.containsKey('DailyAsyncApexExecutions')) {
-        System.OrgLimit orgLimit = limitsMap.get('DailyAsyncApexExecutions');
-        Assert.areEqual(orgLimit.getLimit(), daily.get('limit'));
+        Integer expected = limitsMap.get('DailyAsyncApexExecutions').getLimit();
+        if (limitsMap.containsKey('DailyAsyncApexElasticExecutions')) {
+          Integer elastic = limitsMap.get('DailyAsyncApexElasticExecutions')
+            .getLimit();
+          expected = elastic > 0 ? elastic : expected;
+        }
+        Assert.areEqual(expected, daily.get('limit'));
         Assert.isNotNull(daily.get('used'));
       } else {
         Assert.areEqual(
@@ -182,14 +187,13 @@ private class WorkflowAsyncCapacityServiceTest {
   }
 
   @IsTest
-  static void jobQueryErrorGivesUnknownFlexMetric() {
+  static void jobQueryErrorGivesUnknownBacklogMetric() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowAsyncCapacityService.failJobQuery = true;
       Map<String, Object> result = WorkflowAsyncCapacityService.asyncCapacity();
       Assert.areEqual(
         AsyncCapacityEvaluator.STATUS_UNKNOWN,
-        metricFor(result, AsyncCapacityEvaluator.METRIC_FLEX_QUEUE)
-          .get('status')
+        metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status')
       );
       Assert.isNotNull(
         metricFor(result, AsyncCapacityEvaluator.METRIC_DAILY_ASYNC),

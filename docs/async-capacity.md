@@ -23,31 +23,39 @@ flowchart LR
 
 ## Metrics And Org Values
 
+Two metrics have a status. Both gate the Queueable chain.
+
 | Panel metric                    | Used / limit                                                          | Where an admin sees it                                                                                  |
 | ------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | Daily async Apex executions     | `System.OrgLimits` key `DailyAsyncApexExecutions`                     | REST resource `/services/data/vXX.X/limits`, key `DailyAsyncApexExecutions`. CLI: `sf org list limits`. |
-| Apex flex queue (Holding)       | `AsyncApexJob` rows in `Holding` / 100                                | **Setup → Apex Flex Queue**.                                                                            |
 | Pending jobs vs executions left | `Holding` + `Queued` + `Processing` rows / (daily limit − daily used) | **Setup → Apex Jobs** (filter on the status) and the daily value above.                                 |
+
+The panel also shows these counts. They have no status:
+
+| Count                        | Source                                | Where an admin sees it       |
+| ---------------------------- | ------------------------------------- | ---------------------------- |
+| Flex queue (Holding) n / 100 | `AsyncApexJob` rows in `Holding`      | **Setup → Apex Flex Queue**. |
+| Queued, Processing and Total | `AsyncApexJob` rows in these statuses | **Setup → Apex Jobs**.       |
 
 - No Setup page shows the daily count. Use the REST `/limits` resource or
   `sf org list limits`.
 - The daily value is a rolling 24 hour count. The default limit is 250,000 or
   200 × the number of user licenses, whichever is larger.
+- When the org has an elastic limit (`DailyAsyncApexElasticExecutions` above
+  0), the panel uses it as the daily limit and shows "Elastic limit" on the
+  row. `StepGovernor` uses the same rule.
 - `Limits.getAsyncCalls()` and `Limits.getLimitAsyncCalls()` are "reserved
   for future use". They do not give the daily org count. The panel uses
   `System.OrgLimits` for this reason. `OrgLimits` costs no SOQL.
 - The flex queue holds a maximum of 100 batch jobs in `Holding`. Queueable
-  jobs do not go into the flex queue.
+  jobs do not go into the flex queue. A full flex queue stops new batch jobs,
+  not the Queueable chain. Thus the flex queue has no status.
 - Queueable jobs in `Queued` have no queue limit. A maximum of 5 batch jobs
-  can be `Queued` or `Processing`. Thus the panel does not give `Queued` and
-  `Processing` their own limit. It compares all pending jobs with the daily
-  executions that are left. Each pending job uses one or more executions. A
-  value near 100% tells you that the backlog can use all capacity that is
-  left.
+  can be `Queued` or `Processing`. Thus the panel compares all pending jobs
+  with the daily executions that are left. Each pending job uses one or more
+  executions. A value near 100% tells you that the backlog can use all
+  capacity that is left.
 - Batch jobs in `Preparing` are not counted.
-- When the org has an elastic limit (`DailyAsyncApexElasticExecutions`), the
-  panel does not add it. The org can continue above 100% of the daily limit.
-  The **Elastic Async Apex Limit** tile in System Doctor shows it.
 
 ## Status
 

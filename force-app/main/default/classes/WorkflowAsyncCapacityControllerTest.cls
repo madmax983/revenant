@@ -69,7 +69,7 @@ private class WorkflowAsyncCapacityControllerTest {
       Map<String, Object> result = WorkflowAsyncCapacityController.getAsyncCapacity();
       Assert.isNotNull(result.get('status'));
       Assert.isNotNull(result.get('asOfMs'));
-      Assert.areEqual(3, ((List<Object>) result.get('metrics')).size());
+      Assert.areEqual(2, ((List<Object>) result.get('metrics')).size());
     }
   }
 

@@ -6,6 +6,8 @@
 public inherited sharing class WorkflowAsyncCapacityService {
   // System.OrgLimits key of the rolling 24 hour async Apex execution count.
   private static final String DAILY_ASYNC_KEY = 'DailyAsyncApexExecutions';
+  // System.OrgLimits key of the elastic daily limit. Present only in some orgs.
+  private static final String DAILY_ELASTIC_KEY = 'DailyAsyncApexElasticExecutions';
 
   private static final String JOB_HOLDING = 'Holding';
   private static final String JOB_QUEUED = 'Queued';
@@ -65,6 +67,9 @@ public inherited sharing class WorkflowAsyncCapacityService {
       System.OrgLimit orgLimit = limitsMap.get(DAILY_ASYNC_KEY);
       r.dailyUsed = orgLimit.getValue();
       r.dailyLimit = orgLimit.getLimit();
+    }
+    if (limitsMap.containsKey(DAILY_ELASTIC_KEY)) {
+      r.dailyElasticLimit = limitsMap.get(DAILY_ELASTIC_KEY).getLimit();
     }
   }
 

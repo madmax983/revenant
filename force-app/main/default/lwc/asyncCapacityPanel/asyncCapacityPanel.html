@@ -42,7 +42,12 @@
                     <tbody>
                         <template for:each={metricRows} for:item="m">
                             <tr key={m.key} data-id="capacity-metric">
-                                <td>{m.label}</td>
+                                <td>
+                                    {m.label}
+                                    <template if:true={m.isElastic}>
+                                        <div class="slds-text-body_small slds-text-color_weak">Elastic limit</div>
+                                    </template>
+                                </td>
                                 <td>{m.usageLabel}</td>
                                 <td class="capacity-percent">
                                     <div>{m.percentLabel}</div>
@@ -64,7 +69,7 @@
                 <div data-id="capacity-asof" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{asOfLabel}</div>
             </div>
             <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
-                This panel is read-only. The flex queue holds a maximum of 100 batch jobs. A maximum of 5 batch jobs can be Queued or Processing. Queueable jobs have no queue limit. Pending jobs = Holding + Queued + Processing.
+                This panel is read-only. Pending jobs = Holding + Queued + Processing. The flex queue holds a maximum of 100 batch jobs. Queueable jobs do not go into the flex queue, so the flex queue has no status.
             </p>
         </template>
     </div>

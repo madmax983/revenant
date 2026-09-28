@@ -138,3 +138,10 @@ Four review agents (Apex, LWC, security and acceptance criteria, docs):
   (`—`) for missing values, own-key status lookup.
 - Docs: the batch limit of 5, no Setup page for the daily count, the elastic
   limit, the cause of Unknown.
+
+## Review Round 2 (Codex)
+
+- The daily limit uses the elastic limit when the org has one, as
+  `StepGovernor` does.
+- The flex queue has no status. Queueable jobs do not go into it, so it must
+  not start "Chain handoff at risk". It stays as a count (`Holding` / 100).
