@@ -17,6 +17,7 @@ import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.get
 import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
+import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 
 jest.mock(
@@ -57,6 +58,11 @@ jest.mock(
 jest.mock(
   "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance",
   () => ({ default: jest.fn(() => Promise.resolve()) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth",
+  () => ({ default: jest.fn() }),
   { virtual: true },
 );
 jest.mock(
@@ -3344,6 +3350,479 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
   });
 });
 
+describe("c-workflow-dashboard fleet health view (#111)", () => {
+  function row(name, overrides) {
+    return {
+      workflowName: name,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      inFlight: 0,
+      successRate: null,
+      avgDurationMs: null,
+      maxDurationMs: null,
+      durationSampleSize: 0,
+      durationSampled: false,
+      ...overrides,
+    };
+  }
+
+  // Shapes that the Apex service can return: durationSampled equals isSampled.
+  function health(rows, overrides = {}) {
+    const isSampled = !!overrides.isSampled;
+    return {
+      windowKey: "24h",
+      windowHours: 24,
+      countCap: 20000,
+      countsCapped: false,
+      sampleCap: 2000,
+      isSampled,
+      rows: rows.map((r) => ({ ...r, durationSampled: isSampled })),
+      ...overrides,
+    };
+  }
+
+  const ROWS = [
+    row("OnboardingWorkflow", {
+      started: 12,
+      completed: 8,
+      failed: 2,
+      inFlight: 2,
+      successRate: 80.0,
+      avgDurationMs: 90000,
+      maxDurationMs: 3723000,
+      durationSampleSize: 10,
+    }),
+    // 1,899 / 2,000 = 94.95%. Apex rounds it to 95.0.
+    row("EdgeWorkflow", {
+      started: 2000,
+      completed: 1899,
+      failed: 101,
+      successRate: 95.0,
+      avgDurationMs: 500,
+      maxDurationMs: 900,
+      durationSampleSize: 3,
+    }),
+    // 19 / 20 = 95% exactly.
+    row("ExactWorkflow", {
+      started: 20,
+      completed: 19,
+      failed: 1,
+      successRate: 95.0,
+    }),
+    row("QuietWorkflow", { started: 1, inFlight: 1 }),
+  ];
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function mount() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    return element;
+  }
+
+  function clickButton(element, label) {
+    findButton(element, (b) => b.label === label).dispatchEvent(
+      new CustomEvent("click"),
+    );
+  }
+
+  async function openHealth(data = health(ROWS)) {
+    getFleetHealth.mockResolvedValue(data);
+    const element = mount();
+    await flushPromises();
+    clickButton(element, "Fleet Health");
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  function rowFor(element, name) {
+    return element.shadowRoot.querySelector(
+      `tr[data-id="health-row"][data-definition="${name}"]`,
+    );
+  }
+
+  function cell(tr, id) {
+    return tr.querySelector(`[data-id="${id}"]`).textContent.trim();
+  }
+
+  function isFlagged(element, name) {
+    return !!rowFor(element, name).querySelector('[data-id="health-below"]');
+  }
+
+  function query(element, id) {
+    return element.shadowRoot.querySelector(`[data-id="${id}"]`);
+  }
+
+  function setThreshold(element, value) {
+    element.shadowRoot
+      .querySelector('lightning-input[data-id="health-threshold"]')
+      .dispatchEvent(new CustomEvent("change", { detail: { value } }));
+  }
+
+  function changeWindow(element, value) {
+    element.shadowRoot
+      .querySelector('lightning-combobox[data-id="health-window"]')
+      .dispatchEvent(new CustomEvent("change", { detail: { value } }));
+  }
+
+  it("does not request fleet health on load", async () => {
+    mount();
+    await flushPromises();
+
+    expect(getFleetHealth).not.toHaveBeenCalled();
+  });
+
+  it("lists one row per definition with counts, rate and durations (AC1, AC2, AC4)", async () => {
+    const element = await openHealth();
+
+    expect(getFleetHealth).toHaveBeenCalledWith({ windowKey: "24h" });
+    expect(
+      element.shadowRoot.querySelectorAll('tr[data-id="health-row"]').length,
+    ).toBe(4);
+
+    const tr = rowFor(element, "OnboardingWorkflow");
+    expect(cell(tr, "health-started")).toBe("12");
+    expect(cell(tr, "health-completed")).toBe("8");
+    expect(cell(tr, "health-failed")).toBe("2");
+    expect(cell(tr, "health-inflight")).toBe("2");
+    expect(cell(tr, "health-rate")).toContain("80%");
+    expect(cell(tr, "health-avg")).toBe("1m 30s");
+    expect(cell(tr, "health-max")).toBe("1h 2m");
+    expect(tr.querySelector("abbr")).toBeNull();
+  });
+
+  it("shows a dash for a row with no rate or duration", async () => {
+    const element = await openHealth();
+
+    const tr = rowFor(element, "QuietWorkflow");
+    expect(cell(tr, "health-rate")).toBe("—");
+    expect(cell(tr, "health-avg")).toBe("—");
+    expect(cell(tr, "health-max")).toBe("—");
+    expect(isFlagged(element, "QuietWorkflow")).toBe(false);
+  });
+
+  it("flags rows below the default 95% threshold (AC3)", async () => {
+    const element = await openHealth();
+
+    const threshold = element.shadowRoot.querySelector(
+      'lightning-input[data-id="health-threshold"]',
+    );
+    expect(Number(threshold.value)).toBe(95);
+    expect(query(element, "health-threshold-applied").textContent).toContain(
+      "95%",
+    );
+    expect(isFlagged(element, "OnboardingWorkflow")).toBe(true);
+    expect(rowFor(element, "OnboardingWorkflow").className).toContain(
+      "health-row-below",
+    );
+    expect(isFlagged(element, "ExactWorkflow")).toBe(false);
+  });
+
+  it("flags from the counts, not from the rounded rate (AC3)", async () => {
+    const element = await openHealth();
+
+    const tr = rowFor(element, "EdgeWorkflow");
+    expect(cell(tr, "health-rate")).toContain("95%");
+    expect(isFlagged(element, "EdgeWorkflow")).toBe(true);
+  });
+
+  it("applies an operator threshold without a new server call (AC3)", async () => {
+    const element = await openHealth();
+    getFleetHealth.mockClear();
+
+    setThreshold(element, "70");
+    await flushPromises();
+
+    expect(isFlagged(element, "OnboardingWorkflow")).toBe(false);
+    expect(isFlagged(element, "EdgeWorkflow")).toBe(false);
+    expect(query(element, "health-threshold-applied").textContent).toContain(
+      "70%",
+    );
+    expect(getFleetHealth).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "150", "-1", "abc"])(
+    "keeps the last threshold for the input %p",
+    async (value) => {
+      const element = await openHealth();
+
+      setThreshold(element, value);
+      await flushPromises();
+
+      expect(isFlagged(element, "OnboardingWorkflow")).toBe(true);
+      expect(query(element, "health-threshold-applied").textContent).toContain(
+        "95%",
+      );
+    },
+  );
+
+  it("marks sampled durations as approximate (AC4)", async () => {
+    const element = await openHealth(health(ROWS, { isSampled: true }));
+
+    const tr = rowFor(element, "EdgeWorkflow");
+    expect(tr.querySelector('[data-id="health-avg"] abbr').title).toBe(
+      "Approximate",
+    );
+    expect(cell(tr, "health-avg")).toContain("≈");
+    expect(cell(tr, "health-avg")).toContain("500ms");
+    expect(cell(tr, "health-max")).toContain("900ms");
+    // A missing value shows no mark.
+    expect(cell(rowFor(element, "QuietWorkflow"), "health-avg")).toBe("—");
+    expect(query(element, "health-sampled-note")).not.toBeNull();
+  });
+
+  it("shows no sample or count note when the data is complete", async () => {
+    const element = await openHealth();
+
+    expect(query(element, "health-sampled-note")).toBeNull();
+    expect(query(element, "health-capped-note")).toBeNull();
+  });
+
+  it("shows a note when the counts use the newest instances only (AC6)", async () => {
+    const element = await openHealth(
+      health(ROWS, { countsCapped: true, countCap: 20000 }),
+    );
+
+    expect(query(element, "health-capped-note").textContent).toContain("20000");
+  });
+
+  it("requests a new window when the operator changes it (AC1)", async () => {
+    const element = await openHealth();
+    getFleetHealth.mockClear();
+
+    changeWindow(element, "7d");
+    await flushPromises();
+
+    expect(getFleetHealth).toHaveBeenCalledWith({ windowKey: "7d" });
+  });
+
+  it("discards a stale response that arrives after a newer one", async () => {
+    const element = await openHealth();
+    let resolveOld;
+    getFleetHealth
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(health([]));
+
+    changeWindow(element, "1h");
+    changeWindow(element, "7d");
+    await flushPromises();
+    resolveOld(health(ROWS));
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelectorAll('tr[data-id="health-row"]').length,
+    ).toBe(0);
+    expect(query(element, "health-empty")).not.toBeNull();
+  });
+
+  it("keeps the spinner when a stale response arrives first", async () => {
+    const element = await openHealth();
+    let resolveOld;
+    getFleetHealth
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    changeWindow(element, "1h");
+    changeWindow(element, "7d");
+    resolveOld(health([]));
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector("lightning-spinner"),
+    ).not.toBeNull();
+    expect(query(element, "health-empty")).toBeNull();
+  });
+
+  it("does not show a toast for a stale error", async () => {
+    const element = await openHealth();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+    let rejectOld;
+    getFleetHealth
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            rejectOld = reject;
+          }),
+      )
+      .mockResolvedValueOnce(health(ROWS));
+
+    changeWindow(element, "1h");
+    changeWindow(element, "7d");
+    await flushPromises();
+    rejectOld({ body: { message: "Old failure" } });
+    await flushPromises();
+
+    expect(toastHandler).not.toHaveBeenCalled();
+    expect(rowFor(element, "OnboardingWorkflow")).not.toBeNull();
+  });
+
+  it("does not show a toast after the view closes", async () => {
+    const element = await openHealth();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+    let rejectPending;
+    getFleetHealth.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          rejectPending = reject;
+        }),
+    );
+
+    changeWindow(element, "7d");
+    await flushPromises();
+    clickButton(element, "Close");
+    rejectPending({ body: { message: "Late failure" } });
+    await flushPromises();
+
+    expect(toastHandler).not.toHaveBeenCalled();
+  });
+
+  it("deep-links a row to the filtered instance list and clears other filters (AC7)", async () => {
+    getWorkflowCatalog.mockResolvedValue([
+      {
+        className: "OnboardingWorkflow",
+        label: "Onboarding",
+        documented: true,
+        versioned: false,
+        active: 0,
+        failed: 1,
+        suspended: 0,
+        total: 1,
+      },
+    ]);
+    const element = await openHealth();
+    // Set a status (from a Catalog count) and a search term first.
+    clickButton(element, "Catalog");
+    await flushPromises();
+    element.shadowRoot
+      .querySelector('button.link-button[data-status="Failed"]')
+      .dispatchEvent(new CustomEvent("click"));
+    const search = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-input"),
+    ).find((i) => i.name === "search");
+    search.value = "abc";
+    search.dispatchEvent(new CustomEvent("change"));
+    clickButton(element, "Fleet Health");
+    await flushPromises();
+    await flushPromises();
+    getFilteredInstances.mockClear();
+
+    element.shadowRoot
+      .querySelector(
+        'button[data-id="health-definition"][data-definition="OnboardingWorkflow"]',
+      )
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getFilteredInstances).toHaveBeenCalled();
+    const criteria =
+      getFilteredInstances.mock.calls[
+        getFilteredInstances.mock.calls.length - 1
+      ][0].criteria;
+    expect(criteria.workflowName).toBe("OnboardingWorkflow");
+    expect(criteria.status).toBe("");
+    expect(criteria.searchTerm).toBe("");
+    expect(
+      element.shadowRoot.querySelector('tr[data-id="health-row"]'),
+    ).toBeNull();
+  });
+
+  it("shows an empty state when no instance is in the window", async () => {
+    const element = await openHealth(health([]));
+
+    expect(query(element, "health-empty")).not.toBeNull();
+    expect(query(element, "health-error")).toBeNull();
+  });
+
+  it("shows an error state and a toast when the call fails", async () => {
+    getFleetHealth.mockRejectedValue({ body: { message: "Unauthorized" } });
+    const element = mount();
+    await flushPromises();
+    const toastHandler = jest.fn();
+    element.addEventListener("lightning__showtoast", toastHandler);
+
+    clickButton(element, "Fleet Health");
+    await flushPromises();
+    await flushPromises();
+
+    expect(toastHandler).toHaveBeenCalled();
+    const detail = toastHandler.mock.calls[0][0].detail;
+    expect(detail.variant).toBe("error");
+    expect(detail.message).toContain("Unauthorized");
+    expect(query(element, "health-error").textContent).toContain(
+      "Unauthorized",
+    );
+    expect(query(element, "health-empty")).toBeNull();
+  });
+
+  it("reloads the view on refresh", async () => {
+    const element = await openHealth();
+    getFleetHealth.mockClear();
+
+    Array.from(element.shadowRoot.querySelectorAll("lightning-button-icon"))
+      .find((b) => b.alternativeText === "Refresh")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    expect(getFleetHealth).toHaveBeenCalledWith({ windowKey: "24h" });
+  });
+
+  it.each([
+    "System Doctor",
+    "Schedules",
+    "Version Drain",
+    "Unrouted Signals",
+    "Failure Breakdown",
+    "Latency",
+    "Catalog",
+  ])("closes the view when %s opens", async (label) => {
+    const element = await openHealth();
+
+    clickButton(element, label);
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector('tr[data-id="health-row"]'),
+    ).toBeNull();
+  });
+
+  it("closes the view when the operator selects an instance", async () => {
+    mockSuspendedInstance();
+    const element = await openHealth();
+
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(
+      element.shadowRoot.querySelector('tr[data-id="health-row"]'),
+    ).toBeNull();
+    expect(getInstanceDetails).toHaveBeenCalled();
+  });
+});
+
 // Issue #116: Continue-As-New generation chain in the detail pane.
 describe("c-workflow-dashboard continue-as-new chain", () => {
   const LIVE_ID = "a0G000000000003";
@@ -3990,6 +4469,24 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     });
   });
 
+  it("resets the chain when Fleet Health replaces the detail pane", async () => {
+    getFleetHealth.mockResolvedValue({ windowKey: "24h", rows: [] });
+    arrangeChained();
+    const element = await mountAndSelect();
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+
+    findButton(element, (btn) => btn.label === "Fleet Health").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    getInstanceChain.mockReturnValue(new Promise(() => {}));
+    await selectListItem(element, 0);
+
+    expect(getInstanceChain).toHaveBeenCalledTimes(2);
+    // The old rows are gone while the new read runs.
+    expect(chainRows(element)).toHaveLength(0);
+  });
+
   it("resets the chain when a panel replaces the detail pane", async () => {
     arrangeChained();
     const element = await mountAndSelect();
@@ -3999,8 +4496,11 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
       new CustomEvent("click"),
     );
     await settle();
+    getInstanceChain.mockReturnValue(new Promise(() => {}));
     await selectListItem(element, 0);
 
     expect(getInstanceChain).toHaveBeenCalledTimes(2);
+    // The old rows are gone while the new read runs.
+    expect(chainRows(element)).toHaveLength(0);
   });
 });
