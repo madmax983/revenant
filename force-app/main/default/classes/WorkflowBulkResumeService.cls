@@ -194,9 +194,6 @@ public inherited sharing class WorkflowBulkResumeService {
       ),
       'Resume_' + stepExec.Id
     );
-    // The payload is a new input. Strict determinism (issue #102) must not
-    // compare the next run with the old decision.
-    stepExec.Decision_Record__c = null;
     Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
       inst.Current_Step__c,
       WorkflowTypeResolver.extractNamespace(inst.Workflow_Name__c)

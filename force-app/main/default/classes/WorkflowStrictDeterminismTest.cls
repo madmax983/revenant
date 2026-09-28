@@ -656,6 +656,29 @@ public class WorkflowStrictDeterminismTest {
   }
 
   @IsTest
+  static void resumeWithoutPayloadKeepsTheRecord() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRun(GateWorkflow.class.getName(), 'wait');
+      // An operator resume with no payload is not a new input.
+      WorkflowResumeService.resumeInstance(instId, null);
+      Assert.isNotNull(
+        rows(instId, GATE)[0].Decision_Record__c,
+        'A resume without a payload keeps the record'
+      );
+      mode = 'complete';
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+
+      Assert.areEqual(
+        WorkflowEngine.CAT_STEP_NON_DETERMINISM,
+        load(instId).Failure_Category__c,
+        'A new decision after a payload-less resume is a divergence'
+      );
+    }
+  }
+
+  @IsTest
   static void captureOnceValueIsNotDivergence() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();

@@ -33,7 +33,7 @@ Thus, the only durable decision that a later run can contradict is a wait decisi
 | B12 | On divergence, use a savepoint and roll back the step DML. | No. A savepoint blocks callouts. Step side effects are out of scope. |
 | B13 | On divergence, fail through `failWorkflowInstance`. | Yes. This path also applies error routing (#90) and compensation. |
 | B14 | Do not publish the step's buffered events on divergence. | Yes. The events belong to the divergent decision. |
-| B15 | An operator retry, a parallel re-drive, a resume with a payload and a definition-change release clear the record. | Yes. Each one accepts a new decision. |
+| B15 | An operator retry, a parallel re-drive and a definition-change release clear the record. | Yes. Each one accepts a new decision. A resume payload is step state, so it changes the inputs without a clear. |
 | B16 | A thrown error, `RETRY`, `SLEEP` and `YIELD` are not decisions. Skip the check and keep the record. | Yes. |
 | B18 | Digest the stored (encoded or offloaded) forms, not decoded payloads. | Yes. No plaintext digest. Less heap. |
 | B17 | Config: `Revenant_Config__mdt.Strict_Determinism__c`, default off. Read in the existing static config query. | Yes. |
@@ -43,7 +43,7 @@ Thus, the only durable decision that a later run can contradict is a wait decisi
 | Way to fail | Prevention |
 |-------------|-----------|
 | Strict mode off still costs SOQL or CPU. | One static Boolean check. No query. The field read uses the existing query. |
-| A resume payload looks like no new input. | Step state is an input. The resume service also clears the record. |
+| A resume payload looks like no new input. | Step state is an input. |
 | A step retries or sleeps on a duplicate run. | `RETRY`, `SLEEP` and `YIELD` are not decisions. |
 | The signal query counts all history rows. | Read live signals only. |
 | Two branches swap which signal is claimed. | Digest the live signal Ids, not only counts. |
@@ -97,7 +97,7 @@ Invariants:
 - Schema: `Workflow_Step_Execution__c.Decision_Record__c` (Long Text 4000). `Revenant_Config__mdt.Strict_Determinism__c` (Checkbox, default off). `Failure_Category__c` value `STEP_NON_DETERMINISM`.
 - `WorkflowDecisionFingerprint`: pure decision text, digest and record codec.
 - `WorkflowDeterminismGuard`: inputs digest, verify, fail path.
-- `WorkflowStepInvoke`, `WorkflowStepOutcome`, `WorkflowStepExecLock`, `WorkflowRetryService`, `WorkflowResumeService`, `WorkflowBulkResumeService`, `WorkflowOperatorSkipParallelResume`, `WorkflowDefinitionChangeService`: hooks.
+- `WorkflowStepInvoke`, `WorkflowStepOutcome`, `WorkflowStepExecLock`, `WorkflowRetryService`, `WorkflowOperatorSkipParallelResume`, `WorkflowDefinitionChangeService`: hooks.
 - `WorkflowEngine`: config flag and category constant.
 - Dashboard: category label and filter.
 - Docs: feature doc, ADR 0003, README, ARCHITECTURE.

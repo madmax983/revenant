@@ -36,8 +36,10 @@ decision.
    guard, before the dispatch. Fail the step row, write an Error log row
    (`StepNonDeterminism`) and call `failWorkflowInstance` with the new
    category `STEP_NON_DETERMINISM`.
-7. Clear the record on an operator retry, a parallel re-drive, a resume with
-   a payload, a definition-change release and a run with the mode off.
+7. Clear the record on an operator retry, a parallel re-drive, a
+   definition-change release and a run with the mode off. A resume payload
+   is step state, so it changes the inputs. A resume without a payload keeps
+   the record.
 
 ## Consequences
 

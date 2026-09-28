@@ -63,7 +63,7 @@ The engine records a wait decision in `Workflow_Step_Execution__c.Decision_Recor
 
 The step inputs are:
 
-- The stored step input, previous output and step state. Stored forms are encoded or offloaded. The digest holds no decoded payload.
+- The stored step input, previous output and step state. A resume payload is step state. Stored forms are encoded or offloaded. The digest holds no decoded payload.
 - `ctx.attempt` and the timeout-resume flag.
 - The live signals of the instance (`Received` or `Processing`): Id and status. Signals carry approvals and child outcomes.
 - The status counts of the child instances.
@@ -132,7 +132,6 @@ WHERE Log_Type__c = 'StepNonDeterminism'
 ## When the engine clears a record
 
 - An operator retry, and a re-drive of a parallel branch.
-- A resume with a payload (`WorkflowResumeService`, `RESUME` event). The payload is a new input.
 - A release of a `DefinitionChanged` instance.
 - A step run while the mode is off.
 
