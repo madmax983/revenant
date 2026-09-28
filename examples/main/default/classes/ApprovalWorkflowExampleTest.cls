@@ -26,6 +26,103 @@ private class ApprovalWorkflowExampleTest {
   }
 
   /**
+   * @description Returns the notification anchor rows of an instance.
+   * @param instanceId The workflow instance.
+   * @return The Workflow_Log__c rows of type Notification.
+   */
+  private static List<Workflow_Log__c> notificationRows(Id instanceId) {
+    return [
+      SELECT Outcome__c, Message__c
+      FROM Workflow_Log__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Log_Type__c = :WorkflowNotifier.LOG_TYPE
+      WITH SYSTEM_MODE
+    ];
+  }
+
+  /**
+   * Issue #123: the approval gate asks the engine to notify the approver in
+   * the workflow input. The example has no Messaging code.
+   */
+  @IsTest
+  static void testApproverIsNotified() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String key = KEY_PREFIX + 'notify';
+      String approverId = String.valueOf(UserInfo.getUserId());
+
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(
+        'ApprovalWorkflowExample',
+        key,
+        new Map<String, Object>{
+          'purchaseAmount' => 500,
+          ApprovalWorkflowExample.APPROVER_FIELD => approverId
+        }
+      );
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      WorkflowTestHarness.Result suspended = harness.drive();
+      Test.stopTest();
+
+      Assert.areEqual('Suspended', suspended.status);
+      Assert.areEqual(
+        1,
+        WorkflowNotifier.publishedEvents.size(),
+        'One notify request for the approval wait'
+      );
+      Assert.isTrue(
+        WorkflowNotifier.publishedEvents[0].Payload__c.contains(approverId),
+        'The request must name the approver'
+      );
+      List<Workflow_Log__c> rows = notificationRows(instanceId);
+      Assert.areEqual(1, rows.size(), 'One anchor row for the wait');
+      Assert.isTrue(rows[0].Message__c.contains(approverId));
+
+      WorkflowTestHarness.Result done = harness.injectSignal(
+        key,
+        ApprovalWorkflowExample.DECISION_SIGNAL,
+        '{"approved":true}'
+      );
+      Assert.areEqual('Completed', done.status);
+      Assert.areEqual(
+        1,
+        WorkflowNotifier.publishedEvents.size(),
+        'The approval must not notify again'
+      );
+    }
+  }
+
+  /**
+   * Issue #123: unit test of the gate with StepContextTestBuilder (0 DML).
+   */
+  @IsTest
+  static void testGateRequestsNotificationForApprover() {
+    StepContext ctx = new StepContextTestBuilder()
+      .workflowInput(
+        new Map<String, Object>{
+          'purchaseAmount' => 750,
+          ApprovalWorkflowExample.APPROVER_FIELD => UserInfo.getUserId()
+        }
+      )
+      .build();
+
+    StepResult result = new ApprovalWorkflowExample.RequestApprovalStep()
+      .execute(ctx);
+
+    Assert.areEqual(
+      StepResult.ActionType.WAIT_FOR_APPROVAL,
+      result.directive().action
+    );
+    WorkflowNotification n = result.directive().notification;
+    Assert.isNotNull(n, 'The gate must request a notification');
+    Assert.areEqual(
+      new Set<String>{ ApprovalWorkflowExample.APPROVER_FIELD },
+      n.inputFields
+    );
+    Assert.isTrue(n.body.contains('750'), n.body);
+  }
+
+  /**
    * Approved round trip: start -> Suspended on the approval gate -> approval signal
    * -> resume -> Completed, with no compensation.
    *
@@ -44,7 +141,10 @@ private class ApprovalWorkflowExampleTest {
       Id instanceId = WorkflowEngine.start(
         'ApprovalWorkflowExample',
         key,
-        new Map<String, Object>{ 'purchaseAmount' => 500 }
+        new Map<String, Object>{
+          'purchaseAmount' => 500,
+          ApprovalWorkflowExample.APPROVER_FIELD => UserInfo.getUserId()
+        }
       );
       WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
       // Drives ReserveBudgetStep -> RequestApprovalStep -> suspends awaiting approval.

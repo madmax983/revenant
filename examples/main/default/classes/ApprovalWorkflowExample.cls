@@ -22,6 +22,9 @@ public inherited sharing class ApprovalWorkflowExample implements WorkflowDefini
    */
   public static final String DECISION_SIGNAL = 'Approve:' + APPROVAL_KEY;
 
+  /** Workflow input key that holds the approver Id (issue #123). */
+  public static final String APPROVER_FIELD = 'approverId';
+
   /**
    * @description Declares the ordered step names comprising the approval saga.
    * @return The list of ReserveBudget, RequestApproval, PlaceOrder, and Reject step names.

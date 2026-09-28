@@ -16,6 +16,9 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator toggle (Revenant_Config__mdt.Send_Notifications__c, issue #123):
+  // when true the engine sends the Custom Notification of a waiting step.
+  public static Boolean sendNotifications = true;
   // Operator setting (Revenant_Config__mdt.Payload_Codec__c): the PayloadCodec
   // class name. Blank selects the identity codec. See WorkflowPayloadCodecs.
   public static String payloadCodecClass = null;
