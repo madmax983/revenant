@@ -368,6 +368,25 @@ private class WorkflowReadinessControllerTest {
   }
 
   /**
+   * @description Recipients of only separators send no email, so the check warns.
+   */
+  @IsTest
+  static void testSeparatorOnlyRecipientsWarns() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(true, ',; ', false));
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessService.ReadinessCheck alert = check(
+      'alertConfig',
+      checks
+    );
+    System.assertEquals(WARN, alert.status, 'No real recipient warns');
+    System.assert(alert.finding.contains('Email_Recipients__c'), alert.finding);
+  }
+
+  /**
    * @description A trigger that is not deployed fails.
    */
   @IsTest
