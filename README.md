@@ -725,6 +725,7 @@ How the gates map to permissions:
 - **Dashboard visibility** is gated by `WorkflowDashboardSupport.checkAuthorization()`, which passes for holders of the `Workflow_Dashboard_View` custom permission (granted by `Revenant_Operator`), the `Workflow_Admin` custom permission (granted by `Revenant_Admin`), or the "Modify All Data" system permission.
 - **State-mutating recovery actions** are separately gated by `WorkflowDashboardSupport.checkOperatorAction()`, which passes only for holders of the `Workflow_Operator_Action` custom permission, `Workflow_Admin`, or "Modify All Data". Because the read-only tier holds `Workflow_Dashboard_View` (not `Workflow_Admin`), **granting dashboard visibility never implicitly grants the ability to re-drive, cancel, or delete.**
 - **Rate Limits panel** Apex access: the panel calls `WorkflowRateLimitController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
+- **Fleet Health view** Apex access: the view calls `WorkflowFleetHealthController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
 
 ### Mapping Workflow Definitions to Alert Configurations
@@ -872,6 +873,17 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
   - **Available**: 1 token or more.
   - **Invalid config**: `acquire()` rejects the config (capacity less than 1, or refill rate 0 or less). A key with an invalid config shows Invalid config, also when the key has no state row yet.
   - The panel is read-only. It adds no SOQL to the orchestrator. It does not show state rows that have no config.
+
+### Fleet Health
+
+The **Fleet Health** button opens a read-only view. It shows one row for each definition that has instances in the window (1 hour, 24 hours or 7 days).
+
+- **Counts:** the instances that started in the window. Started, completed (`Completed`, `ContinuedAsNew`), failed (`Failed`, `CompensationFailed`, `Compensated`, `Cancelled`) and in-flight (`Running`, `Suspended`, `Paused`, `Compensating`, `Cancelling`, `Pending`, `DefinitionChanged`). `CompensationFailed` is an active status, but the view counts it as failed.
+- **Success rate:** completed ÷ (completed + failed). When the rate is less than the threshold (default 95%), the row shows a red **Below threshold** badge. Set the threshold in the view. The value stays until the page reloads.
+- **Duration:** the average and the maximum of `Terminal_At__c` − `CreatedDate`, for the instances that finished in the window. The values come from the 2,000 instances of all definitions that finished last. When more instances finished, each duration shows **≈**. Active instances are not in the duration.
+- **Deep link:** click a definition to open the instance list for that definition. The link clears the status, search and attribute filters.
+- **Cost:** three queries each time the view loads. When more than 20,000 instances started in the window, the counts use the 20,000 newest instances and the view shows a note. The view writes no data. See [ADR 0004](docs/adr/0004-fleet-health-duration-sample.md).
+- The System Doctor **Definition Health** panel counts by terminal time. Fleet Health counts by start time. Because of this, the numbers can be different.
 
 ---
 
