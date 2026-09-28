@@ -123,7 +123,7 @@ public inherited sharing class WorkflowCompensationContext {
     Map<String, Object> capturesMap = new Map<String, Object>();
     String workflowName = run.instance.Workflow_Name__c;
     if (compensatableStepInstance instanceof RetryConfigurable) {
-      // The policy goes through the operator record (issue #103).
+      // The resolver applies the operator record to the policy (issue #103).
       maxAttempts = WorkflowRetryConfigResolver.resolve(
           workflowName,
           stepExec.Step_Name__c,
@@ -150,7 +150,7 @@ public inherited sharing class WorkflowCompensationContext {
         }
       }
     }
-    // An override record caps the attempts at once (issue #103).
+    // An override record sets the cap immediately (issue #103).
     run.maxAttempts = WorkflowRetryConfigResolver.overrideMaxAttempts(
       workflowName,
       stepExec.Step_Name__c,

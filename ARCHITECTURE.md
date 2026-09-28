@@ -138,8 +138,9 @@ terminal/retry state, including transient-lock retry and backoff scheduling.
 - `WorkflowAutoRetry` + `AutoRetryConfigurable` interface: retry a thrown
   step error under a declared policy (issue #101)
 - `WorkflowRetryConfigResolver`: effective retry policy from
-  `Workflow_Retry_Config__mdt` (step record > definition record > author
-  policy or engine default; 0 SOQL). Issue #103. See `docs/retry-config.md`.
+  `Workflow_Retry_Config__mdt` (step record > definition record; a record
+  applies with no author policy or with `Override_Author_Policy__c`; 0 SOQL).
+  Issue #103. See `docs/retry-config.md`.
 
 ## Compensation & cancellation
 

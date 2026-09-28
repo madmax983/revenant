@@ -21,8 +21,8 @@ during an incident, an operator must deploy code.
    has `Override_Author_Policy__c` (default `false`).
 4. Add `RetryPolicy.fromConfig()` to mean "no author policy".
    `StepResult.retry(...)` does not change.
-5. A blank or bad record field keeps the value of the lower layer. The result
-   is always sanitized.
+5. A blank or bad record field keeps the value of the lower layer (the author
+   policy, else the engine default). The resolver always sanitizes the result.
 6. `WorkflowRetryConfigResolver` reads `getAll()` (0 SOQL) and does no DML.
    The forward and compensation retry outcomes call it. The step and
    compensation context builders call it for `ctx.isFinalAttempt()`.

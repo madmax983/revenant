@@ -10,8 +10,8 @@
  * The record applies when the step has no author policy (null or
  * `RetryPolicy.fromConfig()`), or when the record has
  * `Override_Author_Policy__c`. A blank or bad record field keeps the value
- * of the lower layer (author policy, else engine default). The result is
- * always sanitized.
+ * of the lower layer (author policy, else engine default). The resolver
+ * always sanitizes the result.
  *
  * Reads use `getAll()`, which uses no SOQL. The resolver does no DML.
  */

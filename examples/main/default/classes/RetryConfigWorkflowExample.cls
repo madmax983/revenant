@@ -1,7 +1,8 @@
 /**
  * @description Reference example for the operator retry policy (issue #103).
- * A workflow sends an order to a partner API. When the API is down (503), the
- * step returns StepResult.retry(RetryPolicy.fromConfig()): no author policy. The operator owns the
+ * A workflow sends an order to a partner API. When the API returns 503 or
+ * 429, the step returns StepResult.retry(RetryPolicy.fromConfig()). This
+ * means no author policy. The operator owns the
  * pacing in the Workflow_Retry_Config__mdt record "PartnerSync".
  *
  * During an incident, the operator sets Maximum_Attempts__c to a lower value

@@ -134,8 +134,8 @@ public inherited sharing class WorkflowStepContext {
   // Resolve the captured-values map and the effective max attempts. Priority:
   // persisted __maxAttempts (not for a RetryConfigurable step without an
   // auto-retry policy), then RetryConfigurable, then auto-retry policy, then 1.
-  // A policy goes through the operator record (issue #103). An override
-  // record caps the result at once.
+  // The resolver applies the operator record to the policy (issue #103). An
+  // override record sets the cap immediately.
   private static CaptureContext resolveCaptureContext(
     WorkflowStep stepInstance,
     WorkflowStepRunner.RunStepContext ctx

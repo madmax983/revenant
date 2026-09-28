@@ -8,26 +8,26 @@ operator must deploy code. During an incident, this takes hours or days.
 ## Goal
 
 An operator changes the retry policy of a workflow or a step in Setup. The
-change applies to the next retry attempt. No deploy is necessary.
+change applies at the next retry outcome. No deploy is necessary.
 
 ## 1. Brainstorming
 
-| Idea                                                                   | Keep? | Reason                                                                 |
-| ---------------------------------------------------------------------- | ----- | ---------------------------------------------------------------------- |
-| New CMDT `Workflow_Retry_Config__mdt`                                  | Yes   | Same pattern as the rate-limit, alert and concurrency configs.         |
-| Match by `DeveloperName` (40 characters)                               | No    | Workflow name plus step name is often longer than 40 characters.       |
-| Match by text fields `Workflow_Definition__c` and `Step_Name__c`       | Yes   | No length problem. Blank step name means "all steps".                  |
-| Read with `getAll()`                                                   | Yes   | `getAll()` uses no SOQL. It reads the metadata cache.                  |
-| New no-argument `StepResult.retry()`                                   | No    | `StepResult` then has 20 public members (PMD `ExcessivePublicCount`).  |
-| New marker `RetryPolicy.fromConfig()`                                  | Yes   | "No author policy". `StepResult.retry(...)` does not change. Additive. |
-| Treat `new RetryPolicy()` as "no author policy"                        | No    | Cannot tell it from an author who wants the defaults.                  |
-| Route `RetryConfigurable` and auto-retry policies through the resolver | Yes   | `fromConfig()` and the override then work on every retry path.         |
-| `Override_Author_Policy__c` checkbox                                   | Yes   | Required by the issue. Default `false` keeps author intent.            |
-| Blank CMDT field keeps the value of the lower layer                    | Yes   | Operator can set only `Maximum_Attempts__c` during an incident.        |
-| Merge step record and definition record field by field                 | No    | Harder to explain. The issue asks "most specific record wins".         |
-| Resolve the policy at each retry outcome                               | Yes   | A new transaction reads the new CMDT value. Next attempt uses it.      |
-| Show an override in `ctx.isFinalAttempt()`                             | Yes   | A step that checks the final attempt must see the operator cap.        |
-| LWC editor for the config                                              | No    | Out of scope. The Setup UI is sufficient.                              |
+| Idea                                                                   | Keep? | Reason                                                                  |
+| ---------------------------------------------------------------------- | ----- | ----------------------------------------------------------------------- |
+| New CMDT `Workflow_Retry_Config__mdt`                                  | Yes   | Same pattern as the rate-limit, alert and concurrency configs.          |
+| Match by `DeveloperName` (40 characters)                               | No    | Workflow name plus step name is often longer than 40 characters.        |
+| Match by text fields `Workflow_Definition__c` and `Step_Name__c`       | Yes   | No length problem. Blank step name means "all steps".                   |
+| Read with `getAll()`                                                   | Yes   | `getAll()` uses no SOQL. It reads the metadata cache.                   |
+| New no-argument `StepResult.retry()`                                   | No    | `StepResult` then has 20 public members (PMD `ExcessivePublicCount`).   |
+| New marker `RetryPolicy.fromConfig()`                                  | Yes   | "No author policy". `StepResult.retry(...)` does not change. Additive.  |
+| Treat `new RetryPolicy()` as "no author policy"                        | No    | Cannot tell it from an author who wants the defaults.                   |
+| Route `RetryConfigurable` and auto-retry policies through the resolver | Yes   | `fromConfig()` and the override then work on every retry path.          |
+| `Override_Author_Policy__c` checkbox                                   | Yes   | Required by the issue. Default `false` keeps author intent.             |
+| Blank CMDT field keeps the value of the lower layer                    | Yes   | Operator can set only `Maximum_Attempts__c` during an incident.         |
+| Merge step record and definition record field by field                 | No    | Harder to explain. The issue asks "most specific record wins".          |
+| Resolve the policy at each retry outcome                               | Yes   | A new transaction reads the new CMDT value. Next retry outcome uses it. |
+| Show an override in `ctx.isFinalAttempt()`                             | Yes   | A step that checks the final attempt must see the operator cap.         |
+| LWC editor for the config                                              | No    | Out of scope. The Setup UI is sufficient.                               |
 
 ## 2. Reverse Brainstorming (How can we make this fail?)
 
@@ -41,7 +41,7 @@ change applies to the next retry attempt. No deploy is necessary.
 | Cache the index across transactions        | CMDT change does not apply            | Cache only in a static variable (one transaction).                     |
 | Update old step rows to the new policy     | Audit trail changes                   | Resolver does no DML. A test checks `Limits.getDmlStatements()`.       |
 | Change `StepResult.retry(policy)` behavior | Existing workflows change             | No record, or no override: same result as before.                      |
-| Org with no records behaves differently    | Upgrade risk                          | No record: sanitized author policy, or `5s, 2.0, 5`. Tested.           |
+| Org with no records behaves differently    | Upgrade risk                          | No record: sanitized author policy, or 5 s, 2.0, 5 attempts. Tested.   |
 | Test depends on org records                | Flaky tests                           | Test mock list replaces `getAll()` fully.                              |
 
 ## 3. Six Thinking Hats
@@ -66,7 +66,7 @@ change applies to the next retry attempt. No deploy is necessary.
 
 ## 4. Specification
 
-Verus does not apply to Apex. The truth table below is the spec. The tests
+Verus is for Rust. Apex has no Verus, so the truth table below is the spec. The tests
 check each row.
 
 **Match:** step record for `(workflow, step)` > definition record for
@@ -76,7 +76,7 @@ check each row.
 
 | Author policy | Record match | Override flag | Effective policy                      |
 | ------------- | ------------ | ------------- | ------------------------------------- |
-| none          | none         | -             | engine default `5s, 2.0, 5`           |
+| none          | none         | -             | engine default 5 s, 2.0, 5 attempts   |
 | none          | yes          | any           | record fields over the engine default |
 | set           | none         | -             | author policy                         |
 | set           | yes          | `false`       | author policy                         |
