@@ -623,6 +623,35 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
+  static void failedClaimSendsNothingAndWaits() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-claim',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(instanceId);
+    WorkflowNotifier.forceClaimFailure = true;
+    Test.getEventBus().deliver();
+    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_REQUESTED,
+      anchors(instanceId)[0].Outcome__c,
+      'No send without a claim'
+    );
+    // The pass published the key again. The next pass claims and sends.
+    WorkflowNotifier.forceClaimFailure = false;
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SENT,
+      anchors(instanceId)[0].Outcome__c
+    );
+  }
+
+  @IsTest
   static void deferredPublishFailureIsLogged() {
     seedType();
     WorkflowNotifier.sendCallsPerPass = 1;

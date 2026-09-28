@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Outcome__c</fullName>
-    <description>Result of this log event. Schedule rows: Started, Skipped or Deduped. Notification rows: Requested, Sent, Failed or Skipped.</description>
+    <description>Result of this log event. Schedule rows: Started, Skipped or Deduped. Notification rows: Requested, Sending, Sent, Failed or Skipped.</description>
     <externalId>false</externalId>
     <label>Outcome</label>
     <length>20</length>

@@ -24,6 +24,8 @@ public inherited sharing class WorkflowNotifier {
   public static final String LOG_TYPE = 'Notification';
   /** @description Outcome__c: the SUSPEND published the request. */
   public static final String OUTCOME_REQUESTED = 'Requested';
+  /** @description Outcome__c: the trigger claimed the row to send it. */
+  public static final String OUTCOME_SENDING = 'Sending';
   /** @description Outcome__c: the platform accepted the send. */
   public static final String OUTCOME_SENT = 'Sent';
   /** @description Outcome__c: the request or the send failed. */
@@ -99,6 +101,8 @@ public inherited sharing class WorkflowNotifier {
   private static Boolean forceResultDmlExhausted = false;
   @TestVisible
   private static Boolean forceQueryBudgetExhausted = false;
+  @TestVisible
+  private static Boolean forceClaimFailure = false;
 
   /**
    * @description Returns the Fire_Key__c of the anchor row of a step row.
@@ -190,7 +194,7 @@ public inherited sharing class WorkflowNotifier {
   // signal redelivery woke it. One SOQL.
   private static Boolean wokenAtSuspend(Id instanceId) {
     if (Limits.getQueries() >= Limits.getLimitQueries()) {
-      return false;
+      return true; // Cannot check: do not risk a stale notification.
     }
     List<Workflow_Instance__c> rows = [
       SELECT Status__c
@@ -345,6 +349,10 @@ public inherited sharing class WorkflowNotifier {
   private class OpenRequest {
     public Workflow_Log__c anchor;
     public Map<String, Object> req;
+    // Set when the request is ready to send.
+    public Id typeId;
+    public List<Set<String>> chunks;
+    public String summary;
     public OpenRequest(Workflow_Log__c anchor, Map<String, Object> req) {
       this.anchor = anchor;
       this.req = req;
@@ -460,7 +468,8 @@ public inherited sharing class WorkflowNotifier {
     System.debug(LoggingLevel.WARN, 'WorkflowNotifier: ' + reason);
   }
 
-  // Reads the Requested anchor rows of the keys. One SOQL.
+  // Reads and locks the Requested anchor rows of the keys. One SOQL. The lock
+  // makes two passes with the same key wait for each other.
   private static List<Workflow_Log__c> openAnchors(List<String> keys) {
     if (keys.isEmpty()) {
       return new List<Workflow_Log__c>();
@@ -473,6 +482,7 @@ public inherited sharing class WorkflowNotifier {
         AND Log_Type__c = :LOG_TYPE
         AND Outcome__c = :OUTCOME_REQUESTED
       WITH SYSTEM_MODE
+      FOR UPDATE
     ];
   }
 
@@ -581,16 +591,67 @@ public inherited sharing class WorkflowNotifier {
     Map<Id, Id> owners = resolveOwners(ownerRecordIds);
 
     List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
+    List<OpenRequest> ready = new List<OpenRequest>();
     Integer callsLeft = sendCallsPerPass;
     for (OpenRequest open : requests) {
-      Integer used = sendOne(open, owners, callsLeft);
+      Integer used = planOne(open, owners, callsLeft);
       if (used < 0) {
         deferred.add(open.anchor);
-      } else {
+      } else if (used > 0) {
+        ready.add(open);
         callsLeft -= used;
       }
     }
+    deferred.addAll(claimAndSend(ready));
     return deferred;
+  }
+
+  // Claims each ready row (Outcome__c = Sending) before the send. Sends only
+  // the rows whose claim succeeded: a row that is not Requested is never read
+  // again, so a failed result update cannot cause a second send. Returns the
+  // rows whose claim failed: they wait for a later pass.
+  private static List<Workflow_Log__c> claimAndSend(List<OpenRequest> ready) {
+    List<Workflow_Log__c> unclaimed = new List<Workflow_Log__c>();
+    if (ready.isEmpty()) {
+      return unclaimed;
+    }
+    if (Test.isRunningTest() && forceClaimFailure) {
+      for (OpenRequest open : ready) {
+        unclaimed.add(open.anchor);
+      }
+      return unclaimed;
+    }
+    List<Workflow_Log__c> claims = new List<Workflow_Log__c>();
+    for (OpenRequest open : ready) {
+      claims.add(
+        new Workflow_Log__c(Id = open.anchor.Id, Outcome__c = OUTCOME_SENDING)
+      );
+    }
+    List<Database.SaveResult> results = Database.update(
+      claims,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    for (Integer i = 0; i < ready.size(); i++) {
+      OpenRequest open = ready[i];
+      if (!results[i].isSuccess()) {
+        unclaimed.add(open.anchor);
+        continue;
+      }
+      try {
+        deliver(open.typeId, open.req, open.chunks);
+        setResult(
+          open.anchor,
+          open.req,
+          OUTCOME_SENT,
+          LEVEL_INFO,
+          open.summary
+        );
+      } catch (Exception e) {
+        failed(open, 'Send failed: ' + e.getMessage());
+      }
+    }
+    return unclaimed;
   }
 
   private static Map<String, Object> readRequest(Workflow_Log__c anchor) {
@@ -606,9 +667,10 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
-  // Sends one request. Returns the send calls it used, or -1 when the calls
-  // left are not sufficient (send it in a later pass).
-  private static Integer sendOne(
+  // Plans one request. Returns the send calls it needs (the request is then
+  // ready), 0 when it failed, or -1 when the calls left are not sufficient
+  // (send it in a later pass).
+  private static Integer planOne(
     OpenRequest open,
     Map<Id, Id> owners,
     Integer callsLeft
@@ -651,18 +713,14 @@ public inherited sharing class WorkflowNotifier {
       if (chunks.size() > callsLeft) {
         return -1;
       }
-      deliver(typeId, req, chunks);
-      setResult(
-        open.anchor,
-        req,
-        OUTCOME_SENT,
-        LEVEL_INFO,
+      open.typeId = typeId;
+      open.chunks = chunks;
+      open.summary =
         'Sent to ' +
-          recipients.size() +
-          ' recipients (ignored ' +
-          ignored +
-          ' non-user Ids)'
-      );
+        recipients.size() +
+        ' recipients (ignored ' +
+        ignored +
+        ' non-user Ids)';
       return chunks.size();
     } catch (Exception e) {
       return failed(open, 'Send failed: ' + e.getMessage());
@@ -841,12 +899,12 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
-  // True when the pass can save its result rows: one update, one publish
-  // for a later pass and one error row.
+  // True when the pass can save its rows: the claim update, the result
+  // update, two publishes for a later pass and one error row.
   private static Boolean hasResultDml(Integer rowCount) {
     return !forceResultDmlExhausted &&
-      Limits.getDmlStatements() + 4 <= Limits.getLimitDmlStatements() &&
-      Limits.getDmlRows() + (2 * rowCount) + 1 <= Limits.getLimitDmlRows();
+      Limits.getDmlStatements() + 5 <= Limits.getLimitDmlStatements() &&
+      Limits.getDmlRows() + (3 * rowCount) + 1 <= Limits.getLimitDmlRows();
   }
 
   // Publishes the keys again for a later pass. Returns the keys whose

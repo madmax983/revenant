@@ -103,6 +103,7 @@ A step that waits again on the same row with a new notification (for example, a 
 - When the anchor insert fails for a reason other than a duplicate key, `request` writes a `Notification` error row.
 - A publish error sets the anchor row to `Failed` (`Level__c = Error`).
 - In the trigger, each request has its own `try`/`catch`. A failed row update writes one error row.
+- Before a send, the trigger claims the row (`Outcome__c = Sending`) and locks it (`FOR UPDATE`). It sends only the rows whose claim succeeded. A row whose claim failed waits for a later pass.
 - The notify trigger checks its query and DML budget before it sends. When the budget is low, it sends nothing and throws `EventBus.RetryableException`: the platform delivers the batch again (max 5 times). It never throws after a send.
 - When the type or owner queries cannot run, the requests wait for a later pass.
 - When the publish for a later pass fails, the row is `Failed`.
@@ -112,6 +113,7 @@ A step that waits again on the same row with a new notification (for example, a 
 | Value | Meaning |
 |-------|---------|
 | `Requested` | The SUSPEND published the request. The trigger did not run yet. |
+| `Sending` | The trigger claimed the row, then the send or the result update stopped. The engine never reads the row again, so it never sends it two times. |
 | `Sent` | The platform accepted the send. It does not prove delivery. |
 | `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, too many recipients, a request that is not readable, or the error. |
 | `Skipped` | `Send_Notifications__c` was off at send time, or the wait ended before the send. |
@@ -139,12 +141,12 @@ In an Apex test, set `WorkflowEngine.sendNotifications`.
 
 On a SUSPEND with a notification:
 
-- 1 SOQL: the instance status after signal redelivery.
+- 1 SOQL: the instance status after signal redelivery. When no SOQL is left, the engine writes no request.
 - Maximum 3 DML statements and 3 DML rows: the anchor insert, the publish, and one update or error row only after an error.
 
 A SUSPEND with no notification costs nothing.
 
-In `WorkflowNotifyTrigger`, for each pass: one SOQL for the anchor rows, one SOQL for the step rows that still wait, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, one update, max 10 send calls, and one publish for the keys that wait for a later pass. The trigger also runs for engine events. It ignores them.
+In `WorkflowNotifyTrigger`, for each pass: one SOQL for the anchor rows, one SOQL for the step rows that still wait, one SOQL for the types that are not in the cache, one SOQL for each object type of `toRecordOwner` records, one claim update, one result update, max 10 send calls, and one publish for the keys that wait for a later pass. The trigger also runs for engine events. It ignores them.
 
 ## Data
 
