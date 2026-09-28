@@ -8,7 +8,7 @@
 //    changes the Workflow_Lifecycle__e (terminal-only, config-toggleable) and Workflow_Event__e (internal
 //    control-plane) platform events do not emit. An empApi migration would change behavior and needs a live org.
 // The requestAnimationFrame scroll-restore that this disable also covered was replaced by renderedCallback.
-import { LightningElement, wire } from "lwc";
+import { LightningElement, api, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
@@ -80,6 +80,169 @@ const LIVENESS_STATUS = {
 };
 const LIVENESS_UNKNOWN = { label: "Unknown", badgeClass: "badge badge-grey" };
 
+// Platform Event allocation (#120). Defaults match PlatformEventHeadroom.cls.
+const PE_DEFAULT_WARNING_PERCENT = 80;
+const PE_DEFAULT_CRITICAL_PERCENT = 95;
+const PE_STATUS = {
+  HEALTHY: { label: "Healthy", badgeClass: "badge badge-green", rank: 1 },
+  WARNING: { label: "Warning", badgeClass: "badge badge-orange", rank: 2 },
+  CRITICAL: { label: "Critical", badgeClass: "badge badge-red", rank: 3 },
+};
+const PE_UNAVAILABLE = {
+  label: "Not available",
+  badgeClass: "badge badge-grey",
+  rank: 0,
+};
+const PE_INTRO =
+  "The Platform Event allocation of the org is almost full. All apps in the org share this allocation.";
+// Consequence for each impact, in display order. A key with no known impact
+// uses PUBLISH, the most severe text.
+const PE_IMPACT_TEXT = [
+  {
+    key: "PUBLISH",
+    text:
+      "Suspended workflows can stay suspended. Child-to-parent resumes and parallel fan-in can stop. " +
+      "The engine can fail to publish lifecycle events.",
+  },
+  {
+    key: "DELIVERY",
+    text:
+      "External subscribers (CometD, Pub/Sub API, empApi) can stop receiving events, for example Workflow_Lifecycle__e. " +
+      "Delivery to Apex triggers does not use this allocation.",
+  },
+  {
+    key: "STANDARD_VOLUME",
+    text:
+      "Standard-volume events of other apps can fail. " +
+      "Revenant events are high-volume and do not use this allocation.",
+  },
+];
+const PE_IGNORED_TEXT =
+  "Page settings ignored: Warning must be more than 0 and less than Critical. Critical must be 100 or less.";
+
+// Same rule as PlatformEventHeadroom.classify: exact ratio, no rounding.
+function classifyHeadroom(value, limit, warningPercent, criticalPercent) {
+  if (!(limit > 0) || value === null || value === undefined) {
+    return "UNAVAILABLE";
+  }
+  const scaledUsed = value * 100;
+  if (scaledUsed >= criticalPercent * limit) {
+    return "CRITICAL";
+  }
+  if (scaledUsed >= warningPercent * limit) {
+    return "WARNING";
+  }
+  return "HEALTHY";
+}
+
+function isThresholdSet(value) {
+  return value !== undefined && value !== null && value !== "";
+}
+
+// Resolves the thresholds. Valid App Builder values replace the server
+// values. If the App Builder values are not valid, the server values apply.
+function resolvePeThresholds(data, warningSetting, criticalSetting) {
+  const base = {
+    warning: isThresholdSet(data.platformEventWarningPercent)
+      ? Number(data.platformEventWarningPercent)
+      : PE_DEFAULT_WARNING_PERCENT,
+    critical: isThresholdSet(data.platformEventCriticalPercent)
+      ? Number(data.platformEventCriticalPercent)
+      : PE_DEFAULT_CRITICAL_PERCENT,
+    overridden: false,
+    ignored: false,
+  };
+  const warnSet = isThresholdSet(warningSetting);
+  const critSet = isThresholdSet(criticalSetting);
+  if (!warnSet && !critSet) {
+    return base;
+  }
+  const warning = warnSet ? Number(warningSetting) : base.warning;
+  const critical = critSet ? Number(criticalSetting) : base.critical;
+  const valid =
+    Number.isFinite(warning) &&
+    Number.isFinite(critical) &&
+    warning > 0 &&
+    warning < critical &&
+    critical <= 100;
+  return valid
+    ? { warning, critical, overridden: true, ignored: false }
+    : { ...base, ignored: true };
+}
+
+function formatCount(value) {
+  return Number(value).toLocaleString();
+}
+
+// Builds the panel model one time for each data or setting change.
+function buildPeView(data, warningSetting, criticalSetting) {
+  const source = data || {};
+  const thresholds = resolvePeThresholds(
+    source,
+    warningSetting,
+    criticalSetting,
+  );
+  const rows = (source.platformEventLimits || [])
+    .map((row) => {
+      const state = thresholds.overridden
+        ? classifyHeadroom(
+            row.value,
+            row.limit,
+            thresholds.warning,
+            thresholds.critical,
+          )
+        : row.state;
+      const status = PE_STATUS[state] || PE_UNAVAILABLE;
+      return {
+        ...row,
+        key: row.name,
+        state,
+        rank: status.rank,
+        stateLabel: status.label,
+        badgeClass: status.badgeClass,
+        usageLabel: `${formatCount(row.value)} / ${formatCount(row.limit)}`,
+        usedLabel: `${row.percentUsed}% used`,
+        remainingLabel: `${formatCount(row.remaining)} remaining (${row.percentRemaining}%)`,
+      };
+    })
+    .filter((row) => row.rank > PE_UNAVAILABLE.rank);
+  const status = rows.reduce(
+    (worst, row) =>
+      row.rank > worst.rank ? PE_STATUS[row.state] || worst : worst,
+    PE_UNAVAILABLE,
+  );
+  const atRiskImpacts = new Set(
+    rows
+      .filter((row) => row.rank >= PE_STATUS.WARNING.rank)
+      .map((row) =>
+        PE_IMPACT_TEXT.some((i) => i.key === row.impact)
+          ? row.impact
+          : "PUBLISH",
+      ),
+  );
+  const critical = status.rank >= PE_STATUS.CRITICAL.rank;
+  let thresholdsLabel = `Warning at ${thresholds.warning}% · Critical at ${thresholds.critical}%`;
+  if (thresholds.overridden) {
+    thresholdsLabel += " (page setting)";
+  }
+  if (thresholds.ignored) {
+    thresholdsLabel += `. ${PE_IGNORED_TEXT}`;
+  }
+  return {
+    rows,
+    hasRows: rows.length > 0,
+    status,
+    atRisk: status.rank >= PE_STATUS.WARNING.rank,
+    consequenceClass: `slds-scoped-notification slds-media slds-media_center slds-m-bottom_small ${
+      critical ? "slds-theme_error" : "slds-theme_warning"
+    }`,
+    consequenceIcon: critical ? "utility:error" : "utility:warning",
+    consequenceIntro: PE_INTRO,
+    consequenceLines: PE_IMPACT_TEXT.filter((i) => atRiskImpacts.has(i.key)),
+    thresholdsLabel,
+  };
+}
+
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
   RETRIES_EXHAUSTED: "Retries Exhausted",
@@ -105,6 +268,30 @@ const ASYNC_LIMITS = {
 };
 
 export default class WorkflowDashboard extends LightningElement {
+  // App Builder settings for the Platform Event thresholds (#120). If a value
+  // is blank or not valid, the component uses the server values.
+  @api
+  get platformEventWarningPercent() {
+    return this._peWarningSetting;
+  }
+  set platformEventWarningPercent(value) {
+    this._peWarningSetting = value;
+    this.refreshPeView();
+  }
+
+  @api
+  get platformEventCriticalPercent() {
+    return this._peCriticalSetting;
+  }
+  set platformEventCriticalPercent(value) {
+    this._peCriticalSetting = value;
+    this.refreshPeView();
+  }
+
+  _peWarningSetting;
+  _peCriticalSetting;
+  peView = buildPeView(null);
+
   instances = [];
   filteredInstances = [];
   definitions = [];
@@ -2130,6 +2317,7 @@ export default class WorkflowDashboard extends LightningElement {
                 : null,
             }
           : { config: {} };
+        this.refreshPeView();
       })
       .catch((error) => {
         this.showToast(
@@ -2165,6 +2353,14 @@ export default class WorkflowDashboard extends LightningElement {
 
     this.loadStorageFootprint();
     this.loadRateLimitStatus();
+  }
+
+  refreshPeView() {
+    this.peView = buildPeView(
+      this.doctorData,
+      this._peWarningSetting,
+      this._peCriticalSetting,
+    );
   }
 
   // Watchdog liveness (#113). The server calculates the state on each read.

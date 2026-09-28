@@ -4547,3 +4547,358 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(chainRows(element)).toHaveLength(0);
   });
 });
+
+describe("c-workflow-dashboard platform event headroom (#120)", () => {
+  const PUBLISH_TEXT = "Suspended workflows can stay suspended";
+  const DELIVERY_TEXT = "External subscribers";
+  const STANDARD_TEXT = "Revenant events are high-volume";
+  const PUBLISH_KEY = "HourlyPublishedPlatformEvents";
+  const DELIVERY_KEY = "DailyDeliveredPlatformEvents";
+  const STANDARD_KEY = "DailyStandardVolumePlatformEvents";
+  const IMPACT = {
+    [PUBLISH_KEY]: "PUBLISH",
+    [DELIVERY_KEY]: "DELIVERY",
+    [STANDARD_KEY]: "STANDARD_VOLUME",
+  };
+
+  beforeEach(() => {
+    getDefinitionTrends.mockResolvedValue({
+      windowKey: "24h",
+      windowHours: 24,
+      rows: [],
+    });
+  });
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function peRow(name, value, limit, state, percentUsed) {
+    return {
+      name,
+      label: `Label of ${name}`,
+      impact: IMPACT[name],
+      value,
+      limit,
+      remaining: Math.max(0, limit - value),
+      percentUsed,
+      percentRemaining: Math.max(0, 100 - percentUsed),
+      state,
+    };
+  }
+
+  function peStatus(rows, state) {
+    return {
+      isRunning: true,
+      scheduledJobsCount: 0,
+      sleepingInstances: 0,
+      pendingTimeouts: 0,
+      dailyAsyncValue: 0,
+      dailyAsyncLimit: 250000,
+      config: {},
+      hasPlatformEventLimits: rows.length > 0,
+      platformEventState: state,
+      platformEventLimits: rows,
+      platformEventWarningPercent: 80,
+      platformEventCriticalPercent: 95,
+    };
+  }
+
+  // Mounts the dashboard with a status payload and opens System Doctor.
+  async function openDoctorWith(status, attributes = {}) {
+    getWatchdogStatus.mockResolvedValueOnce(status);
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    Object.assign(element, attributes);
+    document.body.appendChild(element);
+    await flushPromises();
+    findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  function oneRow(name, value, limit, state, percentUsed) {
+    return peStatus([peRow(name, value, limit, state, percentUsed)], state);
+  }
+
+  function byId(element, id) {
+    return element.shadowRoot.querySelector(`[data-id="${id}"]`);
+  }
+
+  function allById(element, id) {
+    return Array.from(element.shadowRoot.querySelectorAll(`[data-id="${id}"]`));
+  }
+
+  function panelState(element) {
+    return byId(element, "pe-panel-state").textContent;
+  }
+
+  function thresholds(element) {
+    return byId(element, "pe-thresholds").textContent;
+  }
+
+  it("shows used and remaining as number and percent with a Healthy state", async () => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 1000, 250000, "HEALTHY", 0.4),
+    );
+
+    const rows = allById(element, "pe-row");
+    expect(rows).toHaveLength(1);
+    const text = rows[0].textContent;
+    expect(text).toContain(`Label of ${PUBLISH_KEY}`);
+    expect(text).toContain(`OrgLimits key: ${PUBLISH_KEY}`);
+    expect(text).toContain("1,000 / 250,000");
+    expect(text).toContain("0.4% used");
+    expect(text).toContain("249,000 remaining");
+    expect(text).toContain("99.6%");
+    const badge = rows[0].querySelector('[data-id="pe-row-state"]');
+    expect(badge.textContent).toContain("Healthy");
+    expect(badge.className).toContain("badge-green");
+    expect(panelState(element)).toContain("Healthy");
+    expect(thresholds(element)).toContain("Warning at 80%");
+    expect(thresholds(element)).toContain("Critical at 95%");
+    expect(thresholds(element)).not.toContain("page setting");
+    expect(byId(element, "pe-consequence")).toBeNull();
+    expect(byId(element, "pe-unavailable")).toBeNull();
+  });
+
+  it("shows Warning and the publish consequence at the warning threshold", async () => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 80, 100, "WARNING", 80),
+    );
+
+    const badge = byId(element, "pe-panel-state");
+    expect(badge.textContent).toContain("Warning");
+    expect(badge.className).toContain("badge-orange");
+    const consequence = byId(element, "pe-consequence");
+    expect(consequence.getAttribute("role")).toBe("status");
+    expect(consequence.className).toContain("slds-theme_warning");
+    const text = consequence.textContent;
+    expect(text).toContain("Warning:");
+    expect(text).toContain(PUBLISH_TEXT);
+    expect(text).toContain("Child-to-parent resumes");
+    expect(text).toContain("lifecycle events");
+    expect(text).not.toContain(DELIVERY_TEXT);
+  });
+
+  it("shows Critical as the worst row state with the error theme", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [
+          peRow(PUBLISH_KEY, 96, 100, "CRITICAL", 96),
+          peRow(DELIVERY_KEY, 10, 100, "HEALTHY", 10),
+        ],
+        "CRITICAL",
+      ),
+    );
+
+    const rows = allById(element, "pe-row");
+    expect(rows).toHaveLength(2);
+    expect(
+      rows[0].querySelector('[data-id="pe-row-state"]').className,
+    ).toContain("badge-red");
+    const badge = byId(element, "pe-panel-state");
+    expect(badge.textContent).toContain("Critical");
+    expect(badge.className).toContain("badge-red");
+    const consequence = byId(element, "pe-consequence");
+    expect(consequence.className).toContain("slds-theme_error");
+    expect(consequence.textContent).toContain("Critical:");
+    expect(consequence.textContent).toContain(PUBLISH_TEXT);
+    expect(consequence.textContent).not.toContain(DELIVERY_TEXT);
+  });
+
+  it("shows only the delivery consequence when only a delivery key is at risk", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [
+          peRow(PUBLISH_KEY, 10, 100, "HEALTHY", 10),
+          peRow(DELIVERY_KEY, 96, 100, "CRITICAL", 96),
+        ],
+        "CRITICAL",
+      ),
+    );
+
+    const text = byId(element, "pe-consequence").textContent;
+    expect(text).toContain(DELIVERY_TEXT);
+    expect(text).toContain("Apex triggers");
+    expect(text).not.toContain(PUBLISH_TEXT);
+  });
+
+  it("shows only the standard-volume consequence for a standard-volume key", async () => {
+    const element = await openDoctorWith(
+      oneRow(STANDARD_KEY, 90, 100, "WARNING", 90),
+    );
+
+    const text = byId(element, "pe-consequence").textContent;
+    expect(text).toContain(STANDARD_TEXT);
+    expect(text).not.toContain(PUBLISH_TEXT);
+  });
+
+  it("marks the panel Not available when the org has no PE limit", async () => {
+    const element = await openDoctorWith(peStatus([], "UNAVAILABLE"));
+
+    expect(allById(element, "pe-row")).toHaveLength(0);
+    expect(byId(element, "pe-unavailable").textContent).toContain(
+      "Not available",
+    );
+    expect(panelState(element)).toContain("Not available");
+    expect(byId(element, "pe-consequence")).toBeNull();
+  });
+
+  it("marks the panel Not available when the payload has no PE keys", async () => {
+    const status = peStatus([], "UNAVAILABLE");
+    delete status.hasPlatformEventLimits;
+    delete status.platformEventState;
+    delete status.platformEventLimits;
+    delete status.platformEventWarningPercent;
+    delete status.platformEventCriticalPercent;
+    const element = await openDoctorWith(status);
+
+    expect(allById(element, "pe-row")).toHaveLength(0);
+    expect(byId(element, "pe-unavailable")).not.toBeNull();
+    expect(panelState(element)).toContain("Not available");
+    expect(thresholds(element)).toContain("Warning at 80%");
+    expect(thresholds(element)).toContain("Critical at 95%");
+    expect(byId(element, "pe-consequence")).toBeNull();
+  });
+
+  it("updates the panel after Refresh Status", async () => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 10, 100, "HEALTHY", 10),
+    );
+    expect(panelState(element)).toContain("Healthy");
+
+    getWatchdogStatus.mockResolvedValueOnce(
+      oneRow(PUBLISH_KEY, 99, 100, "CRITICAL", 99),
+    );
+    findButton(element, (btn) => btn.label === "Refresh Status").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+
+    expect(panelState(element)).toContain("Critical");
+    expect(byId(element, "pe-consequence")).not.toBeNull();
+  });
+
+  it("uses valid App Builder thresholds to classify the rows", async () => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 60, 100, "HEALTHY", 60),
+      { platformEventWarningPercent: 50, platformEventCriticalPercent: 70 },
+    );
+
+    expect(panelState(element)).toContain("Warning");
+    expect(
+      allById(element, "pe-row")[0].querySelector('[data-id="pe-row-state"]')
+        .textContent,
+    ).toContain("Warning");
+    expect(thresholds(element)).toContain("Warning at 50%");
+    expect(thresholds(element)).toContain("Critical at 70%");
+    expect(thresholds(element)).toContain("page setting");
+    expect(byId(element, "pe-consequence")).not.toBeNull();
+  });
+
+  it.each([
+    [69, "Warning"],
+    [70, "Critical"],
+    [49, "Healthy"],
+  ])(
+    "classifies %i of 100 with App Builder thresholds 50/70 as %s",
+    async (used, expected) => {
+      const element = await openDoctorWith(
+        oneRow(PUBLISH_KEY, used, 100, "HEALTHY", used),
+        { platformEventWarningPercent: 50, platformEventCriticalPercent: 70 },
+      );
+
+      expect(panelState(element)).toContain(expected);
+    },
+  );
+
+  it.each([
+    [7999, "Healthy"],
+    [8000, "Warning"],
+  ])(
+    "classifies %i of 10000 on the exact ratio with an override of 80/90",
+    async (used, expected) => {
+      const element = await openDoctorWith(
+        oneRow(PUBLISH_KEY, used, 10000, "HEALTHY", used / 100),
+        { platformEventWarningPercent: 80, platformEventCriticalPercent: 90 },
+      );
+
+      expect(panelState(element)).toContain(expected);
+    },
+  );
+
+  it("applies one App Builder threshold with the server default for the other", async () => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 60, 100, "HEALTHY", 60),
+      { platformEventWarningPercent: 60 },
+    );
+
+    expect(panelState(element)).toContain("Warning");
+    expect(thresholds(element)).toContain("Critical at 95%");
+  });
+
+  it("accepts a numeric string App Builder threshold", async () => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 60, 100, "HEALTHY", 60),
+      { platformEventWarningPercent: "60" },
+    );
+
+    expect(panelState(element)).toContain("Warning");
+  });
+
+  it("uses the defaults for blank App Builder thresholds", async () => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 60, 100, "HEALTHY", 60),
+      { platformEventWarningPercent: "", platformEventCriticalPercent: null },
+    );
+
+    expect(panelState(element)).toContain("Healthy");
+    expect(thresholds(element)).not.toContain("page setting");
+    expect(thresholds(element)).not.toContain("ignored");
+  });
+
+  it("skips a malformed row when it classifies with App Builder thresholds", async () => {
+    const status = peStatus(
+      [
+        peRow(PUBLISH_KEY, 60, 100, "HEALTHY", 60),
+        { ...peRow(DELIVERY_KEY, 0, 100, "HEALTHY", 0), limit: null },
+      ],
+      "HEALTHY",
+    );
+    const element = await openDoctorWith(status, {
+      platformEventWarningPercent: 50,
+    });
+
+    expect(allById(element, "pe-row")).toHaveLength(1);
+    expect(panelState(element)).toContain("Warning");
+  });
+
+  it.each([
+    [{ platformEventWarningPercent: 90, platformEventCriticalPercent: 80 }],
+    [{ platformEventWarningPercent: 0, platformEventCriticalPercent: 70 }],
+    [{ platformEventWarningPercent: 50, platformEventCriticalPercent: 101 }],
+    [{ platformEventWarningPercent: "abc" }],
+    [{ platformEventWarningPercent: 96 }],
+  ])("ignores invalid App Builder thresholds %j", async (attributes) => {
+    const element = await openDoctorWith(
+      oneRow(PUBLISH_KEY, 60, 100, "HEALTHY", 60),
+      attributes,
+    );
+
+    expect(panelState(element)).toContain("Healthy");
+    expect(thresholds(element)).toContain("Warning at 80%");
+    expect(thresholds(element)).toContain(
+      "Page settings ignored: Warning must be more than 0 and less than Critical. Critical must be 100 or less.",
+    );
+    expect(byId(element, "pe-consequence")).toBeNull();
+  });
+});

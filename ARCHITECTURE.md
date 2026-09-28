@@ -209,6 +209,9 @@ endpoints moved). All three delegate to `inherited sharing` service classes.
   `WorkflowTrendService`, `WorkflowVersionDrainService`,
   `WorkflowFailureBreakdownService`, `WorkflowDashboardStatusService`,
   `WorkflowDashboardQueryBuilders`, `WorkflowDashboardSupport`
+- Platform Event allocation (#120): `PlatformEventHeadroom`. It reads only
+  the `System.OrgLimits` map. `WorkflowDashboardStatusService` adds its
+  result to the `getWatchdogStatus()` payload.
 - Rate Limits panel (#61): `WorkflowRateLimitController` →
   `WorkflowRateLimitStatusService`. It is a separate controller because
   `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The
