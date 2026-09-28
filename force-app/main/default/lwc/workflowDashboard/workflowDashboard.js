@@ -13,6 +13,7 @@ import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
 import getInstanceDetails from "@salesforce/apex/WorkflowDashboardController.getInstanceDetails";
+import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 import getDefinitions from "@salesforce/apex/WorkflowDashboardController.getDefinitions";
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import startWorkflow from "@salesforce/apex/WorkflowDashboardCommandController.startWorkflow";
@@ -116,6 +117,19 @@ export default class WorkflowDashboard extends LightningElement {
   childInstances = [];
   loadingDetails = false;
   successor = null;
+
+  // Continue-As-New chain (issue #116). chainAnchorId is the instance that
+  // loaded the first page; older pages use the same anchor.
+  chainActive = false;
+  chainLoading = false;
+  chainError = null;
+  chainGenerations = [];
+  chainTotal = 0;
+  chainTotalCapped = false;
+  chainNextCursor = null;
+  chainAnchorId = null;
+  chainRequestSeq = 0;
+  _pendingChainScrollTop = null;
   approvalComments = "";
   modalOpen = false;
   searchTerm = "";
@@ -326,6 +340,7 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   renderedCallback() {
+    this.restoreChainScroll();
     if (!this._restoreScroll) {
       return;
     }
@@ -333,6 +348,17 @@ export default class WorkflowDashboard extends LightningElement {
     const el = this.template.querySelector(".slds-scrollable_y");
     if (el) {
       el.scrollTop = this._pendingScrollTop;
+    }
+  }
+
+  restoreChainScroll() {
+    if (this._pendingChainScrollTop === null) {
+      return;
+    }
+    const list = this.template.querySelector('[data-id="chain-scroll"]');
+    if (list) {
+      list.scrollTop = this._pendingChainScrollTop;
+      this._pendingChainScrollTop = null;
     }
   }
 
@@ -362,6 +388,172 @@ export default class WorkflowDashboard extends LightningElement {
 
   get hasChildren() {
     return this.childInstances && this.childInstances.length > 0;
+  }
+
+  // Generation rows with the selected-row class. shapeGeneration formats
+  // each row once, when it arrives.
+  get chainRows() {
+    return this.chainGenerations.map((g) => {
+      const selected = g.instanceId === this.selectedInstanceId;
+      return {
+        ...g,
+        rowClass: `slds-p-around_small list-item chain-row ${
+          selected ? "item-selected" : ""
+        }`,
+        ariaCurrent: selected ? "true" : null,
+      };
+    });
+  }
+
+  get hasChainRows() {
+    return this.chainGenerations.length > 0;
+  }
+
+  get showChainSpinner() {
+    return this.chainLoading && !this.hasChainRows;
+  }
+
+  get chainCountLabel() {
+    const total = `${this.chainTotal}${this.chainTotalCapped ? "+" : ""}`;
+    return `Showing ${this.chainGenerations.length} of ${total} generations`;
+  }
+
+  get hasOlderGenerations() {
+    return !!this.chainNextCursor;
+  }
+
+  shapeGeneration(g) {
+    return {
+      ...g,
+      generationLabel: `Generation ${g.generation ?? "—"}`,
+      formattedStartedAt: this.formatDateTime(g.startedAt),
+      formattedEndedAt: this.formatDateTime(g.endedAt),
+      statusBadgeClass: this.getStatusBadgeClass(g.status),
+      failureCategoryLabel: g.failureCategory
+        ? FAILURE_CATEGORY_LABELS[g.failureCategory] || g.failureCategory
+        : null,
+    };
+  }
+
+  // Loads the chain only for an instance with a predecessor or a successor.
+  // - Same chain (row in the list, or same anchor): refresh page 1 on each
+  //   load, so a poll shows new generations. Older pages stay. After an error,
+  //   only "Try again" reads again.
+  // - Other instance: load its chain and clear the old rows.
+  syncChain(instanceId, inst, successor) {
+    if (!inst.Previous_Instance__c && !successor) {
+      this.resetChain();
+      return;
+    }
+    const sameChain =
+      instanceId === this.chainAnchorId ||
+      this.chainGenerations.some((g) => g.instanceId === instanceId);
+    if (!sameChain) {
+      this.loadChain(instanceId, null, true);
+    } else if (!this.chainError && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, null, false);
+    }
+  }
+
+  resetChain() {
+    this.chainRequestSeq++;
+    this.chainActive = false;
+    this.chainLoading = false;
+    this.chainError = null;
+    this.chainGenerations = [];
+    this.chainTotal = 0;
+    this.chainTotalCapped = false;
+    this.chainNextCursor = null;
+    this.chainAnchorId = null;
+  }
+
+  // clear: remove the old rows first (a different chain).
+  loadChain(instanceId, cursor, clear) {
+    const seq = ++this.chainRequestSeq;
+    if (!cursor) {
+      this.chainAnchorId = instanceId;
+    }
+    if (clear) {
+      this.chainGenerations = [];
+      this.chainTotal = 0;
+      this.chainTotalCapped = false;
+      this.chainNextCursor = null;
+    }
+    this.chainActive = true;
+    this.chainLoading = true;
+    this.chainError = null;
+    getInstanceChain({ instanceId, cursor })
+      .then((page) => {
+        if (seq !== this.chainRequestSeq) {
+          return;
+        }
+        if (!page) {
+          this.resetChain();
+          return;
+        }
+        const rows = (page.generations || []).map((g) =>
+          this.shapeGeneration(g),
+        );
+        const pageCursor = page.hasMore ? page.nextCursor : null;
+        if (cursor) {
+          this.chainGenerations = [...this.chainGenerations, ...rows];
+          this.chainNextCursor = pageCursor;
+        } else {
+          // A refresh of page 1 keeps the loaded older rows only when the lists
+          // join exactly. Page 1 must contain a cached row. Then each row of
+          // page 1 that is not cached is a new generation, so with no purge
+          // the new total is the old total plus those rows. Else (a purge, or
+          // a capped total) paging starts again from page 1.
+          const pageIds = new Set(rows.map((g) => g.instanceId));
+          const older = this.chainGenerations.filter(
+            (g) => !pageIds.has(g.instanceId),
+          );
+          const cachedOnPage = this.chainGenerations.length - older.length;
+          const added = rows.length - cachedOnPage;
+          const exact =
+            cachedOnPage > 0 &&
+            !page.isTotalCapped &&
+            !this.chainTotalCapped &&
+            page.totalCount === this.chainTotal + added;
+          const keep = exact ? older : [];
+          this.chainGenerations = [...rows, ...keep];
+          this.chainNextCursor = keep.length
+            ? this.chainNextCursor
+            : pageCursor;
+        }
+        this.chainTotal = page.totalCount;
+        this.chainTotalCapped = !!page.isTotalCapped;
+      })
+      .catch((error) => {
+        if (seq === this.chainRequestSeq) {
+          this.chainError = this.reduceErrors(error);
+        }
+      })
+      .finally(() => {
+        if (seq === this.chainRequestSeq) {
+          this.chainLoading = false;
+        }
+      });
+  }
+
+  handleLoadOlderGenerations() {
+    if (this.chainNextCursor && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, this.chainNextCursor, false);
+    }
+  }
+
+  handleRetryChain() {
+    if (this.chainAnchorId && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, null, true);
+    }
+  }
+
+  // Opens the step timeline of a generation. The detail spinner rebuilds the
+  // list, so keep its scroll position.
+  handleSelectGeneration(event) {
+    const list = this.template.querySelector('[data-id="chain-scroll"]');
+    this._pendingChainScrollTop = list ? list.scrollTop : null;
+    this.handleSelectRelatedInstance(event);
   }
 
   get hasBreakdownRows() {
@@ -1068,12 +1260,14 @@ export default class WorkflowDashboard extends LightningElement {
           this.selectedInst = {};
           this.steps = [];
           this.childInstances = [];
+          this.resetChain();
           return;
         }
         const inst = result.instance;
         const payloadFiles = result.payloadFiles || {};
         const breadcrumbs = result.breadcrumbs || [];
         this.successor = result.successor;
+        this.syncChain(currentInstanceId, inst, result.successor);
         this.selectedInst = {
           ...inst,
           formattedDate: this.formatDateTime(inst.CreatedDate),
@@ -1328,6 +1522,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingCatalog = false;
     this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadDoctorStatus();
   }
@@ -1345,6 +1540,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingCatalog = false;
     this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     // Re-run the query if a workflow is already selected; the combobox value
     // hasn't changed, so its onchange won't fire to refresh the table itself.
@@ -1369,6 +1565,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingCatalog = false;
     this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
   }
 
   handleCloseSchedules() {
@@ -1385,6 +1582,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingCatalog = false;
     this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadUnroutedSignals();
   }
@@ -1403,6 +1601,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.handleCloseHealth();
     this.viewingLatency = false;
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     if (this.selectedWorkflow) {
       this.breakdownWorkflow = this.selectedWorkflow;
@@ -1426,6 +1625,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.loadCatalog();
   }
@@ -1512,6 +1712,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingLatency = false;
     this.viewingCatalog = false;
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     this.fetchHealth();
   }
@@ -1689,6 +1890,7 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingCatalog = false;
     this.handleCloseHealth();
     this.selectedInstanceId = null;
+    this.resetChain();
     this.filterInstancesList();
     if (this.selectedWorkflow) {
       this.latencyWorkflow = this.selectedWorkflow;

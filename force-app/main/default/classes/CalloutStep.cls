@@ -17,5 +17,5 @@
  * branch (or perform idempotent callouts) when relying on this mode. Serial
  * steps never claim, so the marker is a no-op there.
  */
-public interface CalloutStep {
+global interface CalloutStep {
 }

@@ -8,7 +8,7 @@
  * StepChildOutcomes. Reached by step authors via StepContext.signals().
  * The Signal value type and SignalSource interface remain nested on StepContext.
  */
-public inherited sharing class StepSignals {
+global inherited sharing class StepSignals {
   /** The lazy pending-signal cache state resolved by the loader/latest helpers. */
   private StepSignalState state;
   /** Child (sub-workflow) outcome resolver bound to this accessor. */
@@ -73,7 +73,7 @@ public inherited sharing class StepSignals {
    *
    * @return A cloned list of the pending signals, in arrival order; never null.
    */
-  public List<StepContext.Signal> getSignals() {
+  global List<StepContext.Signal> getSignals() {
     List<StepContext.Signal> all = StepSignalLoader.loadAll(this.state);
     for (StepContext.Signal s : all) {
       markMatched(s);
@@ -87,7 +87,7 @@ public inherited sharing class StepSignals {
    * @param signalName The signal name to match.
    * @return A cloned list of matching pending signals, in arrival order.
    */
-  public List<StepContext.Signal> getSignals(String signalName) {
+  global List<StepContext.Signal> getSignals(String signalName) {
     List<StepContext.Signal> matches = StepSignalLoader.matchesFor(
       this.state,
       signalName
@@ -114,7 +114,7 @@ public inherited sharing class StepSignals {
    * @return The most-recent matching signal, or an empty (not-present) Signal
    * when none is pending; never null.
    */
-  public StepContext.Signal getSignal(String signalName) {
+  global StepContext.Signal getSignal(String signalName) {
     StepContext.Signal latest = StepSignalLatest.latestFor(
       this.state,
       signalName
@@ -135,7 +135,7 @@ public inherited sharing class StepSignals {
    * @param signalName The signal name to probe.
    * @return True if at least one pending signal matches the name.
    */
-  public Boolean hasSignal(String signalName) {
+  global Boolean hasSignal(String signalName) {
     StepContext.Signal latest = StepSignalLatest.latestFor(
       this.state,
       signalName
@@ -187,7 +187,7 @@ public inherited sharing class StepSignals {
    * rows the step never observed.
    * @return True if any signal read was truncated by a governor-safety cap.
    */
-  public Boolean signalReadWasCapped() {
+  global Boolean signalReadWasCapped() {
     return state.signalSource != null && state.signalSource.readWasCapped();
   }
 
@@ -220,7 +220,7 @@ public inherited sharing class StepSignals {
    * @return The child's outcome, or an empty (not-present) outcome when none is
    * pending.
    */
-  public StepContext.ChildOutcome getChildOutcome(String childKey) {
+  global StepContext.ChildOutcome getChildOutcome(String childKey) {
     return childOutcomes.getChildOutcome(childKey);
   }
 
@@ -231,7 +231,7 @@ public inherited sharing class StepSignals {
    * @return A list of outcomes aligned to childKeys; blank/unknown keys yield an
    * empty (not-present) outcome.
    */
-  public List<StepContext.ChildOutcome> getChildOutcomes(
+  global List<StepContext.ChildOutcome> getChildOutcomes(
     List<String> childKeys
   ) {
     return childOutcomes.getChildOutcomes(childKeys);

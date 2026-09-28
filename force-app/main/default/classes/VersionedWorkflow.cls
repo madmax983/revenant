@@ -3,7 +3,7 @@
  * in-flight instances keep running their original topology while new instances adopt the
  * latest revision.
  */
-public interface VersionedWorkflow extends WorkflowDefinition {
+global interface VersionedWorkflow extends WorkflowDefinition {
   /**
    * @description Returns the highest version number defined for this workflow.
    * @return The latest version number available for new instances.
