@@ -104,9 +104,10 @@ public inherited sharing class WorkflowAlertManager {
     if (config == null || !config.Enable_Alerts__c) {
       return false;
     }
-    // If email recipients are blank and event publishing is disabled, skip.
-    return String.isNotBlank(config.Email_Recipients__c) ||
-      config.Publish_Alert_Event__c;
+    // Skip when no address is left after the split and event publish is off.
+    return WorkflowAlertEmailBuilder.hasRecipients(
+        config.Email_Recipients__c
+      ) || config.Publish_Alert_Event__c == true;
   }
 
   private static void dispatchAlert(AlertEventRequest request) {

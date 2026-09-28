@@ -246,13 +246,14 @@ public inherited sharing class WorkflowAlertEmailBuilder {
   }
 
   /**
-   * @description True when the list has one or more addresses after the split.
-   * RED stub.
+   * @description True when the list has one or more addresses after the split. A list
+   * of only separators has none.
    * @param recipients The raw, delimiter-separated recipient address list, or null.
    * @return True when an email can go to someone.
    */
   public static Boolean hasRecipients(String recipients) {
-    return String.isNotBlank(recipients);
+    return String.isNotBlank(recipients) &&
+      !parseRecipients(recipients).isEmpty();
   }
 
   /**

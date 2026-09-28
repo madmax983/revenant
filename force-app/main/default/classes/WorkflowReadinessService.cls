@@ -265,7 +265,7 @@ public inherited sharing class WorkflowReadinessService {
         );
       }
       String cause = config.Enable_Alerts__c == true
-        ? 'has no Email_Recipients__c and Publish_Alert_Event__c is off.'
+        ? 'has no address in Email_Recipients__c and Publish_Alert_Event__c is off.'
         : 'has Enable_Alerts__c off.';
       return row(
         STATUS_WARN,

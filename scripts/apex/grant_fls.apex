@@ -17,7 +17,8 @@ if (existingPs.isEmpty()) {
 
 // Grant FLS on every custom data field of the core engine objects. The list comes
 // from describe, so it matches the fields the Readiness panel (#114) checks. Formula,
-// auto-number and required fields take no FLS, so they are skipped.
+// auto-number and required fields take no FLS, so they are skipped. Fields of other
+// packages are skipped too. This script is for a source deploy (no namespace).
 List<Schema.SObjectType> engineObjects = new List<Schema.SObjectType>{
     Workflow_Instance__c.SObjectType,
     Workflow_Step_Execution__c.SObjectType,
@@ -28,7 +29,9 @@ for (Schema.SObjectType objectType : engineObjects) {
     String objType = objectType.getDescribe().getName();
     for (Schema.SObjectField field : objectType.getDescribe().fields.getMap().values()) {
         Schema.DescribeFieldResult d = field.getDescribe();
-        if (!d.isCustom() || d.isCalculated() || d.isAutoNumber() || !d.isPermissionable()) {
+        // Skip fields of other packages (name has a namespace prefix).
+        if (!d.isCustom() || d.isCalculated() || d.isAutoNumber() || !d.isPermissionable()
+            || d.getName() != d.getLocalName()) {
             continue;
         }
         grants.add(new FieldPermissions(
