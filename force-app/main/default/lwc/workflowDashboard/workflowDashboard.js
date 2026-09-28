@@ -8,7 +8,7 @@
 //    changes the Workflow_Lifecycle__e (terminal-only, config-toggleable) and Workflow_Event__e (internal
 //    control-plane) platform events do not emit. An empApi migration would change behavior and needs a live org.
 // The requestAnimationFrame scroll-restore that this disable also covered was replaced by renderedCallback.
-import { LightningElement, wire } from "lwc";
+import { LightningElement, api, wire } from "lwc";
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
 import getFilteredInstances from "@salesforce/apex/WorkflowDashboardController.getFilteredInstances";
 import getWorkflowStats from "@salesforce/apex/WorkflowDashboardController.getWorkflowStats";
@@ -78,6 +78,43 @@ const LIVENESS_STATUS = {
 };
 const LIVENESS_UNKNOWN = { label: "Unknown", badgeClass: "badge badge-grey" };
 
+// Platform Event headroom (#120). Defaults match PlatformEventHeadroom.cls.
+const PE_DEFAULT_WARNING_PERCENT = 80;
+const PE_DEFAULT_CRITICAL_PERCENT = 95;
+const PE_STATUS = {
+  HEALTHY: { label: "Healthy", badgeClass: "badge badge-green", rank: 1 },
+  WARNING: { label: "Warning", badgeClass: "badge badge-orange", rank: 2 },
+  CRITICAL: { label: "Critical", badgeClass: "badge badge-red", rank: 3 },
+};
+const PE_UNAVAILABLE = {
+  label: "Not available",
+  badgeClass: "badge badge-grey",
+  rank: 0,
+};
+const PE_CONSEQUENCE =
+  "Platform Event quota is near its limit. Suspended workflows can fail to wake. " +
+  "Child-to-parent resumes can stop. Lifecycle events can fail to publish. " +
+  "All apps in the org share this allocation.";
+
+// Same rule as PlatformEventHeadroom.classify: exact ratio, no rounding.
+function classifyHeadroom(value, limit, warningPercent, criticalPercent) {
+  if (!(limit > 0) || value === null || value === undefined) {
+    return "UNAVAILABLE";
+  }
+  const scaledUsed = value * 100;
+  if (scaledUsed >= criticalPercent * limit) {
+    return "CRITICAL";
+  }
+  if (scaledUsed >= warningPercent * limit) {
+    return "WARNING";
+  }
+  return "HEALTHY";
+}
+
+function isThresholdSet(value) {
+  return value !== undefined && value !== null && value !== "";
+}
+
 const FAILURE_CATEGORY_LABELS = {
   STEP_EXCEPTION: "Step Exception",
   RETRIES_EXHAUSTED: "Retries Exhausted",
@@ -96,6 +133,11 @@ const ASYNC_LIMITS = {
 };
 
 export default class WorkflowDashboard extends LightningElement {
+  // App Builder overrides for the Platform Event thresholds (#120). Blank or
+  // invalid values use the server defaults.
+  @api platformEventWarningPercent;
+  @api platformEventCriticalPercent;
+
   instances = [];
   filteredInstances = [];
   definitions = [];
@@ -1786,6 +1828,103 @@ export default class WorkflowDashboard extends LightningElement {
 
     this.loadStorageFootprint();
     this.loadRateLimitStatus();
+  }
+
+  // Platform Event headroom (#120). Uses the server states, or reclassifies
+  // with valid App Builder thresholds.
+  get peThresholds() {
+    const data = this.doctorData || {};
+    const base = {
+      warning: isThresholdSet(data.platformEventWarningPercent)
+        ? Number(data.platformEventWarningPercent)
+        : PE_DEFAULT_WARNING_PERCENT,
+      critical: isThresholdSet(data.platformEventCriticalPercent)
+        ? Number(data.platformEventCriticalPercent)
+        : PE_DEFAULT_CRITICAL_PERCENT,
+      overridden: false,
+    };
+    const warnSet = isThresholdSet(this.platformEventWarningPercent);
+    const critSet = isThresholdSet(this.platformEventCriticalPercent);
+    if (!warnSet && !critSet) {
+      return base;
+    }
+    const warning = warnSet
+      ? Number(this.platformEventWarningPercent)
+      : base.warning;
+    const critical = critSet
+      ? Number(this.platformEventCriticalPercent)
+      : base.critical;
+    const valid =
+      Number.isFinite(warning) &&
+      Number.isFinite(critical) &&
+      warning > 0 &&
+      warning < critical &&
+      critical <= 100;
+    return valid ? { warning, critical, overridden: true } : base;
+  }
+
+  get peRows() {
+    const rows = (this.doctorData && this.doctorData.platformEventLimits) || [];
+    const thresholds = this.peThresholds;
+    return rows.map((row) => {
+      const state = thresholds.overridden
+        ? classifyHeadroom(
+            row.value,
+            row.limit,
+            thresholds.warning,
+            thresholds.critical,
+          )
+        : row.state;
+      const status = PE_STATUS[state] || PE_UNAVAILABLE;
+      return {
+        ...row,
+        key: row.name,
+        rank: status.rank,
+        stateLabel: status.label,
+        badgeClass: status.badgeClass,
+        usageLabel: `${row.value} / ${row.limit}`,
+        usedLabel: `${row.percentUsed}% used`,
+        remainingLabel: `${row.remaining} remaining (${row.percentRemaining}%)`,
+      };
+    });
+  }
+
+  get hasPeRows() {
+    return this.peRows.length > 0;
+  }
+
+  // The panel state is the worst row state.
+  get peStatus() {
+    return this.peRows.reduce(
+      (worst, row) =>
+        row.rank > worst.rank
+          ? {
+              label: row.stateLabel,
+              badgeClass: row.badgeClass,
+              rank: row.rank,
+            }
+          : worst,
+      PE_UNAVAILABLE,
+    );
+  }
+
+  get peAtRisk() {
+    return this.peStatus.rank >= PE_STATUS.WARNING.rank;
+  }
+
+  get peConsequence() {
+    return PE_CONSEQUENCE;
+  }
+
+  get peConsequenceClass() {
+    return this.peStatus.rank >= PE_STATUS.CRITICAL.rank
+      ? "slds-box slds-theme_error slds-m-bottom_small"
+      : "slds-box slds-theme_warning slds-m-bottom_small";
+  }
+
+  get peThresholdsLabel() {
+    const t = this.peThresholds;
+    return `Warning at ${t.warning}% · Critical at ${t.critical}%`;
   }
 
   // Watchdog liveness (#113). The server calculates the state on each read.
