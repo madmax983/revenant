@@ -3867,6 +3867,48 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     });
   });
 
+  it("restarts paging when page 1 does not overlap the cached rows", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+
+    // More than one page of new generations arrived: no overlap.
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      totalCount: 60,
+      nextCursor: "CURSOR-FRESH",
+      generations: [
+        {
+          instanceId: "a0G000000000021",
+          instanceName: "WI-0021",
+          generation: 60,
+          status: "Running",
+        },
+        {
+          instanceId: "a0G000000000020",
+          instanceName: "WI-0020",
+          generation: 59,
+          status: "ContinuedAsNew",
+          outcome: "ContinuedAsNew",
+        },
+      ],
+    });
+    await selectListItem(element, 0);
+
+    expect(chainRows(element).map((r) => r.dataset.id)).toEqual([
+      "a0G000000000021",
+      "a0G000000000020",
+    ]);
+    getInstanceChain.mockResolvedValue(PAGE_2);
+    chainButton(element, "chain-load-more").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: "CURSOR-FRESH",
+    });
+  });
+
   it("reloads the first page when the selected row is stale", async () => {
     arrangeChained();
     const element = await mountAndSelect();

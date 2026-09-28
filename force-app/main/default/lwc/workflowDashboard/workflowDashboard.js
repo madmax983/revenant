@@ -483,19 +483,20 @@ export default class WorkflowDashboard extends LightningElement {
           this.chainGenerations = [...this.chainGenerations, ...rows];
           this.chainNextCursor = pageCursor;
         } else {
-          // A refresh of page 1 keeps the older rows that are loaded. They
-          // are older than the last row of page 1, so the old cursor is valid.
-          // A smaller total means a purge: the cached rows can be gone, so
-          // start again from page 1.
+          // A refresh of page 1 keeps the loaded older rows only when the two
+          // lists join: page 1 contains a cached row, and the total did not
+          // shrink (a purge can remove cached rows). Then the old cursor is
+          // valid. Else paging starts again from page 1.
           const pageIds = new Set(rows.map((g) => g.instanceId));
           const older = this.chainGenerations.filter(
             (g) => !pageIds.has(g.instanceId),
           );
+          const joins = older.length < this.chainGenerations.length;
           const shrank =
             page.totalCount < this.chainTotal ||
             (!page.isTotalCapped &&
               rows.length + older.length > page.totalCount);
-          const keep = shrank ? [] : older;
+          const keep = joins && !shrank ? older : [];
           this.chainGenerations = [...rows, ...keep];
           this.chainNextCursor = keep.length
             ? this.chainNextCursor
