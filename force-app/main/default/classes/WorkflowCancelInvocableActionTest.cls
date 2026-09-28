@@ -829,6 +829,31 @@ private class WorkflowCancelInvocableActionTest {
   }
 
   @IsTest
+  static void testLookupDoesNotLoadPayloads() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = buildInstance('PayloadKey', 'Running');
+      inst.Output__c = '"big-output"';
+      inst.Progress__c = '{"pct": 50}';
+      insert inst;
+
+      Test.startTest();
+      Workflow_Instance__c found = WorkflowStatusInvocableAction.resolveInstances(
+        new List<String>{ 'PayloadKey' }
+      )[0];
+      Test.stopTest();
+
+      Assert.areEqual(inst.Id, found.Id, 'The key must resolve');
+      Boolean loaded;
+      try {
+        loaded = found.Output__c != null;
+      } catch (SObjectException e) {
+        loaded = false;
+      }
+      Assert.isFalse(loaded, 'The lookup must not load payloads (heap)');
+    }
+  }
+
+  @IsTest
   static void testBulkEngineEntryIgnoresNullAndEmpty() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Integer q0 = Limits.getQueries();

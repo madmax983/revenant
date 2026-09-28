@@ -132,8 +132,10 @@ public inherited sharing class WorkflowStatusInvocableAction {
       keysOrIds.add((req == null) ? null : req.workflowKeyOrId);
     }
 
-    // 1-3. Resolve each request to its current instance.
-    List<Workflow_Instance__c> resolved = resolveInstances(keysOrIds);
+    // 1-3. Resolve each request to its current instance (identity fields only).
+    List<Workflow_Instance__c> resolved = loadPayloadFields(
+      resolveInstances(keysOrIds)
+    );
 
     // 4. Bulk-resolve offloaded output/progress payloads.
     Map<Id, String> dataByAttachment = WorkflowStatusPayloadRehydrator.loadOffloadedPayloads(
@@ -148,7 +150,8 @@ public inherited sharing class WorkflowStatusInvocableAction {
    * @description Resolves each value (instance Id or correlation key) to its current
    * instance. An Id reads that exact instance. A key selects the live, then the
    * latest, instance and follows the ContinuedAsNew chain. Read-only and bulk-safe.
-   * Shared with the Cancel Workflow action (issue #107).
+   * Shared with the Cancel Workflow action (issue #107). Loads identity fields only
+   * (Id, Status__c, Correlation_Key__c, Previous_Instance__c), not the payloads.
    * @param keysOrIds The instance Ids or correlation keys, in order (null items allowed).
    * @return One instance per value, in the same order (null where no match); empty for null input.
    */
@@ -235,6 +238,47 @@ public inherited sharing class WorkflowStatusInvocableAction {
   }
 
   /**
+   * @description Replaces each resolved instance with a copy that holds the payload
+   * and failure fields, in one query. The lookup loads identity fields only, so a
+   * key with many past runs does not load their payloads.
+   * @param resolved The resolved instance per request (null where unmatched).
+   * @return The same list, with payload fields loaded.
+   */
+  private static List<Workflow_Instance__c> loadPayloadFields(
+    List<Workflow_Instance__c> resolved
+  ) {
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Instance__c inst : resolved) {
+      if (inst != null) {
+        ids.add(inst.Id);
+      }
+    }
+    if (ids.isEmpty()) {
+      return resolved;
+    }
+    Map<Id, Workflow_Instance__c> full = new Map<Id, Workflow_Instance__c>(
+      [
+        SELECT
+          Id,
+          Status__c,
+          Output__c,
+          Error_Message__c,
+          Progress__c,
+          Causation_Id__c
+        FROM Workflow_Instance__c
+        WHERE Id IN :ids
+        WITH SYSTEM_MODE
+      ]
+    );
+    for (Integer i = 0; i < resolved.size(); i++) {
+      if (resolved[i] != null && full.containsKey(resolved[i].Id)) {
+        resolved[i] = full.get(resolved[i].Id);
+      }
+    }
+    return resolved;
+  }
+
+  /**
    * @description Runs a single bulk query for all direct matches, in any status (terminal
    * included), and indexes them by Id and by preferred correlation key.
    * @param buckets The lookup buckets supplying the de-duplicated Id and key sets to query.
@@ -251,13 +295,9 @@ public inherited sharing class WorkflowStatusInvocableAction {
       SELECT
         Id,
         Status__c,
-        Output__c,
-        Error_Message__c,
         Correlation_Key__c,
         Previous_Instance__c,
-        CreatedDate,
-        Progress__c,
-        Causation_Id__c
+        CreatedDate
       FROM Workflow_Instance__c
       WHERE
         Id IN :buckets.lookupIds

@@ -175,15 +175,7 @@ public inherited sharing class WorkflowStatusChainResolver {
   ) {
     Map<Id, Workflow_Instance__c> successorByPrev = new Map<Id, Workflow_Instance__c>();
     for (Workflow_Instance__c succ : [
-      SELECT
-        Id,
-        Status__c,
-        Output__c,
-        Error_Message__c,
-        Correlation_Key__c,
-        Previous_Instance__c,
-        Progress__c,
-        Causation_Id__c
+      SELECT Id, Status__c, Correlation_Key__c, Previous_Instance__c
       FROM Workflow_Instance__c
       WHERE Previous_Instance__c IN :predecessorIds
       WITH SYSTEM_MODE
