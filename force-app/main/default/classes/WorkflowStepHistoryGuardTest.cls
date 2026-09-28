@@ -566,6 +566,30 @@ public class WorkflowStepHistoryGuardTest {
     }
   }
 
+  // Apex Developer Guide: COUNT() without GROUP BY uses one query row. This
+  // test measures it. Per-row cost would take the worst hop to 4 x ceiling.
+  @IsTest
+  static void countUsesOneQueryRow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instId = start(LoopWorkflow.class.getName());
+      seedRows(instId, 50);
+      Workflow_Instance__c inst = [
+        SELECT Id, Workflow_Name__c, Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instId
+      ];
+      setThresholds(0, 100);
+      Test.startTest();
+      Integer rows0 = Limits.getQueryRows();
+      Boolean stopped = WorkflowStepHistoryGuard.check(ctxFor(inst));
+      Integer rowsUsed = Limits.getQueryRows() - rows0;
+      Test.stopTest();
+
+      Assert.isFalse(stopped, 'Below the ceiling');
+      Assert.areEqual(1, rowsUsed, 'COUNT() of 50 rows uses one query row');
+    }
+  }
+
   @IsTest
   static void exemptWorkflowCostsNoSoql() {
     System.runAs(new User(Id = UserInfo.getUserId())) {

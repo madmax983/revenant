@@ -46,7 +46,7 @@ In an Apex test, set `WorkflowEngine.stepHistoryWarnThreshold` and `WorkflowEngi
 
 The count is `SELECT COUNT() ... LIMIT :ceiling`. `COUNT()` uses one query row and no heap. The `LIMIT` stops the scan at the ceiling.
 
-A hop can read the full history of one instance in max three queries: the visit count of the step, the patch index (`MIN`/`MAX` per step) and the parallel join. Below a ceiling of 10,000, they use max approximately 30,000 of the 50,000 query rows. The step keeps the remainder. These reads do not load long text fields for each row.
+A hop can read the full history of one instance in max three queries: the visit count of the step, the patch index (`MIN`/`MAX` per step) and the parallel join. Below a ceiling of 10,000, they use max approximately 30,000 of the 50,000 query rows. The step keeps the remainder. If the org charged `COUNT()` one row for each counted row, the total is max approximately 40,000. The test `countUsesOneQueryRow` measures the cost. These reads do not load long text fields for each row.
 
 The gap between the thresholds is 5,000 rows. The warning comes before the ceiling when one hop adds fewer rows than the gap. A fan-out wider than the gap can go from below the warning to the ceiling in one hop.
 
