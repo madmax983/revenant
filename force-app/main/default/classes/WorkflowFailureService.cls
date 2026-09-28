@@ -130,7 +130,7 @@ public inherited sharing class WorkflowFailureService {
     WorkflowEngine.FailInstanceRequest req,
     Boolean isCompFailure
   ) {
-    if (isCompFailure) {
+    if (isCompFailure || req.skipErrorRouting == true) {
       return false;
     }
     Workflow_Instance__c instance = req.instance;

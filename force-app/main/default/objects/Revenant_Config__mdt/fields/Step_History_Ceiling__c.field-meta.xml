@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Step_History_Ceiling__c</fullName>
+    <defaultValue>10000</defaultValue>
+    <description>Step rows on one instance at which the engine fails the instance with the category STEP_HISTORY_LIMIT. Use Continue-As-New to start a new count. Blank: 10000. 0: no ceiling. Max: 10000. Issue #112.</description>
+    <externalId>false</externalId>
+    <fieldManageability>DeveloperControlled</fieldManageability>
+    <label>Step History Ceiling</label>
+    <precision>6</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>

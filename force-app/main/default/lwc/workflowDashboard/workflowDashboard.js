@@ -78,6 +78,7 @@ const FAILURE_CATEGORY_LABELS = {
   COMPENSATION_FAILED: "Compensation Failed",
   EXPLICIT_FAIL: "Explicit Step Failure",
   STEP_NON_DETERMINISM: "Step Non-Determinism",
+  STEP_HISTORY_LIMIT: "Step History Limit",
   UNKNOWN: "Unknown",
 };
 
@@ -282,6 +283,7 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Compensation Failed", value: "COMPENSATION_FAILED" },
     { label: "Explicit Step Failure", value: "EXPLICIT_FAIL" },
     { label: "Step Non-Determinism", value: "STEP_NON_DETERMINISM" },
+    { label: "Step History Limit", value: "STEP_HISTORY_LIMIT" },
     { label: "Unknown", value: "UNKNOWN" },
   ];
 
@@ -1086,6 +1088,8 @@ export default class WorkflowDashboard extends LightningElement {
           pendingCompensations: result.pendingCompensations || [],
           attributes: result.attributes || [],
           definitionChange: this.mapDefinitionChange(result.definitionChange),
+          // Issue #112: { message, createdDate } or null.
+          stepHistoryWarning: result.stepHistoryWarning || null,
         };
 
         // Map children

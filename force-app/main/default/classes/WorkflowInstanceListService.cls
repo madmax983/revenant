@@ -137,6 +137,8 @@ public inherited sharing class WorkflowInstanceListService {
     Map<Id, Map<String, Object>> waitDescriptors = WorkflowWaitDescriptorService.describeSignalWaits(
       instances
     );
+    // Step-history warnings (issue #112): one query for the page.
+    Set<Id> historyWarned = WorkflowStepHistoryGuard.warnedInstanceIds(pageIds);
 
     Long nowMs = Datetime.now().getTime();
     List<Map<String, Object>> results = new List<Map<String, Object>>();
@@ -168,6 +170,7 @@ public inherited sharing class WorkflowInstanceListService {
       m.put('stalled', stalled);
       m.put('Failure_Category__c', inst.Failure_Category__c);
       m.put('waitDescriptor', waitDescriptors.get(inst.Id));
+      m.put('stepHistoryWarning', historyWarned.contains(inst.Id));
       results.add(m);
     }
     return results;

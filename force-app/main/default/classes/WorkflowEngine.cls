@@ -134,7 +134,9 @@ public inherited sharing class WorkflowEngine {
           Stale_Threshold_Minutes__c,
           Reclaim_Threshold_Minutes__c,
           Payload_Codec__c,
-          Strict_Determinism__c
+          Strict_Determinism__c,
+          Step_History_Warn_Threshold__c,
+          Step_History_Ceiling__c
         FROM Revenant_Config__mdt
         WHERE DeveloperName = 'Default'
         WITH SYSTEM_MODE
@@ -168,6 +170,13 @@ public inherited sharing class WorkflowEngine {
         }
         payloadCodecClass = configs[0].Payload_Codec__c;
         strictDeterminism = configs[0].Strict_Determinism__c == true;
+        if (configs[0].Step_History_Warn_Threshold__c != null) {
+          stepHistoryWarnThreshold = configs[0]
+            .Step_History_Warn_Threshold__c.intValue();
+        }
+        if (configs[0].Step_History_Ceiling__c != null) {
+          stepHistoryCeiling = configs[0].Step_History_Ceiling__c.intValue();
+        }
       }
     } catch (Exception ignored) {
       // Configuration metadata is optional; fall back to defaults on any read failure.
@@ -768,6 +777,9 @@ public inherited sharing class WorkflowEngine {
     public String errorMessage;
     public String failureCategory;
     public Integer attemptCount;
+    // True skips error routing (#90). The step-history ceiling (issue #112)
+    // sets it: the error step cannot run past the guard.
+    public Boolean skipErrorRouting = false;
   }
 
   /**

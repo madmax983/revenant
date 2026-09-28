@@ -38,4 +38,12 @@
         <field>Storage_Warning_Threshold_Percent__c</field>
         <value xsi:type="xsd:double">75.0</value>
     </values>
+    <values>
+        <field>Step_History_Warn_Threshold__c</field>
+        <value xsi:type="xsd:double">5000.0</value>
+    </values>
+    <values>
+        <field>Step_History_Ceiling__c</field>
+        <value xsi:type="xsd:double">10000.0</value>
+    </values>
 </CustomMetadata>

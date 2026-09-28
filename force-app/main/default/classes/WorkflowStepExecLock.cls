@@ -54,8 +54,10 @@ public inherited sharing class WorkflowStepExecLock {
   ) {
     Id instanceId = ctx.instanceId;
     String activeStepName = ctx.activeStepName;
+    // Id and Status__c only: this read grows with history. The lock query
+    // below reads the long text fields for one row (issue #112).
     List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT Id, Step_Name__c, Status__c, Input__c, Output__c, Retry_Count__c
+      SELECT Id, Status__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instanceId
