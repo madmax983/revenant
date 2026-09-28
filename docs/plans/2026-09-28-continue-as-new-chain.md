@@ -12,7 +12,7 @@ Show all generations of a Continue-As-New chain as one ordered list. Give the li
 - `Previous_Instance__c` uses `SetNull` on delete. A purge of a predecessor makes the successor look like a first generation.
 - The trigger sets `Terminal_At__c` when the status becomes `Completed`, `Failed`, `Compensated`, `Cancelled` or `ContinuedAsNew`. It clears the value for other statuses.
 - `compensate()` on a completed instance inserts a new instance with `Previous_Instance__c` = target and the same root.
-- `COUNT()` uses one query row. `LIMIT` stops the scan.
+- `COUNT()` can use one query row for each counted row (the repo test for #112 says one row; Codex says one for each row). `LIMIT` stops the scan.
 - SOQL `OFFSET` stops at 2,000 rows. `WorkflowInstanceQuery` uses a `(CreatedDate, Id)` keyset cursor.
 - Read contracts live on their own classes (`WorkflowStatusRead`, `WorkflowHistoryRead`, `WorkflowInstanceQuery`). The DTOs live on `WorkflowEngine`.
 - The dashboard detail already reads `Previous_Instance__c` and one successor.
@@ -28,7 +28,7 @@ Show all generations of a Continue-As-New chain as one ordered list. Give the li
 | B5 | Split the scope at each first generation (`Previous_Instance__c` = null). The chain of a member is the window from the nearest first generation at or before it to the next first generation after it. | Yes. An independent run that uses the key again after the chain gets its own window. Two `LIMIT 1` queries. |
 | B6 | Order `CreatedDate DESC, Id DESC`. Keyset cursor. | Yes. Same order as `findInstances`. No `OFFSET` limit. |
 | B7 | `OFFSET` paging. | No. It stops at 2,000. |
-| B8 | Total with `SELECT COUNT() ... LIMIT :cap`. Flag `isTotalCapped`. | Yes. One query row. |
+| B8 | Total with `SELECT COUNT() ... LIMIT :cap`. Flag `isTotalCapped`. | Yes. The cap keeps query rows for the page and the caller. |
 | B9 | Generation number counts from the oldest kept row (1). Page 1: top row = total. Next page: the cursor keeps the number of its last row. | Yes. A new head generation does not change old numbers. No second count. |
 | B10 | Generation number = null when the total is capped. | Yes. The number is not known. Do not show a wrong number. |
 | B11 | Anchor query gets `(SELECT Id FROM Next_Runs__r LIMIT 1)`. No predecessor and no successor: return one entry. | Yes. A single generation costs one query. |
@@ -52,7 +52,7 @@ Show all generations of a Continue-As-New chain as one ordered list. Give the li
 | A bad cursor reads wrong rows. | Decode checks the format. A bad cursor throws `WorkflowException`. |
 | A page size of 0 or 10,000. | 0 or less throws. More than 200 is clamped. |
 | The read changes data. | No DML, no enqueue, no event. A test checks `Limits`. |
-| The count scan is too long. | `LIMIT :MAX_COUNTED_GENERATIONS` (50,000). |
+| The count scan is too long, or uses too many query rows. | `LIMIT` at the cap: 50,000, or less so that the page and 1,000 rows fit. |
 | An operator without access reads the chain. | Controller calls `checkAuthorization()`. A test. |
 | Equal `CreatedDate` values. | `Id` breaks the tie in the order, the window and the cursor. |
 
@@ -88,4 +88,5 @@ Five review agents (correctness, governor and security, tests, LWC, API and docs
 - `continuedAt` removed: same value as `endedAt`.
 - The cursor keeps the anchor. A range check on each cursor field. No internal text in the error.
 - Codex review: membership by link, not by position. A row is a member when its predecessor is in the range. A late `compensate()` after key reuse stays with its chain.
-- LWC: no reload on each poll, refresh page 1 when the selected row is stale or the head is open (older pages stay), clear the old chain at once, "Try again", reset when a panel hides the pane, buttons for keyboard access, scroll position kept.
+- LWC: each poll refreshes page 1 and keeps older pages (no reload loop, no lost pages), no retry after an error until "Try again", clear the old chain at once, reset when a panel hides the pane, buttons for keyboard access, scroll position kept.
+- Codex review: the count cap keeps query rows for the page and the caller (`COUNT()` can use one row for each counted row).

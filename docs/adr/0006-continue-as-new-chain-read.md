@@ -14,10 +14,10 @@ Each Continue-As-New generation is a new `Workflow_Instance__c`. The dashboard a
 2. Scope: same `Workflow_Name__c` and same root key (`Root_Correlation_Key__c`, or `Correlation_Key__c` when the root is blank). Indexed.
 3. Range: the pivot is the predecessor of the anchor (or the anchor when it has none). The range is from the nearest first generation (`Previous_Instance__c` = null) at or before the pivot, to the next first generation after it. Two `LIMIT 1` queries. A member is that first generation, or a row whose predecessor is in the range (a parent-field filter, no extra SOQL). Thus a late `compensate()` stays with its chain.
 4. Order `CreatedDate DESC, Id DESC`. Keyset cursor. Page max 200. The cursor keeps the anchor, so later pages stay on the same chain.
-5. Total: `SELECT COUNT() ... LIMIT 50,001`. Flag `isTotalCapped`.
+5. Total: `SELECT COUNT() ... LIMIT cap + 1`. The cap is 50,000, or less so that the page and 1,000 rows for the caller fit in the query-row limit. Flag `isTotalCapped`.
 6. `generation` counts from the oldest kept row. The cursor keeps the number of its row. Null when the total is capped.
 7. The anchor query has a `Next_Runs__r` subquery. No predecessor and no successor: one row, one SOQL.
-8. Dashboard: `getInstanceChain(instanceId, cursor)`. The LWC loads it only for an instance with a previous or next run.
+8. Dashboard: `getInstanceChain(instanceId, cursor)`. The LWC loads it only for an instance with a previous or next run. Each poll refreshes page 1 and keeps the older pages.
 
 ## Consequences
 

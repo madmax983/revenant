@@ -32,7 +32,7 @@ For the step timeline of one generation, call `WorkflowHistoryRead.getHistory(g.
 | `entries` | `List<ChainGeneration>` | Generations of this page, newest first. |
 | `rootCorrelationKey` | `String` | Root key of the chain. Null for an instance with no key. |
 | `totalCount` | `Integer` | Generations in the chain, for all pages. A lower bound when `isTotalCapped`. |
-| `isTotalCapped` | `Boolean` | True above `WorkflowChainRead.MAX_COUNTED_GENERATIONS` (50,000). |
+| `isTotalCapped` | `Boolean` | True above the count cap: `WorkflowChainRead.MAX_COUNTED_GENERATIONS` (50,000), or less when the transaction has fewer query rows left. |
 | `nextCursor` | `String` | Cursor for the next (older) page. Null on the last page. |
 | `hasMore` | `Boolean` | True when `nextCursor` is not null. |
 | `pageSize` | `Integer` | Page size that the read used. |
@@ -71,7 +71,7 @@ A `compensate()` instance links to the instance that it compensates. Thus it is 
 
 - Max 5 SOQL for each call, for all chain lengths: anchor, range start, range end, count, page. The first generation has no range start query.
 - A single generation costs one SOQL.
-- The count is `SELECT COUNT() ... LIMIT`, one query row.
+- The count is `SELECT COUNT() ... LIMIT`. It can use one query row for each counted row, so the cap keeps rows free for the page and 1,000 rows for the caller.
 - The page query reads max page size + 1 rows. No long text field. No DML, no enqueue, no event.
 - You can call it in all Apex contexts.
 
@@ -83,7 +83,7 @@ Open an instance that has a previous or a next run. The detail pane shows **Cont
 - "Showing X of N generations". `N+` when the total is capped.
 - Click the generation name (or press Enter on it) to open the step timeline of that generation. The list stays.
 - **Show older generations** gets the next page. **Try again** reads the chain again after an error.
-- A poll refreshes the first page when the selected row changed (status or new successor), or when the newest generation is not closed. Older pages that you loaded stay.
+- Each poll refreshes the first page. New generations, and a late `compensate()` instance, show. Older pages that you loaded stay. After an error, only **Try again** reads again.
 
 An instance with no previous and no next run shows no section and makes no extra call.
 

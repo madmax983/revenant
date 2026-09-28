@@ -3679,7 +3679,7 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(chainRows(element)).toHaveLength(2);
   });
 
-  it("does not reload when the selected generation is not on the first page", async () => {
+  it("refreshes with the same anchor when the selected generation is not on the first page", async () => {
     arrangeChained();
     getInstanceChain.mockResolvedValue(OTHER_PAGE);
     const element = await mountAndSelect();
@@ -3688,7 +3688,12 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     // A second details load (as a poll does) for the same instance.
     await selectListItem(element, 0);
 
-    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+    expect(getInstanceChain).toHaveBeenCalledTimes(2);
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: null,
+    });
+    expect(chainRows(element)).toHaveLength(1);
   });
 
   it("clears the old chain at once when an instance of another chain is selected", async () => {
@@ -3777,34 +3782,54 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(chainButton(element, "chain-load-more")).toBeNull();
   });
 
-  it("does not refresh a closed chain when the selected row is current", async () => {
+  it("shows a late compensation of a closed head while an older row is open", async () => {
     getFilteredInstances.mockResolvedValue([
-      { Id: LIVE_ID, Name: "WI-0003", Status__c: "Completed" },
+      { Id: PREV_ID, Name: "WI-0002", Status__c: "ContinuedAsNew" },
     ]);
     getInstanceDetails.mockResolvedValue(
-      details(LIVE_ID, {
-        Status__c: "Completed",
-        Previous_Instance__c: PREV_ID,
-        Previous_Instance__r: { Name: "WI-0002" },
-      }),
+      details(PREV_ID, { Status__c: "ContinuedAsNew" }, { Id: LIVE_ID }),
     );
+    const closedHead = {
+      ...PAGE_1.generations[0],
+      status: "Completed",
+      outcome: "Completed",
+    };
     getInstanceChain.mockResolvedValue({
       ...PAGE_1,
+      hasMore: false,
+      nextCursor: null,
+      totalCount: 2,
+      generations: [closedHead, PAGE_1.generations[1]],
+    });
+    const element = await mountAndSelect();
+    expect(chainRows(element)).toHaveLength(2);
+
+    const UNDO_ID = "a0G000000000011";
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      hasMore: false,
+      nextCursor: null,
+      totalCount: 3,
       generations: [
         {
-          ...PAGE_1.generations[0],
-          status: "Completed",
-          outcome: "Completed",
+          instanceId: UNDO_ID,
+          instanceName: "WI-0011",
+          generation: 3,
+          status: "Compensating",
+          startedAt: "2026-09-01T11:00:00.000Z",
         },
+        closedHead,
         PAGE_1.generations[1],
       ],
     });
-    const element = await mountAndSelect();
-    expect(getInstanceChain).toHaveBeenCalledTimes(1);
-
     await selectListItem(element, 0);
 
-    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+    expect(chainRows(element).map((r) => r.dataset.id)).toEqual([
+      UNDO_ID,
+      LIVE_ID,
+      PREV_ID,
+    ]);
+    expect(chainCount(element)).toBe("Showing 3 of 3 generations");
   });
 
   it("reloads the first page when the selected row is stale", async () => {

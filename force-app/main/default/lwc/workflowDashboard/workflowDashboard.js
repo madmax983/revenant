@@ -420,29 +420,22 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   // Loads the chain only for an instance with a predecessor or a successor.
-  // - Row in the list: refresh page 1 when the row is stale (status or
-  //   successor changed) or the head is open. Older pages stay. Else no call.
-  // - Row not in the list: load the chain of this instance, once. A poll of
-  //   the same instance does not call again, also after an error.
+  // - Same chain (row in the list, or same anchor): refresh page 1 on each
+  //   load, so a poll shows new generations. Older pages stay. After an error,
+  //   only "Try again" reads again.
+  // - Other instance: load its chain and clear the old rows.
   syncChain(instanceId, inst, successor) {
     if (!inst.Previous_Instance__c && !successor) {
       this.resetChain();
       return;
     }
-    const list = this.chainGenerations;
-    const row = list.find((g) => g.instanceId === instanceId);
-    if (row) {
-      const successorMissing =
-        !!successor && !list.some((g) => g.instanceId === successor.Id);
-      const headOpen = !list[0].outcome;
-      const stale = row.status !== inst.Status__c || successorMissing;
-      if ((stale || headOpen) && !this.chainLoading) {
-        this.loadChain(this.chainAnchorId, null, false);
-      }
-      return;
-    }
-    if (instanceId !== this.chainAnchorId) {
+    const sameChain =
+      instanceId === this.chainAnchorId ||
+      this.chainGenerations.some((g) => g.instanceId === instanceId);
+    if (!sameChain) {
       this.loadChain(instanceId, null, true);
+    } else if (!this.chainError && !this.chainLoading) {
+      this.loadChain(this.chainAnchorId, null, false);
     }
   }
 

@@ -19,10 +19,14 @@ public inherited sharing class WorkflowChainRead {
   public static final Integer MAX_PAGE_SIZE = 200;
 
   /**
-   * @description Max generations that the total counts. Above this value,
+   * @description Max generations that the total counts. The cap is lower when
+   * the transaction has fewer query rows left. Above the cap,
    * `ChainPage.isTotalCapped` is true and `generation` is null.
    */
   public static final Integer MAX_COUNTED_GENERATIONS = 50000;
+
+  // Query rows that the read keeps free for the caller.
+  private static final Integer ROW_SAFETY_MARGIN = 1000;
 
   // Tests set a small cap to test the capped path.
   @TestVisible
@@ -250,8 +254,13 @@ public inherited sharing class WorkflowChainRead {
     Map<String, Object> binds = new Map<String, Object>();
     String window = WorkflowChainWindow.clause(anchor, chain.root, binds);
 
-    // COUNT() uses one query row. LIMIT stops the scan after the cap.
-    binds.put('cap', countCap + 1);
+    // COUNT() can use one query row for each counted row. The cap keeps rows
+    // for the page and the caller. LIMIT stops the scan after the cap.
+    Integer cap = resolveCountCap(
+      Limits.getLimitQueryRows() - Limits.getQueryRows(),
+      chain.pageSize
+    );
+    binds.put('cap', cap + 1);
     Integer counted = Database.countQueryWithBinds(
       'SELECT COUNT() FROM Workflow_Instance__c WHERE ' +
         window +
@@ -259,8 +268,8 @@ public inherited sharing class WorkflowChainRead {
       binds,
       AccessLevel.SYSTEM_MODE
     );
-    chain.capped = counted > countCap;
-    chain.total = Math.min(counted, countCap);
+    chain.capped = counted > cap;
+    chain.total = Math.min(counted, cap);
 
     String pageWhere = chain.cursor == null
       ? window
@@ -276,6 +285,22 @@ public inherited sharing class WorkflowChainRead {
       AccessLevel.SYSTEM_MODE
     );
     return buildPage(rows, chain);
+  }
+
+  /**
+   * @description Count cap from the query rows left. The count (cap + 1), the
+   * page (pageSize + 1) and a safety margin must fit. Never above `countCap`.
+   * @param remainingRows query rows left in the transaction
+   * @param pageSize page size of the read
+   * @return the cap, 0 or more
+   */
+  @TestVisible
+  private static Integer resolveCountCap(
+    Integer remainingRows,
+    Integer pageSize
+  ) {
+    Integer free = remainingRows - (pageSize + 1) - ROW_SAFETY_MARGIN - 1;
+    return Math.max(0, Math.min(countCap, free));
   }
 
   /**

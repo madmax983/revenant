@@ -614,6 +614,22 @@ private class WorkflowChainReadTest {
   }
 
   @IsTest
+  static void countCapKeepsQueryRowsForThePageAndTheCaller() {
+    // Full budget: the remaining rows set the cap, not the max.
+    Assert.areEqual(48948, WorkflowChainRead.resolveCountCap(50000, 50));
+    // Large budget: the max sets the cap.
+    Assert.areEqual(
+      WorkflowChainRead.MAX_COUNTED_GENERATIONS,
+      WorkflowChainRead.resolveCountCap(1000000, 50)
+    );
+    // Small budget: no count.
+    Assert.areEqual(0, WorkflowChainRead.resolveCountCap(100, 50));
+    // Count (cap + 1), page (pageSize + 1) and margin fit in the budget.
+    Integer cap = WorkflowChainRead.resolveCountCap(50000, 200);
+    Assert.isTrue(cap + 1 + 201 + 1000 <= 50000, 'Fits: ' + cap);
+  }
+
+  @IsTest
   static void pageSizeIsDefaultedClampedAndValidated() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       chain('sized', 2);
