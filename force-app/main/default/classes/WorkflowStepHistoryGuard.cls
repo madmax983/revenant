@@ -48,7 +48,9 @@ public inherited sharing class WorkflowStepHistoryGuard {
 
   /** @description Effective thresholds. 0 means the check is off. */
   public class Thresholds {
+    /** @description Warn threshold in rows, or 0 (off). */
     public Integer warn;
+    /** @description Ceiling in rows, or 0 (off). */
     public Integer ceiling;
 
     /**
