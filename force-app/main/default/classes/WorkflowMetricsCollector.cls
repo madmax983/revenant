@@ -26,9 +26,11 @@ public inherited sharing class WorkflowMetricsCollector {
     'Cancelled'
   };
 
-  // Maximum groups read by each grouped query.
+  // Maximum groups kept from each grouped query. The query reads one more
+  // group to find truncation. An aggregate query can return max 2,000 rows,
+  // so the cap is 1,999.
   @TestVisible
-  private static Integer groupRowCap = 2000;
+  private static Integer groupRowCap = 1999;
   // Maximum rows read by the age scan.
   @TestVisible
   private static Integer ageScanRowCap = 10000;

@@ -1,8 +1,9 @@
 /**
  * @description Reference subscriber for Workflow_Metrics__e (issue #127).
- * Shapes one snapshot chunk into a Datadog v2 series body and pushes it with
- * a Queueable callout. A platform event trigger cannot make a callout, so the
- * trigger enqueues PushJob. See docs/workflow-metrics-event.md for the
+ * Shapes snapshot chunks into a Datadog v2 series body and pushes it with a
+ * Queueable callout. A platform event trigger cannot make a callout and can
+ * enqueue only one Queueable, so the trigger makes one body for its batch
+ * and enqueues one PushJob. See docs/workflow-metrics-event.md for the
  * trigger.
  *
  * Each gauge is one series with the tag `workflow:<name>`. A null age sends
@@ -19,19 +20,43 @@ public with sharing class WorkflowMetricsDatadogShaper {
    * @return The JSON body, or null when the chunk has no definitions.
    */
   public static String toSeriesJson(Workflow_Metrics__e event) {
+    return toSeriesJson(new List<Workflow_Metrics__e>{ event });
+  }
+
+  /**
+   * @description Makes one Datadog v2 series body for all chunks of a
+   * trigger batch.
+   * @param events The Workflow_Metrics__e chunks, for example Trigger.new.
+   * @return The JSON body, or null when no chunk has definitions.
+   */
+  public static String toSeriesJson(List<Workflow_Metrics__e> events) {
+    List<Object> series = new List<Object>();
+    if (events == null) {
+      return null;
+    }
+    for (Workflow_Metrics__e event : events) {
+      addSeries(series, event);
+    }
+    return series.isEmpty()
+      ? null
+      : JSON.serialize(new Map<String, Object>{ 'series' => series });
+  }
+
+  private static void addSeries(
+    List<Object> series,
+    Workflow_Metrics__e event
+  ) {
     List<WorkflowMetricsSnapshot.DefinitionMetrics> rows = WorkflowMetricsSnapshot.parse(
       event
     );
     if (rows.isEmpty()) {
-      return null;
+      return;
     }
     Long timestamp = event.Snapshot_At__c.getTime() / 1000;
-    List<Object> series = new List<Object>();
     for (WorkflowMetricsSnapshot.DefinitionMetrics row : rows) {
-      List<String> tags = new List<String>{
-        'workflow:' + row.workflowName,
-        'snapshot_id:' + event.Snapshot_Id__c
-      };
+      // Do not tag the snapshot id: a new tag value on each sweep makes
+      // high cardinality in the sink.
+      List<String> tags = new List<String>{ 'workflow:' + row.workflowName };
       Map<String, Object> gauges = new Map<String, Object>{
         'pending' => row.pending,
         'running' => row.running,
@@ -54,7 +79,6 @@ public with sharing class WorkflowMetricsDatadogShaper {
         }
       }
     }
-    return JSON.serialize(new Map<String, Object>{ 'series' => series });
   }
 
   private static Map<String, Object> point(

@@ -117,6 +117,30 @@ private class WorkflowMetricsDatadogShaperTest {
   }
 
   @IsTest
+  static void batchGivesOneBodyForAllChunks() {
+    Workflow_Metrics__e first = snapshot();
+    Workflow_Metrics__e second = snapshot();
+    second.Chunk_Index__c = 2;
+    second.Metrics_Json__c = '{"definitions":[{"workflowName":"Acme.Ship","running":7}]}';
+
+    Map<String, Object> body = (Map<String, Object>) JSON.deserializeUntyped(
+      WorkflowMetricsDatadogShaper.toSeriesJson(
+        new List<Workflow_Metrics__e>{ first, second }
+      )
+    );
+    List<Object> series = (List<Object>) body.get('series');
+
+    Assert.isNotNull(
+      findSeries(series, 'revenant.workflow.running', 'workflow:Acme.Order'),
+      'Series from chunk 1'
+    );
+    Assert.isNotNull(
+      findSeries(series, 'revenant.workflow.running', 'workflow:Acme.Ship'),
+      'Series from chunk 2 in the same body'
+    );
+  }
+
+  @IsTest
   static void emptySnapshotGivesNoSeries() {
     Workflow_Metrics__e event = snapshot();
     event.Metrics_Json__c = '{"definitions":[]}';

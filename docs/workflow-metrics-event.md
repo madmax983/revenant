@@ -82,7 +82,7 @@ Rules:
 - One `Metrics_Json__c` value holds max 100,000 characters. A large snapshot
   uses more than one event. All chunks have the same `Snapshot_Id__c` and
   `Chunk_Count__c`. A row is never split.
-- Caps: 2,000 groups for each grouped query, 10,000 rows for the age scan,
+- Caps: 1,999 groups for each grouped query, 10,000 rows for the age scan,
   10 chunks for each snapshot.
 - When a cap drops data, each chunk has `Is_Truncated__c = true`. The engine
   also writes one `Warn` row in `Workflow_Log__c` with `Log_Type__c =
@@ -114,21 +114,20 @@ unknown keys. Check `Schema_Version__c` before you use a new key.
 `WorkflowMetricsSnapshot.parse(event)` gives typed rows. The example class
 [`WorkflowMetricsDatadogShaper`](../examples/main/default/classes/WorkflowMetricsDatadogShaper.cls)
 shapes one chunk into a Datadog v2 series body (one gauge for each key, tag
-`workflow:<name>`). A platform event trigger cannot make a callout, so the
-trigger enqueues a Queueable:
+`workflow:<name>`). A platform event trigger cannot make a callout. It runs
+async, so it can enqueue only one Queueable. The trigger makes one body for
+all events of the batch and enqueues one job:
 
 ```apex
 trigger WorkflowMetricsSubscriber on Workflow_Metrics__e(after insert) {
-  for (Workflow_Metrics__e event : Trigger.new) {
-    String body = WorkflowMetricsDatadogShaper.toSeriesJson(event);
-    if (body != null) {
-      System.enqueueJob(
-        new WorkflowMetricsDatadogShaper.PushJob(
-          body,
-          'callout:Datadog/api/v2/series'
-        )
-      );
-    }
+  String body = WorkflowMetricsDatadogShaper.toSeriesJson(Trigger.new);
+  if (body != null) {
+    System.enqueueJob(
+      new WorkflowMetricsDatadogShaper.PushJob(
+        body,
+        'callout:Datadog/api/v2/series'
+      )
+    );
   }
 }
 ```
@@ -141,8 +140,9 @@ Setup:
 3. Deploy the trigger above.
 4. Turn on **Publish Metrics Events**.
 
-A trigger can enqueue max 50 jobs. One sweep sends max 10 chunks, so this is
-safe.
+One body holds all series of the batch. For a large fleet, set a small batch
+size with `PlatformEventSubscriberConfig`, so the body stays below the sink
+size limit (Datadog: 5 MB).
 
 ## Reference subscriber (external)
 
