@@ -520,7 +520,7 @@ private class WorkflowRetryConfigResolverTest {
   }
 
   @IsTest
-  static void overrideMaxAttemptsUsesOverrideRecordOnly() {
+  static void overrideMaxAttemptsUsesMostSpecificOverrideRecord() {
     System.runAs(runner()) {
       useRecords(
         new List<Workflow_Retry_Config__mdt>{
@@ -537,14 +537,14 @@ private class WorkflowRetryConfigResolverTest {
         'Override record sets the cap'
       );
       Assert.areEqual(
-        7,
+        2,
         WorkflowRetryConfigResolver.overrideMaxAttempts(WF, 'PlainStep', 7),
-        'No override: current value stays'
+        'Definition override caps a step that has only a plain record'
       );
       Assert.areEqual(
         7,
         WorkflowRetryConfigResolver.overrideMaxAttempts(WF, 'BlankStep', 7),
-        'Blank attempts field: current value stays'
+        'Step override replaces the definition override fully'
       );
       Assert.areEqual(
         7,
