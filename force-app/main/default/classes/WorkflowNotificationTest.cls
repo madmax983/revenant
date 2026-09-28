@@ -220,6 +220,35 @@ private class WorkflowNotificationTest {
   }
 
   @IsTest
+  static void ownerObjectTypesAreCapped() {
+    List<String> prefixes = new List<String>{
+      '001',
+      '003',
+      '005',
+      '006',
+      '00Q',
+      '500',
+      '701',
+      '800',
+      '00G',
+      '00T'
+    };
+    WorkflowNotification n = WorkflowNotification.create('T', 'B');
+    for (String prefix : prefixes) {
+      n.toRecordOwner(fakeId(prefix, 1));
+    }
+    n.toRecordOwner(fakeId('001', 2)); // A known type: accepted.
+    Assert.areEqual(11, n.ownerRecordIds.size());
+    try {
+      n.toRecordOwner(fakeId('00U', 1));
+      Assert.fail('An 11th object type must throw');
+    } catch (IllegalArgumentException e) {
+      Assert.isTrue(e.getMessage().contains('object types'), e.getMessage());
+      Assert.areEqual(11, n.ownerRecordIds.size());
+    }
+  }
+
+  @IsTest
   static void withNotificationStoresOnSuspendAndApproval() {
     WorkflowNotification n = WorkflowNotification.create('T', 'B')
       .toRecipient(USER_ID);

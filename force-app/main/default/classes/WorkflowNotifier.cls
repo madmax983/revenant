@@ -567,7 +567,6 @@ public inherited sharing class WorkflowNotifier {
   private static List<Workflow_Log__c> sendAll(List<Workflow_Log__c> anchors) {
     List<OpenRequest> requests = new List<OpenRequest>();
     Set<String> typeNames = new Set<String>();
-    Set<Id> ownerRecordIds = new Set<Id>();
     for (Workflow_Log__c anchor : anchors) {
       Map<String, Object> req = readRequest(anchor);
       if (req == null) {
@@ -584,23 +583,33 @@ public inherited sharing class WorkflowNotifier {
       if (req.get('type') instanceof String) {
         typeNames.add((String) req.get('type'));
       }
-      ownerRecordIds.addAll(ids(req.get('owners')));
     }
+    // Admit requests while their owner queries fit the budget: one SOQL for
+    // the types, plus one for each owner object type. The rest wait for a
+    // later pass. The first request always fits: max 10 owner types.
     Set<Schema.SObjectType> ownerTypes = new Set<Schema.SObjectType>();
-    for (Id recordId : ownerRecordIds) {
-      ownerTypes.add(recordId.getSObjectType());
-    }
-    if (!hasQueryBudget(1 + ownerTypes.size())) {
-      List<Workflow_Log__c> all = new List<Workflow_Log__c>();
-      for (OpenRequest open : requests) {
-        all.add(open.anchor);
+    List<OpenRequest> admitted = new List<OpenRequest>();
+    List<Workflow_Log__c> waiting = new List<Workflow_Log__c>();
+    Set<Id> ownerRecordIds = new Set<Id>();
+    for (OpenRequest open : requests) {
+      Set<Id> owners = ids(open.req.get('owners'));
+      Set<Schema.SObjectType> merged = new Set<Schema.SObjectType>(ownerTypes);
+      for (Id recordId : owners) {
+        merged.add(recordId.getSObjectType());
       }
-      return all;
+      if (hasQueryBudget(1 + merged.size())) {
+        ownerTypes = merged;
+        ownerRecordIds.addAll(owners);
+        admitted.add(open);
+      } else {
+        waiting.add(open.anchor);
+      }
     }
+    requests = admitted;
     resolveTypeIds(typeNames);
     Map<Id, Id> owners = resolveOwners(ownerRecordIds);
 
-    List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
+    List<Workflow_Log__c> deferred = new List<Workflow_Log__c>(waiting);
     List<OpenRequest> ready = new List<OpenRequest>();
     Integer callsLeft = sendCallsPerPass;
     for (OpenRequest open : requests) {

@@ -13,6 +13,8 @@ public inherited sharing class WorkflowNotification {
   public static final Integer MAX_BODY_LENGTH = 750;
   /** @description Maximum static recipients. For more, use a group. */
   public static final Integer MAX_STATIC_RECIPIENTS = 500;
+  /** @description Maximum object types for toRecordOwner (one SOQL each). */
+  public static final Integer MAX_OWNER_OBJECT_TYPES = 10;
 
   private final Set<Id> recipients = new Set<Id>();
   private final Set<String> keys = new Set<String>();
@@ -122,12 +124,26 @@ public inherited sharing class WorkflowNotification {
   /**
    * @description Adds the owner (user or queue) of a record. The engine reads
    * the owner when it sends. When the object has no OwnerId, or the record is
-   * not found, the engine ignores it.
+   * not found, the engine ignores it. Maximum MAX_OWNER_OBJECT_TYPES object
+   * types for each notification.
    * @param recordId Record Id. Not null.
    * @return This notification.
    */
   public WorkflowNotification toRecordOwner(Id recordId) {
     requireRecordId(recordId, 'toRecordOwner');
+    Set<Schema.SObjectType> types = new Set<Schema.SObjectType>{
+      recordId.getSObjectType()
+    };
+    for (Id existing : ownerRecords) {
+      types.add(existing.getSObjectType());
+    }
+    if (types.size() > MAX_OWNER_OBJECT_TYPES) {
+      throw new IllegalArgumentException(
+        'WorkflowNotification.toRecordOwner: maximum ' +
+          MAX_OWNER_OBJECT_TYPES +
+          ' object types'
+      );
+    }
     ownerRecords.add(recordId);
     return this;
   }

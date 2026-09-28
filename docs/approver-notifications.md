@@ -29,7 +29,7 @@ public StepResult execute(StepContext ctx) {
 | `WorkflowNotification.create(title, body)` | Makes a notification. Title: not blank, maximum 250 characters. Body: not blank, maximum 750 characters. |
 | `.toRecipient(Id)` / `.toRecipients(Set<Id>)` | Static recipients: user, group or queue Ids. Maximum 500. For more, use a public group. |
 | `.toInputKey(key)` | The recipients in a top-level workflow input key. The value is one Id or a list of Ids. The engine reads it at the SUSPEND. |
-| `.toRecordOwner(recordId)` | The owner (user or queue) of a record. The engine reads the owner when it sends. |
+| `.toRecordOwner(recordId)` | The owner (user or queue) of a record. The engine reads the owner when it sends. Maximum 10 object types (one SOQL each). |
 | `.withTarget(recordId)` | The deep-link record. Default: the workflow instance. |
 | `.withNotificationType(developerName)` | The `CustomNotificationType`. Default: `Revenant_Workflow_Notification`. |
 | `StepResult.withNotification(n)` | Adds `n` to a SUSPEND or WAIT_FOR_APPROVAL result. It throws `IllegalArgumentException` for another action, a null `n`, no recipient source, or a second call on the same result. |
@@ -105,7 +105,7 @@ A step that waits again on the same row with a new notification (for example, a 
 - In the trigger, each request has its own `try`/`catch`. A failed row update writes one error row.
 - Before a send, the trigger claims the row (`Outcome__c = Sending`) and locks it (`FOR UPDATE`). It sends only the rows whose claim succeeded. A row whose claim failed waits for a later pass.
 - The notify trigger checks its query and DML budget before it sends. When the budget is low, or an error occurs before the first send (for example, a row lock time-out), it throws `EventBus.RetryableException`: the platform delivers the batch again (max 5 times). It never throws after a send.
-- When the type or owner queries cannot run, the requests wait for a later pass.
+- A pass admits requests while their owner queries fit the query budget. The other requests wait for a later pass. The first request always fits.
 - When the publish for a later pass fails, the row is `Failed`.
 
 `Outcome__c` values:
