@@ -422,4 +422,41 @@ public class RevenantOperatorPermSetTest {
       );
     }
   }
+
+  /**
+   * @description A read-only operator passes the view gate of the Fleet Health view
+   * (#111) and gets data. WorkflowFleetHealthServiceTest checks the class access.
+   */
+  @IsTest
+  static void testOperatorCanReadFleetHealth() {
+    User operator = buildOperatorUser();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert operator;
+      PermissionSet ps = [
+        SELECT Id
+        FROM PermissionSet
+        WHERE Name = 'Revenant_Operator'
+        LIMIT 1
+      ];
+      insert new PermissionSetAssignment(
+        AssigneeId = operator.Id,
+        PermissionSetId = ps.Id
+      );
+      insert new Workflow_Instance__c(
+        Workflow_Name__c = 'OpFleetDef',
+        Status__c = 'Running'
+      );
+    }
+
+    System.runAs(operator) {
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      System.assertEquals(
+        1,
+        ((List<Object>) result.get('rows')).size(),
+        'The operator gets one row for each definition'
+      );
+    }
+  }
 }
