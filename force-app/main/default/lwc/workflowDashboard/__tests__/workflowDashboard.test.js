@@ -3337,3 +3337,48 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     expect(JSON.stringify(lastCall)).toContain("STEP_HISTORY_LIMIT");
   });
 });
+
+describe("c-workflow-dashboard async capacity panel (#129)", () => {
+  beforeEach(() => {
+    getDefinitionTrends.mockResolvedValue({
+      windowKey: "24h",
+      windowHours: 24,
+      rows: [],
+    });
+  });
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  async function mountDashboard() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    return element;
+  }
+
+  it("does not show the panel before System Doctor opens", async () => {
+    const element = await mountDashboard();
+    expect(
+      element.shadowRoot.querySelector("c-async-capacity-panel"),
+    ).toBeNull();
+  });
+
+  it("shows the panel in System Doctor", async () => {
+    const element = await mountDashboard();
+    findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    expect(
+      element.shadowRoot.querySelector("c-async-capacity-panel"),
+    ).not.toBeNull();
+  });
+});

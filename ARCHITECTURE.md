@@ -191,9 +191,9 @@ translation/evaluation.
 
 ## Dashboard services
 
-The LWC-facing API has two **read** controllers and one **command**
+The LWC-facing API has three **read** controllers and one **command**
 controller (endpoint names unchanged; only the host class of the 16 command
-endpoints moved). All three delegate to `inherited sharing` service classes.
+endpoints moved). All of them delegate to `inherited sharing` service classes.
 
 - Read side: `WorkflowDashboardController` (holds `InstanceQuery` / `StalledQuery`
   / `UnroutedQuery` DTOs) → `WorkflowInstanceListService`,
@@ -205,6 +205,10 @@ endpoints moved). All three delegate to `inherited sharing` service classes.
   `WorkflowRateLimitStatusService`. It is a separate controller because
   `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The
   service uses the `RateLimiter` refill formula (`availableTokens`).
+- Async Apex Capacity panel (#129): `WorkflowAsyncCapacityController` →
+  `WorkflowAsyncCapacityService` → `AsyncCapacityEvaluator` (pure rules). One
+  `AsyncApexJob` aggregate and `System.OrgLimits`. The orchestrator does not
+  call it. See [docs/async-capacity.md](docs/async-capacity.md).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,

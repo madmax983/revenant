@@ -1,0 +1,227 @@
+/**
+ * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
+ * thresholds, calculates percentages and gives each metric a status. It does no SOQL,
+ * no DML and reads no clock.
+ */
+public inherited sharing class AsyncCapacityEvaluator {
+  /** @description Percent is below the warn threshold. */
+  public static final String STATUS_HEALTHY = 'HEALTHY';
+  /** @description Percent is at or above the warn threshold. */
+  public static final String STATUS_DEGRADED = 'DEGRADED';
+  /** @description Percent is at or above the critical threshold. */
+  public static final String STATUS_CRITICAL = 'CRITICAL';
+  /** @description No usable data or limit. */
+  public static final String STATUS_UNKNOWN = 'UNKNOWN';
+
+  /** @description Thresholds are the defaults because the field is blank. */
+  public static final String SOURCE_DEFAULT = 'DEFAULT';
+  /** @description Thresholds come from the config field. */
+  public static final String SOURCE_CONFIG = 'CONFIG';
+  /** @description The config field is not valid. Thresholds are the defaults. */
+  public static final String SOURCE_INVALID = 'INVALID';
+
+  /** @description Key of the daily async Apex executions metric. */
+  public static final String METRIC_DAILY_ASYNC = 'DAILY_ASYNC';
+  /** @description Key of the Apex flex queue metric. */
+  public static final String METRIC_FLEX_QUEUE = 'FLEX_QUEUE';
+
+  /** @description Platform maximum of batch jobs in the flex queue (Holding). */
+  public static final Integer FLEX_QUEUE_LIMIT = 100;
+
+  /** @description Default warn threshold in percent. */
+  public static final Decimal DEFAULT_WARN_PERCENT = 80;
+  /** @description Default critical threshold in percent. */
+  public static final Decimal DEFAULT_CRIT_PERCENT = 95;
+
+  // Display label of each metric.
+  private static final Map<String, String> LABELS = new Map<String, String>{
+    METRIC_DAILY_ASYNC => 'Daily async Apex executions',
+    METRIC_FLEX_QUEUE => 'Apex flex queue (Holding)'
+  };
+
+  // Rank for the overall status. Higher is worse. Unknown is worse than Healthy.
+  private static final Map<String, Integer> RANK = new Map<String, Integer>{
+    STATUS_HEALTHY => 0,
+    STATUS_UNKNOWN => 1,
+    STATUS_DEGRADED => 2,
+    STATUS_CRITICAL => 3
+  };
+
+  /**
+   * @description Warn and critical thresholds in percent, and their source.
+   */
+  public class Thresholds {
+    /** @description Warn threshold in percent. */
+    public Decimal warn;
+    /** @description Critical threshold in percent. */
+    public Decimal crit;
+    /** @description SOURCE_DEFAULT, SOURCE_CONFIG or SOURCE_INVALID. */
+    public String source;
+  }
+
+  /**
+   * @description Raw values of one capacity read. A null value means "not known".
+   */
+  public class Reading {
+    /** @description Daily async Apex executions used in the last 24 hours. */
+    public Integer dailyUsed;
+    /** @description Daily async Apex executions limit. */
+    public Integer dailyLimit;
+    /** @description AsyncApexJob rows in Holding (the flex queue). */
+    public Integer holding;
+    /** @description AsyncApexJob rows in Queued. */
+    public Integer queued;
+    /** @description AsyncApexJob rows in Processing. */
+    public Integer processing;
+    /** @description False when the AsyncApexJob read failed. */
+    public Boolean jobsKnown = false;
+  }
+
+  /**
+   * @description Parses the text "warn,crit". Blank gives the defaults. Text that is
+   * not two numbers with 0 < warn < crit <= 100 gives the defaults and SOURCE_INVALID.
+   * @param raw The config text, for example "80,95".
+   * @return The thresholds to use.
+   */
+  public static Thresholds parseThresholds(String raw) {
+    Thresholds t = new Thresholds();
+    t.warn = DEFAULT_WARN_PERCENT;
+    t.crit = DEFAULT_CRIT_PERCENT;
+    t.source = SOURCE_DEFAULT;
+    if (String.isBlank(raw)) {
+      return t;
+    }
+    t.source = SOURCE_INVALID;
+    List<String> parts = raw.split(',', -1);
+    if (parts.size() != 2) {
+      return t;
+    }
+    Decimal warn;
+    Decimal crit;
+    try {
+      warn = Decimal.valueOf(parts[0].trim());
+      crit = Decimal.valueOf(parts[1].trim());
+    } catch (System.TypeException ex) {
+      return t;
+    }
+    if (warn <= 0 || warn >= crit || crit > 100) {
+      return t;
+    }
+    t.warn = warn;
+    t.crit = crit;
+    t.source = SOURCE_CONFIG;
+    return t;
+  }
+
+  /**
+   * @description Calculates used / limit in percent, rounded HALF_UP to 2 places.
+   * @param used The used amount.
+   * @param limitValue The limit.
+   * @return The percent, or null when a value is missing or the limit is not above 0.
+   */
+  public static Decimal percentOf(Integer used, Integer limitValue) {
+    if (used == null || limitValue == null || limitValue <= 0) {
+      return null;
+    }
+    Decimal usedValue = used;
+    return (usedValue *
+      100 /
+      limitValue)
+      .setScale(2, System.RoundingMode.HALF_UP);
+  }
+
+  /**
+   * @description Gives the status of one percent.
+   * @param percent The percent, or null.
+   * @param t The thresholds.
+   * @return STATUS_UNKNOWN, STATUS_HEALTHY, STATUS_DEGRADED or STATUS_CRITICAL.
+   */
+  public static String classify(Decimal percent, Thresholds t) {
+    if (percent == null) {
+      return STATUS_UNKNOWN;
+    }
+    if (percent >= t.crit) {
+      return STATUS_CRITICAL;
+    }
+    if (percent >= t.warn) {
+      return STATUS_DEGRADED;
+    }
+    return STATUS_HEALTHY;
+  }
+
+  /**
+   * @description Gives the worst status. Rank: Critical, Degraded, Unknown, Healthy.
+   * @param statuses The statuses.
+   * @return The worst status, or STATUS_UNKNOWN for an empty list.
+   */
+  public static String worst(List<String> statuses) {
+    String result = null;
+    for (String s : statuses) {
+      if (result == null || RANK.get(s) > RANK.get(result)) {
+        result = s;
+      }
+    }
+    return result == null ? STATUS_UNKNOWN : result;
+  }
+
+  /**
+   * @description Builds the panel envelope (without asOfMs) from one reading.
+   * @param r The reading.
+   * @param t The thresholds.
+   * @return A map with status, chainAtRisk, thresholds, metrics and jobCounts.
+   */
+  public static Map<String, Object> evaluate(Reading r, Thresholds t) {
+    Integer holding = r.jobsKnown ? r.holding : null;
+    List<Map<String, Object>> metrics = new List<Map<String, Object>>{
+      metric(METRIC_DAILY_ASYNC, r.dailyUsed, r.dailyLimit),
+      metric(METRIC_FLEX_QUEUE, holding, FLEX_QUEUE_LIMIT)
+    };
+    List<String> statuses = new List<String>();
+    for (Map<String, Object> m : metrics) {
+      String status = classify((Decimal) m.get('percent'), t);
+      m.put('status', status);
+      statuses.add(status);
+    }
+    return new Map<String, Object>{
+      'status' => worst(statuses),
+      'chainAtRisk' => statuses.contains(STATUS_CRITICAL),
+      'warnPercent' => t.warn,
+      'critPercent' => t.crit,
+      'thresholdSource' => t.source,
+      'metrics' => metrics,
+      'jobCounts' => jobCounts(r)
+    };
+  }
+
+  private static Map<String, Object> metric(
+    String key,
+    Integer used,
+    Integer limitValue
+  ) {
+    return new Map<String, Object>{
+      'key' => key,
+      'label' => LABELS.get(key),
+      'used' => used,
+      'limit' => limitValue,
+      'percent' => percentOf(used, limitValue)
+    };
+  }
+
+  private static Map<String, Object> jobCounts(Reading r) {
+    if (!r.jobsKnown) {
+      return new Map<String, Object>{
+        'holding' => null,
+        'queued' => null,
+        'processing' => null,
+        'total' => null
+      };
+    }
+    Integer total = r.holding + r.queued + r.processing;
+    return new Map<String, Object>{
+      'holding' => r.holding,
+      'queued' => r.queued,
+      'processing' => r.processing,
+      'total' => total
+    };
+  }
+}
