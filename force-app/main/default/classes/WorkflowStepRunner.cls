@@ -40,6 +40,8 @@ public inherited sharing class WorkflowStepRunner {
     public RetryPolicy autoRetryPolicy;
     // Exception that execute() threw and the engine caught for auto-retry.
     public Exception thrownError;
+    // The resolved step. The invoke phase sets it.
+    public WorkflowStep stepInstance;
   }
 
   /**

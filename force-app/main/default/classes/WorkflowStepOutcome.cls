@@ -51,6 +51,11 @@ public inherited sharing class WorkflowStepOutcome {
     if (!WorkflowOutcomePrepare.prepareStepOutcome(outcome, freshInstance)) {
       return;
     }
+    // Strict determinism (issue #102): stop a divergent decision before the
+    // dispatch writes it.
+    if (WorkflowDeterminismGuard.failIfDivergent(outcome)) {
+      return;
+    }
     dispatchStepOutcome(outcome);
   }
 

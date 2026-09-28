@@ -22,6 +22,7 @@ public inherited sharing class WorkflowStepInvoke {
       ctx.instance,
       ctx.activeStepName
     );
+    ctx.stepInstance = stepInstance;
 
     // Circuit-breaker admission (issue #128): when the step is CircuitBreakerGuarded
     // and its dependency's breaker is Open, fast-fail by parking instead of executing.
@@ -39,6 +40,13 @@ public inherited sharing class WorkflowStepInvoke {
       stepInstance,
       prevOutput
     );
+    // Strict determinism (issue #102): digest the inputs before the step runs.
+    // Null, with no SOQL, when the mode is off.
+    String determinismInputs = WorkflowDeterminismGuard.captureInputs(
+      ctx,
+      context,
+      prevOutput
+    );
     StepResult result = executeStepWithTimeout(ctx, stepInstance, context);
 
     // 6. Handle Step Outcome
@@ -48,6 +56,22 @@ public inherited sharing class WorkflowStepInvoke {
     outcome.result = result;
     outcome.context = context;
     outcome.thrownError = ctx.thrownError;
+    String divergence = WorkflowDeterminismGuard.verify(
+      determinismInputs,
+      ctx,
+      result
+    );
+    // An input can arrive after the snapshot and before the step reads it.
+    // Then the new decision is legal: do not report it.
+    if (
+      divergence != null &&
+      !determinismInputs.equals(
+        WorkflowDeterminismGuard.captureInputs(ctx, context, prevOutput)
+      )
+    ) {
+      divergence = null;
+    }
+    outcome.divergence = divergence;
     WorkflowStepOutcome.handleStepResult(outcome);
   }
 

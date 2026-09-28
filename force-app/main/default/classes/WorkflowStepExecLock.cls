@@ -118,7 +118,8 @@ public inherited sharing class WorkflowStepExecLock {
         Output__c,
         Retry_Count__c,
         Transient_Retry_Count__c,
-        Captured_Values__c
+        Captured_Values__c,
+        Decision_Record__c
       FROM Workflow_Step_Execution__c
       WHERE Id = :stepExecs[0].Id
       WITH SYSTEM_MODE

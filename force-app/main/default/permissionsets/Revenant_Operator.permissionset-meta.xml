@@ -286,6 +286,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Decision_Record__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
         <field>Workflow_Step_Execution__c.Error_Details__c</field>
         <readable>true</readable>
     </fieldPermissions>

@@ -37,6 +37,11 @@
                 <label>Explicit Step Failure</label>
             </value>
             <value>
+                <fullName>STEP_NON_DETERMINISM</fullName>
+                <default>false</default>
+                <label>Step Non-Determinism</label>
+            </value>
+            <value>
                 <fullName>UNKNOWN</fullName>
                 <default>false</default>
                 <label>Unknown</label>

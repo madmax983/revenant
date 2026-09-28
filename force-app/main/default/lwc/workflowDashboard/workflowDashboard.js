@@ -77,6 +77,7 @@ const FAILURE_CATEGORY_LABELS = {
   TIMEOUT: "Timeout",
   COMPENSATION_FAILED: "Compensation Failed",
   EXPLICIT_FAIL: "Explicit Step Failure",
+  STEP_NON_DETERMINISM: "Step Non-Determinism",
   UNKNOWN: "Unknown",
 };
 
@@ -280,6 +281,7 @@ export default class WorkflowDashboard extends LightningElement {
     { label: "Timeout", value: "TIMEOUT" },
     { label: "Compensation Failed", value: "COMPENSATION_FAILED" },
     { label: "Explicit Step Failure", value: "EXPLICIT_FAIL" },
+    { label: "Step Non-Determinism", value: "STEP_NON_DETERMINISM" },
     { label: "Unknown", value: "UNKNOWN" },
   ];
 

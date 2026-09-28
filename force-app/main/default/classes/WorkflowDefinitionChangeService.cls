@@ -65,6 +65,8 @@ public inherited sharing class WorkflowDefinitionChangeService {
     inst.Status__c = 'Running';
     inst.Error_Message__c = null;
     Database.update(inst, true, AccessLevel.SYSTEM_MODE);
+    // Strict determinism (issue #102): the live code can make a new decision.
+    WorkflowDeterminismGuard.clearRecords(inst.Id, inst.Current_Step__c);
 
     WorkflowLog.warn(
       'DefinitionChanged',

@@ -31,6 +31,10 @@
         <value xsi:type="xsd:double">60.0</value>
     </values>
     <values>
+        <field>Strict_Determinism__c</field>
+        <value xsi:type="xsd:boolean">false</value>
+    </values>
+    <values>
         <field>Storage_Warning_Threshold_Percent__c</field>
         <value xsi:type="xsd:double">75.0</value>
     </values>
