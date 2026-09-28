@@ -239,6 +239,47 @@ private class WorkflowDeterminismGuardTest {
     }
   }
 
+  @IsTest
+  static void captureInputsTellsNullFromTheTextNull() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Id instId = insertInstance().Id;
+      WorkflowStepRunner.RunStepContext textNull = rowContext(instId);
+      textNull.stepExec.Output__c = 'null';
+      Assert.areNotEqual(
+        digestOf(rowContext(instId), contextFor(instId)),
+        digestOf(textNull, contextFor(instId)),
+        'A null state and the text "null" are different inputs'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsGivesUnknownOverTheSignalCap() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      WorkflowDeterminismGuard.maxLiveSignals = 1;
+      Workflow_Instance__c inst = insertInstance();
+      List<Workflow_Signal__c> sigs = new List<Workflow_Signal__c>();
+      for (Integer i = 0; i < 2; i++) {
+        sigs.add(
+          new Workflow_Signal__c(
+            Workflow_Instance__c = inst.Id,
+            Correlation_Key__c = inst.Correlation_Key__c,
+            Signal_Name__c = 'Go' + i,
+            Status__c = 'Received'
+          )
+        );
+      }
+      insert sigs;
+      Assert.areEqual(
+        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'A backlog over the cap gives unknown inputs'
+      );
+    }
+  }
+
   // ============================================================
   // verify
   // ============================================================
@@ -425,6 +466,27 @@ private class WorkflowDeterminismGuardTest {
       Assert.isNull(
         ctx.stepExec.Decision_Record__c,
         'A completion clears the record'
+      );
+    }
+  }
+
+  @IsTest
+  static void verifyKeepsTheRecordOnUnknownInputs() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String record = recordOf('in1', StepResult.suspend());
+      WorkflowStepRunner.RunStepContext ctx = runContext(record);
+      Assert.isNull(
+        WorkflowDeterminismGuard.verify(
+          WorkflowDeterminismGuard.UNKNOWN_INPUTS,
+          ctx,
+          StepResult.complete('Other', null)
+        ),
+        'Unknown inputs give no compare'
+      );
+      Assert.areEqual(
+        record,
+        ctx.stepExec.Decision_Record__c,
+        'Unknown inputs keep the record'
       );
     }
   }

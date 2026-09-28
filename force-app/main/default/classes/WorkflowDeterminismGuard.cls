@@ -16,6 +16,16 @@ public inherited sharing class WorkflowDeterminismGuard {
   public static final String MESSAGE_PREFIX = 'Step non-determinism: ';
   /** @description Workflow_Log__c type of a divergence. */
   public static final String LOG_TYPE = 'StepNonDeterminism';
+  /**
+   * @description Inputs value when the guard cannot read all inputs. The
+   * guard then does not compare and keeps the record.
+   */
+  public static final String UNKNOWN_INPUTS = 'unknown';
+
+  // Max live signals the guard reads. More rows give UNKNOWN_INPUTS, so a
+  // large backlog cannot use up the query-row limit.
+  @TestVisible
+  private static Integer maxLiveSignals = 2000;
 
   /**
    * @description Digests the inputs of a step run. Call before execute(), so
@@ -23,7 +33,8 @@ public inherited sharing class WorkflowDeterminismGuard {
    * @param ctx The run context with the step row.
    * @param context The hydrated step context.
    * @param prevOutput The stored previous step output.
-   * @return The inputs digest, or null when strict mode is off.
+   * @return The inputs digest, UNKNOWN_INPUTS for a live-signal backlog over
+   * the cap, or null when strict mode is off.
    */
   public static String captureInputs(
     WorkflowStepRunner.RunStepContext ctx,
@@ -38,16 +49,18 @@ public inherited sharing class WorkflowDeterminismGuard {
       return null;
     }
     Id instanceId = ctx.instanceId;
-    List<String> parts = new List<String>{
-      'input=' + ctx.stepExec.Input__c,
-      'previous=' + prevOutput,
-      'state=' + ctx.stepExec.Output__c,
-      'attempt=' + context.attempt,
-      'timeoutResume=' + context.retry().isTimeoutResume()
+    // Typed JSON values: a null value and the text "null" differ.
+    List<Object> parts = new List<Object>{
+      ctx.stepExec.Input__c,
+      prevOutput,
+      ctx.stepExec.Output__c,
+      context.attempt,
+      context.retry().isTimeoutResume()
     };
     // Live signals only: a step reads only these. Consumed history does
     // not count query rows.
-    for (Workflow_Signal__c sig : [
+    Integer rowCap = maxLiveSignals + 1;
+    List<Workflow_Signal__c> live = [
       SELECT Id, Status__c
       FROM Workflow_Signal__c
       WHERE
@@ -55,8 +68,13 @@ public inherited sharing class WorkflowDeterminismGuard {
         AND Status__c IN ('Received', 'Processing')
       WITH SYSTEM_MODE
       ORDER BY Id
-    ]) {
-      parts.add('signal=' + sig.Id + '|' + sig.Status__c);
+      LIMIT :rowCap
+    ];
+    if (live.size() > maxLiveSignals) {
+      return UNKNOWN_INPUTS;
+    }
+    for (Workflow_Signal__c sig : live) {
+      parts.add(sig.Id + '|' + sig.Status__c);
     }
     for (AggregateResult row : [
       SELECT Status__c childStatus, COUNT(Id) total
@@ -66,7 +84,7 @@ public inherited sharing class WorkflowDeterminismGuard {
       GROUP BY Status__c
       ORDER BY Status__c
     ]) {
-      parts.add('child=' + row.get('childStatus') + '|' + row.get('total'));
+      parts.add('child|' + row.get('childStatus') + '|' + row.get('total'));
     }
     // JSON keeps each part apart: no part can look like two parts.
     return WorkflowDecisionFingerprint.digest(JSON.serialize(parts));
@@ -96,9 +114,8 @@ public inherited sharing class WorkflowDeterminismGuard {
       stepExec.Decision_Record__c = null;
       return null;
     }
-    // A thrown error and a transient result are not decisions. Keep the
-    // record, so the next decision is still compared.
-    if (ctx.thrownError != null || isTransient(result)) {
+    // Keep the record, so the next decision is still compared.
+    if (isNotComparable(inputs, ctx, result)) {
       return null;
     }
     String decision = WorkflowDecisionFingerprint.describe(
@@ -196,6 +213,17 @@ public inherited sharing class WorkflowDeterminismGuard {
     if (!rows.isEmpty()) {
       Database.update(rows, true, AccessLevel.SYSTEM_MODE);
     }
+  }
+
+  // Unknown inputs, a thrown error and a transient result give no compare.
+  private static Boolean isNotComparable(
+    String inputs,
+    WorkflowStepRunner.RunStepContext ctx,
+    StepResult result
+  ) {
+    return inputs == UNKNOWN_INPUTS ||
+      ctx.thrownError != null ||
+      isTransient(result);
   }
 
   // RETRY, SLEEP and YIELD ask the engine to run the step again later. They

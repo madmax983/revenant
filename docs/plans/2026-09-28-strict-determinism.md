@@ -45,7 +45,8 @@ Thus, the only durable decision that a later run can contradict is a wait decisi
 | Strict mode off still costs SOQL or CPU. | One static Boolean check. No query. The field read uses the existing query. |
 | A resume payload looks like no new input. | Step state is an input. |
 | A step retries or sleeps on a duplicate run. | `RETRY`, `SLEEP` and `YIELD` are not decisions. |
-| The signal query counts all history rows. | Read live signals only. |
+| The signal query counts all history rows. | Read live signals only, max 2000. Over the cap: unknown inputs, no compare, keep the record. |
+| A null value and the text `null` give the same digest. | Digest typed JSON values. |
 | Two branches swap which signal is claimed. | Digest the live signal Ids, not only counts. |
 | Two different child lists give the same text. | Each value is JSON. |
 | A new signal arrives and the step moves on. The guard fails it. | The signal status counts change. The guard does not compare. |
