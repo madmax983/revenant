@@ -343,6 +343,10 @@ private class WorkflowReadinessControllerTest {
     System.assertEquals(WARN, alert.status, 'Disabled alerts warn');
     System.assert(alert.finding.contains('Enable_Alerts__c'), alert.finding);
     System.assert(
+      alert.finding.contains('without their own alert record'),
+      'The finding says a per-workflow record still alerts: ' + alert.finding
+    );
+    System.assert(
       alert.remediation.contains('Enable Alerts'),
       alert.remediation
     );

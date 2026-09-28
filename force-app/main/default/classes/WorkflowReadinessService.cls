@@ -271,8 +271,7 @@ public inherited sharing class WorkflowReadinessService {
         STATUS_WARN,
         'The Default Workflow_Alert_Config__mdt record ' +
           cause +
-          ' ' +
-          NO_ALERT,
+          ' Failures of workflows without their own alert record will not alert anyone.',
         'Setup > Custom Metadata Types > Workflow Alert Config > Manage Records > Default > Edit. Select Enable Alerts, and set Email Recipients or select Publish Alert Event.'
       );
     }
