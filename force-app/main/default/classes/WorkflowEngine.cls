@@ -26,6 +26,10 @@ public inherited sharing class WorkflowEngine {
   // when true, a parent that enters a failure state cancels its in-flight
   // descendants.
   public static Boolean cascadeCancelChildrenOnFailure = true;
+  // Operator toggle (Revenant_Config__mdt.Strict_Determinism__c, issue #102):
+  // when true, a step that makes a different routing decision on a re-run with
+  // the same inputs fails. Default: off.
+  public static Boolean strictDeterminism = false;
 
   // Failure Category picklist API values
   public static final String CAT_STEP_EXCEPTION = 'STEP_EXCEPTION';
@@ -33,6 +37,7 @@ public inherited sharing class WorkflowEngine {
   public static final String CAT_TIMEOUT = 'TIMEOUT';
   public static final String CAT_COMPENSATION_FAILED = 'COMPENSATION_FAILED';
   public static final String CAT_EXPLICIT_FAIL = 'EXPLICIT_FAIL';
+  public static final String CAT_STEP_NON_DETERMINISM = 'STEP_NON_DETERMINISM';
   public static final String CAT_UNKNOWN = 'UNKNOWN';
 
   // Get-or-start dedup window in minutes. Redelivered starts whose correlation
@@ -715,6 +720,8 @@ public inherited sharing class WorkflowEngine {
     public Boolean isParallel;
     // Exception caught for auto-retry (issue #101). Null for a returned result.
     public Exception thrownError;
+    // Divergence message from strict determinism mode (issue #102), or null.
+    public String divergence;
   }
 
   /**
