@@ -1054,6 +1054,8 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
+    // Issue #119: a typed hold reason belongs to one instance.
+    this.holdReason = "";
     this.filterInstancesList();
     this.loadDetails(true);
   }
@@ -1068,6 +1070,8 @@ export default class WorkflowDashboard extends LightningElement {
     this.viewingFailureBreakdown = false;
     this.viewingLatency = false;
     this.selectedInstanceId = event.currentTarget.dataset.id;
+    // Issue #119: a typed hold reason belongs to one instance.
+    this.holdReason = "";
     this.filterInstancesList();
     this.loadDetails(true);
   }

@@ -53,12 +53,12 @@ The runner reads the formula field `Held__c`. DML ignores formula fields, so a s
 ## While an instance is held
 
 - The correlation key stays reserved. `startOrGet` returns the held instance.
-- A signal is stored as `Received`. It does not wake a parked instance.
+- The engine stores a signal as `Received`. The signal does not wake a parked instance.
 - Cancel works. The trigger clears the hold when the status leaves the forward path.
 - The watchdog does not re-drive a parked instance. The timeout sweep and the execution-deadline sweep skip it.
 - The instance keeps its concurrency slot, the same as `Paused` and `DefinitionChanged`.
 - Continue-As-New copies the hold to the successor. The successor parks at its first gate.
-- Hold and release schedule no job.
+- Hold and release add no scheduled job. The park cancels the scheduled jobs of the instance. Release arms again only the step timeouts that the park cancelled.
 
 ## Dashboard
 
