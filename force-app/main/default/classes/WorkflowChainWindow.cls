@@ -5,9 +5,10 @@
  * blank `Root_Correlation_Key__c` matches on its `Correlation_Key__c`.</p>
  *
  * <p>Window: from the nearest first generation (`Previous_Instance__c` = null)
- * at or before the anchor, to the next first generation after the anchor. Thus
- * an independent run that uses the key again after the chain is not in it.
- * `Id` breaks `CreatedDate` ties. Max 2 SOQL.</p>
+ * at or before the anchor, to the next first generation after the anchor. A
+ * later independent run with the same key is not in the window. An anchor with
+ * no successor is the end of the window. `Id` breaks `CreatedDate` ties. Max 2
+ * SOQL.</p>
  */
 public inherited sharing class WorkflowChainWindow {
   private static final String SCOPE =
@@ -17,7 +18,7 @@ public inherited sharing class WorkflowChainWindow {
   /**
    * @description WHERE clause of the chain window of the anchor. Adds its
    * binds to the map.
-   * @param anchor the anchor row
+   * @param anchor the anchor row, with its `Next_Runs__r` subquery
    * @param root the root key of the anchor (not blank)
    * @param binds bind map
    * @return the clause
@@ -41,11 +42,20 @@ public inherited sharing class WorkflowChainWindow {
         '(CreatedDate > :startAt OR (CreatedDate = :startAt AND Id >= :startId))'
       );
     }
-    Workflow_Instance__c next = nextStart(anchor, root);
-    if (next != null) {
-      binds.put('nextAt', next.CreatedDate);
-      binds.put('nextId', next.Id);
-      parts.add(olderThan('nextAt', 'nextId'));
+    if (anchor.Next_Runs__r.isEmpty()) {
+      // No successor: no later row is in the chain.
+      binds.put('endAt', anchor.CreatedDate);
+      binds.put('endId', anchor.Id);
+      parts.add(
+        '(CreatedDate < :endAt OR (CreatedDate = :endAt AND Id <= :endId))'
+      );
+    } else {
+      Workflow_Instance__c next = nextStart(anchor, root);
+      if (next != null) {
+        binds.put('nextAt', next.CreatedDate);
+        binds.put('nextId', next.Id);
+        parts.add(olderThan('nextAt', 'nextId'));
+      }
     }
     return String.join(parts, ' AND ');
   }

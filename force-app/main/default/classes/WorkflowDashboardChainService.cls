@@ -3,7 +3,7 @@
  * {@link WorkflowChainRead} pages to plain maps for the LWC. Read-only.
  */
 public inherited sharing class WorkflowDashboardChainService {
-  // Test hook: a small page exercises the cursor path.
+  // Tests set a small page size to test the cursor.
   @TestVisible
   private static Integer pageSize = WorkflowChainRead.DEFAULT_PAGE_SIZE;
 
@@ -19,7 +19,7 @@ public inherited sharing class WorkflowDashboardChainService {
       throw auraError('instanceId is required.');
     }
     WorkflowEngine.ChainRequest request = new WorkflowEngine.ChainRequest();
-    request.keyOrId = instanceId;
+    request.instanceId = instanceId;
     request.pageSize = pageSize;
     request.cursor = cursor;
     WorkflowEngine.ChainPage page;
@@ -44,7 +44,6 @@ public inherited sharing class WorkflowDashboardChainService {
           'outcome' => g.outcome,
           'startedAt' => g.startedAt,
           'endedAt' => g.endedAt,
-          'continuedAt' => g.continuedAt,
           'failureCategory' => g.failureCategory,
           'errorMessage' => g.errorMessage
         }

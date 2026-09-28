@@ -2,14 +2,22 @@
 private class WorkflowDashboardChainTest {
   private static final String WF = 'WorkflowDashboardChainTest.StubWorkflow';
 
-  // Inserts a linked chain of size rows. The last row is Running.
   private static List<Workflow_Instance__c> chain(String root, Integer size) {
+    return chain(root, size, 'Running');
+  }
+
+  // Inserts a linked chain of size rows. The last row gets lastStatus.
+  private static List<Workflow_Instance__c> chain(
+    String root,
+    Integer size,
+    String lastStatus
+  ) {
     List<Workflow_Instance__c> gens = new List<Workflow_Instance__c>();
     for (Integer i = 1; i <= size; i++) {
       gens.add(
         new Workflow_Instance__c(
           Workflow_Name__c = WF,
-          Status__c = i == size ? 'Running' : 'ContinuedAsNew',
+          Status__c = i == size ? lastStatus : 'ContinuedAsNew',
           Correlation_Key__c = i == 1 ? root : root + '_run' + i,
           Root_Correlation_Key__c = root
         )
@@ -36,9 +44,11 @@ private class WorkflowDashboardChainTest {
   @IsTest
   static void mapsChainForTheDashboard() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      List<Workflow_Instance__c> gens = chain('dash', 3);
-      gens[1].Failure_Category__c = 'TIMEOUT';
-      Database.update(gens[1], AccessLevel.SYSTEM_MODE);
+      List<Workflow_Instance__c> gens = chain('dash', 3, 'Failed');
+      // The trigger keeps a category only on a Failed row.
+      gens[2].Failure_Category__c = 'TIMEOUT';
+      gens[2].Error_Message__c = 'Step timed out';
+      Database.update(gens[2], AccessLevel.SYSTEM_MODE);
 
       Map<String, Object> view = WorkflowDashboardController.getInstanceChain(
         gens[0].Id,
@@ -57,16 +67,18 @@ private class WorkflowDashboardChainTest {
       Assert.areEqual(gens[2].Id, top.get('instanceId'));
       Assert.isNotNull(top.get('instanceName'), 'Name for the row label');
       Assert.areEqual(3, top.get('generation'));
-      Assert.areEqual('Running', top.get('status'));
+      Assert.areEqual('Failed', top.get('status'));
+      Assert.areEqual('Failed', top.get('outcome'));
       Assert.areEqual('dash_run3', top.get('correlationKey'));
       Assert.isNotNull(top.get('startedAt'));
-      Assert.isNull(top.get('endedAt'));
-      Assert.isNull(top.get('outcome'));
+      Assert.isNotNull(top.get('endedAt'));
+      Assert.areEqual('TIMEOUT', top.get('failureCategory'));
+      Assert.areEqual('Step timed out', top.get('errorMessage'));
 
       Map<String, Object> mid = rows[1];
       Assert.areEqual('ContinuedAsNew', mid.get('outcome'));
-      Assert.isNotNull(mid.get('continuedAt'));
-      Assert.areEqual('TIMEOUT', mid.get('failureCategory'));
+      Assert.isNotNull(mid.get('endedAt'), 'Hand-off time');
+      Assert.isNull(mid.get('failureCategory'));
     }
   }
 
@@ -170,9 +182,10 @@ private class WorkflowDashboardChainTest {
       );
       insert stdUser;
 
+      List<Workflow_Instance__c> gens = chain('dash-auth', 2);
       System.runAs(stdUser) {
         try {
-          WorkflowDashboardController.getInstanceChain(null, null);
+          WorkflowDashboardController.getInstanceChain(gens[0].Id, null);
           Assert.fail('Expected AuraHandledException');
         } catch (AuraHandledException e) {
           Assert.isTrue(
@@ -182,6 +195,30 @@ private class WorkflowDashboardChainTest {
           );
         }
       }
+    }
+  }
+
+  @IsTest
+  static void controllerReadChangesNothing() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> gens = chain('dash-ro', 3);
+      WorkflowDashboardChainService.pageSize = 2;
+      Integer dml0 = Limits.getDmlStatements();
+      Integer jobs0 = Limits.getQueueableJobs();
+      Integer events0 = Limits.getPublishImmediateDML();
+
+      Map<String, Object> p1 = WorkflowDashboardController.getInstanceChain(
+        gens[1].Id,
+        null
+      );
+      WorkflowDashboardController.getInstanceChain(
+        gens[1].Id,
+        (String) p1.get('nextCursor')
+      );
+
+      Assert.areEqual(dml0, Limits.getDmlStatements(), 'No DML');
+      Assert.areEqual(jobs0, Limits.getQueueableJobs(), 'No enqueue');
+      Assert.areEqual(events0, Limits.getPublishImmediateDML(), 'No event');
     }
   }
 }

@@ -43,7 +43,7 @@ Show all generations of a Continue-As-New chain as one ordered list. Give the li
 
 | Way to fail | Prevention |
 |-------------|-----------|
-| A long chain uses too many SOQL queries. | Constant query count: max 6. A test compares a 3-row and a 30-row chain. |
+| A long chain uses too many SOQL queries. | Constant query count: max 5. A test compares a 3-row and a 30-row chain. |
 | A long chain uses too many query rows or too much heap. | Page cap 200. `COUNT()` uses one row. No long text field. |
 | Two members give different chains. | Same window rule for each member. A test reads from each member. |
 | An independent run with the same key joins the chain. | Window split at each first generation (B5). A test. |
@@ -67,16 +67,26 @@ Show all generations of a Continue-As-New chain as one ordered list. Give the li
 
 ## Design
 
-`WorkflowChainRead.getChain(String keyOrId)` and `getChain(WorkflowEngine.ChainRequest)` return `WorkflowEngine.ChainPage`, or null when no instance matches.
+`WorkflowChainRead.getChain(Id)`, `getChain(String correlationKey)` and `getChain(WorkflowEngine.ChainRequest)` return `WorkflowEngine.ChainPage`, or null when no instance matches.
 
 Steps:
 
 1. Check the page size and decode the cursor.
-2. Anchor: an Id-shaped value reads by Id. Else, or when no row, read the newest row with `Correlation_Key__c = key OR Root_Correlation_Key__c = key`.
+2. Anchor: the cursor anchor, else the Id, else the newest row with `Correlation_Key__c = key OR Root_Correlation_Key__c = key`.
 3. No predecessor and no successor, or no root: return one entry.
 4. Start: the anchor when it has no predecessor. Else the newest first generation in scope before the anchor.
-5. End: the oldest first generation in scope after the anchor.
+5. End: the anchor when it has no successor. Else the oldest first generation in scope after the anchor.
 6. Total: `COUNT()` in the window, `LIMIT` 50,000.
 7. Page: rows in the window (and after the cursor), `LIMIT pageSize + 1`.
 
-Dashboard: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)` maps the page to a `Map`. The LWC shows a "Continue-As-New Generations" section, "Showing X of N generations", and "Load older generations".
+Dashboard: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)` maps the page to a `Map`. The LWC shows a "Continue-As-New Generations" section, "X of N generations", and "Show older generations".
+
+## Changes After Review
+
+Five review agents (correctness, governor and security, tests, LWC, API and docs) gave these changes:
+
+- Typed input: `getChain(Id)` and `getChain(String)`. No shape guess, no fallback query. Max 5 SOQL.
+- `continuedAt` removed: same value as `endedAt`.
+- The cursor keeps the anchor. A range check on each cursor field. No internal text in the error.
+- An anchor with no successor ends the window: one query less for the live generation.
+- LWC: no reload on each poll, reload when the selected row is stale, clear the old chain at once, "Try again", reset when a panel hides the pane, buttons for keyboard access, scroll position kept.

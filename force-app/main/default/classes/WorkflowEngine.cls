@@ -1091,23 +1091,27 @@ public inherited sharing class WorkflowEngine {
   // Forever-public DTOs for WorkflowChainRead.getChain. Read-only (private setters).
 
   /**
-   * @description Request for {@link WorkflowChainRead#getChain}.
+   * @description Request for {@link WorkflowChainRead#getChain}. Set
+   * `instanceId` or `correlationKey`, not both.
    */
   public class ChainRequest {
+    /** @description Id of a generation. The read gives the chain of that instance. */
+    public Id instanceId;
     /**
-     * @description Instance Id or correlation key of any generation of the
-     * chain. Blank gives a null result.
+     * @description Correlation key or root key. The read gives the chain of the
+     * newest instance with that key.
      */
-    public String keyOrId;
+    public String correlationKey;
     /**
      * @description Page size. Null: {@link WorkflowChainRead#DEFAULT_PAGE_SIZE}.
-     * Above {@link WorkflowChainRead#MAX_PAGE_SIZE}: clamped. Zero or less:
-     * throws a `WorkflowException`.
+     * Above {@link WorkflowChainRead#MAX_PAGE_SIZE}: the read uses the max.
+     * Zero or less: throws a `WorkflowException`.
      */
     public Integer pageSize;
     /**
      * @description Opaque cursor from `ChainPage.nextCursor`. Null: first page.
-     * Send it back with no change. A bad value throws a `WorkflowException`.
+     * Send it back with no change. The read then uses the chain of the first
+     * page. A bad value throws a `WorkflowException`.
      */
     public String cursor;
   }
@@ -1123,7 +1127,8 @@ public inherited sharing class WorkflowEngine {
     public String instanceName { get; private set; }
     /**
      * @description Position in the chain. 1 is the oldest kept generation.
-     * Null when `ChainPage.isTotalCapped` makes the position unknown.
+     * Null when not known (for example when `ChainPage.isTotalCapped` is true).
+     * A purge changes it. It is not an identifier: use `instanceId`.
      */
     public Integer generation { get; private set; }
     /** @description Developer name of the workflow definition. */
@@ -1144,10 +1149,11 @@ public inherited sharing class WorkflowEngine {
     public String outcome { get; private set; }
     /** @description When the instance was created (`CreatedDate`). */
     public Datetime startedAt { get; private set; }
-    /** @description When the instance closed (`Terminal_At__c`). Null while open. */
+    /**
+     * @description When the instance closed (`Terminal_At__c`). For outcome
+     * `ContinuedAsNew`, this is the hand-off time. Null while open.
+     */
     public Datetime endedAt { get; private set; }
-    /** @description When the instance handed off. Null unless `ContinuedAsNew`. */
-    public Datetime continuedAt { get; private set; }
     /** @description `Failure_Category__c`, or null. */
     public String failureCategory { get; private set; }
     /** @description `Error_Message__c` (max 255 characters), or null. */
@@ -1174,7 +1180,6 @@ public inherited sharing class WorkflowEngine {
       this.outcome = this.isTerminal || continued ? inst.Status__c : null;
       this.startedAt = inst.CreatedDate;
       this.endedAt = this.outcome == null ? null : inst.Terminal_At__c;
-      this.continuedAt = continued ? inst.Terminal_At__c : null;
       this.failureCategory = inst.Failure_Category__c;
       this.errorMessage = inst.Error_Message__c;
       this.previousInstanceId = inst.Previous_Instance__c;
@@ -1210,7 +1215,8 @@ public inherited sharing class WorkflowEngine {
     public Integer pageSize { get; private set; }
 
     /**
-     * @description Makes a page. `hasMore` comes from `nextCursor`.
+     * @description Makes a page. `hasMore` comes from `nextCursor`. The read API
+     * calls this constructor.
      * @param entries generations of this page, newest first
      * @param rootCorrelationKey root key of the chain
      * @param totalCount counted generations

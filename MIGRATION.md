@@ -502,7 +502,7 @@ shapes, the keyset-cursor / ContinueAsNew semantics, and the honest SOQL profile
 
 ```apex
 WorkflowEngine.ChainRequest req = new WorkflowEngine.ChainRequest();
-req.keyOrId = 'nightly-sync';   // any member: root key, successor key or Id
+req.correlationKey = 'nightly-sync'; // or req.instanceId = someId; not both
 req.pageSize = 100;             // null -> 50; above 200 -> 200; 0 or less -> throws
 WorkflowEngine.ChainPage page = WorkflowChainRead.getChain(req);
 req.cursor = page.nextCursor;   // send back with no change; null on the last page

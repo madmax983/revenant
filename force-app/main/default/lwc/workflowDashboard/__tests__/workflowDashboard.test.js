@@ -3349,6 +3349,7 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
   const LIVE_ID = "a0G000000000003";
   const PREV_ID = "a0G000000000002";
   const OLDER_ID = "a0G000000000004";
+  const OTHER_ID = "a0G000000000007";
 
   const PAGE_1 = {
     rootCorrelationKey: "poller",
@@ -3366,7 +3367,6 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
         correlationKey: "poller_run5",
         startedAt: "2026-09-01T10:04:00.000Z",
         endedAt: null,
-        continuedAt: null,
         outcome: null,
       },
       {
@@ -3377,7 +3377,6 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
         correlationKey: "poller_run4",
         startedAt: "2026-09-01T10:03:00.000Z",
         endedAt: "2026-09-01T10:03:30.000Z",
-        continuedAt: "2026-09-01T10:03:30.000Z",
         outcome: "ContinuedAsNew",
         failureCategory: "TIMEOUT",
       },
@@ -3397,13 +3396,30 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
         correlationKey: "poller_run3",
         startedAt: "2026-09-01T10:02:00.000Z",
         endedAt: "2026-09-01T10:02:30.000Z",
-        continuedAt: null,
         outcome: "Failed",
       },
     ],
   };
 
-  function details(id, extra) {
+  const OTHER_PAGE = {
+    ...PAGE_1,
+    rootCorrelationKey: "other",
+    totalCount: 2,
+    hasMore: false,
+    nextCursor: null,
+    generations: [
+      {
+        instanceId: OTHER_ID,
+        instanceName: "WI-0007",
+        generation: 2,
+        status: "Suspended",
+        correlationKey: "other_run2",
+        startedAt: "2026-09-02T10:00:00.000Z",
+      },
+    ],
+  };
+
+  function details(id, extra, successor) {
     return {
       instance: {
         Id: id,
@@ -3415,8 +3431,24 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
       steps: [],
       children: [],
       payloadFiles: {},
-      successor: null,
+      successor: successor || null,
     };
+  }
+
+  // Details that match the chain rows: the previous generation handed off
+  // to the live one.
+  function chainedDetails(instanceId) {
+    if (instanceId === PREV_ID) {
+      return Promise.resolve(
+        details(PREV_ID, { Status__c: "ContinuedAsNew" }, { Id: LIVE_ID }),
+      );
+    }
+    return Promise.resolve(
+      details(instanceId, {
+        Previous_Instance__c: PREV_ID,
+        Previous_Instance__r: { Name: "WI-0002" },
+      }),
+    );
   }
 
   function arrangeChained() {
@@ -3427,30 +3459,45 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
         Workflow_Name__c: "Poller",
         Status__c: "Suspended",
       },
+      {
+        Id: OTHER_ID,
+        Name: "WI-0007",
+        Workflow_Name__c: "Poller",
+        Status__c: "Suspended",
+      },
     ]);
     getInstanceDetails.mockImplementation(({ instanceId }) =>
-      Promise.resolve(
-        details(instanceId, {
-          Previous_Instance__c: PREV_ID,
-          Previous_Instance__r: { Name: "WI-0002" },
-        }),
-      ),
+      chainedDetails(instanceId),
     );
     getInstanceChain.mockResolvedValue(PAGE_1);
   }
 
-  async function mountAndSelect() {
+  async function settle() {
+    for (let i = 0; i < 4; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await flushPromises();
+    }
+  }
+
+  async function mount() {
     const element = createElement("c-workflow-dashboard", {
       is: WorkflowDashboard,
     });
     document.body.appendChild(element);
     await flushPromises();
+    return element;
+  }
+
+  async function selectListItem(element, index) {
     element.shadowRoot
-      .querySelector(".list-item")
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
-    await flushPromises();
+      .querySelectorAll(".list-item")
+      [index].dispatchEvent(new CustomEvent("click"));
+    await settle();
+  }
+
+  async function mountAndSelect() {
+    const element = await mount();
+    await selectListItem(element, 0);
     return element;
   }
 
@@ -3458,9 +3505,22 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     return Array.from(element.shadowRoot.querySelectorAll(".chain-row"));
   }
 
+  async function clickGeneration(element, index) {
+    chainRows(element)
+      [index].querySelector("button.chain-link")
+      .dispatchEvent(new CustomEvent("click"));
+    await settle();
+  }
+
   function chainCount(element) {
     const node = element.shadowRoot.querySelector('[data-id="chain-count"]');
     return node ? node.textContent.trim() : null;
+  }
+
+  function chainButton(element, dataId) {
+    return element.shadowRoot.querySelector(
+      `lightning-button[data-id="${dataId}"]`,
+    );
   }
 
   afterEach(() => {
@@ -3485,19 +3545,21 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     const rows = chainRows(element);
     expect(rows).toHaveLength(2);
     expect(rows[0].dataset.id).toBe(LIVE_ID);
-    expect(rows[0].textContent).toContain("Gen 5");
+    expect(rows[0].textContent).toContain("Generation 5");
     expect(rows[0].textContent).toContain("WI-0003");
-    expect(rows[1].textContent).toContain("Gen 4");
+    expect(rows[1].textContent).toContain("Generation 4");
     expect(rows[1].textContent).toContain("Timeout");
     expect(rows[0].className).toContain("item-selected");
+    expect(rows[0].getAttribute("aria-current")).toBe("true");
     expect(rows[1].className).not.toContain("item-selected");
+    expect(rows[1].getAttribute("aria-current")).toBeNull();
     expect(rows[0].querySelector(".badge").textContent.trim()).toBe(
       "Suspended",
     );
     expect(rows[1].querySelector(".badge").textContent.trim()).toBe(
       "ContinuedAsNew",
     );
-    expect(chainCount(element)).toBe("Showing 2 of 5 generations");
+    expect(chainCount(element)).toBe("2 of 5 generations");
   });
 
   it("does not call getInstanceChain for a single generation", async () => {
@@ -3518,29 +3580,35 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     getFilteredInstances.mockResolvedValue([
       { Id: LIVE_ID, Name: "WI-0003", Status__c: "ContinuedAsNew" },
     ]);
-    getInstanceDetails.mockResolvedValue({
-      ...details(LIVE_ID, { Status__c: "ContinuedAsNew" }),
-      successor: { Id: "a0G000000000009", Name: "WI-0009" },
+    getInstanceDetails.mockResolvedValue(
+      details(LIVE_ID, { Status__c: "ContinuedAsNew" }, { Id: PREV_ID }),
+    );
+    getInstanceChain.mockResolvedValue({
+      ...PAGE_1,
+      generations: [
+        { ...PAGE_1.generations[0], status: "ContinuedAsNew" },
+        PAGE_1.generations[1],
+      ],
     });
-    getInstanceChain.mockResolvedValue(PAGE_1);
     const element = await mountAndSelect();
 
     expect(getInstanceChain).toHaveBeenCalledTimes(1);
+    expect(getInstanceChain).toHaveBeenCalledWith({
+      instanceId: LIVE_ID,
+      cursor: null,
+    });
     expect(chainRows(element)).toHaveLength(2);
   });
 
-  it("deep-links a generation row to its step timeline", async () => {
+  it("deep-links a generation to its step timeline and keeps the list", async () => {
     arrangeChained();
     const element = await mountAndSelect();
 
-    chainRows(element)[1].dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
+    await clickGeneration(element, 1);
 
     expect(getInstanceDetails).toHaveBeenLastCalledWith({
       instanceId: PREV_ID,
     });
-    // The row is in the list, so the list stays and no new call runs.
     expect(getInstanceChain).toHaveBeenCalledTimes(1);
     const rows = chainRows(element);
     expect(rows[1].className).toContain("item-selected");
@@ -3552,11 +3620,10 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     const element = await mountAndSelect();
     getInstanceChain.mockResolvedValue(PAGE_2);
 
-    element.shadowRoot
-      .querySelector('lightning-button[data-id="chain-load-more"]')
-      .dispatchEvent(new CustomEvent("click"));
-    await flushPromises();
-    await flushPromises();
+    chainButton(element, "chain-load-more").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
 
     expect(getInstanceChain).toHaveBeenLastCalledWith({
       instanceId: LIVE_ID,
@@ -3565,13 +3632,9 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     const rows = chainRows(element);
     expect(rows).toHaveLength(3);
     expect(rows[2].dataset.id).toBe(OLDER_ID);
-    expect(rows[2].textContent).toContain("Gen 3");
-    expect(chainCount(element)).toBe("Showing 3 of 5 generations");
-    expect(
-      element.shadowRoot.querySelector(
-        'lightning-button[data-id="chain-load-more"]',
-      ),
-    ).toBeNull();
+    expect(rows[2].textContent).toContain("Generation 3");
+    expect(chainCount(element)).toBe("3 of 5 generations");
+    expect(chainButton(element, "chain-load-more")).toBeNull();
   });
 
   it("shows a lower bound when the total is capped", async () => {
@@ -3584,11 +3647,11 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     });
     const element = await mountAndSelect();
 
-    expect(chainCount(element)).toBe("Showing 2 of 50000+ generations");
-    expect(chainRows(element)[0].textContent).toContain("Gen —");
+    expect(chainCount(element)).toBe("2 of 50000+ generations");
+    expect(chainRows(element)[0].textContent).toContain("Generation —");
   });
 
-  it("shows an error line when the chain read fails", async () => {
+  it("shows an error, does not retry on the next load, and retries on request", async () => {
     arrangeChained();
     getInstanceChain.mockRejectedValue({ body: { message: "boom" } });
     const element = await mountAndSelect();
@@ -3597,5 +3660,161 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(error).not.toBeNull();
     expect(error.textContent).toContain("boom");
     expect(chainRows(element)).toHaveLength(0);
+    expect(chainCount(element)).toBeNull();
+
+    // A new details load for the same instance does not call again.
+    await selectListItem(element, 0);
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+
+    getInstanceChain.mockResolvedValue(PAGE_1);
+    chainButton(element, "chain-retry").dispatchEvent(new CustomEvent("click"));
+    await settle();
+    expect(getInstanceChain).toHaveBeenCalledTimes(2);
+    expect(chainRows(element)).toHaveLength(2);
+  });
+
+  it("does not reload when the selected generation is not on the first page", async () => {
+    arrangeChained();
+    getInstanceChain.mockResolvedValue(OTHER_PAGE);
+    const element = await mountAndSelect();
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+
+    // A second details load (as a poll does) for the same instance.
+    await selectListItem(element, 0);
+
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the old chain at once when an instance of another chain is selected", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    expect(chainRows(element)).toHaveLength(2);
+
+    getInstanceChain.mockReturnValue(new Promise(() => {}));
+    await selectListItem(element, 1);
+
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: OTHER_ID,
+      cursor: null,
+    });
+    expect(chainRows(element)).toHaveLength(0);
+    expect(
+      element.shadowRoot.querySelector('[data-id="chain-loading"]'),
+    ).not.toBeNull();
+  });
+
+  it("ignores a late reply for an older request", async () => {
+    arrangeChained();
+    let resolveFirst;
+    getInstanceChain.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+    getInstanceChain.mockResolvedValueOnce(OTHER_PAGE);
+    const element = await mountAndSelect();
+    await selectListItem(element, 1);
+
+    resolveFirst(PAGE_1);
+    await settle();
+
+    const rows = chainRows(element);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dataset.id).toBe(OTHER_ID);
+  });
+
+  it("reloads the first page when the selected row is stale", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    getInstanceDetails.mockImplementation(({ instanceId }) =>
+      Promise.resolve(
+        details(
+          instanceId,
+          {
+            Status__c: "ContinuedAsNew",
+            Previous_Instance__c: PREV_ID,
+            Previous_Instance__r: { Name: "WI-0002" },
+          },
+          { Id: "a0G000000000009", Name: "WI-0009" },
+        ),
+      ),
+    );
+
+    await selectListItem(element, 0);
+
+    expect(getInstanceChain).toHaveBeenCalledTimes(2);
+    expect(getInstanceChain).toHaveBeenLastCalledWith({
+      instanceId: LIVE_ID,
+      cursor: null,
+    });
+  });
+
+  it("removes the section when a single-generation instance is selected", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    expect(chainRows(element)).toHaveLength(2);
+
+    getInstanceDetails.mockResolvedValue(details(OTHER_ID, {}));
+    await selectListItem(element, 1);
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="chain-section"]'),
+    ).toBeNull();
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the section when the chain is not found", async () => {
+    arrangeChained();
+    getInstanceChain.mockResolvedValue(null);
+    const element = await mountAndSelect();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="chain-section"]'),
+    ).toBeNull();
+  });
+
+  it("opens a sub-workflow with its keyboard-accessible button", async () => {
+    getFilteredInstances.mockResolvedValue([
+      { Id: LIVE_ID, Name: "WI-0003", Status__c: "Suspended" },
+    ]);
+    getInstanceDetails.mockResolvedValue({
+      ...details(LIVE_ID, {}),
+      children: [
+        {
+          Id: "a0G000000000008",
+          Name: "WI-0008",
+          Workflow_Name__c: "Child",
+          Status__c: "Completed",
+          Correlation_Key__c: "child-1",
+        },
+      ],
+    });
+    const element = await mountAndSelect();
+
+    const button = element.shadowRoot.querySelector(
+      'button[data-id="a0G000000000008"]',
+    );
+    expect(button).not.toBeNull();
+    expect(button.textContent.trim()).toBe("WI-0008");
+    button.dispatchEvent(new CustomEvent("click"));
+    await settle();
+
+    expect(getInstanceDetails).toHaveBeenLastCalledWith({
+      instanceId: "a0G000000000008",
+    });
+  });
+
+  it("resets the chain when a panel replaces the detail pane", async () => {
+    arrangeChained();
+    const element = await mountAndSelect();
+    expect(getInstanceChain).toHaveBeenCalledTimes(1);
+
+    findButton(element, (btn) => btn.label === "Latency").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await settle();
+    await selectListItem(element, 0);
+
+    expect(getInstanceChain).toHaveBeenCalledTimes(2);
   });
 });

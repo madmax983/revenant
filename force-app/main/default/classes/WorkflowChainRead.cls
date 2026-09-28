@@ -1,20 +1,20 @@
 /**
  * @description Read API for a Continue-As-New chain (issue #116). Gives the
  * generations of a chain as one list, newest first, with a keyset cursor.
- * Each member of a chain gives the same result. {@link WorkflowChainWindow}
- * sets the membership.
+ * An Id of each member of a chain gives the same result.
+ * {@link WorkflowChainWindow} sets the membership.
  *
- * <p>Cost: max 6 SOQL, for all chain lengths. One SOQL for a single
+ * <p>Cost: max 5 SOQL, for all chain lengths. One SOQL for a single
  * generation. No DML, no enqueue, no event. No long text field.</p>
  *
- * <p>Limit: a run that uses the root key again while the chain is live mixes
- * the two chains. This is the same limit as `getStatus`.</p>
+ * <p>Limit: an independent run that uses the root key while the chain is not
+ * closed splits the chain. `getStatus` has a related limit.</p>
  */
 public inherited sharing class WorkflowChainRead {
   /** @description Page size when `ChainRequest.pageSize` is null. */
   public static final Integer DEFAULT_PAGE_SIZE = 50;
 
-  /** @description Max page size. A larger value is clamped. */
+  /** @description Max page size. The read uses this value for a larger value. */
   public static final Integer MAX_PAGE_SIZE = 200;
 
   /**
@@ -23,7 +23,7 @@ public inherited sharing class WorkflowChainRead {
    */
   public static final Integer MAX_COUNTED_GENERATIONS = 50000;
 
-  // Test hook: a small cap exercises the capped path.
+  // Tests set a small cap to test the capped path.
   @TestVisible
   private static Integer countCap = MAX_COUNTED_GENERATIONS;
 
@@ -33,39 +33,52 @@ public inherited sharing class WorkflowChainRead {
     'Error_Message__c, Previous_Instance__c';
 
   /**
-   * @description Gives the first page of the chain of a generation.
-   * @param keyOrId instance Id or correlation key of any generation
-   * @return the first page, or null when no instance matches
+   * @description Gives the first page of the chain of an instance.
+   * @param instanceId Id of a generation
+   * @return the first page, or null when no instance has that Id
    */
-  public static WorkflowEngine.ChainPage getChain(String keyOrId) {
+  public static WorkflowEngine.ChainPage getChain(Id instanceId) {
     WorkflowEngine.ChainRequest request = new WorkflowEngine.ChainRequest();
-    request.keyOrId = keyOrId;
+    request.instanceId = instanceId;
     return getChain(request);
   }
 
   /**
-   * @description Gives one page of the chain of a generation, newest first.
-   * An Id-shaped value reads that instance. Else (or when no instance has that
-   * Id) the value is a key: the newest row with that correlation key or root
-   * key is the anchor.
-   * @param request key or Id, page size and cursor
-   * @return the page, or null when the request is null, blank or unknown
-   * @throws WorkflowEngine.WorkflowException when the page size is zero or
-   * less, or the cursor is bad
+   * @description Gives the first page of the chain of the newest instance with
+   * this correlation key or root key.
+   * @param correlationKey the key
+   * @return the first page, or null when no instance has that key
+   */
+  public static WorkflowEngine.ChainPage getChain(String correlationKey) {
+    WorkflowEngine.ChainRequest request = new WorkflowEngine.ChainRequest();
+    request.correlationKey = correlationKey;
+    return getChain(request);
+  }
+
+  /**
+   * @description Gives one page of a chain, newest first. With a cursor, the
+   * read uses the chain of the first page.
+   * @param request Id or key, page size and cursor
+   * @return the page, or null when the request is null, empty or unknown
+   * @throws WorkflowEngine.WorkflowException when the request sets both Id and
+   * key, the page size is zero or less, or the cursor is bad
    */
   public static WorkflowEngine.ChainPage getChain(
     WorkflowEngine.ChainRequest request
   ) {
-    if (request == null || String.isBlank(request.keyOrId)) {
+    if (!hasInput(request)) {
       return null;
     }
     Chain chain = new Chain();
     chain.pageSize = resolvePageSize(request.pageSize);
     chain.cursor = WorkflowChainCursor.decode(request.cursor);
-    Workflow_Instance__c anchor = resolveAnchor(request.keyOrId.trim());
+    Workflow_Instance__c anchor = chain.cursor != null
+      ? anchorById(chain.cursor.anchorId)
+      : resolveAnchor(request);
     if (anchor == null) {
       return null;
     }
+    chain.anchorId = anchor.Id;
     chain.root = rootKeyOf(anchor);
     if (isSingleGeneration(anchor, chain.root)) {
       // The only row is on the first page. A cursor points past it.
@@ -77,6 +90,38 @@ public inherited sharing class WorkflowChainRead {
       );
     }
     return readWindow(anchor, chain);
+  }
+
+  /**
+   * @description True when the request sets an Id or a key.
+   * @param request the request, or null
+   * @return true when there is input to read
+   * @throws WorkflowEngine.WorkflowException when both are set
+   */
+  private static Boolean hasInput(WorkflowEngine.ChainRequest request) {
+    if (request == null) {
+      return false;
+    }
+    Boolean hasKey = String.isNotBlank(request.correlationKey);
+    if (request.instanceId != null && hasKey) {
+      throw new WorkflowEngine.WorkflowException(
+        'Set instanceId or correlationKey, not both.'
+      );
+    }
+    return request.instanceId != null || hasKey;
+  }
+
+  /**
+   * @description Reads the anchor of a first page: by key or by Id.
+   * @param request request with an Id or a key
+   * @return the anchor, or null
+   */
+  private static Workflow_Instance__c resolveAnchor(
+    WorkflowEngine.ChainRequest request
+  ) {
+    return String.isNotBlank(request.correlationKey)
+      ? anchorByKey(request.correlationKey.trim())
+      : anchorById(request.instanceId);
   }
 
   /**
@@ -104,38 +149,13 @@ public inherited sharing class WorkflowChainRead {
   }
 
   /**
-   * @description Reads the anchor row. Id first, then key. The child subquery
-   * finds a successor in the same SOQL.
-   * @param keyOrId trimmed Id or key
+   * @description Reads the anchor by Id. The child subquery finds a successor
+   * in the same SOQL.
+   * @param instanceId the Id
    * @return the anchor, or null
    */
-  private static Workflow_Instance__c resolveAnchor(String keyOrId) {
-    Id instanceId = toInstanceId(keyOrId);
-    if (instanceId != null) {
-      List<Workflow_Instance__c> byId = [
-        SELECT
-          Id,
-          Name,
-          Workflow_Name__c,
-          Correlation_Key__c,
-          Root_Correlation_Key__c,
-          Status__c,
-          CreatedDate,
-          Terminal_At__c,
-          Failure_Category__c,
-          Error_Message__c,
-          Previous_Instance__c,
-          (SELECT Id FROM Next_Runs__r LIMIT 1)
-        FROM Workflow_Instance__c
-        WHERE Id = :instanceId
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (!byId.isEmpty()) {
-        return byId[0];
-      }
-    }
-    List<Workflow_Instance__c> byKey = [
+  private static Workflow_Instance__c anchorById(Id instanceId) {
+    List<Workflow_Instance__c> rows = [
       SELECT
         Id,
         Name,
@@ -150,33 +170,40 @@ public inherited sharing class WorkflowChainRead {
         Previous_Instance__c,
         (SELECT Id FROM Next_Runs__r LIMIT 1)
       FROM Workflow_Instance__c
-      WHERE Correlation_Key__c = :keyOrId OR Root_Correlation_Key__c = :keyOrId
+      WHERE Id = :instanceId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    return rows.isEmpty() ? null : rows[0];
+  }
+
+  /**
+   * @description Reads the newest row with this correlation key or root key.
+   * @param key the trimmed key
+   * @return the anchor, or null
+   */
+  private static Workflow_Instance__c anchorByKey(String key) {
+    List<Workflow_Instance__c> rows = [
+      SELECT
+        Id,
+        Name,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Root_Correlation_Key__c,
+        Status__c,
+        CreatedDate,
+        Terminal_At__c,
+        Failure_Category__c,
+        Error_Message__c,
+        Previous_Instance__c,
+        (SELECT Id FROM Next_Runs__r LIMIT 1)
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = :key OR Root_Correlation_Key__c = :key
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1
     ];
-    return byKey.isEmpty() ? null : byKey[0];
-  }
-
-  /**
-   * @description Converts an Id-shaped value to a `Workflow_Instance__c` Id.
-   * @param value trimmed input
-   * @return the Id, or null when the value is not an instance Id
-   */
-  private static Id toInstanceId(String value) {
-    Boolean idShaped =
-      (value.length() == 15 || value.length() == 18) && value.isAlphanumeric();
-    if (!idShaped) {
-      return null;
-    }
-    try {
-      Id candidate = Id.valueOf(value);
-      return candidate.getSobjectType() == Workflow_Instance__c.SObjectType
-        ? candidate
-        : null;
-    } catch (StringException notAnId) {
-      return null;
-    }
+    return rows.isEmpty() ? null : rows[0];
   }
 
   /**
@@ -208,7 +235,7 @@ public inherited sharing class WorkflowChainRead {
 
   /**
    * @description Counts the window, then reads one page of it. Max 4 SOQL
-   * (2 for the window, 1 count, 1 page).
+   * (max 2 for the window, 1 count, 1 page).
    * @param anchor the anchor
    * @param chain the read state; this method sets the total
    * @return the page
@@ -249,7 +276,8 @@ public inherited sharing class WorkflowChainRead {
   }
 
   /**
-   * @description Makes the page. Each row gets 1 less than the row above it.
+   * @description Makes the page. Each row gets a generation 1 less than the
+   * row above it.
    * The extra row (pageSize + 1) only sets the next cursor.
    * @param rows rows newest first, max pageSize + 1
    * @param chain the read state
@@ -268,7 +296,11 @@ public inherited sharing class WorkflowChainRead {
       entries.add(new WorkflowEngine.ChainGeneration(rows[i], lastGeneration));
     }
     String nextCursor = rows.size() > chain.pageSize
-      ? WorkflowChainCursor.encode(rows[take - 1], lastGeneration)
+      ? WorkflowChainCursor.encode(
+          chain.anchorId,
+          rows[take - 1],
+          lastGeneration
+        )
       : null;
     return new WorkflowEngine.ChainPage(
       entries,
@@ -284,6 +316,7 @@ public inherited sharing class WorkflowChainRead {
    * @description State of one read.
    */
   private class Chain {
+    private Id anchorId;
     private String root;
     private Integer pageSize;
     private WorkflowChainCursor cursor;

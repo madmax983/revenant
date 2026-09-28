@@ -1,42 +1,58 @@
 /**
  * @description Opaque keyset cursor of {@link WorkflowChainRead} (issue #116).
- * Keeps the position (`CreatedDate`, `Id`) and the generation of the last row
- * of a page. The format is internal. Callers send it back with no change.
+ * Internal: not a contract. It keeps the anchor of the first page, and the
+ * position (`CreatedDate`, `Id`) and generation of the last row of a page.
+ * Callers send it back with no change.
  */
 public inherited sharing class WorkflowChainCursor {
-  private static final String VERSION = 'v1';
-  private static final String SEPARATOR = '|';
+  private static final Integer VERSION = 1;
+  // Year 1970 to year 3000, in epoch milliseconds.
+  private static final Long MAX_MILLIS = 32503680000000L;
 
+  /** @description Anchor of the first page. */
+  public Id anchorId { get; private set; }
   /** @description `CreatedDate` of the last row of the page. */
   public Datetime createdAt { get; private set; }
   /** @description `Id` of the last row of the page. */
-  public Id id { get; private set; }
+  public Id rowId { get; private set; }
   /** @description Generation of the last row, or null when unknown. */
   public Integer generation { get; private set; }
 
-  private WorkflowChainCursor(Datetime createdAt, Id id, Integer generation) {
-    this.createdAt = createdAt;
-    this.id = id;
-    this.generation = generation;
+  private WorkflowChainCursor(Map<String, Object> payload) {
+    this.anchorId = toInstanceId(payload.get('a'));
+    this.rowId = toInstanceId(payload.get('i'));
+    Long millis = Long.valueOf(String.valueOf(payload.get('c')));
+    if (millis <= 0 || millis > MAX_MILLIS) {
+      throw new StringException('bad time');
+    }
+    this.createdAt = Datetime.newInstance(millis);
+    Object gen = payload.get('g');
+    this.generation = gen == null ? null : Integer.valueOf(String.valueOf(gen));
+    if (this.generation != null && this.generation < 1) {
+      throw new StringException('bad generation');
+    }
   }
 
   /**
-   * @description Encodes the position and generation of a row.
+   * @description Encodes a cursor.
+   * @param anchorId anchor of the first page
    * @param row last row of the page
    * @param generation its generation, or null
    * @return opaque cursor
    */
-  public static String encode(Workflow_Instance__c row, Integer generation) {
-    String raw = String.join(
-      new List<String>{
-        VERSION,
-        String.valueOf(row.CreatedDate.getTime()),
-        String.valueOf(row.Id),
-        generation == null ? '' : String.valueOf(generation)
-      },
-      SEPARATOR
-    );
-    return EncodingUtil.base64Encode(Blob.valueOf(raw));
+  public static String encode(
+    Id anchorId,
+    Workflow_Instance__c row,
+    Integer generation
+  ) {
+    Map<String, Object> payload = new Map<String, Object>{
+      'v' => VERSION,
+      'a' => String.valueOf(anchorId),
+      'c' => row.CreatedDate.getTime(),
+      'i' => String.valueOf(row.Id),
+      'g' => generation
+    };
+    return EncodingUtil.base64Encode(Blob.valueOf(JSON.serialize(payload)));
   }
 
   /**
@@ -50,47 +66,39 @@ public inherited sharing class WorkflowChainCursor {
       return null;
     }
     try {
-      return parse(EncodingUtil.base64Decode(value).toString());
+      Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(
+        EncodingUtil.base64Decode(value).toString()
+      );
+      if (payload.get('v') != VERSION) {
+        throw new StringException('unknown version');
+      }
+      return new WorkflowChainCursor(payload);
     } catch (Exception decodeError) {
-      // Each parse error (base64, UTF-8, number, Id) is a bad cursor.
+      // Each parse error (base64, UTF-8, JSON, number, Id) is a bad cursor.
       throw new WorkflowEngine.WorkflowException(
         'Invalid chain cursor. Send back nextCursor with no change, or leave ' +
-          'it null for the first page. (' +
-          decodeError.getMessage() +
-          ')'
+        'it null for the first page.'
       );
     }
   }
 
   /**
-   * @description Keyset clause for rows older than this position. Adds the
+   * @description Keyset clause for rows older than the last row. Adds the
    * binds `cursorAt` and `cursorId`.
    * @param binds bind map
    * @return the clause
    */
   public String olderClause(Map<String, Object> binds) {
     binds.put('cursorAt', createdAt);
-    binds.put('cursorId', id);
+    binds.put('cursorId', rowId);
     return WorkflowChainWindow.olderThan('cursorAt', 'cursorId');
   }
 
-  private static WorkflowChainCursor parse(String raw) {
-    List<String> parts = raw.split('\\' + SEPARATOR, -1);
-    if (parts.size() != 4 || !VERSION.equals(parts[0])) {
-      throw new StringException('unknown format');
-    }
-    return new WorkflowChainCursor(
-      Datetime.newInstance(Long.valueOf(parts[1])),
-      toInstanceId(parts[2]),
-      String.isBlank(parts[3]) ? null : Integer.valueOf(parts[3])
-    );
-  }
-
-  private static Id toInstanceId(String value) {
-    Id rowId = Id.valueOf(value);
-    if (rowId.getSobjectType() != Workflow_Instance__c.SObjectType) {
+  private static Id toInstanceId(Object value) {
+    Id parsed = Id.valueOf(String.valueOf(value));
+    if (parsed.getSobjectType() != Workflow_Instance__c.SObjectType) {
       throw new StringException('not an instance Id');
     }
-    return rowId;
+    return parsed;
   }
 }
