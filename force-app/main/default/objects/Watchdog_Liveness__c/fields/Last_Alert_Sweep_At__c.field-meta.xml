@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Last_Alert_Sweep_At__c</fullName>
+    <description>Last Sweep At value of the last stall that sent an alert. When it is equal to Last Sweep At, the detector does no DML.</description>
+    <externalId>false</externalId>
+    <label>Last Alert Sweep At</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>

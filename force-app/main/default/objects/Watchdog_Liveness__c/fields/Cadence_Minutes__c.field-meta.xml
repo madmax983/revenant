@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Cadence_Minutes__c</fullName>
+    <description>Watchdog cadence in minutes at the last complete sweep. The stale threshold is 2 times the cadence.</description>
+    <externalId>false</externalId>
+    <label>Cadence Minutes</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

@@ -16,6 +16,7 @@ import injectSignal from "@salesforce/apex/WorkflowDashboardCommandController.in
 import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.getWorkflowCatalog";
 import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
+import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
 import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 
 jest.mock(
@@ -3032,6 +3033,160 @@ describe("c-workflow-dashboard definition changed", () => {
     const detail = toastHandler.mock.calls[0][0].detail;
     expect(detail.variant).toBe("error");
     expect(detail.message).toContain("StepB");
+  });
+});
+
+describe("c-workflow-dashboard watchdog liveness (#113)", () => {
+  beforeEach(() => {
+    getDefinitionTrends.mockResolvedValue({
+      windowKey: "24h",
+      windowHours: 24,
+      rows: [],
+    });
+  });
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  // Mounts the dashboard with a given liveness and opens System Doctor.
+  async function openDoctorWith(liveness) {
+    getWatchdogStatus.mockResolvedValueOnce({
+      isRunning: true,
+      scheduledJobsCount: 0,
+      sleepingInstances: 0,
+      pendingTimeouts: 0,
+      dailyAsyncValue: 0,
+      dailyAsyncLimit: 250000,
+      config: {},
+      liveness,
+    });
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  function livenessBadge(element) {
+    return element.shadowRoot.querySelector('[data-id="watchdog-liveness"]');
+  }
+
+  function livenessDetail(element) {
+    return element.shadowRoot.querySelector(
+      '[data-id="watchdog-liveness-detail"]',
+    );
+  }
+
+  it("shows a green Healthy badge with last sweep, elapsed and threshold", async () => {
+    const element = await openDoctorWith({
+      state: "HEALTHY",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: 3,
+      thresholdMinutes: 20,
+      cadenceMinutes: 10,
+    });
+
+    const badge = livenessBadge(element);
+    expect(badge.textContent).toContain("Healthy");
+    expect(badge.className).toContain("badge-green");
+    const detail = livenessDetail(element).textContent;
+    expect(detail).toContain("3 min ago");
+    expect(detail).toContain("Stale after 20 min");
+    expect(detail).toContain("Last sweep");
+  });
+
+  it("shows a red Stale badge once elapsed exceeds the threshold", async () => {
+    const element = await openDoctorWith({
+      state: "STALE",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: 45,
+      thresholdMinutes: 20,
+      cadenceMinutes: 10,
+    });
+
+    const badge = livenessBadge(element);
+    expect(badge.textContent).toContain("Stale");
+    expect(badge.className).toContain("badge-red");
+    expect(livenessDetail(element).textContent).toContain("45 min ago");
+  });
+
+  it("shows a grey Unknown badge when no sweep is recorded", async () => {
+    const element = await openDoctorWith({
+      state: "UNKNOWN",
+      lastSweepAt: null,
+      elapsedMinutes: null,
+      thresholdMinutes: 20,
+      cadenceMinutes: 10,
+    });
+
+    const badge = livenessBadge(element);
+    expect(badge.textContent).toContain("Unknown");
+    expect(badge.className).toContain("badge-grey");
+    expect(livenessDetail(element).textContent).toContain("No sweep recorded");
+  });
+
+  it("warns when the watchdog record is active but stale", async () => {
+    const element = await openDoctorWith({
+      state: "STALE",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: 45,
+      thresholdMinutes: 20,
+      cadenceMinutes: 10,
+    });
+
+    const warn = element.shadowRoot.querySelector(
+      '[data-id="watchdog-running-stale"]',
+    );
+    expect(warn).not.toBeNull();
+    expect(warn.textContent).toContain("Enqueue Watchdog");
+    expect(livenessDetail(element).className).toContain(
+      "slds-text-color_error",
+    );
+  });
+
+  it("shows no stale warning when the watchdog is healthy", async () => {
+    const element = await openDoctorWith({
+      state: "HEALTHY",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: 1,
+      thresholdMinutes: 20,
+      cadenceMinutes: 10,
+    });
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="watchdog-running-stale"]'),
+    ).toBeNull();
+  });
+
+  it("omits the elapsed text when elapsedMinutes is missing", async () => {
+    const element = await openDoctorWith({
+      state: "HEALTHY",
+      lastSweepAt: "2026-09-28T10:00:00.000Z",
+      elapsedMinutes: null,
+      thresholdMinutes: null,
+      cadenceMinutes: 10,
+    });
+
+    const detail = livenessDetail(element).textContent;
+    expect(detail).toContain("Last sweep");
+    expect(detail).not.toContain("null");
+    expect(detail).not.toContain("Stale after");
+  });
+
+  it("shows Unknown when the server sends no liveness", async () => {
+    const element = await openDoctorWith(undefined);
+
+    expect(livenessBadge(element).textContent).toContain("Unknown");
   });
 });
 
