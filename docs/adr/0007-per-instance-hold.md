@@ -1,4 +1,4 @@
-# ADR 0006: Per-instance hold and release
+# ADR 0007: Per-instance hold and release
 
 - **Status:** Accepted
 - **Date:** 2026-09-28

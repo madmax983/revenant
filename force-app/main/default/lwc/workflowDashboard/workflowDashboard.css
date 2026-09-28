@@ -114,6 +114,14 @@
   background: var(--slds-g-color-surface-2, rgba(241, 245, 249, 0.6));
 }
 
+/* Fleet Health row with a success rate less than the threshold (#111). */
+.health-row-below {
+  background: var(--slds-g-color-error-base-95, hsl(0, 100%, 96%));
+}
+/* Darker red on the tinted row, for 4.5:1 contrast. */
+.health-row-below .text-red {
+  color: var(--slds-g-color-palette-red-40, hsl(0, 85%, 40%));
+}
 .item-selected {
   background: var(--slds-g-color-accent-light-1, rgba(239, 246, 255, 0.85));
   border-left: var(--slds-g-sizing-border-4, 4px) solid

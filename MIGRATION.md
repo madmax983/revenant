@@ -447,7 +447,8 @@ See [docs/definition-change-detection.md](docs/definition-change-detection.md).
 
 - `Workflow_Instance__c.Status__c` has a new value: `Held`. It is not terminal. The instance waits for an operator release or a cancel.
 - New fields: `Workflow_Instance__c.Held_At__c`, `Hold_Reason__c` and the formula `Held__c`. They are blank on existing rows.
-- New API: `WorkflowInstanceHold.hold(Id, String)` and `WorkflowInstanceHold.release(Id)`. They are not on the `WorkflowEngine` facade. The dashboard calls them through `WorkflowDashboardCommandController.holdInstance` and `releaseHeldInstance`.
+- New API: `WorkflowInstanceHold.hold(Id, String)` and `WorkflowInstanceHold.release(Id)`. They are not on the `WorkflowEngine` facade. They are not in the global API (see [docs/global-api.md](docs/global-api.md)), so they work in the package namespace only.
+- `getStatus` can return the new status `Held`. The global status list in `docs/global-api.md` includes it. The dashboard calls them through `WorkflowDashboardCommandController.holdInstance` and `releaseHeldInstance`.
 
 See [docs/instance-hold.md](docs/instance-hold.md).
 
@@ -471,6 +472,19 @@ See [docs/strict-determinism.md](docs/strict-determinism.md).
 - Each hop does one more SOQL. A test that drives many hops in one transaction uses one more SOQL for each hop. To turn the guard off in a test, set `WorkflowEngine.stepHistoryWarnThreshold` and `WorkflowEngine.stepHistoryCeiling` to `0`.
 
 See [docs/step-history-guard.md](docs/step-history-guard.md).
+
+## New (additive): approver notifications
+
+**Issue #123.** No signature changes. Nothing changes until a step calls `withNotification`.
+
+- New author API: `StepResult.withNotification(WorkflowNotification)` and the `WorkflowNotification` builder. New field: `StepResult.StepDirective.notification`.
+- New config field: `Revenant_Config__mdt.Send_Notifications__c` (default on).
+- New metadata: `CustomNotificationType` `Revenant_Workflow_Notification`.
+- `Workflow_Event__e` has a new `Event_Type__c` value: `NOTIFY`, and a new trigger: `WorkflowNotifyTrigger`. A custom subscriber to `Workflow_Event__e` must ignore `NOTIFY`.
+- `Workflow_Log__c` has new rows with `Log_Type__c = Notification`.
+- `ApprovalWorkflowExample` reads the approver from the workflow input key `approverId`. With no approver, it notifies the instance owner.
+
+See [docs/approver-notifications.md](docs/approver-notifications.md).
 
 ---
 
@@ -503,6 +517,22 @@ sharing` service class (`WorkflowInstanceQuery`), while the forever-public DTOs
 classes of `WorkflowEngine`. It is strictly read-only and payload-free; see the
 README's "List & Page Through Workflow Instances (Apex)" section for the full DTO
 shapes, the keyset-cursor / ContinueAsNew semantics, and the honest SOQL profile.
+
+---
+
+## New (additive, non-breaking): `WorkflowChainRead.getChain`
+
+**Issue #116.** A new read contract. No signature changes. It gives all generations of a Continue-As-New chain, newest first, with a cursor. Before, you walked `Previous_Instance__c` with SOQL. Do not do that now.
+
+```apex
+WorkflowEngine.ChainRequest req = new WorkflowEngine.ChainRequest();
+req.correlationKey = 'nightly-sync'; // or req.instanceId = someId; not both
+req.pageSize = 100;             // null -> 50; above 200 -> 200; 0 or less -> throws
+WorkflowEngine.ChainPage page = WorkflowChainRead.getChain(req);
+req.cursor = page.nextCursor;   // send back with no change; null on the last page
+```
+
+The DTOs (`ChainRequest`, `ChainPage`, `ChainGeneration`) are inner classes of `WorkflowEngine`. New dashboard method: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)`. See [docs/continue-as-new-chain.md](docs/continue-as-new-chain.md).
 
 ---
 

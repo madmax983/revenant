@@ -109,6 +109,6 @@ Gate `parkIfHeld(instance)`:
 
 1. RED: `WorkflowInstanceHoldTest` (Apex) and jest tests. The API does not exist yet, so the tests fail.
 2. GREEN: fields, picklist value, gate, public API (`WorkflowInstanceHold`), status lists, trigger, Continue-As-New, timeouts, dashboard.
-3. REFACTOR: shared engine-workflow check, docs, ADR 0006.
+3. REFACTOR: shared engine-workflow check, docs, ADR 0007.
 4. Review from several angles. Fix findings.
 5. Map each AC to evidence.

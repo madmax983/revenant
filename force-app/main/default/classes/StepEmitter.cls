@@ -6,7 +6,16 @@
  * because the buffer lives only on this in-memory context, which is rebuilt
  * fresh on every re-execution. Reached by step authors via StepContext.events().
  */
-public inherited sharing class StepEmitter {
+global inherited sharing class StepEmitter {
+  /**
+   * @description Keeps construction in the package namespace. Without an
+   * explicit constructor, a global class gets a global default
+   * constructor (issue #122).
+   */
+  public StepEmitter() {
+    // No state to set.
+  }
+
   /** Outbound domain events buffered via emit() during this execution. */
   private List<SObject> pendingEmits = new List<SObject>();
 
@@ -21,7 +30,7 @@ public inherited sharing class StepEmitter {
    * idempotent. A null event is ignored.
    * @param event The platform event (__e) SObject to buffer for publication.
    */
-  public void emit(SObject event) {
+  global void emit(SObject event) {
     if (event != null) {
       this.pendingEmits.add(event);
     }

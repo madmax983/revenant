@@ -63,6 +63,13 @@
                     onclick={handleOpenCatalog}
                     class="slds-m-left_small">
                 </lightning-button>
+                <lightning-button
+                    label="Fleet Health"
+                    icon-name="utility:trending"
+                    variant="neutral"
+                    onclick={handleOpenHealth}
+                    class="slds-m-left_small">
+                </lightning-button>
 
                 <lightning-button-icon
                     icon-name="utility:refresh"
@@ -1299,8 +1306,135 @@
                             </template>
                         </template>
 
+                        <!-- Fleet Health view (#111): read-only, one row for each definition -->
+                        <template if:true={viewingHealth}>
+                            <div class="slds-p-around_medium">
+                                <div class="slds-grid slds-grid_align-spread slds-m-bottom_medium border-bottom slds-p-bottom_small">
+                                    <div>
+                                        <h2 class="slds-text-heading_medium font-outfit slds-grid slds-grid_vertical-align-center">
+                                            <lightning-icon icon-name="utility:trending" size="small" class="slds-m-right_small text-primary"></lightning-icon>
+                                            Fleet Health
+                                        </h2>
+                                        <p class="slds-text-color_weak slds-m-top_xx-small">Each row shows one definition. The counts use the instances that started in the window. The durations use the instances that finished in the window. The lowest success rate is first. Click a definition to see its instances.</p>
+                                    </div>
+                                    <lightning-button
+                                        label="Close"
+                                        variant="neutral"
+                                        icon-name="utility:close"
+                                        onclick={handleCloseHealth}>
+                                    </lightning-button>
+                                </div>
+
+                                <div class="slds-grid slds-gutters_small slds-m-bottom_medium">
+                                    <div class="slds-col">
+                                        <lightning-combobox
+                                            name="healthWindow"
+                                            data-id="health-window"
+                                            label="Window"
+                                            value={healthWindow}
+                                            options={healthWindowOptions}
+                                            onchange={handleHealthWindowChange}>
+                                        </lightning-combobox>
+                                    </div>
+                                    <div class="slds-col">
+                                        <lightning-input
+                                            type="number"
+                                            name="healthThreshold"
+                                            data-id="health-threshold"
+                                            label="Flag if success rate is less than (%)"
+                                            min="0"
+                                            max="100"
+                                            step="any"
+                                            value={healthThreshold}
+                                            onchange={handleHealthThresholdChange}>
+                                        </lightning-input>
+                                        <div data-id="health-threshold-applied" class="slds-text-body_small slds-text-color_weak">Threshold in use: {healthThreshold}%</div>
+                                    </div>
+                                </div>
+
+                                <template if:true={loadingHealth}>
+                                    <div class="slds-align_absolute-center slds-p-around_large spinner-height">
+                                        <lightning-spinner alternative-text="Loading fleet health..." size="medium"></lightning-spinner>
+                                    </div>
+                                </template>
+                                <template if:false={loadingHealth}>
+                                    <template if:true={healthError}>
+                                        <div data-id="health-error" class="slds-p-around_medium slds-text-align_center">
+                                            <lightning-icon icon-name="utility:warning" size="xx-small" alternative-text="Error" class="slds-m-right_xx-small text-red-icon"></lightning-icon>
+                                            Fleet health is not available.
+                                            <div class="slds-text-body_small slds-text-color_weak">{healthError}</div>
+                                        </div>
+                                    </template>
+                                    <template if:true={healthCountsCapped}>
+                                        <div data-id="health-capped-note" class="slds-text-body_small text-orange slds-m-bottom_small">
+                                            More than {healthCountCap} instances started in this window. The counts use the {healthCountCap} most recent instances.
+                                        </div>
+                                    </template>
+                                    <template if:true={healthIsSampled}>
+                                        <div data-id="health-sampled-note" class="slds-text-body_small text-orange slds-m-bottom_small">
+                                            Durations use the {healthSampleCap} instances of all definitions that finished last. A value with ≈ is approximate.
+                                        </div>
+                                    </template>
+                                    <template if:true={hasHealthRows}>
+                                        <table class="slds-table slds-table_cell-buffer slds-table_bordered" aria-label="Fleet health">
+                                            <thead>
+                                                <tr class="slds-line-height_reset">
+                                                    <th scope="col"><div class="slds-truncate" title="Definition">Definition</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Started">Started</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Completed">Completed</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Failed">Failed</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="In-flight">In-flight</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Success Rate">Success Rate</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Average duration">Avg Duration</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Maximum duration">Max Duration</div></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <template for:each={healthRows} for:item="row">
+                                                    <tr key={row.workflowName} data-id="health-row" data-definition={row.workflowName} class={row.rowClass}>
+                                                        <th scope="row" data-label="Definition">
+                                                            <button
+                                                                type="button"
+                                                                data-id="health-definition"
+                                                                data-definition={row.workflowName}
+                                                                title={row.linkTitle}
+                                                                onclick={handleHealthRowClick}
+                                                                class="slds-button link-button slds-text-align_left">
+                                                                <span class="slds-truncate">{row.workflowName}</span>
+                                                            </button>
+                                                        </th>
+                                                        <td data-label="Started" data-id="health-started">{row.started}</td>
+                                                        <td data-label="Completed" data-id="health-completed" class="text-green">{row.completed}</td>
+                                                        <td data-label="Failed" data-id="health-failed" class={row.failedClass}>{row.failed}</td>
+                                                        <td data-label="In-flight" data-id="health-inflight">{row.inFlight}</td>
+                                                        <td data-label="Success Rate" data-id="health-rate">
+                                                            <strong class={row.rateClass}>{row.rateDisplay}</strong>
+                                                            <template if:true={row.belowThreshold}>
+                                                                <span data-id="health-below" class="badge badge-red slds-m-left_x-small">Below threshold</span>
+                                                            </template>
+                                                        </td>
+                                                        <td data-label="Avg Duration" data-id="health-avg"><template if:true={row.avgApprox}><abbr title="Approximate" class="slds-m-right_xx-small">≈</abbr><span class="slds-assistive-text">Approximately </span></template>{row.avgDisplay}</td>
+                                                        <td data-label="Max Duration" data-id="health-max"><template if:true={row.maxApprox}><abbr title="Approximate" class="slds-m-right_xx-small">≈</abbr><span class="slds-assistive-text">Approximately </span></template>{row.maxDisplay}</td>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </template>
+                                    <template if:true={showHealthEmpty}>
+                                        <div data-id="health-empty" class="slds-align_absolute-center slds-p-around_large slds-text-align_center">
+                                            <div class="slds-flex_column">
+                                                <lightning-icon icon-name="utility:trending" size="large" class="slds-m-bottom_medium text-weak-icon"></lightning-icon>
+                                                <p class="slds-text-color_weak">No workflow instance started in this window.</p>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </template>
+                            </div>
+                        </template>
+
                         <template if:false={viewingLatency}>
                         <template if:false={viewingCatalog}>
+                        <template if:false={viewingHealth}>
                         <template if:true={selectedInstanceId}>
                         <template if:true={loadingDetails}>
 
@@ -1640,6 +1774,59 @@
                                     </template>
                                 </div>
 
+                                <!-- Continue-As-New Generations (issue #116) -->
+                                <template if:true={chainActive}>
+                                    <div class="slds-m-bottom_large" data-id="chain-section">
+                                        <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                            <h3 class="slds-text-heading_small font-outfit">Continue-As-New Generations</h3>
+                                            <template if:true={hasChainRows}>
+                                                <span class="slds-text-body_small slds-text-color_weak" data-id="chain-count">{chainCountLabel}</span>
+                                            </template>
+                                        </div>
+                                        <template if:true={showChainSpinner}>
+                                            <div class="slds-is-relative slds-p-around_medium" data-id="chain-loading">
+                                                <lightning-spinner alternative-text="Loading generations" size="small"></lightning-spinner>
+                                            </div>
+                                        </template>
+                                        <template if:true={chainError}>
+                                            <div class="slds-text-body_small slds-text-color_error slds-m-bottom_x-small" data-id="chain-error">
+                                                Cannot load the generations: {chainError}
+                                                <lightning-button variant="base" label="Try again" class="slds-m-left_x-small" data-id="chain-retry" onclick={handleRetryChain}></lightning-button>
+                                            </div>
+                                        </template>
+                                        <template if:true={hasChainRows}>
+                                            <div class="panel-card">
+                                                <div class="slds-scrollable_y" style="max-height: 260px;" data-id="chain-scroll">
+                                                    <ul class="slds-has-dividers_bottom-space">
+                                                        <template for:each={chainRows} for:item="gen">
+                                                            <li key={gen.instanceId} class={gen.rowClass} data-id={gen.instanceId} aria-current={gen.ariaCurrent}>
+                                                                <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
+                                                                    <div>
+                                                                        <button type="button" class="slds-button link-button chain-link slds-text-title_bold" data-id={gen.instanceId} onclick={handleSelectGeneration}>{gen.generationLabel} · {gen.instanceName}</button>
+                                                                        <div class="slds-text-body_small slds-text-color_weak">
+                                                                            Key: {gen.correlationKey} | Started: {gen.formattedStartedAt}
+                                                                            <template if:true={gen.formattedEndedAt}> | Ended: {gen.formattedEndedAt}</template>
+                                                                        </div>
+                                                                        <template if:true={gen.failureCategoryLabel}>
+                                                                            <div class="slds-text-body_small text-red">{gen.failureCategoryLabel}</div>
+                                                                        </template>
+                                                                    </div>
+                                                                    <span class={gen.statusBadgeClass}>{gen.status}</span>
+                                                                </div>
+                                                            </li>
+                                                        </template>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <template if:true={hasOlderGenerations}>
+                                            <div class="slds-m-top_x-small slds-text-align_center">
+                                                <lightning-button variant="base" label="Show older generations" data-id="chain-load-more" onclick={handleLoadOlderGenerations} disabled={chainLoading}></lightning-button>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+
                                 <!-- Child Workflows Section -->
                                 <template if:true={hasChildren}>
                                     <div class="slds-m-bottom_large">
@@ -1648,10 +1835,10 @@
                                             <div class="slds-scrollable_y" style="max-height: 200px;">
                                                 <ul class="slds-has-dividers_bottom-space">
                                                     <template for:each={childInstances} for:item="child">
-                                                        <li key={child.Id} class="slds-p-around_small list-item clickable" data-id={child.Id} onclick={handleSelectRelatedInstance}>
+                                                        <li key={child.Id} class="slds-p-around_small list-item" data-id={child.Id}>
                                                             <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center">
                                                                 <div>
-                                                                    <div class="slds-text-title_bold text-primary">{child.Name}</div>
+                                                                    <button type="button" class="slds-button link-button slds-text-title_bold" data-id={child.Id} onclick={handleSelectRelatedInstance}>{child.Name}</button>
                                                                     <div class="slds-text-body_small slds-text-color_weak">
                                                                         {child.Workflow_Name__c} | Key: {child.Correlation_Key__c}
                                                                     </div>
@@ -1853,6 +2040,7 @@
                             <p class="slds-text-color_weak slds-m-top_x-small">Select a workflow instance from the list to view its DAG path, state values, and execution steps.</p>
                         </div>
                     </template>
+                        </template><!-- /if:false viewingHealth -->
                         </template><!-- /if:false viewingCatalog -->
                         </template>
                         </template>

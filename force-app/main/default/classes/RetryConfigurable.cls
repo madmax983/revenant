@@ -3,7 +3,7 @@
  * letting the engine override the default backoff/attempt limits when the step
  * returns a retry result.
  */
-public interface RetryConfigurable {
+global interface RetryConfigurable {
   /**
    * @description Returns the RetryPolicy governing this step's retry attempts,
    * including maximum attempts, initial interval, and backoff coefficient.

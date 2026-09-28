@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomNotificationType xmlns="http://soap.sforce.com/2006/04/metadata">
+    <customNotifTypeName>Revenant Workflow Notification</customNotifTypeName>
+    <description>Default type for the notification that the Revenant engine sends when a workflow step waits for a human (issue #123).</description>
+    <desktop>true</desktop>
+    <masterLabel>Revenant Workflow Notification</masterLabel>
+    <mobile>true</mobile>
+</CustomNotificationType>

@@ -12,7 +12,7 @@
  * reserved bookkeeping keys round-trip through the payload, and a
  * StepExecutionIndex for the patch prior-execution lookups.
  */
-public inherited sharing class StepCaptures {
+global inherited sharing class StepCaptures {
   // Capture-once state. capturedValues is loaded from Captured_Values__c on
   // hydration and extended in-memory as once() is called. newCaptureKeys tracks
   // which keys were added THIS execution so the engine can persist only when
@@ -77,7 +77,7 @@ public inherited sharing class StepCaptures {
    * @param producer Invoked at most once: only on the first call for this key.
    * @return The originally produced value in its JSON-normalized form.
    */
-  public Object once(String key, CaptureProducer producer) {
+  global Object once(String key, CaptureProducer producer) {
     if (capturedValues.containsKey(key)) {
       return StepCaptureSerde.defensiveCopy(capturedValues.get(key));
     }
@@ -102,7 +102,7 @@ public inherited sharing class StepCaptures {
    * @param changeId The unique developer-supplied name for the patch/change.
    * @return True if the patch is active/enabled for this instance, else false.
    */
-  public Boolean patched(String changeId) {
+  global Boolean patched(String changeId) {
     return patched(changeId, null);
   }
 
@@ -117,7 +117,7 @@ public inherited sharing class StepCaptures {
    * risks when the class is redeployed for unrelated edits later.
    * @return True if the patch is active/enabled for this instance, else false.
    */
-  public Boolean patched(String changeId, DateTime introducedAt) {
+  global Boolean patched(String changeId, DateTime introducedAt) {
     if (String.isBlank(changeId)) {
       return false;
     }
@@ -144,7 +144,7 @@ public inherited sharing class StepCaptures {
    *
    * @param changeId The unique developer-supplied name for the patch/change.
    */
-  public void deprecated(String changeId) {
+  global void deprecated(String changeId) {
     deprecated(changeId, null);
   }
 
@@ -156,7 +156,7 @@ public inherited sharing class StepCaptures {
    * @param introducedAt Optional DateTime representing when the patch was
    * introduced.
    */
-  public void deprecated(String changeId, DateTime introducedAt) {
+  global void deprecated(String changeId, DateTime introducedAt) {
     if (!patched(changeId, introducedAt)) {
       throw new WorkflowEngine.WorkflowException(
         'Workflow execution reached retired code path for patch: ' + changeId

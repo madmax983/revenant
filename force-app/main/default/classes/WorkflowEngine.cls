@@ -8,7 +8,16 @@
  * SOQL run in system mode so the engine can drive workflows regardless of the
  * invoking user's object permissions.
  */
-public inherited sharing class WorkflowEngine {
+global inherited sharing class WorkflowEngine {
+  /**
+   * @description Blocks construction outside this class. Without an explicit
+   * constructor, a global class gets a default constructor that subscribers
+   * can call (issue #122).
+   */
+  private WorkflowEngine() {
+    // No state to set.
+  }
+
   public static Set<Id> resumedInstanceIds = new Set<Id>();
   public static Boolean disableQueueableInTest = false;
   public static Integer watchdogDelayMinutes = 10;
@@ -16,6 +25,9 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator toggle (Revenant_Config__mdt.Send_Notifications__c, issue #123):
+  // when true the engine sends the Custom Notification of a waiting step.
+  public static Boolean sendNotifications = true;
   // Operator setting (Revenant_Config__mdt.Payload_Codec__c): the PayloadCodec
   // class name. Blank selects the identity codec. See WorkflowPayloadCodecs.
   public static String payloadCodecClass = null;
@@ -131,6 +143,7 @@ public inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
+          Send_Notifications__c,
           Cascade_Cancel_Children_On_Failure__c,
           Dedup_Window_Minutes__c,
           Stale_Threshold_Minutes__c,
@@ -154,6 +167,9 @@ public inherited sharing class WorkflowEngine {
         }
         if (configs[0].Publish_Lifecycle_Events__c != null) {
           publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
+        }
+        if (configs[0].Send_Notifications__c != null) {
+          sendNotifications = configs[0].Send_Notifications__c;
         }
         if (configs[0].Cascade_Cancel_Children_On_Failure__c != null) {
           cascadeCancelChildrenOnFailure = configs[0]
@@ -193,18 +209,18 @@ public inherited sharing class WorkflowEngine {
    * operations. Distinguishes engine-originated errors from arbitrary step
    * exceptions.
    */
-  public class WorkflowException extends Exception {
+  global class WorkflowException extends Exception {
   }
 
   /**
    * Outcome of a get-or-start admission decision. Distinguishes a brand-new
    * instance from an existing instance returned for a deduplicated redelivery.
    */
-  public class StartResult {
-    public Id instanceId;
+  global class StartResult {
+    global Id instanceId { get; private set; }
     // true when a new instance was inserted; false when an existing instance
     // was returned (deduped active or recently-terminal redelivery).
-    public Boolean isNew;
+    global Boolean isNew { get; private set; }
 
     /**
      * @description Builds an admission result for an existing (deduplicated)
@@ -234,26 +250,26 @@ public inherited sharing class WorkflowEngine {
    * read-only to callers (private setters); the engine's read layer populates
    * them once via the all-arguments constructor.
    */
-  public class WorkflowStatus {
+  global class WorkflowStatus {
     /** @description Salesforce Id of the workflow instance. */
-    public Id instanceId { get; private set; }
+    global Id instanceId { get; private set; }
     /** @description Developer name of the workflow definition. */
-    public String definitionName { get; private set; }
+    global String definitionName { get; private set; }
     /** @description Correlation key the instance was started with. */
-    public String correlationKey { get; private set; }
+    global String correlationKey { get; private set; }
     /** @description Current lifecycle status of the instance. */
-    public String status { get; private set; }
+    global String status { get; private set; }
     /** @description True when the status is a terminal outcome. */
-    public Boolean isTerminal { get; private set; }
+    global Boolean isTerminal { get; private set; }
     /** @description Failure message for a failed instance; null otherwise. */
-    public String errorMessage { get; private set; }
+    global String errorMessage { get; private set; }
     /**
      * @description Fully rehydrated output for terminal instances; null for
      * in-flight instances.
      */
-    public String output { get; private set; }
+    global String output { get; private set; }
     /** @description Causation Id linking this run to the event that caused it. */
-    public String causationId { get; private set; }
+    global String causationId { get; private set; }
 
     /**
      * @description Builds a fully-populated status DTO from a queried instance
@@ -282,7 +298,7 @@ public inherited sharing class WorkflowEngine {
 
   /**
    * Stable read-only DTO for a single step execution in an instance's timeline.
-   * A forever-public API contract: v1 is metadata-only (no per-step input/output
+   * A stable in-package contract (not global; see docs/global-api.md): v1 is metadata-only (no per-step input/output
    * payload bodies). All fields are read-only to callers (private setters); the
    * read layer populates them once via the constructor.
    */
@@ -438,7 +454,7 @@ public inherited sharing class WorkflowEngine {
    * @param input start input payload passed to the first step
    * @return Id of the new or deduplicated existing instance
    */
-  public static Id start(
+  global static Id start(
     String workflowName,
     String correlationKey,
     Object input
@@ -452,7 +468,7 @@ public inherited sharing class WorkflowEngine {
    * @param request the start request describing the instance to get-or-start
    * @return Id of the new or deduplicated existing instance
    */
-  public static Id start(StartRequest request) {
+  global static Id start(StartRequest request) {
     return WorkflowStartService.startOne(request);
   }
 
@@ -464,7 +480,7 @@ public inherited sharing class WorkflowEngine {
    * @param input start input payload passed to the first step
    * @return a StartResult carrying the instance Id and whether it was newly created
    */
-  public static StartResult startOrGet(
+  global static StartResult startOrGet(
     String workflowName,
     String correlationKey,
     Object input
@@ -482,7 +498,7 @@ public inherited sharing class WorkflowEngine {
    * @param request the start request describing the instance to get-or-start
    * @return a StartResult carrying the instance Id and whether it was newly created
    */
-  public static StartResult startOrGet(StartRequest request) {
+  global static StartResult startOrGet(StartRequest request) {
     return WorkflowStartService.startOrGetOne(request);
   }
 
@@ -492,14 +508,14 @@ public inherited sharing class WorkflowEngine {
    * input (as an Object or pre-serialized JSON), and optional parent reference,
    * searchable attributes and causation id.
    */
-  public class StartRequest {
+  global class StartRequest {
     public String workflowName;
     public String correlationKey;
     public Object input;
     public String inputJson;
     public Id parentInstanceId;
     public Map<String, String> attributes;
-    public String causationId;
+    global String causationId;
 
     /**
      * @description Builds a minimal start request.
@@ -507,7 +523,7 @@ public inherited sharing class WorkflowEngine {
      * @param correlationKey dedup/correlation key
      * @param input start input payload
      */
-    public StartRequest(
+    global StartRequest(
       String workflowName,
       String correlationKey,
       Object input
@@ -522,7 +538,7 @@ public inherited sharing class WorkflowEngine {
      * @param attributesArg searchable key/value attributes
      * @return this request, for call chaining
      */
-    public StartRequest withAttributes(Map<String, String> attributesArg) {
+    global StartRequest withAttributes(Map<String, String> attributesArg) {
       this.attributes = attributesArg;
       return this;
     }
@@ -573,7 +589,7 @@ public inherited sharing class WorkflowEngine {
    * correlation key or Id and carries the signal name, payload and optional
    * dedup/idempotency keys for effectively-once delivery.
    */
-  public class SignalRequest {
+  global class SignalRequest {
     public String keyOrId;
     public String signalName;
     public String payload;
@@ -586,7 +602,7 @@ public inherited sharing class WorkflowEngine {
      * @param signalName name of the signal
      * @param payload signal payload
      */
-    public SignalRequest(String keyOrId, String signalName, String payload) {
+    global SignalRequest(String keyOrId, String signalName, String payload) {
       this.keyOrId = keyOrId;
       this.signalName = signalName;
       this.payload = payload;
@@ -597,7 +613,7 @@ public inherited sharing class WorkflowEngine {
      * @param dedupKeyArg routing-level dedup key
      * @return this request, for call chaining
      */
-    public SignalRequest withDedupKey(String dedupKeyArg) {
+    global SignalRequest withDedupKey(String dedupKeyArg) {
       this.dedupKey = dedupKeyArg;
       return this;
     }
@@ -607,7 +623,7 @@ public inherited sharing class WorkflowEngine {
      * @param idempotencyKeyArg per-delivery idempotency key
      * @return this request, for call chaining
      */
-    public SignalRequest withIdempotencyKey(String idempotencyKeyArg) {
+    global SignalRequest withIdempotencyKey(String idempotencyKeyArg) {
       this.idempotencyKey = idempotencyKeyArg;
       return this;
     }
@@ -659,7 +675,7 @@ public inherited sharing class WorkflowEngine {
    * @param requests the start requests to process
    * @return instance Ids index-aligned with requests (null per null request)
    */
-  public static List<Id> start(List<StartRequest> requests) {
+  global static List<Id> start(List<StartRequest> requests) {
     return WorkflowStartService.startBulk(requests);
   }
 
@@ -670,7 +686,7 @@ public inherited sharing class WorkflowEngine {
    * @param requests the start requests to process
    * @return StartResults index-aligned with requests (null per null request)
    */
-  public static List<StartResult> startOrGet(List<StartRequest> requests) {
+  global static List<StartResult> startOrGet(List<StartRequest> requests) {
     return WorkflowStartService.startOrGetBulk(requests);
   }
 
@@ -819,7 +835,7 @@ public inherited sharing class WorkflowEngine {
    * @param signalName name of the signal to deliver
    * @param payload signal payload
    */
-  public static void signal(String keyOrId, String signalName, String payload) {
+  global static void signal(String keyOrId, String signalName, String payload) {
     WorkflowSignalRouter.routeSignalRequest(
       new SignalRequest(keyOrId, signalName, payload)
     );
@@ -836,7 +852,7 @@ public inherited sharing class WorkflowEngine {
    * @param req the signal request (keyOrId, signalName, payload and optional
    * idempotencyKey); when idempotencyKey is null, at-least-once behavior applies
    */
-  public static void signal(SignalRequest req) {
+  global static void signal(SignalRequest req) {
     WorkflowSignalRouter.routeSignalRequest(req);
   }
 
@@ -848,7 +864,7 @@ public inherited sharing class WorkflowEngine {
    * forward signals, insert the rows, then wake and enqueue.
    * @param requests the signal requests to deliver
    */
-  public static void signal(List<SignalRequest> requests) {
+  global static void signal(List<SignalRequest> requests) {
     WorkflowSignalBatch.routeSignalBatch(requests);
   }
 
@@ -857,8 +873,22 @@ public inherited sharing class WorkflowEngine {
    * jobs WITHOUT running saga compensations.
    * @param instanceId Id of the target instance to cancel (with its active descendants)
    */
-  public static void cancel(Id instanceId) {
+  global static void cancel(Id instanceId) {
     cancelInstance(instanceId, false);
+  }
+
+  /**
+   * Cancels a workflow instance (and its active descendants) and aborts
+   * scheduled jobs. With true, it is the same as
+   * `WorkflowCancellation.cancelWithCompensations`: a repeat on a `Cancelling`
+   * instance starts the rollback again. Use the bulk entry
+   * `WorkflowCancellation.cancelWithCompensationsInstances` to skip it.
+   * @param instanceId Id of the target instance to cancel (with its active descendants)
+   * @param runCompensations true to roll back completed steps; null means true,
+   * the same default as the Cancel signal and the Cancel Workflow action
+   */
+  public static void cancel(Id instanceId, Boolean runCompensations) {
+    cancelInstance(instanceId, runCompensations != false);
   }
 
   /**
@@ -915,7 +945,7 @@ public inherited sharing class WorkflowEngine {
    * @description Filter + pagination criteria for
    * {@link WorkflowInstanceQuery#findInstances}. Every field is optional; an
    * all-null/empty criteria (or a null argument) matches all instances. This is a
-   * forever-public API contract, so the shape is deliberately minimal and each
+   * stable in-package contract (not global), so the shape is deliberately minimal and each
    * field's null/empty semantics are fixed here.
    */
   public class InstanceCriteria {
@@ -986,7 +1016,7 @@ public inherited sharing class WorkflowEngine {
    * row returned by {@link WorkflowInstanceQuery#findInstances}. Deliberately omits
    * the heavy long-text payloads (`Input__c` / `Output__c` / `Progress__c`): fetch a
    * terminal instance's full output per-Id via
-   * {@link WorkflowStatusRead#getStatus}. A forever-public read contract; all fields
+   * {@link WorkflowStatusRead#getStatus}. A stable read contract; all fields
    * are read-only to callers (private setters), populated once via the projecting
    * constructor.
    */
@@ -1037,8 +1067,8 @@ public inherited sharing class WorkflowEngine {
    * the ordered summaries plus the keyset cursor for the next page. Callers page
    * until `hasMore` is false (equivalently, `nextCursor` is null). No exact total
    * is exposed: an unbounded, deeply-paged result set cannot be counted within a
-   * constant SOQL/heap budget, so callers walk pages instead. A forever-public
-   * contract; fields are read-only to callers (private setters).
+   * constant SOQL/heap budget, so callers walk pages instead. A stable in-package
+   * contract (not global); fields are read-only to callers (private setters).
    */
   public class InstancePage {
     /**
@@ -1088,4 +1118,161 @@ public inherited sharing class WorkflowEngine {
   }
 
   // ─── End Find / List API ─────────────────────────────────────────────────────
+
+  // ─── Chain API (issue #116) ──────────────────────────────────────────────────
+  // Forever-public DTOs for WorkflowChainRead.getChain. Read-only (private setters).
+
+  /**
+   * @description Request for {@link WorkflowChainRead#getChain}. Set
+   * `instanceId` or `correlationKey`, not both.
+   */
+  public class ChainRequest {
+    /** @description Id of a generation. The read gives the chain of that instance. */
+    public Id instanceId;
+    /**
+     * @description Correlation key or root key. The read gives the chain of the
+     * newest instance with that key.
+     */
+    public String correlationKey;
+    /**
+     * @description Page size. Null: {@link WorkflowChainRead#DEFAULT_PAGE_SIZE}.
+     * Above {@link WorkflowChainRead#MAX_PAGE_SIZE}: the read uses the max.
+     * Zero or less: throws a `WorkflowException`.
+     */
+    public Integer pageSize;
+    /**
+     * @description Opaque cursor from `ChainPage.nextCursor`. Null: first page.
+     * Send it back with no change. The read then uses the chain of the first
+     * page. A bad value throws a `WorkflowException`.
+     */
+    public String cursor;
+  }
+
+  /**
+   * @description One generation (one `Workflow_Instance__c`) of a
+   * Continue-As-New chain. Payload-free.
+   */
+  public class ChainGeneration {
+    /** @description Id of the instance. */
+    public Id instanceId { get; private set; }
+    /** @description Auto-number name of the instance. */
+    public String instanceName { get; private set; }
+    /**
+     * @description Position in the chain. 1 is the oldest kept generation.
+     * Null when not known (for example when `ChainPage.isTotalCapped` is true).
+     * A purge changes it. It is not an identifier: use `instanceId`.
+     */
+    public Integer generation { get; private set; }
+    /** @description Developer name of the workflow definition. */
+    public String definitionName { get; private set; }
+    /** @description Correlation key of this generation. */
+    public String correlationKey { get; private set; }
+    /** @description Raw `Status__c`. */
+    public String status { get; private set; }
+    /**
+     * @description True for `Completed`, `Failed`, `Compensated` and
+     * `Cancelled` (the `getStatus` set). `ContinuedAsNew` gives false.
+     */
+    public Boolean isTerminal { get; private set; }
+    /**
+     * @description How this generation ended: a terminal status or
+     * `ContinuedAsNew`. Null while it is not closed.
+     */
+    public String outcome { get; private set; }
+    /** @description When the instance was created (`CreatedDate`). */
+    public Datetime startedAt { get; private set; }
+    /**
+     * @description When the instance closed (`Terminal_At__c`). For outcome
+     * `ContinuedAsNew`, this is the hand-off time. Null while open.
+     */
+    public Datetime endedAt { get; private set; }
+    /** @description `Failure_Category__c`, or null. */
+    public String failureCategory { get; private set; }
+    /** @description `Error_Message__c` (max 255 characters), or null. */
+    public String errorMessage { get; private set; }
+    /** @description Id of the predecessor, or null for a first generation. */
+    public Id previousInstanceId { get; private set; }
+
+    /**
+     * @description Makes a generation from a queried row.
+     * @param inst row with the chain read fields
+     * @param generation position in the chain, or null when unknown
+     */
+    public ChainGeneration(Workflow_Instance__c inst, Integer generation) {
+      this.instanceId = inst.Id;
+      this.instanceName = inst.Name;
+      this.generation = generation;
+      this.definitionName = inst.Workflow_Name__c;
+      this.correlationKey = inst.Correlation_Key__c;
+      this.status = inst.Status__c;
+      this.isTerminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
+        inst.Status__c
+      );
+      Boolean continued = inst.Status__c == 'ContinuedAsNew';
+      this.outcome = this.isTerminal || continued ? inst.Status__c : null;
+      this.startedAt = inst.CreatedDate;
+      this.endedAt = this.outcome == null ? null : inst.Terminal_At__c;
+      this.failureCategory = inst.Failure_Category__c;
+      this.errorMessage = inst.Error_Message__c;
+      this.previousInstanceId = inst.Previous_Instance__c;
+    }
+  }
+
+  /**
+   * @description One page of a Continue-As-New chain, newest first.
+   */
+  public class ChainPage {
+    /** @description Generations of this page, newest first. */
+    public List<ChainGeneration> entries { get; private set; }
+    /**
+     * @description Root correlation key of the chain. Null for an instance with
+     * no correlation key.
+     */
+    public String rootCorrelationKey { get; private set; }
+    /**
+     * @description Number of generations in the chain, for all pages. When
+     * `isTotalCapped` is true, this is a lower bound.
+     */
+    public Integer totalCount { get; private set; }
+    /**
+     * @description True when the chain has more than
+     * {@link WorkflowChainRead#MAX_COUNTED_GENERATIONS} generations.
+     */
+    public Boolean isTotalCapped { get; private set; }
+    /** @description Cursor for the next (older) page. Null on the last page. */
+    public String nextCursor { get; private set; }
+    /** @description True when `nextCursor` is not null. */
+    public Boolean hasMore { get; private set; }
+    /** @description Page size that the read used. */
+    public Integer pageSize { get; private set; }
+
+    /**
+     * @description Makes a page. `hasMore` comes from `nextCursor`. The read API
+     * calls this constructor.
+     * @param entries generations of this page, newest first
+     * @param rootCorrelationKey root key of the chain
+     * @param totalCount counted generations
+     * @param isTotalCapped true when the count stopped at the cap
+     * @param nextCursor cursor for the next page, or null
+     * @param pageSize page size that the read used
+     */
+    public ChainPage(
+      List<ChainGeneration> entries,
+      String rootCorrelationKey,
+      Integer totalCount,
+      Boolean isTotalCapped,
+      String nextCursor,
+      Integer pageSize
+    ) {
+      this.entries = entries;
+      this.rootCorrelationKey = rootCorrelationKey;
+      this.totalCount = totalCount;
+      this.isTotalCapped = isTotalCapped;
+      this.nextCursor = nextCursor;
+      this.hasMore = nextCursor != null;
+      this.pageSize = pageSize;
+    }
+  }
+
+  // ─── End Chain API ───────────────────────────────────────────────────────────
 }
