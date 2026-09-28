@@ -76,8 +76,13 @@ public inherited sharing class WorkflowDeterminismGuard {
     if (live.size() > maxLiveSignals) {
       return UNKNOWN_INPUTS;
     }
+    // A parallel branch claims what it reads (Received to Processing). Count
+    // the claims of this run as Received, so a re-check after the run sees
+    // the same inputs.
+    Set<Id> ownClaims = context.signals().getClaimedSignalIds();
     for (Workflow_Signal__c sig : live) {
-      parts.add(sig.Id + '|' + sig.Status__c);
+      String status = ownClaims.contains(sig.Id) ? 'Received' : sig.Status__c;
+      parts.add(sig.Id + '|' + status);
     }
     Integer childCap = maxChildren + 1;
     List<Workflow_Instance__c> children = [

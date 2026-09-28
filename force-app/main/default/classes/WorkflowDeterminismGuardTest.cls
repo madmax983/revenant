@@ -269,6 +269,53 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
+  static void captureInputsIgnoresTheClaimsOfThisRun() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      insert new Workflow_Signal__c(
+        Workflow_Instance__c = inst.Id,
+        Correlation_Key__c = inst.Correlation_Key__c,
+        Signal_Name__c = 'Go',
+        Status__c = 'Received'
+      );
+      StepContext context = contextFor(inst.Id)
+        .signalSource(
+          new WorkflowSignalSources.ParallelBranchSignalSource(inst.Id)
+        )
+        .build();
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      String before = WorkflowDeterminismGuard.captureInputs(
+        ctx,
+        context,
+        '{"p":1}'
+      );
+
+      // A parallel branch claims the signal it reads.
+      Assert.isTrue(
+        context.signals().getSignal('Go').isPresent(),
+        'The branch reads the signal'
+      );
+      Assert.areEqual(
+        'Processing',
+        [
+          SELECT Status__c
+          FROM Workflow_Signal__c
+          WHERE Workflow_Instance__c = :inst.Id
+        ]
+        .Status__c,
+        'The read claims the signal'
+      );
+
+      Assert.areEqual(
+        before,
+        WorkflowDeterminismGuard.captureInputs(ctx, context, '{"p":1}'),
+        'The claims of this run do not change the inputs'
+      );
+    }
+  }
+
+  @IsTest
   static void captureInputsTellsNullFromTheTextNull() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
