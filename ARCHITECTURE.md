@@ -191,9 +191,9 @@ translation/evaluation.
 
 ## Dashboard services
 
-The LWC-facing API has three **read** controllers and one **command**
+The LWC-facing API has four **read** controllers and one **command**
 controller (endpoint names unchanged; only the host class of the 16 command
-endpoints moved). All four delegate to `inherited sharing` service classes.
+endpoints moved). All five delegate to `inherited sharing` service classes.
 
 - Read side: `WorkflowDashboardController` (holds `InstanceQuery` / `StalledQuery`
   / `UnroutedQuery` DTOs) → `WorkflowInstanceListService`,
@@ -209,6 +209,10 @@ endpoints moved). All four delegate to `inherited sharing` service classes.
   `WorkflowReadinessService`. It is a separate controller for the same PMD
   reason. The watchdog check uses `WorkflowDashboardStatusService.watchdogRunning`,
   the same signal as the Watchdog Daemon Health panel.
+- Fleet Health view (#111): `WorkflowFleetHealthController` →
+  `WorkflowFleetHealthService`. It is a separate controller for the same PMD reason.
+  It uses three queries, each with a cap: a count probe, the counts (an aggregate up
+  to 2,000 instances, else a row query) and a duration sample (ADR 0004).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,

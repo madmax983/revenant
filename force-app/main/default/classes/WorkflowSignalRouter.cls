@@ -252,14 +252,10 @@ public inherited sharing class WorkflowSignalRouter {
     String signalName,
     String idempotencyKey
   ) {
-    Workflow_Signal__c marker = new Workflow_Signal__c(
-      Workflow_Instance__c = instanceId,
-      Signal_Name__c = signalName,
-      Status__c = 'Consumed',
-      Signal_Key__c = WorkflowSignalDedup.deriveSignalDedupKey(
-        instanceId,
-        idempotencyKey
-      )
+    Workflow_Signal__c marker = WorkflowSignalBatchCancel.buildCancelClaim(
+      instanceId,
+      signalName,
+      idempotencyKey
     );
     try {
       Database.insert(marker, true, AccessLevel.SYSTEM_MODE);
