@@ -8,14 +8,14 @@
         </div>
 
         <template if:true={isLoading}>
-            <div data-id="capacity-loading" class="slds-box slds-text-color_weak slds-text-align_center">
+            <div data-id="capacity-loading" aria-live="polite" aria-busy="true" class="slds-box slds-text-color_weak slds-text-align_center">
                 Loading async Apex capacity…
             </div>
         </template>
 
         <template if:true={error}>
-            <div data-id="capacity-error" class="slds-box slds-text-align_center">
-                <lightning-icon icon-name="utility:warning" size="xx-small" alternative-text="Unavailable" class="slds-m-right_xx-small"></lightning-icon>
+            <div data-id="capacity-error" role="alert" class="slds-box slds-text-align_center">
+                <lightning-icon icon-name="utility:warning" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
                 Async Apex capacity is not available.
                 <div class="slds-text-body_small slds-text-color_weak">{error}</div>
             </div>
@@ -24,8 +24,8 @@
         <template if:true={hasData}>
             <template if:true={chainAtRisk}>
                 <div data-id="capacity-risk" role="alert" class="slds-notify slds-notify_alert slds-theme_error slds-m-bottom_small">
-                    <lightning-icon icon-name="utility:error" size="x-small" variant="inverse" alternative-text="Critical" class="slds-m-right_x-small"></lightning-icon>
-                    <h2><strong>Chain handoff at risk.</strong> The next Queueable handoff can fail. In-flight instances can become orphans.</h2>
+                    <lightning-icon icon-name="utility:error" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                    <p><strong>Chain handoff at risk.</strong> The next Queueable handoff can fail. Running instances can stop and not continue.</p>
                 </div>
             </template>
 
@@ -35,7 +35,7 @@
                         <tr class="slds-line-height_reset">
                             <th scope="col">Metric</th>
                             <th scope="col">Used / Limit</th>
-                            <th scope="col">Used</th>
+                            <th scope="col">Percent used</th>
                             <th scope="col">Status</th>
                         </tr>
                     </thead>
@@ -64,7 +64,7 @@
                 <div data-id="capacity-asof" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{asOfLabel}</div>
             </div>
             <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
-                Read only. The flex queue holds max 100 batch jobs. Queued and Processing have no fixed ceiling.
+                This panel is read-only. The flex queue holds a maximum of 100 batch jobs. A maximum of 5 batch jobs can be Queued or Processing. Queueable jobs have no queue limit. Pending jobs = Holding + Queued + Processing.
             </p>
         </template>
     </div>

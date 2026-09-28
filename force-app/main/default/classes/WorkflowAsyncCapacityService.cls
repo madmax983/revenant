@@ -68,7 +68,9 @@ public inherited sharing class WorkflowAsyncCapacityService {
     }
   }
 
-  // One aggregate query. COUNT with GROUP BY costs one query row per group (max 3).
+  // One aggregate query. The SOQL reference: COUNT(field) with GROUP BY costs one query
+  // row per group (max 3). The test readCostsAtMostOneSoqlAndNoDml measures this.
+  // Batch jobs in Preparing are not counted.
   // A failed read leaves jobsKnown false, so the flex metric shows Unknown.
   private static void readJobCounts(AsyncCapacityEvaluator.Reading r) {
     try {

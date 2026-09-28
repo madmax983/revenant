@@ -17,9 +17,11 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
    future use" and gives no org data.
 2. Read job counts with one `AsyncApexJob` aggregate, `GROUP BY Status`, for
    `Holding`, `Queued` and `Processing`. Max 3 query rows.
-3. Two metrics have a status: daily executions (limit from `OrgLimits`) and
-   the flex queue (`Holding` / 100). `Queued` and `Processing` are counts only,
-   because the platform has no fixed ceiling for them.
+3. Three metrics have a status: daily executions (limit from `OrgLimits`),
+   the flex queue (`Holding` / 100), and pending jobs (`Holding` + `Queued` +
+   `Processing`) / daily executions left. Queueable jobs in `Queued` have no
+   queue limit, so the pending jobs use the executions that are left as the
+   limit.
 4. One Text field `Async_Capacity_Thresholds__c` holds `warn,crit`. Default
    `80,95`. Text that is not valid gives the defaults and a note on the panel.
 5. Classify the rounded percent that the panel shows.
@@ -30,17 +32,20 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
 
 ## Consequences
 
-- No new object. One new optional field. No DML.
-- The enqueue path does not change. A test checks that
-  `WorkflowOrchestrator` does not name the read.
+- No DML.
+- The enqueue path does not change. A test checks that the orchestrator and
+  the classes that call `System.enqueueJob()` do not name the read.
 - The status is a snapshot. An operator must open the panel.
 - The same evaluator can feed a later alert (#127) or throttle (#91/#28).
 
 ## Rejected Options
 
 - Two number fields for the thresholds: the issue permits one field.
-- A ceiling for `Queued` + `Processing`: the platform has none. An invented
-  value gives false alerts.
+- A fixed limit for `Queued` + `Processing`: Queueable jobs have no queue
+  limit. An invented value gives false alerts. The batch limit of 5 is normal
+  batch saturation. It is not a risk to the Queueable chain.
+- Add the elastic limit to the daily limit: the elastic tile already shows it.
+  The panel stays conservative.
 - Add the metrics to `getWatchdogStatus`: that read runs many queries and the
   stall detector. The capacity read must stay small.
 - Cache the read in a custom setting: it adds a write.

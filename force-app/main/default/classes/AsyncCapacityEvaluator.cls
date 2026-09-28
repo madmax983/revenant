@@ -1,7 +1,9 @@
 /**
  * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
- * thresholds, calculates percentages and gives each metric a status. It does no SOQL,
- * no DML and reads no clock.
+ * thresholds, calculates percentages and gives each metric a status. Metrics: daily
+ * executions (used / limit), flex queue (Holding / 100) and pending jobs (Holding +
+ * Queued + Processing) / daily executions left. It does no SOQL, no DML and reads no
+ * clock.
  */
 public inherited sharing class AsyncCapacityEvaluator {
   /** @description Percent is below the warn threshold. */
@@ -24,6 +26,8 @@ public inherited sharing class AsyncCapacityEvaluator {
   public static final String METRIC_DAILY_ASYNC = 'DAILY_ASYNC';
   /** @description Key of the Apex flex queue metric. */
   public static final String METRIC_FLEX_QUEUE = 'FLEX_QUEUE';
+  /** @description Key of the pending jobs vs daily executions left metric. */
+  public static final String METRIC_BACKLOG = 'BACKLOG';
 
   /** @description Platform maximum of batch jobs in the flex queue (Holding). */
   public static final Integer FLEX_QUEUE_LIMIT = 100;
@@ -36,10 +40,12 @@ public inherited sharing class AsyncCapacityEvaluator {
   // Display label of each metric.
   private static final Map<String, String> LABELS = new Map<String, String>{
     METRIC_DAILY_ASYNC => 'Daily async Apex executions',
-    METRIC_FLEX_QUEUE => 'Apex flex queue (Holding)'
+    METRIC_FLEX_QUEUE => 'Apex flex queue (Holding)',
+    METRIC_BACKLOG => 'Pending jobs vs executions left'
   };
 
   // Rank for the overall status. Higher is worse. Unknown is worse than Healthy.
+  // worst() ignores a status that is not in this map.
   private static final Map<String, Integer> RANK = new Map<String, Integer>{
     STATUS_HEALTHY => 0,
     STATUS_UNKNOWN => 1,
@@ -151,12 +157,15 @@ public inherited sharing class AsyncCapacityEvaluator {
 
   /**
    * @description Gives the worst status. Rank: Critical, Degraded, Unknown, Healthy.
-   * @param statuses The statuses.
-   * @return The worst status, or STATUS_UNKNOWN for an empty list.
+   * @param statuses The statuses. Values that are not ranked are ignored.
+   * @return The worst status, or STATUS_UNKNOWN when no status is ranked.
    */
   public static String worst(List<String> statuses) {
     String result = null;
     for (String s : statuses) {
+      if (!RANK.containsKey(s)) {
+        continue;
+      }
       if (result == null || RANK.get(s) > RANK.get(result)) {
         result = s;
       }
@@ -174,7 +183,8 @@ public inherited sharing class AsyncCapacityEvaluator {
     Integer holding = r.jobsKnown ? r.holding : null;
     List<Map<String, Object>> metrics = new List<Map<String, Object>>{
       metric(METRIC_DAILY_ASYNC, r.dailyUsed, r.dailyLimit),
-      metric(METRIC_FLEX_QUEUE, holding, FLEX_QUEUE_LIMIT)
+      metric(METRIC_FLEX_QUEUE, holding, FLEX_QUEUE_LIMIT),
+      metric(METRIC_BACKLOG, pendingJobs(r), executionsLeft(r))
     };
     List<String> statuses = new List<String>();
     for (Map<String, Object> m : metrics) {
@@ -207,6 +217,20 @@ public inherited sharing class AsyncCapacityEvaluator {
     };
   }
 
+  // Holding + Queued + Processing. Null when the job read failed.
+  private static Integer pendingJobs(Reading r) {
+    return r.jobsKnown ? r.holding + r.queued + r.processing : null;
+  }
+
+  // Daily limit minus daily used. Null when the daily values are not known.
+  // A value of 0 or less gives no percent (Unknown). The daily metric is then Critical.
+  private static Integer executionsLeft(Reading r) {
+    if (r.dailyUsed == null || r.dailyLimit == null) {
+      return null;
+    }
+    return r.dailyLimit - r.dailyUsed;
+  }
+
   private static Map<String, Object> jobCounts(Reading r) {
     if (!r.jobsKnown) {
       return new Map<String, Object>{
@@ -216,7 +240,7 @@ public inherited sharing class AsyncCapacityEvaluator {
         'total' => null
       };
     }
-    Integer total = r.holding + r.queued + r.processing;
+    Integer total = pendingJobs(r);
     return new Map<String, Object>{
       'holding' => r.holding,
       'queued' => r.queued,

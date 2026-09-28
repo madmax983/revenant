@@ -48,7 +48,7 @@ private class WorkflowAsyncCapacityServiceTest {
       ) {
         Assert.isTrue(result.containsKey(key), 'Missing key ' + key);
       }
-      Assert.areEqual(2, ((List<Object>) result.get('metrics')).size());
+      Assert.areEqual(3, ((List<Object>) result.get('metrics')).size());
     }
   }
 
@@ -77,29 +77,37 @@ private class WorkflowAsyncCapacityServiceTest {
   @IsTest
   static void readCostsAtMostOneSoqlAndNoDml() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      // Five jobs in one status group. A charge of one row per job gives 5 rows or more.
+      System.enqueueJob(new NoopJob());
+      System.enqueueJob(new NoopJob());
+      System.enqueueJob(new NoopJob());
+      System.enqueueJob(new NoopJob());
+      System.enqueueJob(new NoopJob());
       Integer logsBefore = [SELECT COUNT() FROM Workflow_Log__c];
       Integer queriesBefore = Limits.getQueries();
       Integer rowsBefore = Limits.getQueryRows();
       Integer dmlBefore = Limits.getDmlStatements();
 
-      WorkflowAsyncCapacityService.readCapacity();
+      Map<String, Object> result = WorkflowAsyncCapacityService.readCapacity();
 
+      Integer queries = Limits.getQueries() - queriesBefore;
+      Integer rows = Limits.getQueryRows() - rowsBefore;
+      Integer dml = Limits.getDmlStatements() - dmlBefore;
+      Integer logsAfter = [SELECT COUNT() FROM Workflow_Log__c];
+      Test.stopTest();
+
+      Map<String, Object> jobs = (Map<String, Object>) result.get('jobCounts');
+      Assert.isTrue((Integer) jobs.get('total') >= 5, String.valueOf(jobs));
+      Assert.isTrue(queries <= 1, 'The read must cost max 1 SOQL: ' + queries);
       Assert.isTrue(
-        Limits.getQueries() - queriesBefore <= 1,
-        'The read must cost max 1 SOQL'
+        rows <= 3,
+        'The read must cost max 3 query rows (one per status group): ' + rows
       );
-      Assert.isTrue(
-        Limits.getQueryRows() - rowsBefore <= 3,
-        'The read must cost max 3 query rows (one per status group)'
-      );
-      Assert.areEqual(
-        dmlBefore,
-        Limits.getDmlStatements(),
-        'The read must not write'
-      );
+      Assert.areEqual(0, dml, 'The read must not write');
       Assert.areEqual(
         logsBefore,
-        [SELECT COUNT() FROM Workflow_Log__c],
+        logsAfter,
         'The read must not add audit rows'
       );
     }
@@ -191,18 +199,46 @@ private class WorkflowAsyncCapacityServiceTest {
   }
 
   @IsTest
-  static void orchestratorDoesNotCallTheRead() {
+  static void enqueuePathDoesNotCallTheRead() {
+    // The orchestrator and each production class that calls System.enqueueJob.
+    Set<String> hotPath = new Set<String>{
+      'WorkflowOrchestrator',
+      'WorkflowOrchestratorEnqueue',
+      'WorkflowEngine',
+      'WorkflowStepRunner',
+      'WorkflowBranchResume',
+      'WorkflowCancellation',
+      'WorkflowCascadeCancel',
+      'WorkflowCompensation',
+      'WorkflowCompensationRunner',
+      'WorkflowContinueAsNew',
+      'WorkflowEventTriggerHandler',
+      'WorkflowOperatorSkipAdvance',
+      'WorkflowOperatorSkipParallelResume',
+      'WorkflowPauseResumeDrainer',
+      'WorkflowResumeEnqueue',
+      'WorkflowResumeService',
+      'WorkflowRetryJob',
+      'WorkflowRetryService',
+      'WorkflowRetrySleepScheduler',
+      'WorkflowSleepJob',
+      'WorkflowTimeoutReArm',
+      'WorkflowTimeoutScheduler'
+    };
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      ApexClass orchestrator = [
-        SELECT Body
+      List<ApexClass> classes = [
+        SELECT Name, Body
         FROM ApexClass
-        WHERE Name = 'WorkflowOrchestrator'
-        LIMIT 1
+        WHERE Name IN :hotPath
+        LIMIT 100
       ];
-      Assert.isFalse(
-        orchestrator.Body.contains('AsyncCapacity'),
-        'The capacity read must stay off the enqueue hot path'
-      );
+      Assert.isTrue(classes.size() >= 2, 'Hot-path classes must exist');
+      for (ApexClass c : classes) {
+        Assert.isFalse(
+          c.Body.contains('AsyncCapacity'),
+          c.Name + ' must not call the capacity read'
+        );
+      }
     }
   }
 }

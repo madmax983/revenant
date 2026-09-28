@@ -333,4 +333,96 @@ private class AsyncCapacityEvaluatorTest {
       result.get('thresholdSource')
     );
   }
+
+  @IsTest
+  static void backlogMetricUsesExecutionsLeft() {
+    AsyncCapacityEvaluator.Reading r = reading(200000, 250000, 10);
+    r.queued = 30;
+    r.processing = 5;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Map<String, Object> backlog = metricFor(
+      result,
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(45, backlog.get('used'), 'Holding + Queued + Processing');
+    Assert.areEqual(50000, backlog.get('limit'), 'Limit minus used');
+    Assert.areEqual(0.09, backlog.get('percent'));
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_HEALTHY,
+      backlog.get('status')
+    );
+    Assert.areEqual(3, ((List<Object>) result.get('metrics')).size());
+  }
+
+  @IsTest
+  static void backlogLargerThanExecutionsLeftIsCritical() {
+    AsyncCapacityEvaluator.Reading r = reading(249900, 250000, 0);
+    r.queued = 100;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Map<String, Object> backlog = metricFor(
+      result,
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(100.00, backlog.get('percent'));
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_CRITICAL,
+      backlog.get('status')
+    );
+    Assert.areEqual(true, result.get('chainAtRisk'));
+  }
+
+  @IsTest
+  static void backlogIsUnknownWithoutDailyOrJobData() {
+    Map<String, Object> noDaily = AsyncCapacityEvaluator.evaluate(
+      reading(null, null, 4),
+      defaults()
+    );
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      metricFor(noDaily, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status')
+    );
+    Map<String, Object> noJobs = AsyncCapacityEvaluator.evaluate(
+      reading(10, 250000, null),
+      defaults()
+    );
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      metricFor(noJobs, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status')
+    );
+  }
+
+  @IsTest
+  static void noExecutionsLeftGivesUnknownBacklogAndCriticalDaily() {
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(
+      reading(250000, 250000, 1),
+      defaults()
+    );
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status')
+    );
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_CRITICAL,
+      result.get('status')
+    );
+    Assert.areEqual(true, result.get('chainAtRisk'));
+  }
+
+  @IsTest
+  static void worstIgnoresUnrankedStatus() {
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_DEGRADED,
+      AsyncCapacityEvaluator.worst(
+        new List<String>{
+          'BOGUS',
+          AsyncCapacityEvaluator.STATUS_DEGRADED,
+          null
+        }
+      )
+    );
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      AsyncCapacityEvaluator.worst(new List<String>{ 'BOGUS' })
+    );
+  }
 }

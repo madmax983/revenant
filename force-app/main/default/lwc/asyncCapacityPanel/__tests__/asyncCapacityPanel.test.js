@@ -152,7 +152,8 @@ describe("c-async-capacity-panel", () => {
     const statuses = qa(element, "metric-status");
     expect(statuses[0].textContent).toBe("Degraded");
     expect(statuses[1].textContent).toBe("Unknown");
-    expect(rows[1].textContent).toContain("N/A");
+    expect(rows[1].textContent).toContain("—");
+    expect(rows[1].textContent).not.toContain("N/A");
   });
 
   it("renders the job counts", async () => {
@@ -212,5 +213,110 @@ describe("c-async-capacity-panel", () => {
   it("shows an error when the read returns no data", async () => {
     const element = await render(undefined);
     expect(q(element, "capacity-error")).not.toBeNull();
+  });
+
+  it("shows the action for Degraded and Critical", async () => {
+    let element = await render(envelope({ status: "DEGRADED" }));
+    expect(q(element, "capacity-action").textContent).toContain(
+      "Start fewer new instances",
+    );
+    document.body.removeChild(element);
+    element = await render(envelope({ status: "CRITICAL", chainAtRisk: true }));
+    expect(q(element, "capacity-action").textContent).toContain(
+      "Pause definitions that are not critical",
+    );
+  });
+
+  it("uses the plain badge for Unknown and for an unexpected status", async () => {
+    for (const status of ["UNKNOWN", "toString", undefined]) {
+      const element = await render(envelope({ status }));
+      const badge = q(element, "capacity-status");
+      expect(badge.textContent).toBe("Unknown");
+      expect(badge.className).toBe("slds-badge");
+      document.body.removeChild(element);
+    }
+  });
+
+  it("follows chainAtRisk from Apex, not the status text", async () => {
+    const element = await render(
+      envelope({ status: "DEGRADED", chainAtRisk: true }),
+    );
+    expect(q(element, "capacity-risk")).not.toBeNull();
+  });
+
+  it("clamps the progress bar at 100", async () => {
+    const element = await render(
+      envelope({
+        metrics: [
+          {
+            key: "DAILY_ASYNC",
+            label: "Daily async Apex executions",
+            used: 300,
+            limit: 200,
+            percent: 150,
+            status: "CRITICAL",
+          },
+        ],
+      }),
+    );
+    const bar = element.shadowRoot.querySelector("lightning-progress-bar");
+    expect(bar.value).toBe(100);
+    expect(q(element, "capacity-metric").textContent).toContain("150%");
+  });
+
+  it("skips null metric rows and keys rows without a key", async () => {
+    const element = await render(
+      envelope({
+        metrics: [
+          null,
+          {
+            label: "No key",
+            used: 1,
+            limit: 10,
+            percent: 10,
+            status: "HEALTHY",
+          },
+        ],
+      }),
+    );
+    const rows = qa(element, "capacity-metric");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("No key");
+  });
+
+  it("shows the as-of time", async () => {
+    const element = await render(envelope());
+    expect(q(element, "capacity-asof").textContent).toContain("As of");
+  });
+
+  it("says when thresholds are missing", async () => {
+    const element = await render(
+      envelope({ warnPercent: null, critPercent: undefined }),
+    );
+    const text = q(element, "capacity-thresholds").textContent;
+    expect(text).toBe("Thresholds are not available.");
+    expect(text).not.toContain("null");
+  });
+
+  it("shows an error when metrics is not a list", async () => {
+    const element = await render(envelope({ metrics: "bad" }));
+    expect(q(element, "capacity-error").textContent).toContain(
+      "No data was returned.",
+    );
+  });
+
+  it("marks the loading box busy and the error box as an alert", async () => {
+    getAsyncCapacity.mockReturnValue(new Promise(() => {}));
+    const loading = createElement("c-async-capacity-panel", {
+      is: AsyncCapacityPanel,
+    });
+    document.body.appendChild(loading);
+    expect(q(loading, "capacity-loading").getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    document.body.removeChild(loading);
+
+    const element = await render(new Error("boom"));
+    expect(q(element, "capacity-error").getAttribute("role")).toBe("alert");
   });
 });

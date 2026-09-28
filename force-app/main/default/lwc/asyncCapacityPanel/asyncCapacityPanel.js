@@ -17,13 +17,13 @@ const STATUS = {
     label: "Degraded",
     badgeClass: "slds-badge slds-theme_warning",
     action:
-      "Find the jobs that use async capacity (Setup > Apex Jobs). Decrease new starts or move batch work to a later time.",
+      "Find the jobs that use async capacity (Setup > Apex Jobs). Start fewer new instances. Move batch work to a later time.",
   },
   CRITICAL: {
     label: "Critical",
     badgeClass: "slds-badge slds-theme_error",
     action:
-      "Pause definitions that are not critical. Stop or move batch jobs. After recovery, look for orphaned instances.",
+      "Pause definitions that are not critical. Stop or move batch jobs. When capacity is normal again, look for orphaned instances.",
   },
 };
 const STATUS_UNKNOWN = {
@@ -33,9 +33,15 @@ const STATUS_UNKNOWN = {
     "Capacity data is not available. Examine the org limits (sf org list limits) and Setup > Apex Jobs.",
 };
 
+const MISSING = "—";
 const isMissing = (value) => value === null || value === undefined;
 const formatCount = (value) =>
-  isMissing(value) ? "—" : Number(value).toLocaleString();
+  isMissing(value) ? MISSING : Number(value).toLocaleString();
+// Own keys only, so a status such as "toString" gives Unknown.
+const statusFor = (code) =>
+  Object.prototype.hasOwnProperty.call(STATUS, code)
+    ? STATUS[code]
+    : STATUS_UNKNOWN;
 
 export default class AsyncCapacityPanel extends LightningElement {
   capacity = null;
@@ -83,8 +89,13 @@ export default class AsyncCapacityPanel extends LightningElement {
     return !!this.capacity;
   }
 
+  // Null-safe view of the envelope. The getters do not throw when there is no data.
+  get data() {
+    return this.capacity || {};
+  }
+
   get overall() {
-    return STATUS[this.capacity && this.capacity.status] || STATUS_UNKNOWN;
+    return statusFor(this.data.status);
   }
 
   get statusLabel() {
@@ -100,18 +111,19 @@ export default class AsyncCapacityPanel extends LightningElement {
   }
 
   get chainAtRisk() {
-    return !!(this.capacity && this.capacity.chainAtRisk === true);
+    return this.data.chainAtRisk === true;
   }
 
   get metricRows() {
-    return (this.capacity.metrics || []).map((m) => {
-      const status = STATUS[m.status] || STATUS_UNKNOWN;
+    const metrics = Array.isArray(this.data.metrics) ? this.data.metrics : [];
+    return metrics.filter(Boolean).map((m, index) => {
+      const status = statusFor(m.status);
       const hasPercent = !isMissing(m.percent);
       return {
-        key: m.key,
+        key: m.key || `metric-${index}`,
         label: m.label,
         usageLabel: `${formatCount(m.used)} / ${formatCount(m.limit)}`,
-        percentLabel: hasPercent ? `${m.percent}%` : "N/A",
+        percentLabel: hasPercent ? `${m.percent}%` : MISSING,
         barValue: hasPercent ? Math.min(Number(m.percent), 100) : 0,
         statusLabel: status.label,
         badgeClass: status.badgeClass,
@@ -120,7 +132,7 @@ export default class AsyncCapacityPanel extends LightningElement {
   }
 
   get jobCountsLabel() {
-    const jobs = this.capacity.jobCounts || {};
+    const jobs = this.data.jobCounts || {};
     if (isMissing(jobs.total)) {
       return "AsyncApexJob counts are not available.";
     }
@@ -132,16 +144,20 @@ export default class AsyncCapacityPanel extends LightningElement {
   }
 
   get thresholdLabel() {
-    return `Degraded at ${this.capacity.warnPercent}% · Critical at ${this.capacity.critPercent}%`;
+    const { warnPercent, critPercent } = this.data;
+    if (isMissing(warnPercent) || isMissing(critPercent)) {
+      return "Thresholds are not available.";
+    }
+    return `Degraded at ${warnPercent}% · Critical at ${critPercent}%`;
   }
 
   get isInvalidConfig() {
-    return this.capacity.thresholdSource === "INVALID";
+    return this.data.thresholdSource === "INVALID";
   }
 
   get asOfLabel() {
-    return this.capacity.asOfMs
-      ? `As of ${new Date(this.capacity.asOfMs).toLocaleTimeString()}`
+    return this.data.asOfMs
+      ? `As of ${new Date(this.data.asOfMs).toLocaleTimeString()}`
       : "";
   }
 }

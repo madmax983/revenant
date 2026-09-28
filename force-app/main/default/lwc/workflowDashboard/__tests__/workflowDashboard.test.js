@@ -17,6 +17,13 @@ import getWorkflowCatalog from "@salesforce/apex/WorkflowDashboardController.get
 import releaseDefinitionChangedInstance from "@salesforce/apex/WorkflowDashboardCommandController.releaseDefinitionChangedInstance";
 import getRateLimitStatus from "@salesforce/apex/WorkflowRateLimitController.getRateLimitStatus";
 import getWatchdogStatus from "@salesforce/apex/WorkflowDashboardController.getWatchdogStatus";
+import getAsyncCapacity from "@salesforce/apex/WorkflowAsyncCapacityController.getAsyncCapacity";
+
+jest.mock(
+  "@salesforce/apex/WorkflowAsyncCapacityController.getAsyncCapacity",
+  () => ({ default: jest.fn(() => Promise.resolve()) }),
+  { virtual: true },
+);
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -3370,15 +3377,56 @@ describe("c-workflow-dashboard async capacity panel (#129)", () => {
     ).toBeNull();
   });
 
-  it("shows the panel in System Doctor", async () => {
+  const CAPACITY = {
+    asOfMs: 1700000000000,
+    status: "CRITICAL",
+    chainAtRisk: true,
+    warnPercent: 80,
+    critPercent: 95,
+    thresholdSource: "DEFAULT",
+    metrics: [
+      {
+        key: "DAILY_ASYNC",
+        label: "Daily async Apex executions",
+        used: 240000,
+        limit: 250000,
+        percent: 96,
+        status: "CRITICAL",
+      },
+    ],
+    jobCounts: { holding: 0, queued: 1, processing: 0, total: 1 },
+  };
+
+  async function openDoctor() {
     const element = await mountDashboard();
     findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
       new CustomEvent("click"),
     );
     await flushPromises();
     await flushPromises();
+    return element;
+  }
+
+  it("shows the panel with data in System Doctor", async () => {
+    getAsyncCapacity.mockResolvedValue(CAPACITY);
+    const element = await openDoctor();
+    const panel = element.shadowRoot.querySelector("c-async-capacity-panel");
+    expect(panel).not.toBeNull();
+    await flushPromises();
     expect(
-      element.shadowRoot.querySelector("c-async-capacity-panel"),
+      panel.shadowRoot.querySelector('[data-id="capacity-risk"]'),
     ).not.toBeNull();
+  });
+
+  it("reads capacity again on Refresh Status", async () => {
+    getAsyncCapacity.mockResolvedValue(CAPACITY);
+    const element = await openDoctor();
+    expect(getAsyncCapacity).toHaveBeenCalledTimes(1);
+    findButton(element, (btn) => btn.label === "Refresh Status").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    expect(getAsyncCapacity).toHaveBeenCalledTimes(2);
   });
 });
