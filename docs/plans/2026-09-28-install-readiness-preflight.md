@@ -71,6 +71,7 @@ Give the operator one read-only check list on System Doctor. Each check tells if
 | `eventTrigger`    | not found                            | Fail   | Not deployed.                                               |
 | `watchdog`        | running                              | Pass   | Running.                                                    |
 | `watchdog`        | not running                          | Fail   | Points to **Enqueue Watchdog**.                             |
+| `watchdog`        | running, liveness `STALE` (#113)     | Warn   | Cancel the instance, then Enqueue Watchdog.                 |
 | `access.<Object>` | read and create on object and fields | Pass   | Access OK.                                                  |
 | `access.<Object>` | a read gap                           | Fail   | Names each object or field.                                 |
 | `access.<Object>` | create gap only                      | Warn   | Names each object or field.                                 |

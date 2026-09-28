@@ -91,11 +91,12 @@ public inherited sharing class WorkflowReadinessService {
     }
 
     /**
-     * @description The watchdog liveness state of System Doctor (#113).
+     * @description The watchdog liveness state of System Doctor (#113). It only reads:
+     * it does not run the stall detector, so it sends no alert.
      * @return 'HEALTHY', 'STALE' or 'UNKNOWN'.
      */
     public virtual String watchdogLivenessState() {
-      return null;
+      return WatchdogLiveness.evaluateNow().state;
     }
 
     /**
@@ -304,7 +305,8 @@ public inherited sharing class WorkflowReadinessService {
     }
   }
 
-  // (d) The watchdog chain. Uses the System Doctor signal.
+  // (d) The watchdog chain. Uses the System Doctor signals: Running/Stopped and the
+  // #113 liveness state. UNKNOWN (no sweep yet) on a running chain passes.
   private class WatchdogRule extends Rule {
     public WatchdogRule() {
       key = 'watchdog';
@@ -312,14 +314,21 @@ public inherited sharing class WorkflowReadinessService {
     }
 
     protected override ReadinessCheck evaluate() {
-      if (probe.watchdogRunning()) {
-        return pass('The watchdog chain is running.');
+      if (!probe.watchdogRunning()) {
+        return row(
+          STATUS_FAIL,
+          'The watchdog chain is not running (System Doctor shows Stopped). Sleeps, timeouts, retries, and stall recovery do not resume.',
+          'Click Enqueue Watchdog in the Watchdog Daemon Health panel on this tab.'
+        );
       }
-      return row(
-        STATUS_FAIL,
-        'The watchdog chain is not running (System Doctor shows Stopped). Sleeps, timeouts, retries, and stall recovery do not resume.',
-        'Click Enqueue Watchdog in the Watchdog Daemon Health panel on this tab.'
-      );
+      if (probe.watchdogLivenessState() == WatchdogLiveness.STATE_STALE) {
+        return row(
+          STATUS_WARN,
+          'The watchdog record is active, but its sweeps stopped (System Doctor shows Stale). Sleeps, timeouts, retries, and stall recovery do not resume.',
+          'Cancel the watchdog instance (Correlation Key SystemWatchdog) on this dashboard, then click Enqueue Watchdog. See docs/watchdog-liveness.md.'
+        );
+      }
+      return pass('The watchdog chain is running.');
     }
   }
 
