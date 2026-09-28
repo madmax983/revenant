@@ -1,20 +1,20 @@
 /**
  * @description Pure helpers for strict determinism mode (issue #102). Builds
  * the routing-decision text of a StepResult, digests text with SHA-256, and
- * reads and writes Decision_Record__c. No SOQL. No DML.
+ * encodes and parses the Decision_Record__c value. No SOQL. No DML.
  *
  * The decision text holds routing data only: the action, the next step, the
  * split and child targets, the approval key and role, the timeout route and
- * the compensation flag. Payloads, step state and durations are not routing.
- * Targets are sorted, so an unordered query does not change the text.
+ * the compensation flag. It does not include payloads, step state or
+ * durations. Each value is JSON, so a delimiter in a value cannot make two
+ * decisions look equal. The class sorts the targets. Thus, a change in order
+ * does not change the text.
  */
 public inherited sharing class WorkflowDecisionFingerprint {
   /** @description Version of the Decision_Record__c format. */
   public static final Integer RECORD_VERSION = 1;
   /** @description Max length of the decision summary in a record. */
   public static final Integer MAX_SUMMARY_LENGTH = 255;
-
-  private static final String NONE = '-';
 
   /**
    * @description A parsed Decision_Record__c value.
@@ -44,24 +44,24 @@ public inherited sharing class WorkflowDecisionFingerprint {
       when COMPLETE {
         return action +
           ' next=' +
-          orNone(d.nextStepName) +
+          quote(d.nextStepName) +
           ' compensate=' +
           (compensatable == true);
       }
       when SPLIT {
-        return action + ' targets=' + sorted(d.parallelStepNames);
+        return action + ' targets=' + sortedJson(d.parallelStepNames);
       }
       when SUSPEND {
-        return action + ' timeout=' + orNone(d.timeout.step);
+        return action + ' timeout=' + quote(d.timeout.step);
       }
       when WAIT_FOR_APPROVAL {
         return action +
           ' key=' +
-          orNone(d.approvalKey) +
+          quote(d.approvalKey) +
           ' role=' +
-          orNone(d.approvalRole) +
+          quote(d.approvalRole) +
           ' timeout=' +
-          orNone(d.timeout.step);
+          quote(d.timeout.step);
       }
       when START_CHILD {
         return action +
@@ -69,7 +69,7 @@ public inherited sharing class WorkflowDecisionFingerprint {
           childTarget(d.childWorkflowName, d.childCorrelationKey);
       }
       when START_CHILDREN {
-        return action + ' children=' + sorted(childTargets(d.childRequests));
+        return action + ' children=' + childTargets(d.childRequests);
       }
       when else {
         return action;
@@ -153,34 +153,33 @@ public inherited sharing class WorkflowDecisionFingerprint {
     }
   }
 
-  private static String orNone(String value) {
-    return String.isBlank(value) ? NONE : value;
+  // A JSON string (or null) has no ambiguous delimiter.
+  private static String quote(String value) {
+    return JSON.serialize(value);
   }
 
   private static String childTarget(String workflowName, String key) {
-    return orNone(workflowName) + ':' + orNone(key);
+    return JSON.serialize(new List<String>{ workflowName, key });
   }
 
-  private static List<String> childTargets(
-    List<StepResult.ChildRequest> requests
-  ) {
+  private static String childTargets(List<StepResult.ChildRequest> requests) {
     List<String> targets = new List<String>();
-    if (requests == null) {
-      return targets;
-    }
-    for (StepResult.ChildRequest req : requests) {
-      if (req != null) {
-        targets.add(childTarget(req.workflowName, req.correlationKey));
+    if (requests != null) {
+      for (StepResult.ChildRequest req : requests) {
+        if (req != null) {
+          targets.add(childTarget(req.workflowName, req.correlationKey));
+        }
       }
     }
-    return targets;
+    targets.sort();
+    return '[' + String.join(targets, ',') + ']';
   }
 
-  private static String sorted(List<String> values) {
+  private static String sortedJson(List<String> values) {
     List<String> copy = values == null
       ? new List<String>()
       : new List<String>(values);
     copy.sort();
-    return '[' + String.join(copy, ', ') + ']';
+    return JSON.serialize(copy);
   }
 }

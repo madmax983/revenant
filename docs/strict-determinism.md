@@ -1,48 +1,58 @@
 # Strict Determinism Mode
 
-Issue #102. The engine can find a step that makes a different routing decision when it runs again with the same inputs. It fails the instance before it writes that decision. Use this mode in development and staging.
+Issue #102. The engine can find a step that makes a different routing decision when it runs again with the same inputs. It fails the instance before the decision is written. Use this mode in development and staging.
 
 ## Why a step runs again
 
-The engine runs `execute()` again on the same step row after each wait:
+The engine runs `execute()` again on the same step row after these results:
 
-- `SUSPEND`, `WAIT_FOR_APPROVAL`, `START_CHILD` and `START_CHILDREN` run the step again when it wakes. A duplicate delivery, an operator resume or a reclaim also wakes it.
-- `SLEEP`, `YIELD` and `RETRY` run the step again later.
+- `SUSPEND`, `WAIT_FOR_APPROVAL`, `START_CHILD` and `START_CHILDREN`. A signal, an approval, a child outcome or a resume wakes the step. A duplicate delivery, an operator resume or a reclaim also wakes it, with no new input.
+- `SLEEP`, `YIELD` and `RETRY`. The engine runs the step again later.
 
-Each run must make the same decision from the same inputs. When a step reads data that changes, and does not wrap the value in `once()`, the new run can route to another step. The history and the compensation stack then do not agree with the work that the step did.
+Each run must make the same decision from the same inputs. A step can read data that changes, without `once()`. The next run can then route to another step. The history and the compensation stack then do not agree with the work that the step did.
 
 ## Replay-safe operations
 
 | Operation in `execute()` | Replay-safe? | What to do |
 |--------------------------|--------------|------------|
 | Read `ctx.workflowInputJson`, `ctx.inputJson`, `ctx.previousStepOutput` | Yes | - |
-| Read `ctx.attempt` | Yes | - |
-| Read `ctx.stepStateJson` | Yes | Do not use it to skip a wait. Repeat the wait until a new input arrives. |
+| Read `ctx.stepStateJson` (also a resume payload) | Yes | - |
+| Read `ctx.attempt`, `ctx.isFinalAttempt()`, `ctx.idempotencyKey` | Yes | - |
 | Read signals, approvals, child outcomes (`ctx.signals()`) | Yes | - |
 | Read a value from `ctx.captures().once(...)` | Yes | - |
+| `ctx.shouldYield()` | No | Return `YIELD` only. Do not use it to select a wait. |
 | `Datetime.now()`, `Date.today()`, `System.now()` | No | Wrap in `once()`. |
 | `Crypto` random values, generated ids or UUIDs | No | Wrap in `once()`. |
-| SOQL on records that other processes change | No | Wrap the value in `once()`, or send a signal. |
+| SOQL on records that other processes change | No | Wrap the value in `once()`. Or make the other process send a signal. |
+| SOQL on child `Workflow_Instance__c` status | No | Use `ctx.signals().getChildOutcomes(...)`. |
 | A callout response that routes the step | No | Wrap the result in `once()`. |
 | A branch on user, org or custom setting data that can change | No | Wrap in `once()`. |
 
 A value in `once()` does not change between runs. Thus, a decision that uses it does not change.
 
-A waiting step must repeat the same wait until a new signal, approval or child outcome arrives. The examples in `examples/` obey this rule.
+A waiting step must repeat the same wait until a new input arrives.
 
 ## Turn on the mode
 
-Set `Revenant_Config__mdt.Strict_Determinism__c` to checked on the **Default** record. The default is off.
+On the **Default** record of `Revenant_Config__mdt`, select the `Strict_Determinism__c` check box. The default is off.
+
+The Default record is in the source. A deploy of the source sets the mode to off again. Set it again after each deploy.
+
+In an Apex test, set `WorkflowEngine.strictDeterminism = true`.
+
+## Cost
 
 When the mode is off, the engine does no work for it: no SOQL, no DML.
 
-When the mode is on, each step run costs one aggregate SOQL on `Workflow_Signal__c`.
+When the mode is on, each step run costs:
+
+- Three SOQL queries: live signal counts, the newest signal, and child status counts.
+- One query row for each live signal (`Received` or `Processing`) and each child instance.
+- One SHA-256 digest of the stored inputs.
 
 ## What the engine records
 
 The engine records a wait decision in `Workflow_Step_Execution__c.Decision_Record__c`. The wait handler saves the row, so the record costs no extra DML.
-
-The record holds:
 
 | Key | Value |
 |-----|-------|
@@ -53,35 +63,41 @@ The record holds:
 
 The step inputs are:
 
-- Step input and previous step output.
-- `ctx.attempt`.
-- The timeout-resume flag.
-- The signals of the instance: status, count and newest `CreatedDate` for each status. Signals carry approvals and child outcomes.
+- The stored step input, previous output and step state. Stored forms are encoded or offloaded. The digest holds no decoded payload.
+- `ctx.attempt` and the timeout-resume flag.
+- The counts of live signals, and the newest signal of the instance. Signals carry approvals and child outcomes.
+- The status counts of the child instances.
 
-Captures and step state are not inputs. A `once()` value is stable by contract. The engine writes wait state from the recorded decision.
+Captures are not inputs. A `once()` value is stable by contract.
 
-The decision text holds routing data only:
+A wait can write new step state. The next run then has new inputs, and the engine records again. After such a wait, the engine compares from the second duplicate run.
+
+The decision text holds routing data only. Each value is JSON.
 
 | Action | Decision text |
 |--------|---------------|
-| `COMPLETE` | Next step and the compensation flag. |
+| `COMPLETE` | Next step hint and the compensation flag. |
 | `SPLIT` | Sorted target steps. |
 | `SUSPEND` | Timeout step. |
 | `WAIT_FOR_APPROVAL` | Key, role and timeout step. |
 | `START_CHILD` | Child workflow and key. |
 | `START_CHILDREN` | Sorted child workflows and keys. |
-| Other actions | The action name. |
+| `FAIL`, `CONTINUE_AS_NEW` | The action name. |
 
-Payloads, step state and durations are not routing.
+The decision text does not include payloads, step state or durations. The engine records only wait decisions. The text of other decisions shows in the error message.
+
+`RETRY`, `SLEEP` and `YIELD` are not decisions. The engine keeps the record and compares the next decision. A thrown error is not a decision.
 
 ## What the engine checks
 
 ```mermaid
 flowchart TD
-    A[Hydrate StepContext] --> B[Digest inputs]
+    A[Hydrate StepContext] --> S{Strict mode on?}
+    S -- no --> Z[Clear record] --> P[Pass]
+    S -- yes --> B[Digest inputs]
     B --> C[execute]
-    C --> D{Thrown error?}
-    D -- yes --> P[Pass]
+    C --> D{Thrown error or RETRY, SLEEP, YIELD?}
+    D -- yes --> P
     D -- no --> E{Record with equal inputs?}
     E -- no --> F{Wait decision?}
     F -- yes --> R[Record decision] --> P
@@ -94,20 +110,18 @@ flowchart TD
     J --> K[failWorkflowInstance: STEP_NON_DETERMINISM]
 ```
 
-A new signal, approval or child outcome changes the inputs. The step can then make a new decision.
-
 ## What a divergence does
 
-1. It sets the step row to `Failed`. `Error_Details__c` shows the recorded and the new decision.
-2. It writes an Error `Workflow_Log__c` row with `Log_Type__c` = `StepNonDeterminism`.
-3. It fails the instance through the normal failure path:
+1. The engine sets the step row to `Failed`. `Error_Details__c` shows the recorded and the new decision.
+2. The engine writes an Error `Workflow_Log__c` row with `Log_Type__c` = `StepNonDeterminism`.
+3. The engine fails the instance through the normal failure path:
    - No compensation stack: `Failed`, with `Failure_Category__c` = `STEP_NON_DETERMINISM`.
-   - A compensation stack: LIFO rollback.
+   - A compensation stack: LIFO rollback. The category stays blank.
    - An `ErrorRoutingWorkflow`: the error step. `StepError.errorMessage` starts with `Step non-determinism: `.
 
-The divergent decision writes no new step row and no compensation push. The engine does not publish the step's buffered events. Claimed signals go back to `Received`.
+The engine does not write a new step row. It does not push the step onto the compensation stack. It does not publish the buffered step events. Claimed signals go back to `Received`. Other observed signals stay `Received`.
 
-Query the log rows to find all divergences, also the ones that error routing or compensation handled:
+To find all divergences, query the log rows. The query also finds divergences that error routing or compensation handled:
 
 ```sql
 SELECT Workflow_Instance__c, Message__c, CreatedDate
@@ -115,13 +129,18 @@ FROM Workflow_Log__c
 WHERE Log_Type__c = 'StepNonDeterminism'
 ```
 
-## Operator retry
+## When the engine clears a record
 
-A retry clears `Decision_Record__c`. The step then makes a fresh decision. Correct the step code before you retry.
+- An operator retry, and a re-drive of a parallel branch.
+- A resume with a payload (`WorkflowResumeService`, `RESUME` event). The payload is a new input.
+- A release of a `DefinitionChanged` instance.
+- A step run while the mode is off.
+
+Correct the step code before you retry. A deploy of changed step code can change the decision of a waiting step. Turn the mode off until the waiting instances move on.
 
 ## Limits
 
-- The engine compares only when the inputs are equal. A step that reads changed data after a new signal is not found.
+- The engine compares only when the inputs are equal. The engine does not compare a run that follows a new input.
 - The engine does not check side effects that do not change routing.
 - The engine does not check `compensate()`.
-- A thrown error is not a decision. Auto-retry handles it.
+- With a payload codec, each wait that writes step state writes new stored state. The engine then compares less often.

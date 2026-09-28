@@ -441,6 +441,16 @@ section for the full contract shape, type-coercion rules, and bulk/Flow behavior
 
 See [docs/definition-change-detection.md](docs/definition-change-detection.md).
 
+## New (additive, non-breaking): `STEP_NON_DETERMINISM` category
+
+**Issue #102.** No signature changes. Read this if your code switches on `Failure_Category__c`.
+
+- `Workflow_Instance__c.Failure_Category__c` has a new value: `STEP_NON_DETERMINISM` (label "Step Non-Determinism").
+- New field: `Workflow_Step_Execution__c.Decision_Record__c`. Only strict determinism mode writes it.
+- New config field: `Revenant_Config__mdt.Strict_Determinism__c`. Default: off. When off, nothing changes.
+
+See [docs/strict-determinism.md](docs/strict-determinism.md).
+
 ---
 
 ## 9. New (additive, non-breaking): `WorkflowInstanceQuery.findInstances`

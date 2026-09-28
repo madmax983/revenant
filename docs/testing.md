@@ -404,6 +404,18 @@ static void testRetryWorkflow() {
 
 ---
 
+## Strict determinism mode in tests
+
+To find a step that changes its decision on a re-run, turn on the mode in the test:
+
+```apex
+WorkflowEngine.strictDeterminism = true;
+```
+
+Then run the waiting step again with no new input, for example with `WorkflowEngine.runStep(instanceId)`. A step that changes its decision fails with `STEP_NON_DETERMINISM`. See [strict-determinism.md](strict-determinism.md).
+
+---
+
 ## Governor limit cheat sheet
 
 | Resource | Per-transaction limit | Implication |

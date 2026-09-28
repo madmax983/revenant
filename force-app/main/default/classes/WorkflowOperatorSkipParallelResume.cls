@@ -109,6 +109,8 @@ public inherited sharing class WorkflowOperatorSkipParallelResume {
         pe.Status__c = 'Pending';
         pe.Retry_Count__c = 0;
         pe.Error_Details__c = null;
+        // A re-drive accepts a new decision (strict determinism, issue #102).
+        pe.Decision_Record__c = null;
         stepsToReset.add(pe);
         stepsToEnqueue.add(ps);
       } else if (pe.Status__c == 'Pending' && pe.CPU_Time_Ms__c == null) {

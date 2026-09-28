@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Strict_Determinism__c</fullName>
     <defaultValue>false</defaultValue>
-    <description>If checked, the engine fails a step that makes a different routing decision when it runs again with the same inputs. Category: STEP_NON_DETERMINISM. Use in development and staging. Default: off.</description>
+    <description>When you select this box, the engine fails the instance of a step that makes a different routing decision when it runs again with the same inputs. Category: STEP_NON_DETERMINISM. Use in development and staging. Default: off.</description>
     <externalId>false</externalId>
     <fieldManageability>SubscriberControlled</fieldManageability>
     <label>Strict Determinism</label>

@@ -48,6 +48,10 @@ The codec also does not cover these fields. Do not put sensitive data in them:
 - Schedule input (`Workflow_Schedule__c.Input_Json__c`).
 - Platform events: `Workflow_Event__e` payloads that you publish, and events
   from `ctx.events()`.
+- Strict determinism mode: `Workflow_Step_Execution__c.Decision_Record__c`
+  and the `StepNonDeterminism` log rows. They hold step names, approval keys
+  and roles, and child keys. The inputs digest uses the stored (encoded)
+  forms, not plaintext.
 
 ## Write a codec
 

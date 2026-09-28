@@ -13,6 +13,7 @@ private class WorkflowStrictDeterminismTest {
   private static final String CHARGE = 'WorkflowStrictDeterminismTest.ChargeStep';
   private static final String COMP_GATE = 'WorkflowStrictDeterminismTest.CompGateStep';
   private static final String RECOVER = 'WorkflowStrictDeterminismTest.RecoverStep';
+  private static final String CHILD_WF = 'WorkflowStrictDeterminismTest.ChildWorkflow';
 
   /** @description Decision the gate steps return on their next run. */
   public static String mode = 'wait';
@@ -138,6 +139,35 @@ private class WorkflowStrictDeterminismTest {
   }
 
   /**
+   * @description Child workflow with one step.
+   */
+  public class ChildWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the step.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ NEXT };
+    }
+    /**
+     * @description Names the first step.
+     * @return The next step.
+     */
+    public String getInitialStep() {
+      return NEXT;
+    }
+    /**
+     * @description Ends after the step.
+     * @param currentStepName The completed step.
+     * @param result The step result.
+     * @return Null.
+     */
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null;
+    }
+  }
+
+  /**
    * @description Returns the decision that the static mode selects.
    */
   public class GateStep implements WorkflowStep {
@@ -167,6 +197,25 @@ private class WorkflowStrictDeterminismTest {
           return ctx.signals().hasSignal('Go')
             ? StepResult.complete(NEXT, null)
             : StepResult.suspend();
+        }
+        when 'resume' {
+          return String.isBlank(ctx.stepStateJson)
+            ? StepResult.suspend()
+            : StepResult.complete(OTHER, null);
+        }
+        when 'childA' {
+          return StepResult.startChild(
+            CHILD_WF,
+            'ChildA-' + ctx.workflowInstanceId,
+            null
+          );
+        }
+        when 'childB' {
+          return StepResult.startChild(
+            CHILD_WF,
+            'ChildB-' + ctx.workflowInstanceId,
+            null
+          );
         }
         when 'captured' {
           String tier = (String) ctx.captures()
@@ -340,7 +389,7 @@ private class WorkflowStrictDeterminismTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRun(GateWorkflow.class.getName(), 'wait');
-      Assert.areEqual('Suspended', load(instId).Status__c);
+      Assert.areEqual('Suspended', load(instId).Status__c, 'The gate waits');
       Assert.isNotNull(
         rows(instId, GATE)[0].Decision_Record__c,
         'The wait decision is recorded'
@@ -351,10 +400,15 @@ private class WorkflowStrictDeterminismTest {
       Test.stopTest();
 
       Workflow_Instance__c inst = load(instId);
-      Assert.areEqual('Failed', inst.Status__c);
+      Assert.areEqual(
+        'Failed',
+        inst.Status__c,
+        'The divergence fails the instance'
+      );
       Assert.areEqual(
         WorkflowEngine.CAT_STEP_NON_DETERMINISM,
-        inst.Failure_Category__c
+        inst.Failure_Category__c,
+        'The category is STEP_NON_DETERMINISM'
       );
       Assert.areEqual(
         GATE,
@@ -368,13 +422,17 @@ private class WorkflowStrictDeterminismTest {
 
       List<Workflow_Step_Execution__c> gateRows = rows(instId, GATE);
       Assert.areEqual(1, gateRows.size(), 'No new gate row');
-      Assert.areEqual('Failed', gateRows[0].Status__c);
+      Assert.areEqual(
+        'Failed',
+        gateRows[0].Status__c,
+        'The gate row is Failed'
+      );
       Assert.isTrue(
-        gateRows[0].Error_Details__c.contains('SUSPEND timeout=-'),
+        gateRows[0].Error_Details__c.contains('SUSPEND timeout=null'),
         'Error shows the recorded decision: ' + gateRows[0].Error_Details__c
       );
       Assert.isTrue(
-        gateRows[0].Error_Details__c.contains('COMPLETE next=' + OTHER),
+        gateRows[0].Error_Details__c.contains('COMPLETE next="' + OTHER + '"'),
         'Error shows the new decision: ' + gateRows[0].Error_Details__c
       );
       Assert.areEqual(
@@ -382,7 +440,7 @@ private class WorkflowStrictDeterminismTest {
         rows(instId, OTHER).size(),
         'The divergent next step has no row'
       );
-      Assert.areEqual(1, divergenceLogCount(instId));
+      Assert.areEqual(1, divergenceLogCount(instId), 'One divergence log row');
     }
   }
 
@@ -392,7 +450,7 @@ private class WorkflowStrictDeterminismTest {
       Test.startTest();
       Id instId = startAndRun(SagaWorkflow.class.getName(), 'wait');
       WorkflowEngine.runStep(instId); // CompGate waits
-      Assert.areEqual('Suspended', load(instId).Status__c);
+      Assert.areEqual('Suspended', load(instId).Status__c, 'CompGate waits');
 
       mode = 'complete';
       WorkflowEngine.runStep(instId);
@@ -408,13 +466,13 @@ private class WorkflowStrictDeterminismTest {
         .drive();
       Test.stopTest();
 
-      Assert.areEqual('Compensated', result.status);
+      Assert.areEqual('Compensated', result.status, 'The saga rolls back');
       Assert.areEqual(
         new List<String>{ CHARGE + '_Compensate' },
         result.compensatedSteps,
         'Only the completed forward step is undone'
       );
-      Assert.areEqual(1, divergenceLogCount(instId));
+      Assert.areEqual(1, divergenceLogCount(instId), 'One divergence log row');
     }
   }
 
@@ -423,15 +481,22 @@ private class WorkflowStrictDeterminismTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRun(GateWorkflow.class.getName(), 'timeoutA');
+      // The first wait writes step state, so the second run records again.
+      WorkflowEngine.runStep(instId);
       mode = 'timeoutB';
       WorkflowEngine.runStep(instId);
       Test.stopTest();
 
       Workflow_Instance__c inst = load(instId);
-      Assert.areEqual('Failed', inst.Status__c);
+      Assert.areEqual(
+        'Failed',
+        inst.Status__c,
+        'The divergence fails the instance'
+      );
       Assert.areEqual(
         WorkflowEngine.CAT_STEP_NON_DETERMINISM,
-        inst.Failure_Category__c
+        inst.Failure_Category__c,
+        'The category is STEP_NON_DETERMINISM'
       );
     }
   }
@@ -441,13 +506,46 @@ private class WorkflowStrictDeterminismTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRun(GateWorkflow.class.getName(), 'approvalA');
+      // The first wait writes step state, so the second run records again.
+      WorkflowEngine.runStep(instId);
       mode = 'approvalB';
       WorkflowEngine.runStep(instId);
       Test.stopTest();
 
       Assert.areEqual(
         WorkflowEngine.CAT_STEP_NON_DETERMINISM,
-        load(instId).Failure_Category__c
+        load(instId).Failure_Category__c,
+        'The category is STEP_NON_DETERMINISM'
+      );
+    }
+  }
+
+  @IsTest
+  static void changedChildKeyIsDivergence() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRun(GateWorkflow.class.getName(), 'childA');
+      // The first wait writes step state, so the second run records again.
+      WorkflowEngine.runStep(instId);
+      mode = 'childB';
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+
+      Assert.areEqual(
+        WorkflowEngine.CAT_STEP_NON_DETERMINISM,
+        load(instId).Failure_Category__c,
+        'A different child on equal inputs is a divergence'
+      );
+      Assert.areEqual(
+        0,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE
+            Parent_Instance__c = :instId
+            AND Correlation_Key__c LIKE 'ChildB-%'
+        ],
+        'The divergent child does not start'
       );
     }
   }
@@ -459,16 +557,28 @@ private class WorkflowStrictDeterminismTest {
       Id instId = startAndRun(RoutedGateWorkflow.class.getName(), 'wait');
       mode = 'complete';
       WorkflowEngine.runStep(instId); // divergence -> RecoverStep
-      Assert.areEqual(RECOVER, load(instId).Current_Step__c);
+      Assert.areEqual(
+        RECOVER,
+        load(instId).Current_Step__c,
+        'The error step is current'
+      );
       WorkflowEngine.runStep(instId); // RecoverStep completes
       Test.stopTest();
 
-      Assert.areEqual('Completed', load(instId).Status__c);
+      Assert.areEqual(
+        'Completed',
+        load(instId).Status__c,
+        'The error step completes the run'
+      );
       Assert.isTrue(
         routedError.startsWith(WorkflowDeterminismGuard.MESSAGE_PREFIX),
         'The error handler sees the category: ' + routedError
       );
-      Assert.areEqual(0, rows(instId, OTHER).size());
+      Assert.areEqual(
+        0,
+        rows(instId, OTHER).size(),
+        'The divergent next step has no row'
+      );
       Assert.areEqual(
         1,
         divergenceLogCount(instId),
@@ -491,9 +601,9 @@ private class WorkflowStrictDeterminismTest {
       Test.stopTest();
 
       Workflow_Instance__c inst = load(instId);
-      Assert.areEqual('Suspended', inst.Status__c);
-      Assert.isNull(inst.Failure_Category__c);
-      Assert.areEqual(0, divergenceLogCount(instId));
+      Assert.areEqual('Suspended', inst.Status__c, 'The step still waits');
+      Assert.isNull(inst.Failure_Category__c, 'No failure category');
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
     }
   }
 
@@ -512,9 +622,34 @@ private class WorkflowStrictDeterminismTest {
       WorkflowTestHarness.Result done = harness.injectSignal(key, 'Go', null);
       Test.stopTest();
 
-      Assert.areEqual('Completed', done.status);
-      Assert.isTrue(done.reachedStep(NEXT));
-      Assert.areEqual(0, divergenceLogCount(instId));
+      Assert.areEqual(
+        'Completed',
+        done.status,
+        'The new signal completes the run'
+      );
+      Assert.isTrue(done.reachedStep(NEXT), 'The run reaches Next');
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
+    }
+  }
+
+  @IsTest
+  static void resumePayloadIsANewInput() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRun(GateWorkflow.class.getName(), 'resume');
+      Assert.areEqual('Suspended', load(instId).Status__c, 'The gate waits');
+
+      WorkflowResumeService.resumeInstance(instId, '{"status":200}');
+      WorkflowEngine.runStep(instId); // Gate reads the payload -> Other
+      WorkflowEngine.runStep(instId); // Other completes
+      Test.stopTest();
+
+      Assert.areEqual(
+        'Completed',
+        load(instId).Status__c,
+        'A resume payload lets the step make a new decision'
+      );
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
     }
   }
 
@@ -529,9 +664,9 @@ private class WorkflowStrictDeterminismTest {
       Test.stopTest();
 
       Workflow_Instance__c inst = load(instId);
-      Assert.areEqual('Suspended', inst.Status__c);
-      Assert.isNull(inst.Failure_Category__c);
-      Assert.areEqual(0, divergenceLogCount(instId));
+      Assert.areEqual('Suspended', inst.Status__c, 'once() keeps the wait');
+      Assert.isNull(inst.Failure_Category__c, 'No failure category');
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
     }
   }
 
@@ -540,14 +675,21 @@ private class WorkflowStrictDeterminismTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       Id instId = startAndRun(GateWorkflow.class.getName(), 'wait');
-      Assert.isNotNull(rows(instId, GATE)[0].Decision_Record__c);
+      Assert.isNotNull(
+        rows(instId, GATE)[0].Decision_Record__c,
+        'Strict mode records the wait'
+      );
       WorkflowEngine.strictDeterminism = false; // operator turns it off
       mode = 'complete';
       WorkflowEngine.runStep(instId);
       Test.stopTest();
 
       Assert.areEqual(1, rows(instId, OTHER).size(), 'The gate advanced');
-      Assert.areEqual(0, divergenceLogCount(instId));
+      Assert.isNull(
+        rows(instId, GATE)[0].Decision_Record__c,
+        'Off removes the old record'
+      );
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
     }
   }
 
@@ -556,6 +698,7 @@ private class WorkflowStrictDeterminismTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.strictDeterminism = false;
       mode = 'wait';
       Id instId = WorkflowEngine.start(
         GateWorkflow.class.getName(),
@@ -569,10 +712,14 @@ private class WorkflowStrictDeterminismTest {
       Test.stopTest();
 
       Workflow_Instance__c inst = load(instId);
-      Assert.areEqual('Completed', inst.Status__c);
-      Assert.isNull(inst.Failure_Category__c);
-      Assert.areEqual(1, rows(instId, OTHER).size());
-      Assert.areEqual(0, divergenceLogCount(instId));
+      Assert.areEqual('Completed', inst.Status__c, 'Off: the run completes');
+      Assert.isNull(inst.Failure_Category__c, 'No failure category');
+      Assert.areEqual(
+        1,
+        rows(instId, OTHER).size(),
+        'Off: the gate advances to Other'
+      );
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
     }
   }
 
@@ -581,6 +728,7 @@ private class WorkflowStrictDeterminismTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
       WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.strictDeterminism = false;
       mode = 'wait';
       Id instId = WorkflowEngine.start(
         GateWorkflow.class.getName(),
@@ -590,8 +738,10 @@ private class WorkflowStrictDeterminismTest {
       WorkflowEngine.runStep(instId);
       Test.stopTest();
 
-      Assert.isFalse(WorkflowEngine.strictDeterminism, 'Default is off');
-      Assert.isNull(rows(instId, GATE)[0].Decision_Record__c);
+      Assert.isNull(
+        rows(instId, GATE)[0].Decision_Record__c,
+        'Off writes no record'
+      );
     }
   }
 
@@ -602,7 +752,11 @@ private class WorkflowStrictDeterminismTest {
       Id instId = startAndRun(GateWorkflow.class.getName(), 'wait');
       mode = 'complete';
       WorkflowEngine.runStep(instId);
-      Assert.areEqual('Failed', load(instId).Status__c);
+      Assert.areEqual(
+        'Failed',
+        load(instId).Status__c,
+        'The divergence fails the instance'
+      );
 
       WorkflowRetryService.retryWorkflow(instId);
       Assert.isNull(
@@ -613,8 +767,16 @@ private class WorkflowStrictDeterminismTest {
       WorkflowEngine.runStep(instId); // Other completes
       Test.stopTest();
 
-      Assert.areEqual('Completed', load(instId).Status__c);
-      Assert.areEqual(1, rows(instId, OTHER).size());
+      Assert.areEqual(
+        'Completed',
+        load(instId).Status__c,
+        'The retried run completes'
+      );
+      Assert.areEqual(
+        1,
+        rows(instId, OTHER).size(),
+        'The new decision routes to Other'
+      );
     }
   }
 }

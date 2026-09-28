@@ -3,13 +3,13 @@
  * guard records each wait decision of a step. When the step runs again with
  * the same inputs, the guard compares the new decision with the record. A
  * different decision fails the instance with STEP_NON_DETERMINISM, before the
- * engine writes the decision. When the mode is off, the guard does no work.
+ * dispatch writes the decision. When the mode is off, the guard does no work.
  *
- * Inputs are what the engine gives the step: step input, previous output,
- * attempt, the timeout-resume flag, and the signals of the instance (status,
- * count and newest CreatedDate). Signals carry approvals and child outcomes.
- * Captures and step state are not inputs: once() values are stable by
- * contract, and the engine writes wait state from the recorded decision.
+ * The inputs digest holds: the stored step input, previous output and step
+ * state, the attempt, the timeout-resume flag, the live signal counts, the
+ * newest signal, and the child status counts. The guard digests stored forms,
+ * so no decoded payload goes into the digest. Captures are not inputs:
+ * once() values are stable by contract.
  */
 public inherited sharing class WorkflowDeterminismGuard {
   /** @description Error message prefix of a divergence. */
@@ -20,44 +20,72 @@ public inherited sharing class WorkflowDeterminismGuard {
   /**
    * @description Digests the inputs of a step run. Call before execute(), so
    * a signal that arrives during the run counts as a new input.
+   * @param ctx The run context with the step row.
    * @param context The hydrated step context.
+   * @param prevOutput The stored previous step output.
    * @return The inputs digest, or null when strict mode is off.
    */
-  public static String captureInputs(StepContext context) {
-    if (WorkflowEngine.strictDeterminism != true || context == null) {
+  public static String captureInputs(
+    WorkflowStepRunner.RunStepContext ctx,
+    StepContext context,
+    String prevOutput
+  ) {
+    if (
+      WorkflowEngine.strictDeterminism != true ||
+      ctx?.stepExec == null ||
+      context == null
+    ) {
       return null;
     }
+    Id instanceId = ctx.instanceId;
     List<String> parts = new List<String>{
-      'input=' + context.inputJson,
-      'previous=' + context.previousStepOutput,
+      'input=' + ctx.stepExec.Input__c,
+      'previous=' + prevOutput,
+      'state=' + ctx.stepExec.Output__c,
       'attempt=' + context.attempt,
       'timeoutResume=' + context.retry().isTimeoutResume()
     };
-    Id instanceId = context.workflowInstanceId;
+    // Live signals only: consumed history does not count query rows.
     for (AggregateResult row : [
-      SELECT Status__c sigStatus, COUNT(Id) total, MAX(CreatedDate) newest
+      SELECT Status__c sigStatus, COUNT(Id) total
       FROM Workflow_Signal__c
-      WHERE Workflow_Instance__c = :instanceId
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Status__c IN ('Received', 'Processing')
       WITH SYSTEM_MODE
       GROUP BY Status__c
       ORDER BY Status__c
     ]) {
-      parts.add(
-        'signals=' +
-          row.get('sigStatus') +
-          '|' +
-          row.get('total') +
-          '|' +
-          row.get('newest')
-      );
+      parts.add('live=' + row.get('sigStatus') + '|' + row.get('total'));
     }
-    return WorkflowDecisionFingerprint.digest(String.join(parts, '\n'));
+    for (Workflow_Signal__c newest : [
+      SELECT Id
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c = :instanceId
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ]) {
+      parts.add('newest=' + newest.Id);
+    }
+    for (AggregateResult row : [
+      SELECT Status__c childStatus, COUNT(Id) total
+      FROM Workflow_Instance__c
+      WHERE Parent_Instance__c = :instanceId
+      WITH SYSTEM_MODE
+      GROUP BY Status__c
+      ORDER BY Status__c
+    ]) {
+      parts.add('child=' + row.get('childStatus') + '|' + row.get('total'));
+    }
+    // JSON keeps each part apart: no part can look like two parts.
+    return WorkflowDecisionFingerprint.digest(JSON.serialize(parts));
   }
 
   /**
    * @description Compares a step result with the recorded decision, and
-   * records or clears the decision on the in-memory step row. The wait
-   * handler saves the row, so a record costs no extra DML.
+   * records or clears the decision on the in-memory step row. The outcome
+   * handler saves the row, so this costs no extra DML.
    * @param inputs The digest from captureInputs, or null.
    * @param ctx The run context with the step, the step row and the thrown
    * error.
@@ -69,11 +97,20 @@ public inherited sharing class WorkflowDeterminismGuard {
     WorkflowStepRunner.RunStepContext ctx,
     StepResult result
   ) {
-    // A thrown error is not a decision. Auto-retry handles it.
-    if (inputs == null || ctx?.stepExec == null || ctx.thrownError != null) {
+    if (ctx?.stepExec == null) {
       return null;
     }
     Workflow_Step_Execution__c stepExec = ctx.stepExec;
+    if (inputs == null) {
+      // Mode off: remove an old record, so it cannot come back later.
+      stepExec.Decision_Record__c = null;
+      return null;
+    }
+    // A thrown error and a transient result are not decisions. Keep the
+    // record, so the next decision is still compared.
+    if (ctx.thrownError != null || isTransient(result)) {
+      return null;
+    }
     String decision = WorkflowDecisionFingerprint.describe(
       result,
       ctx.stepInstance instanceof CompensatableStep
@@ -88,18 +125,16 @@ public inherited sharing class WorkflowDeterminismGuard {
         return null;
       }
       return MESSAGE_PREFIX +
-        'step ' +
-        stepExec.Step_Name__c +
-        ' ran again with the same inputs and changed its decision. Recorded: ' +
+        'the step changed its decision on equal inputs.' +
+        '\nRecorded: ' +
         rec.decision +
-        '. New: ' +
+        '\nNew: ' +
         decision.left(WorkflowDecisionFingerprint.MAX_SUMMARY_LENGTH) +
-        '. Wrap values that change between runs in StepContext.captures().once().';
+        '\nWrap values that change between runs in StepContext.captures().once().';
     }
-    Boolean isWait =
-      result != null &&
-      WorkflowDecisionFingerprint.isWait(result.directive().action);
-    stepExec.Decision_Record__c = isWait
+    stepExec.Decision_Record__c = WorkflowDecisionFingerprint.isWait(
+        result?.directive().action
+      )
       ? WorkflowDecisionFingerprint.toRecordJson(inputs, decision)
       : null;
     return null;
@@ -107,9 +142,9 @@ public inherited sharing class WorkflowDeterminismGuard {
 
   /**
    * @description Fails the instance when the outcome carries a divergence.
-   * Runs after the outcome re-lock and before the dispatch, so the divergent
-   * decision writes no new step row and no compensation push. The buffered
-   * step events are not published. Claimed signals go back to Received.
+   * Runs after the outcome re-lock and before the dispatch, so the engine
+   * writes no new step row and no compensation push. The guard does not
+   * publish the buffered step events. Claimed signals go back to Received.
    * @param outcome The step outcome.
    * @return True when the guard failed the instance.
    */
@@ -139,5 +174,46 @@ public inherited sharing class WorkflowDeterminismGuard {
     req.failureCategory = WorkflowEngine.CAT_STEP_NON_DETERMINISM;
     WorkflowEngine.failWorkflowInstance(req);
     return true;
+  }
+
+  /**
+   * @description Removes the recorded decisions of the open rows of the
+   * current steps. Call when an operator accepts new decisions, for example on
+   * a definition-change release.
+   * @param instanceId The instance.
+   * @param currentStep The current step, or a comma-separated list of steps.
+   */
+  public static void clearRecords(Id instanceId, String currentStep) {
+    if (String.isBlank(currentStep)) {
+      return;
+    }
+    List<String> steps = new List<String>();
+    for (String step : currentStep.split(',')) {
+      steps.add(step.trim());
+    }
+    List<Workflow_Step_Execution__c> rows = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c IN :steps
+        AND Status__c IN ('Pending', 'Running')
+      WITH SYSTEM_MODE
+    ];
+    for (Workflow_Step_Execution__c row : rows) {
+      row.Decision_Record__c = null;
+    }
+    if (!rows.isEmpty()) {
+      Database.update(rows, true, AccessLevel.SYSTEM_MODE);
+    }
+  }
+
+  // RETRY, SLEEP and YIELD ask the engine to run the step again later. They
+  // are not routing decisions.
+  private static Boolean isTransient(StepResult result) {
+    StepResult.ActionType action = result?.directive().action;
+    return action == StepResult.ActionType.RETRY ||
+      action == StepResult.ActionType.SLEEP ||
+      action == StepResult.ActionType.YIELD;
   }
 }

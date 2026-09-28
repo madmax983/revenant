@@ -217,7 +217,7 @@ public inherited sharing class WorkflowRetryService {
         stepExec.Status__c = 'Pending';
         stepExec.Retry_Count__c = 0; // reset retry counter
         stepExec.Error_Details__c = null;
-        // A retry accepts a fresh decision (strict determinism, issue #102).
+        // A retry accepts a new decision (strict determinism, issue #102).
         stepExec.Decision_Record__c = null;
         stepsToReset.add(stepExec);
       }

@@ -4,7 +4,7 @@
     <description>Strict determinism mode (issue #102). JSON record of the last wait decision of this step and a digest of its inputs. The engine compares the next run of the step with this record.</description>
     <externalId>false</externalId>
     <label>Decision Record</label>
-    <length>1000</length>
+    <length>4000</length>
     <trackTrending>false</trackTrending>
     <type>LongTextArea</type>
     <visibleLines>3</visibleLines>

@@ -46,14 +46,36 @@ private class WorkflowDeterminismGuardTest {
     return inst;
   }
 
+  // A run context with a stored step input and no step state.
+  private static WorkflowStepRunner.RunStepContext rowContext(Id instanceId) {
+    WorkflowStepRunner.RunStepContext ctx = new WorkflowStepRunner.RunStepContext();
+    ctx.instanceId = instanceId;
+    ctx.stepInstance = new PlainStep();
+    ctx.stepExec = new Workflow_Step_Execution__c(
+      Step_Name__c = 'StepA',
+      Input__c = '{"a":1}',
+      Output__c = null
+    );
+    return ctx;
+  }
+
   private static StepContext.Builder contextFor(Id instanceId) {
     return new StepContext.Builder()
       .instanceId(instanceId)
       .workflowName('GuardTestWorkflow')
       .stepName('StepA')
-      .inputJson('{"a":1}')
-      .previousStepOutput('{"p":1}')
       .attempt(1);
+  }
+
+  private static String digestOf(
+    WorkflowStepRunner.RunStepContext ctx,
+    StepContext.Builder builder
+  ) {
+    return WorkflowDeterminismGuard.captureInputs(
+      ctx,
+      builder.build(),
+      '{"p":1}'
+    );
   }
 
   private static WorkflowStepRunner.RunStepContext runContext(String record) {
@@ -81,9 +103,12 @@ private class WorkflowDeterminismGuardTest {
   static void captureInputsIsFreeWhenOff() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = false;
-      StepContext context = contextFor(insertInstance().Id).build();
+      Id instId = insertInstance().Id;
       Integer before = Limits.getQueries();
-      Assert.isNull(WorkflowDeterminismGuard.captureInputs(context));
+      Assert.isNull(
+        digestOf(rowContext(instId), contextFor(instId)),
+        'Off gives no digest'
+      );
       Assert.areEqual(before, Limits.getQueries(), 'Off costs no SOQL');
     }
   }
@@ -94,14 +119,17 @@ private class WorkflowDeterminismGuardTest {
       WorkflowEngine.strictDeterminism = true;
       Id instId = insertInstance().Id;
       Integer before = Limits.getQueries();
-      String first = WorkflowDeterminismGuard.captureInputs(
-        contextFor(instId).build()
+      String first = digestOf(rowContext(instId), contextFor(instId));
+      Assert.areEqual(
+        before + 3,
+        Limits.getQueries(),
+        'On costs three SOQL: live signals, newest signal, children'
       );
-      Assert.areEqual(before + 1, Limits.getQueries(), 'On costs one SOQL');
-      Assert.areEqual(64, first.length());
+      Assert.areEqual(64, first.length(), 'SHA-256 hex digest');
       Assert.areEqual(
         first,
-        WorkflowDeterminismGuard.captureInputs(contextFor(instId).build())
+        digestOf(rowContext(instId), contextFor(instId)),
+        'Equal inputs give an equal digest'
       );
     }
   }
@@ -111,46 +139,52 @@ private class WorkflowDeterminismGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
       Id instId = insertInstance().Id;
-      String base = WorkflowDeterminismGuard.captureInputs(
-        contextFor(instId).build()
-      );
+      String base = digestOf(rowContext(instId), contextFor(instId));
+
       Assert.areNotEqual(
         base,
-        WorkflowDeterminismGuard.captureInputs(
-          contextFor(instId).attempt(2).build()
-        ),
+        digestOf(rowContext(instId), contextFor(instId).attempt(2)),
         'Attempt is an input'
       );
       Assert.areNotEqual(
         base,
-        WorkflowDeterminismGuard.captureInputs(
-          contextFor(instId).inputJson('{"a":2}').build()
-        ),
-        'Step input is an input'
+        digestOf(rowContext(instId), contextFor(instId).markTimeoutResume()),
+        'A timeout resume is an input'
       );
+
+      WorkflowStepRunner.RunStepContext changedInput = rowContext(instId);
+      changedInput.stepExec.Input__c = '{"a":2}';
+      Assert.areNotEqual(
+        base,
+        digestOf(changedInput, contextFor(instId)),
+        'Stored step input is an input'
+      );
+
+      WorkflowStepRunner.RunStepContext resumed = rowContext(instId);
+      resumed.stepExec.Output__c = '{"status":200}';
+      Assert.areNotEqual(
+        base,
+        digestOf(resumed, contextFor(instId)),
+        'Stored step state is an input, for example a resume payload'
+      );
+
       Assert.areNotEqual(
         base,
         WorkflowDeterminismGuard.captureInputs(
-          contextFor(instId).previousStepOutput('{"p":2}').build()
+          rowContext(instId),
+          contextFor(instId).build(),
+          '{"p":2}'
         ),
         'Previous output is an input'
       );
-      Assert.areNotEqual(
-        base,
-        WorkflowDeterminismGuard.captureInputs(
-          contextFor(instId).markTimeoutResume().build()
-        ),
-        'A timeout resume is an input'
-      );
+
       Assert.areEqual(
         base,
-        WorkflowDeterminismGuard.captureInputs(
-          contextFor(instId)
-            .capturedValuesJson('{"k":"v"}')
-            .stepStateJson('{"s":1}')
-            .build()
+        digestOf(
+          rowContext(instId),
+          contextFor(instId).capturedValuesJson('{"k":"v"}')
         ),
-        'Captures and step state are not inputs'
+        'Captures are not inputs'
       );
     }
   }
@@ -160,9 +194,7 @@ private class WorkflowDeterminismGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
       Workflow_Instance__c inst = insertInstance();
-      String none = WorkflowDeterminismGuard.captureInputs(
-        contextFor(inst.Id).build()
-      );
+      String none = digestOf(rowContext(inst.Id), contextFor(inst.Id));
       Workflow_Signal__c sig = new Workflow_Signal__c(
         Workflow_Instance__c = inst.Id,
         Correlation_Key__c = inst.Correlation_Key__c,
@@ -170,17 +202,39 @@ private class WorkflowDeterminismGuardTest {
         Status__c = 'Received'
       );
       insert sig;
-      String received = WorkflowDeterminismGuard.captureInputs(
-        contextFor(inst.Id).build()
-      );
+      String received = digestOf(rowContext(inst.Id), contextFor(inst.Id));
       Assert.areNotEqual(none, received, 'A new signal changes the inputs');
 
       sig.Status__c = 'Consumed';
       update sig;
       Assert.areNotEqual(
         received,
-        WorkflowDeterminismGuard.captureInputs(contextFor(inst.Id).build()),
-        'A signal status change changes the inputs'
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'A consumed signal changes the inputs'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsSeesChildStatus() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c parent = insertInstance();
+      Workflow_Instance__c child = new Workflow_Instance__c(
+        Workflow_Name__c = 'GuardTestChild',
+        Status__c = 'Running',
+        Correlation_Key__c = 'GuardChild-' + Crypto.getRandomInteger(),
+        Parent_Instance__c = parent.Id
+      );
+      insert child;
+      String running = digestOf(rowContext(parent.Id), contextFor(parent.Id));
+
+      child.Status__c = 'Completed';
+      update child;
+      Assert.areNotEqual(
+        running,
+        digestOf(rowContext(parent.Id), contextFor(parent.Id)),
+        'A child status change changes the inputs'
       );
     }
   }
@@ -190,13 +244,19 @@ private class WorkflowDeterminismGuardTest {
   // ============================================================
 
   @IsTest
-  static void verifyDoesNothingWithoutInputs() {
+  static void verifyClearsTheRecordWhenOff() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowStepRunner.RunStepContext ctx = runContext(null);
-      Assert.isNull(
-        WorkflowDeterminismGuard.verify(null, ctx, StepResult.suspend())
+      WorkflowStepRunner.RunStepContext ctx = runContext(
+        recordOf('in1', StepResult.suspend())
       );
-      Assert.isNull(ctx.stepExec.Decision_Record__c, 'Off writes no record');
+      Assert.isNull(
+        WorkflowDeterminismGuard.verify(null, ctx, StepResult.suspend()),
+        'Off never reports a divergence'
+      );
+      Assert.isNull(
+        ctx.stepExec.Decision_Record__c,
+        'Off removes an old record'
+      );
     }
   }
 
@@ -205,24 +265,34 @@ private class WorkflowDeterminismGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowStepRunner.RunStepContext ctx = runContext(null);
       Assert.isNull(
-        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.suspend())
+        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.suspend()),
+        'A first wait is not a divergence'
       );
       WorkflowDecisionFingerprint.Record rec = WorkflowDecisionFingerprint.parseRecord(
         ctx.stepExec.Decision_Record__c
       );
-      Assert.areEqual('in1', rec.inputs);
-      Assert.areEqual('SUSPEND timeout=-', rec.decision);
+      Assert.areEqual('in1', rec.inputs, 'The record keeps the inputs');
+      Assert.areEqual(
+        'SUSPEND timeout=null',
+        rec.decision,
+        'The record keeps the decision'
+      );
     }
   }
 
   @IsTest
-  static void verifyDoesNotRecordANonWait() {
+  static void verifyDoesNotRecordACompletion() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowStepRunner.RunStepContext ctx = runContext(null);
       Assert.isNull(
-        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.sleep(5))
+        WorkflowDeterminismGuard.verify(
+          'in1',
+          ctx,
+          StepResult.complete('Next', null)
+        ),
+        'A completion without a record passes'
       );
-      Assert.isNull(ctx.stepExec.Decision_Record__c);
+      Assert.isNull(ctx.stepExec.Decision_Record__c, 'Only a wait is recorded');
     }
   }
 
@@ -232,9 +302,14 @@ private class WorkflowDeterminismGuardTest {
       String record = recordOf('in1', StepResult.suspend());
       WorkflowStepRunner.RunStepContext ctx = runContext(record);
       Assert.isNull(
-        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.suspend())
+        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.suspend()),
+        'The same decision passes'
       );
-      Assert.areEqual(record, ctx.stepExec.Decision_Record__c);
+      Assert.areEqual(
+        record,
+        ctx.stepExec.Decision_Record__c,
+        'The record does not change'
+      );
     }
   }
 
@@ -249,15 +324,18 @@ private class WorkflowDeterminismGuardTest {
         ctx,
         StepResult.complete('Other', null)
       );
-      Assert.isNotNull(message);
+      Assert.isNotNull(message, 'A different decision is a divergence');
       Assert.isTrue(
         message.startsWith(WorkflowDeterminismGuard.MESSAGE_PREFIX),
-        message
+        'The message starts with the prefix: ' + message
       );
-      Assert.isTrue(message.contains('SUSPEND timeout=-'), message);
       Assert.isTrue(
-        message.contains('COMPLETE next=Other compensate=false'),
-        message
+        message.contains('Recorded: SUSPEND timeout=null'),
+        'The message shows the recorded decision: ' + message
+      );
+      Assert.isTrue(
+        message.contains('New: COMPLETE next="Other" compensate=false'),
+        'The message shows the new decision: ' + message
       );
     }
   }
@@ -275,22 +353,33 @@ private class WorkflowDeterminismGuardTest {
         StepResult.complete(null, null)
       );
       Assert.isTrue(
-        message.contains('COMPLETE next=- compensate=true'),
+        message.contains('COMPLETE next=null compensate=true'),
         'The message names the compensation push: ' + message
       );
     }
   }
 
   @IsTest
-  static void verifyFlagsATransientResultOnSameInputs() {
+  static void verifyIgnoresATransientResult() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowStepRunner.RunStepContext ctx = runContext(
-        recordOf('in1', StepResult.suspend())
-      );
-      Assert.isNotNull(
-        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.sleep(5)),
-        'Same inputs must give the same decision'
-      );
+      String record = recordOf('in1', StepResult.suspend());
+      List<StepResult> transients = new List<StepResult>{
+        StepResult.retry(new RetryPolicy()),
+        StepResult.sleep(5),
+        StepResult.yield('{}')
+      };
+      for (StepResult result : transients) {
+        WorkflowStepRunner.RunStepContext ctx = runContext(record);
+        Assert.isNull(
+          WorkflowDeterminismGuard.verify('in1', ctx, result),
+          'A transient result is not a decision: ' + result.directive().action
+        );
+        Assert.areEqual(
+          record,
+          ctx.stepExec.Decision_Record__c,
+          'A transient result keeps the record: ' + result.directive().action
+        );
+      }
     }
   }
 
@@ -305,13 +394,17 @@ private class WorkflowDeterminismGuardTest {
           'in2',
           ctx,
           StepResult.waitForApproval('K', null)
-        )
+        ),
+        'New inputs allow a new decision'
       );
       WorkflowDecisionFingerprint.Record rec = WorkflowDecisionFingerprint.parseRecord(
         ctx.stepExec.Decision_Record__c
       );
-      Assert.areEqual('in2', rec.inputs);
-      Assert.isTrue(rec.decision.startsWith('WAIT_FOR_APPROVAL'));
+      Assert.areEqual('in2', rec.inputs, 'The record has the new inputs');
+      Assert.isTrue(
+        rec.decision.startsWith('WAIT_FOR_APPROVAL'),
+        'The record has the new wait: ' + rec.decision
+      );
     }
   }
 
@@ -325,10 +418,14 @@ private class WorkflowDeterminismGuardTest {
         WorkflowDeterminismGuard.verify(
           'in2',
           ctx,
-          StepResult.retry(new RetryPolicy())
-        )
+          StepResult.complete('Next', null)
+        ),
+        'New inputs allow a completion'
       );
-      Assert.isNull(ctx.stepExec.Decision_Record__c);
+      Assert.isNull(
+        ctx.stepExec.Decision_Record__c,
+        'A completion clears the record'
+      );
     }
   }
 
@@ -342,11 +439,15 @@ private class WorkflowDeterminismGuardTest {
         WorkflowDeterminismGuard.verify(
           'in1',
           ctx,
-          StepResult.retry(new RetryPolicy())
+          StepResult.complete('Other', null)
         ),
         'A thrown error is not a decision'
       );
-      Assert.areEqual(record, ctx.stepExec.Decision_Record__c);
+      Assert.areEqual(
+        record,
+        ctx.stepExec.Decision_Record__c,
+        'A thrown error keeps the record'
+      );
     }
   }
 
@@ -359,7 +460,60 @@ private class WorkflowDeterminismGuardTest {
           'in1',
           ctx,
           StepResult.complete('Other', null)
+        ),
+        'An unreadable record is no record'
+      );
+    }
+  }
+
+  @IsTest
+  static void clearRecordsClearsOnlyOpenCurrentRows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id instId = insertInstance().Id;
+      String record = recordOf('in1', StepResult.suspend());
+      List<Workflow_Step_Execution__c> execs = new List<Workflow_Step_Execution__c>{
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = instId,
+          Step_Name__c = 'StepA',
+          Status__c = 'Pending',
+          Decision_Record__c = record
+        ),
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = instId,
+          Step_Name__c = 'StepB',
+          Status__c = 'Running',
+          Decision_Record__c = record
+        ),
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = instId,
+          Step_Name__c = 'StepA',
+          Status__c = 'Completed',
+          Decision_Record__c = record
         )
+      };
+      insert execs;
+
+      WorkflowDeterminismGuard.clearRecords(instId, 'StepA, StepB');
+
+      Map<Id, Workflow_Step_Execution__c> after = new Map<Id, Workflow_Step_Execution__c>(
+        [
+          SELECT Decision_Record__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c = :instId
+        ]
+      );
+      Assert.isNull(
+        after.get(execs[0].Id).Decision_Record__c,
+        'An open row of a current step is cleared'
+      );
+      Assert.isNull(
+        after.get(execs[1].Id).Decision_Record__c,
+        'An open parallel branch row is cleared'
+      );
+      Assert.areEqual(
+        record,
+        after.get(execs[2].Id).Decision_Record__c,
+        'A closed row keeps its record'
       );
     }
   }
@@ -369,8 +523,15 @@ private class WorkflowDeterminismGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.StepOutcomeContext outcome = new WorkflowEngine.StepOutcomeContext();
       Integer before = Limits.getDmlStatements();
-      Assert.isFalse(WorkflowDeterminismGuard.failIfDivergent(outcome));
-      Assert.areEqual(before, Limits.getDmlStatements());
+      Assert.isFalse(
+        WorkflowDeterminismGuard.failIfDivergent(outcome),
+        'No divergence, no failure'
+      );
+      Assert.areEqual(
+        before,
+        Limits.getDmlStatements(),
+        'No divergence costs no DML'
+      );
     }
   }
 }

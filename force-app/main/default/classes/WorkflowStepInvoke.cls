@@ -42,7 +42,11 @@ public inherited sharing class WorkflowStepInvoke {
     );
     // Strict determinism (issue #102): digest the inputs before the step runs.
     // Null, with no SOQL, when the mode is off.
-    String determinismInputs = WorkflowDeterminismGuard.captureInputs(context);
+    String determinismInputs = WorkflowDeterminismGuard.captureInputs(
+      ctx,
+      context,
+      prevOutput
+    );
     StepResult result = executeStepWithTimeout(ctx, stepInstance, context);
 
     // 6. Handle Step Outcome

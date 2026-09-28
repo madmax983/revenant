@@ -4,26 +4,30 @@
  */
 @IsTest
 private class WorkflowDecisionFingerprintTest {
+  private static String text(StepResult result) {
+    return WorkflowDecisionFingerprint.describe(result, false);
+  }
+
   @IsTest
   static void completeTextHasNextStepAndCompensationFlag() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      String plain = WorkflowDecisionFingerprint.describe(
-        StepResult.complete('Ship', null),
-        false
-      );
-      String comp = WorkflowDecisionFingerprint.describe(
-        StepResult.complete('Ship', null),
-        true
-      );
-      Assert.areEqual('COMPLETE next=Ship compensate=false', plain);
-      Assert.areEqual('COMPLETE next=Ship compensate=true', comp);
       Assert.areEqual(
-        'COMPLETE next=- compensate=false',
+        'COMPLETE next="Ship" compensate=false',
+        text(StepResult.complete('Ship', null)),
+        'Plain completion'
+      );
+      Assert.areEqual(
+        'COMPLETE next="Ship" compensate=true',
         WorkflowDecisionFingerprint.describe(
-          StepResult.complete(null, null),
-          false
+          StepResult.complete('Ship', null),
+          true
         ),
-        'A null next step shows as a dash'
+        'Compensatable completion'
+      );
+      Assert.areEqual(
+        'COMPLETE next=null compensate=false',
+        text(StepResult.complete(null, null)),
+        'A null next step shows as null'
       );
     }
   }
@@ -32,14 +36,9 @@ private class WorkflowDecisionFingerprintTest {
   static void differentNextStepGivesDifferentText() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Assert.areNotEqual(
-        WorkflowDecisionFingerprint.describe(
-          StepResult.complete('A', null),
-          false
-        ),
-        WorkflowDecisionFingerprint.describe(
-          StepResult.complete('B', null),
-          false
-        )
+        text(StepResult.complete('A', null)),
+        text(StepResult.complete('B', null)),
+        'The next step is routing'
       );
     }
   }
@@ -48,38 +47,23 @@ private class WorkflowDecisionFingerprintTest {
   static void payloadsAndDurationsAreNotPartOfTheDecision() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Assert.areEqual(
-        WorkflowDecisionFingerprint.describe(
-          StepResult.complete('A', 1),
-          false
-        ),
-        WorkflowDecisionFingerprint.describe(
-          StepResult.complete('A', 2),
-          false
-        ),
+        text(StepResult.complete('A', 1)),
+        text(StepResult.complete('A', 2)),
         'Output is not routing'
       );
       Assert.areEqual(
-        WorkflowDecisionFingerprint.describe(StepResult.sleep(10), false),
-        WorkflowDecisionFingerprint.describe(StepResult.sleep(20), false),
+        text(StepResult.sleep(10)),
+        text(StepResult.sleep(20)),
         'Sleep time is not routing'
       );
       Assert.areEqual(
-        WorkflowDecisionFingerprint.describe(
-          StepResult.suspend(60, 'Late'),
-          false
-        ),
-        WorkflowDecisionFingerprint.describe(
-          StepResult.suspend(120, 'Late'),
-          false
-        ),
+        text(StepResult.suspend(60, 'Late')),
+        text(StepResult.suspend(120, 'Late')),
         'Timeout time is not routing'
       );
       Assert.areEqual(
-        WorkflowDecisionFingerprint.describe(
-          StepResult.suspend().withStepState('{"a":1}'),
-          false
-        ),
-        WorkflowDecisionFingerprint.describe(StepResult.suspend(), false),
+        text(StepResult.suspend().withStepState('{"a":1}')),
+        text(StepResult.suspend()),
         'Step state is not routing'
       );
     }
@@ -89,23 +73,22 @@ private class WorkflowDecisionFingerprintTest {
   static void timeoutRouteIsPartOfTheDecision() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Assert.areEqual(
-        'SUSPEND timeout=Late',
-        WorkflowDecisionFingerprint.describe(
-          StepResult.suspend(60, 'Late'),
-          false
-        )
+        'SUSPEND timeout="Late"',
+        text(StepResult.suspend(60, 'Late')),
+        'Timed suspend'
       );
       Assert.areEqual(
-        'SUSPEND timeout=-',
-        WorkflowDecisionFingerprint.describe(StepResult.suspend(), false)
+        'SUSPEND timeout=null',
+        text(StepResult.suspend()),
+        'Plain suspend'
       );
       Assert.areEqual(
-        'WAIT_FOR_APPROVAL key=K role=Manager timeout=Esc',
-        WorkflowDecisionFingerprint.describe(
+        'WAIT_FOR_APPROVAL key="K" role="Manager" timeout="Esc"',
+        text(
           StepResult.waitForApproval('K', 'Manager')
-            .withApprovalTimeout(60, 'Esc'),
-          false
-        )
+            .withApprovalTimeout(60, 'Esc')
+        ),
+        'Timed approval'
       );
     }
   }
@@ -113,16 +96,13 @@ private class WorkflowDecisionFingerprintTest {
   @IsTest
   static void splitTargetsAreSorted() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      String ab = WorkflowDecisionFingerprint.describe(
-        StepResult.split(new List<String>{ 'A', 'B' }),
-        false
+      String ab = text(StepResult.split(new List<String>{ 'A', 'B' }));
+      Assert.areEqual('SPLIT targets=["A","B"]', ab, 'Split targets');
+      Assert.areEqual(
+        ab,
+        text(StepResult.split(new List<String>{ 'B', 'A' })),
+        'Order of split targets is not routing'
       );
-      String ba = WorkflowDecisionFingerprint.describe(
-        StepResult.split(new List<String>{ 'B', 'A' }),
-        false
-      );
-      Assert.areEqual('SPLIT targets=[A, B]', ab);
-      Assert.areEqual(ab, ba, 'Order of split targets is not routing');
     }
   }
 
@@ -130,69 +110,84 @@ private class WorkflowDecisionFingerprintTest {
   static void childTargetsAreSortedAndPayloadFree() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Assert.areEqual(
-        'START_CHILD child=Wf:k1',
-        WorkflowDecisionFingerprint.describe(
-          StepResult.startChild(
-            'Wf',
-            'k1',
-            new Map<String, Object>{ 'x' => 1 }
-          ),
-          false
-        )
+        'START_CHILD child=["Wf","k1"]',
+        text(
+          StepResult.startChild('Wf', 'k1', new Map<String, Object>{ 'x' => 1 })
+        ),
+        'One child'
       );
-      String one = WorkflowDecisionFingerprint.describe(
+      String one = text(
         StepResult.startChildren(
           new List<StepResult.ChildRequest>{
             new StepResult.ChildRequest('Wf', 'k2', 1),
             new StepResult.ChildRequest('Wf', 'k1', 2)
           }
-        ),
-        false
+        )
       );
-      String two = WorkflowDecisionFingerprint.describe(
+      String two = text(
         StepResult.startChildren(
           new List<StepResult.ChildRequest>{
             new StepResult.ChildRequest('Wf', 'k1', 3),
             new StepResult.ChildRequest('Wf', 'k2', 4)
           }
-        ),
-        false
+        )
       );
-      Assert.areEqual('START_CHILDREN children=[Wf:k1, Wf:k2]', one);
+      Assert.areEqual(
+        'START_CHILDREN children=[["Wf","k1"],["Wf","k2"]]',
+        one,
+        'Two children'
+      );
       Assert.areEqual(one, two, 'Child order and input are not routing');
+    }
+  }
+
+  @IsTest
+  static void delimitersInValuesCannotMakeTwoDecisionsEqual() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String oneChild = text(
+        StepResult.startChildren(
+          new List<StepResult.ChildRequest>{
+            new StepResult.ChildRequest('Wf', 'a, Wf:b', null)
+          }
+        )
+      );
+      String twoChildren = text(
+        StepResult.startChildren(
+          new List<StepResult.ChildRequest>{
+            new StepResult.ChildRequest('Wf', 'a', null),
+            new StepResult.ChildRequest('Wf', 'b', null)
+          }
+        )
+      );
+      Assert.areNotEqual(oneChild, twoChildren, 'A comma in a key');
+      Assert.areNotEqual(
+        text(StepResult.waitForApproval('a" role="b', null)),
+        text(StepResult.waitForApproval('a', 'b')),
+        'A quote in a key'
+      );
     }
   }
 
   @IsTest
   static void otherActionsUseTheActionName() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Assert.areEqual(
-        'YIELD',
-        WorkflowDecisionFingerprint.describe(StepResult.yield('{}'), false)
-      );
+      Assert.areEqual('YIELD', text(StepResult.yield('{}')), 'Yield');
       Assert.areEqual(
         'RETRY',
-        WorkflowDecisionFingerprint.describe(
-          StepResult.retry(new RetryPolicy()),
-          false
-        )
+        text(StepResult.retry(new RetryPolicy())),
+        'Retry'
       );
       Assert.areEqual(
         'FAIL',
-        WorkflowDecisionFingerprint.describe(StepResult.fail('no'), true)
+        WorkflowDecisionFingerprint.describe(StepResult.fail('no'), true),
+        'Fail'
       );
       Assert.areEqual(
         'CONTINUE_AS_NEW',
-        WorkflowDecisionFingerprint.describe(
-          StepResult.continueAsNew(null),
-          false
-        )
+        text(StepResult.continueAsNew(null)),
+        'Continue as new'
       );
-      Assert.areEqual(
-        'NULL',
-        WorkflowDecisionFingerprint.describe(null, false),
-        'A null result has a fixed text'
-      );
+      Assert.areEqual('NULL', text(null), 'A null result has a fixed text');
     }
   }
 
@@ -212,7 +207,10 @@ private class WorkflowDecisionFingerprintTest {
           'isWait for ' + action
         );
       }
-      Assert.isFalse(WorkflowDecisionFingerprint.isWait(null));
+      Assert.isFalse(
+        WorkflowDecisionFingerprint.isWait(null),
+        'Null is not a wait'
+      );
     }
   }
 
@@ -220,10 +218,18 @@ private class WorkflowDecisionFingerprintTest {
   static void digestIsStableHex() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String a = WorkflowDecisionFingerprint.digest('abc');
-      Assert.areEqual(64, a.length());
+      Assert.areEqual(64, a.length(), 'SHA-256 hex length');
       Assert.isTrue(a.isAlphanumeric(), 'Hex digest');
-      Assert.areEqual(a, WorkflowDecisionFingerprint.digest('abc'));
-      Assert.areNotEqual(a, WorkflowDecisionFingerprint.digest('abd'));
+      Assert.areEqual(
+        a,
+        WorkflowDecisionFingerprint.digest('abc'),
+        'Equal text gives an equal digest'
+      );
+      Assert.areNotEqual(
+        a,
+        WorkflowDecisionFingerprint.digest('abd'),
+        'Other text gives another digest'
+      );
       Assert.areEqual(
         WorkflowDecisionFingerprint.digest(''),
         WorkflowDecisionFingerprint.digest(null),
@@ -235,19 +241,20 @@ private class WorkflowDecisionFingerprintTest {
   @IsTest
   static void recordRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      String raw = WorkflowDecisionFingerprint.toRecordJson(
-        'in1',
-        'SUSPEND timeout=-'
-      );
       WorkflowDecisionFingerprint.Record rec = WorkflowDecisionFingerprint.parseRecord(
-        raw
+        WorkflowDecisionFingerprint.toRecordJson('in1', 'SUSPEND timeout=null')
       );
-      Assert.isNotNull(rec);
-      Assert.areEqual('in1', rec.inputs);
-      Assert.areEqual('SUSPEND timeout=-', rec.decision);
+      Assert.isNotNull(rec, 'The record parses');
+      Assert.areEqual('in1', rec.inputs, 'Inputs round-trip');
       Assert.areEqual(
-        WorkflowDecisionFingerprint.digest('SUSPEND timeout=-'),
-        rec.decisionHash
+        'SUSPEND timeout=null',
+        rec.decision,
+        'Decision round-trips'
+      );
+      Assert.areEqual(
+        WorkflowDecisionFingerprint.digest('SUSPEND timeout=null'),
+        rec.decisionHash,
+        'The hash is the digest of the decision'
       );
     }
   }
@@ -256,14 +263,13 @@ private class WorkflowDecisionFingerprintTest {
   static void recordKeepsFullHashButShortSummary() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       String longText = 'START_CHILDREN children=[' + 'x'.repeat(2000) + ']';
-      String raw = WorkflowDecisionFingerprint.toRecordJson('in', longText);
-      Assert.isTrue(raw.length() <= 1000, 'Record fits Decision_Record__c');
       WorkflowDecisionFingerprint.Record rec = WorkflowDecisionFingerprint.parseRecord(
-        raw
+        WorkflowDecisionFingerprint.toRecordJson('in', longText)
       );
       Assert.areEqual(
         WorkflowDecisionFingerprint.MAX_SUMMARY_LENGTH,
-        rec.decision.length()
+        rec.decision.length(),
+        'The summary is short'
       );
       Assert.areEqual(
         WorkflowDecisionFingerprint.digest(longText),
@@ -274,12 +280,35 @@ private class WorkflowDecisionFingerprintTest {
   }
 
   @IsTest
+  static void recordFitsTheFieldInTheWorstCase() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Each control character escapes to six characters in JSON.
+      String worst = String.fromCharArray(new List<Integer>{ 1 }).repeat(2000);
+      String raw = WorkflowDecisionFingerprint.toRecordJson(
+        WorkflowDecisionFingerprint.digest('in'),
+        worst
+      );
+      Assert.isTrue(
+        raw.length() <=
+        Workflow_Step_Execution__c.Decision_Record__c.getDescribe().getLength(),
+        'Record fits Decision_Record__c: ' + raw.length()
+      );
+    }
+  }
+
+  @IsTest
   static void parseRejectsBlankInvalidAndForeignVersion() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Assert.isNull(WorkflowDecisionFingerprint.parseRecord(null));
-      Assert.isNull(WorkflowDecisionFingerprint.parseRecord('  '));
-      Assert.isNull(WorkflowDecisionFingerprint.parseRecord('not json'));
-      Assert.isNull(WorkflowDecisionFingerprint.parseRecord('[1,2]'));
+      Assert.isNull(WorkflowDecisionFingerprint.parseRecord(null), 'Null');
+      Assert.isNull(WorkflowDecisionFingerprint.parseRecord('  '), 'Blank');
+      Assert.isNull(
+        WorkflowDecisionFingerprint.parseRecord('not json'),
+        'Not JSON'
+      );
+      Assert.isNull(
+        WorkflowDecisionFingerprint.parseRecord('[1,2]'),
+        'Not an object'
+      );
       Assert.isNull(
         WorkflowDecisionFingerprint.parseRecord(
           '{"v":2,"inputs":"a","decisionHash":"b","decision":"c"}'
