@@ -17,6 +17,7 @@ private class WorkflowReadinessControllerTest {
     Workflow_Alert_Config__mdt alert;
     Boolean triggerSet = false;
     String triggerStatus;
+    Boolean triggerThrows = false;
     Set<Schema.SObjectType> unreadableObjects = new Set<Schema.SObjectType>();
     Set<Schema.SObjectType> uncreatableObjects = new Set<Schema.SObjectType>();
     Set<Schema.SObjectField> unreadableFields = new Set<Schema.SObjectField>();
@@ -31,6 +32,9 @@ private class WorkflowReadinessControllerTest {
     }
 
     public override String eventTriggerStatus() {
+      if (triggerThrows) {
+        throw new IllegalArgumentException('Probe failed');
+      }
       return triggerSet ? triggerStatus : super.eventTriggerStatus();
     }
 
@@ -95,6 +99,8 @@ private class WorkflowReadinessControllerTest {
     );
   }
 
+  // Deployed fields give no field access to the org admin profile. Access tests use a
+  // user with a known permission set, so the result does not depend on the org.
   private static User userWith(String permissionSetName) {
     Profile stdProfile = [
       SELECT Id
@@ -212,6 +218,10 @@ private class WorkflowReadinessControllerTest {
       config.remediation.contains('Custom Metadata Types > Revenant Config'),
       config.remediation
     );
+    System.assert(
+      config.remediation.contains('Revenant_Config.Default.md-meta.xml'),
+      config.remediation
+    );
 
     WorkflowReadinessService.ReadinessCheck alert = check(
       'alertConfig',
@@ -233,13 +243,13 @@ private class WorkflowReadinessControllerTest {
     );
     System.assertEquals(FAIL, trig.status, 'An inactive trigger fails');
     System.assert(
-      trig.finding.contains(
+      trig.finding.containsIgnoreCase(
         'inbound signals, approvals, and child-completion resumes will never fire'
       ),
       trig.finding
     );
     System.assert(
-      trig.remediation.contains('WorkflowEventTrigger'),
+      trig.remediation.contains('<status>Active</status>'),
       trig.remediation
     );
 
@@ -248,6 +258,7 @@ private class WorkflowReadinessControllerTest {
       checks
     );
     System.assertEquals(FAIL, watchdog.status, 'No watchdog fails');
+    System.assert(watchdog.finding.contains('not running'), watchdog.finding);
     System.assert(
       watchdog.remediation.contains('Enqueue Watchdog'),
       watchdog.remediation
@@ -255,8 +266,9 @@ private class WorkflowReadinessControllerTest {
   }
 
   /**
-   * @description AC6: a correct install returns all Pass. Config and trigger use the
-   * real probe, so this also checks the deployed metadata.
+   * @description AC6: a correct install returns all Pass. Config, trigger and access use
+   * the real probe. The package ships no Default alert config, so the probe gives one.
+   * The watchdog passes from a seeded Suspended instance.
    */
   @IsTest
   static void testConfiguredOrgReturnsAllPass() {
@@ -366,7 +378,57 @@ private class WorkflowReadinessControllerTest {
     );
     System.assertEquals(FAIL, trig.status, 'A missing trigger fails');
     System.assert(trig.finding.contains('not deployed'), trig.finding);
-    System.assert(trig.remediation.contains('Deploy'), trig.remediation);
+    System.assert(
+      trig.remediation.contains('Deploy triggers/WorkflowEventTrigger.trigger'),
+      trig.remediation
+    );
+  }
+
+  /**
+   * @description A deleted trigger is the same as a trigger that is not deployed.
+   */
+  @IsTest
+  static void testDeletedTriggerFailsAsNotDeployed() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(goodAlert())
+      .withTrigger('Deleted');
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessService.ReadinessCheck trig = check(
+      'eventTrigger',
+      checks
+    );
+    System.assertEquals(FAIL, trig.status, 'A deleted trigger fails');
+    System.assert(trig.finding.contains('not deployed'), trig.finding);
+  }
+
+  /**
+   * @description A check that throws gives Warn with the error. The other checks run.
+   */
+  @IsTest
+  static void testCheckThatThrowsWarnsAndOthersStillRun() {
+    FakeProbe fake = new FakeProbe().withAlert(goodAlert());
+    fake.triggerThrows = true;
+    WorkflowReadinessService.probe = fake;
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    assertActionable(checks);
+    WorkflowReadinessService.ReadinessCheck trig = check(
+      'eventTrigger',
+      checks
+    );
+    System.assertEquals(WARN, trig.status, 'A failed probe warns');
+    System.assert(trig.finding.contains('could not run'), trig.finding);
+    System.assert(trig.finding.contains('Probe failed'), trig.finding);
+    System.assertEquals(
+      PASS,
+      check('alertConfig', checks).status,
+      'The other checks still run'
+    );
   }
 
   /**
@@ -423,16 +485,25 @@ private class WorkflowReadinessControllerTest {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
     assertActionable(checks);
-    WorkflowReadinessService.ReadinessCheck access = check(
-      'access.Workflow_Instance__c',
-      checks
-    );
-    System.assertEquals(WARN, access.status, 'Read-only access warns');
-    System.assert(access.finding.contains('create'), access.finding);
-    System.assert(
-      access.remediation.contains('Revenant_Admin'),
-      access.remediation
-    );
+    for (
+      String key : new List<String>{
+        'access.Workflow_Instance__c',
+        'access.Workflow_Step_Execution__c',
+        'access.Workflow_Signal__c'
+      }
+    ) {
+      WorkflowReadinessService.ReadinessCheck access = check(key, checks);
+      System.assertEquals(WARN, access.status, key + ': read-only warns');
+      System.assert(access.finding.contains('cannot create'), access.finding);
+      System.assert(
+        access.finding.contains('(object)'),
+        'Only the object is listed: ' + access.finding
+      );
+      System.assert(
+        access.remediation.contains('Revenant_Operator'),
+        access.remediation
+      );
+    }
   }
 
   /**
@@ -444,7 +515,7 @@ private class WorkflowReadinessControllerTest {
     fake.unreadableFields.add(Workflow_Instance__c.Terminal_At__c);
     WorkflowReadinessService.probe = fake;
     List<WorkflowReadinessService.ReadinessCheck> checks;
-    System.runAs(new User(Id = UserInfo.getUserId())) {
+    System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
     WorkflowReadinessService.ReadinessCheck access = check(
@@ -456,9 +527,10 @@ private class WorkflowReadinessControllerTest {
       access.finding.contains('Workflow_Instance__c.Terminal_At__c'),
       access.finding
     );
+    System.assert(access.finding.contains('No such column'), access.finding);
     System.assert(
-      access.remediation.contains('Revenant_Admin'),
-      access.remediation
+      access.remediation.contains('Revenant Operator'),
+      'A read gap points to the least-privilege set: ' + access.remediation
     );
   }
 
@@ -471,7 +543,7 @@ private class WorkflowReadinessControllerTest {
     fake.unreadableObjects.add(Workflow_Signal__c.SObjectType);
     WorkflowReadinessService.probe = fake;
     List<WorkflowReadinessService.ReadinessCheck> checks;
-    System.runAs(new User(Id = UserInfo.getUserId())) {
+    System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
     WorkflowReadinessService.ReadinessCheck access = check(
@@ -480,8 +552,71 @@ private class WorkflowReadinessControllerTest {
     );
     System.assertEquals(FAIL, access.status, 'No object read fails');
     System.assert(
-      access.finding.contains('Workflow_Signal__c'),
+      access.finding.contains('Workflow_Signal__c (object)'),
       access.finding
+    );
+    System.assert(
+      !access.finding.contains('Workflow_Signal__c.Payload__c'),
+      'Fields are not listed when the object is not readable: ' + access.finding
+    );
+  }
+
+  /**
+   * @description A read gap and a create gap on one object give one Fail row that
+   * names both.
+   */
+  @IsTest
+  static void testReadAndCreateGapsBothNamed() {
+    FakeProbe fake = new FakeProbe().withAlert(goodAlert());
+    fake.unreadableFields.add(Workflow_Instance__c.Output__c);
+    fake.uncreatableFields.add(Workflow_Instance__c.Current_Step__c);
+    WorkflowReadinessService.probe = fake;
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(userWith('Revenant_Admin')) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessService.ReadinessCheck access = check(
+      'access.Workflow_Instance__c',
+      checks
+    );
+    System.assertEquals(FAIL, access.status, 'A read gap wins');
+    System.assert(
+      access.finding.contains('cannot read: Workflow_Instance__c.Output__c'),
+      access.finding
+    );
+    System.assert(
+      access.finding.contains(
+        'also cannot create: Workflow_Instance__c.Current_Step__c'
+      ),
+      access.finding
+    );
+  }
+
+  /**
+   * @description An object create gap lists only the object, not each field.
+   */
+  @IsTest
+  static void testObjectCreateGapListsOnlyObject() {
+    FakeProbe fake = new FakeProbe().withAlert(goodAlert());
+    fake.uncreatableObjects.add(Workflow_Signal__c.SObjectType);
+    fake.uncreatableFields.add(Workflow_Signal__c.Payload__c);
+    WorkflowReadinessService.probe = fake;
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(userWith('Revenant_Admin')) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessService.ReadinessCheck access = check(
+      'access.Workflow_Signal__c',
+      checks
+    );
+    System.assertEquals(WARN, access.status, 'A create gap warns');
+    System.assert(
+      access.finding.contains('cannot create: Workflow_Signal__c (object).'),
+      access.finding
+    );
+    System.assert(
+      !access.finding.contains('Payload__c'),
+      'Fields are not listed when the object has a gap: ' + access.finding
     );
   }
 
@@ -494,7 +629,7 @@ private class WorkflowReadinessControllerTest {
     fake.uncreatableFields.add(Workflow_Step_Execution__c.Timeout_At__c);
     WorkflowReadinessService.probe = fake;
     List<WorkflowReadinessService.ReadinessCheck> checks;
-    System.runAs(new User(Id = UserInfo.getUserId())) {
+    System.runAs(userWith('Revenant_Admin')) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
     WorkflowReadinessService.ReadinessCheck access = check(
@@ -540,7 +675,7 @@ private class WorkflowReadinessControllerTest {
       );
       System.assert(
         Limits.getCpuTime() - cpu < 2000,
-        'Checks stay under 2 s of CPU'
+        'CPU budget: checks use less than 2000 ms of CPU'
       );
     }
   }

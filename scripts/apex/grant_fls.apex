@@ -42,6 +42,7 @@ List<String> fieldsToGrant = new List<String>{
     'Workflow_Step_Execution__c.Workflow_Instance__c',
     'Workflow_Step_Execution__c.Timeout_At__c',
     
+    'Workflow_Signal__c.Correlation_Key__c',
     'Workflow_Signal__c.Payload__c',
     'Workflow_Signal__c.Signal_Name__c',
     'Workflow_Signal__c.Status__c',

@@ -94,7 +94,6 @@ public inherited sharing class WorkflowAlertManager {
     }
   }
 
-  // Alerting only proceeds when enabled and at least one channel is configured.
   /**
    * @description True when the config can send an alert: alerts are on and it has
    * email recipients or event publish. The Readiness panel (#114) uses it too.

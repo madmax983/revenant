@@ -9,7 +9,7 @@ Give the operator one read-only check list on System Doctor. Each check tells if
 - `WorkflowEngine` reads `Revenant_Config__mdt` record `Default`. When the record is missing, the engine uses built-in defaults and the operator cannot change a setting.
 - `WorkflowFailureAlertEvaluator` falls back to `Workflow_Alert_Config__mdt` record `Default`. `WorkflowAlertManager` sends no alert when the config is missing, when `Enable_Alerts__c` is off, or when it has no recipients and no event.
 - `WorkflowEventTrigger` on `Workflow_Event__e` delivers signals, approvals and child-completion resumes.
-- System Doctor gets the watchdog health from `WorkflowDashboardStatusService.isWatchdogRunning` (latest watchdog instance is `Pending`, `Running` or `Suspended`).
+- System Doctor gets the watchdog health from `WorkflowDashboardStatusService` (latest watchdog instance is `Pending`, `Running` or `Suspended`). The change shares it as `watchdogRunning()`.
 - `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit. The Rate Limits panel (#61) uses its own controller for this reason.
 - Custom metadata records and trigger status cannot change in an Apex test.
 
@@ -33,19 +33,19 @@ Give the operator one read-only check list on System Doctor. Each check tells if
 
 ## Reverse Brainstorming (how can this fail?)
 
-| Way to fail                                                  | Prevention                                                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| The check writes data or starts a job.                       | Only getInstance, describe and two SELECTs. Test asserts 0 DML, 0 jobs, 0 events.           |
-| A read-only operator sees `Fail` for missing create access.  | Missing read is `Fail`. Missing create is `Warn`. The text says who needs create access.    |
-| The finding says "something is wrong".                       | Every `Warn` and `Fail` names the item. Test asserts a remediation on every non-`Pass` row. |
-| A `Default` alert config exists but alerts no one.           | Reuse `isAlertActionable`. `Warn` when not actionable.                                      |
-| The trigger is not deployed.                                 | No `ApexTrigger` row: `Fail`, with a deploy step.                                           |
-| A namespaced install finds the wrong trigger.                | Filter on the namespace of the service class.                                               |
-| The watchdog rule changes in one panel but not in the other. | One shared method.                                                                          |
-| A slow check blocks the panel.                               | Bounded work: 2 SOQL, no loops over records. Test asserts CPU < 2000 ms.                    |
-| An old response replaces a new one.                          | Only the newest request can change the panel.                                               |
-| An error looks like "all pass".                              | Error state is separate. No rows on error.                                                  |
-| An unknown status looks healthy.                             | Unknown status shows grey "Unknown".                                                        |
+| Way to fail                                                  | Prevention                                                                                                                      |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| The check writes data or starts a job.                       | Only getInstance, describe and two SELECTs (plus one for the view gate). Test asserts 0 DML, 0 jobs, 0 events.                  |
+| A read-only operator sees `Fail` for missing create access.  | Missing read is `Fail`. Missing create is `Warn`. The engine writes in system mode, so only user-mode code needs create access. |
+| The finding says "something is wrong".                       | Every `Warn` and `Fail` names the item. Test asserts a remediation on every non-`Pass` row.                                     |
+| A `Default` alert config exists but alerts no one.           | Reuse `isAlertActionable`. `Warn` when not actionable.                                                                          |
+| The trigger is not deployed.                                 | No `ApexTrigger` row: `Fail`, with a deploy step.                                                                               |
+| A namespaced install finds the wrong trigger.                | Filter on the namespace of the service class.                                                                                   |
+| The watchdog rule changes in one panel but not in the other. | One shared method.                                                                                                              |
+| A slow check blocks the panel.                               | Bounded work: 2 SOQL, no loops over records. Test asserts CPU < 2000 ms.                                                        |
+| An old response replaces a new one.                          | Only the newest request can change the panel.                                                                                   |
+| An error looks like "all pass".                              | Error state is separate. No rows on error.                                                                                      |
+| An unknown status looks healthy.                             | Unknown status shows grey "Unknown".                                                                                            |
 
 ## Six Thinking Hats
 

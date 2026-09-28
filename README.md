@@ -710,6 +710,7 @@ How the gates map to permissions:
 - **Dashboard visibility** is gated by `WorkflowDashboardSupport.checkAuthorization()`, which passes for holders of the `Workflow_Dashboard_View` custom permission (granted by `Revenant_Operator`), the `Workflow_Admin` custom permission (granted by `Revenant_Admin`), or the "Modify All Data" system permission.
 - **State-mutating recovery actions** are separately gated by `WorkflowDashboardSupport.checkOperatorAction()`, which passes only for holders of the `Workflow_Operator_Action` custom permission, `Workflow_Admin`, or "Modify All Data". Because the read-only tier holds `Workflow_Dashboard_View` (not `Workflow_Admin`), **granting dashboard visibility never implicitly grants the ability to re-drive, cancel, or delete.**
 - **Rate Limits panel** Apex access: the panel calls `WorkflowRateLimitController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
+- **Readiness panel** Apex access: the panel calls `WorkflowReadinessController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
 
 ### Mapping Workflow Definitions to Alert Configurations
