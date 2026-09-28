@@ -79,6 +79,12 @@ public inherited sharing class StepResult {
     public String failureReason { get; set; }
     /** @description Optional serialized structured data accompanying the failure. */
     public String failureDataJson { get; set; }
+
+    /**
+     * @description Custom Notification that the engine sends one time when
+     * this SUSPEND or WAIT_FOR_APPROVAL commits (issue #123). Null: none.
+     */
+    public WorkflowNotification notification { get; set; }
   }
 
   /**
@@ -344,6 +350,25 @@ public inherited sharing class StepResult {
     );
     this.directiveData.timeout.seconds = timeoutSeconds;
     this.directiveData.timeout.step = timeoutStep;
+    return this;
+  }
+
+  /**
+   * @description Adds a Custom Notification to this SUSPEND or WAIT_FOR_APPROVAL result (issue #123). The engine sends it once for each step row (logical suspend), after the SUSPEND commits. When the step suspends again on the same row, the engine sends nothing. A notification error does not stop the SUSPEND. Call it only one time for each result. Example: StepResult.waitForApproval(key, null).withNotification(WorkflowNotification.create(title, body).toInputKey('approverId')).
+   * @param notification The notification. Not null. Must have a recipient source.
+   * @return This StepResult, for fluent chaining.
+   */
+  public StepResult withNotification(WorkflowNotification notification) {
+    StepResultValidator.requireNotifiable(
+      this.directiveData.action,
+      notification
+    );
+    if (this.directiveData.notification != null) {
+      throw new IllegalArgumentException(
+        'StepResult.withNotification: this result already has a notification'
+      );
+    }
+    this.directiveData.notification = notification;
     return this;
   }
 

@@ -113,7 +113,7 @@ Invariants:
   `WorkflowEngine.publishMetricsEvents`.
 - `Revenant_Admin`: read and create on the event and its fields.
 - Example: `WorkflowMetricsDatadogShaper` (examples) with a test.
-- Docs: `docs/workflow-metrics-event.md`, ADR 0006, README.
+- Docs: `docs/workflow-metrics-event.md`, ADR 0007, README.
 
 ## Test Plan
 

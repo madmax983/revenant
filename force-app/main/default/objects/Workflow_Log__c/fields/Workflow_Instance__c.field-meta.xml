@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Workflow_Instance__c</fullName>
-    <description>The workflow instance started or referenced by this log entry. Populated for Started outcomes.</description>
+    <description>The workflow instance started or referenced by this log entry. Populated for Started outcomes and Notification rows.</description>
     <externalId>false</externalId>
     <label>Workflow Instance</label>
     <referenceTo>Workflow_Instance__c</referenceTo>

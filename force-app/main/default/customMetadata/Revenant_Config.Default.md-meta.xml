@@ -19,6 +19,10 @@
         <value xsi:type="xsd:boolean">false</value>
     </values>
     <values>
+        <field>Send_Notifications__c</field>
+        <value xsi:type="xsd:boolean">true</value>
+    </values>
+    <values>
         <field>Use_Dynamic_Scheduling__c</field>
         <value xsi:type="xsd:boolean">true</value>
     </values>

@@ -1,4 +1,4 @@
-# ADR 0006: Engine-health metrics event on the watchdog sweep
+# ADR 0007: Engine-health metrics event on the watchdog sweep
 
 - **Status:** Accepted
 - **Date:** 2026-09-28
