@@ -29,9 +29,10 @@ for (Schema.SObjectType objectType : engineObjects) {
     String objType = objectType.getDescribe().getName();
     for (Schema.SObjectField field : objectType.getDescribe().fields.getMap().values()) {
         Schema.DescribeFieldResult d = field.getDescribe();
-        // Skip fields of other packages (name has a namespace prefix).
+        // Skip fields of other packages: after the __c suffix, a remaining "__" marks a
+        // namespace prefix. getLocalName() keeps a foreign prefix here, so it is not used.
         if (!d.isCustom() || d.isCalculated() || d.isAutoNumber() || !d.isPermissionable()
-            || d.getName() != d.getLocalName()) {
+            || d.getName().removeEndIgnoreCase('__c').contains('__')) {
             continue;
         }
         grants.add(new FieldPermissions(

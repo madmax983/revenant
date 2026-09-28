@@ -644,36 +644,30 @@ private class WorkflowReadinessControllerTest {
    */
   @IsTest
   static void testOnlyPackageFieldsAreChecked() {
+    // Only the API name is used: getLocalName() keeps a foreign prefix when the code
+    // runs without a namespace, so it cannot tell the packages apart.
     System.assert(
-      WorkflowReadinessService.isPackageField('Input__c', 'Input__c', null),
+      WorkflowReadinessService.isPackageField('Input__c', null),
       'No namespace: a field with no prefix belongs to the package'
     );
     System.assert(
-      !WorkflowReadinessService.isPackageField(
-        'other__Extra__c',
-        'Extra__c',
-        null
-      ),
+      !WorkflowReadinessService.isPackageField('other__Secret__c', null),
       'No namespace: a field of another package is skipped'
     );
     System.assert(
-      WorkflowReadinessService.isPackageField(
-        'rvnt__Input__c',
-        'Input__c',
-        'rvnt'
-      ),
+      WorkflowReadinessService.isPackageField('rvnt__Input__c', 'rvnt'),
       'Namespace: a field with the package prefix belongs to the package'
     );
     System.assert(
-      !WorkflowReadinessService.isPackageField('Extra__c', 'Extra__c', 'rvnt'),
+      WorkflowReadinessService.isPackageField('RVNT__Input__c', 'rvnt'),
+      'Namespace: the prefix match ignores case'
+    );
+    System.assert(
+      !WorkflowReadinessService.isPackageField('Extra__c', 'rvnt'),
       'Namespace: a subscriber field is skipped'
     );
     System.assert(
-      !WorkflowReadinessService.isPackageField(
-        'other__Extra__c',
-        'Extra__c',
-        'rvnt'
-      ),
+      !WorkflowReadinessService.isPackageField('other__Extra__c', 'rvnt'),
       'Namespace: a field of another package is skipped'
     );
   }

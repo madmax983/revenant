@@ -146,19 +146,17 @@ public inherited sharing class WorkflowReadinessService {
     return checks;
   }
 
-  // True when the field belongs to this package. With a namespace, the field name must
-  // start with it. Without a namespace, the field must have no namespace prefix, so
-  // fields of other packages are not included.
+  // True when the field belongs to this package. The prefix comes from the API name:
+  // after the __c suffix, a remaining "__" marks a namespace prefix. getLocalName() is
+  // not used, because it keeps a foreign prefix when this code runs without a namespace.
   @TestVisible
-  private static Boolean isPackageField(
-    String name,
-    String localName,
-    String namespace
-  ) {
+  private static Boolean isPackageField(String name, String namespace) {
+    String base = name.removeEndIgnoreCase('__c');
+    String prefix = base.contains('__') ? base.substringBefore('__') : null;
     if (String.isBlank(namespace)) {
-      return name == localName;
+      return prefix == null;
     }
-    return name.startsWithIgnoreCase(namespace + '__');
+    return prefix != null && prefix.equalsIgnoreCase(namespace);
   }
 
   // The namespace of this package, or null when not in a namespace.
@@ -375,7 +373,7 @@ public inherited sharing class WorkflowReadinessService {
           d.isCustom() &&
           !d.isCalculated() &&
           !d.isAutoNumber() &&
-          isPackageField(d.getName(), d.getLocalName(), namespace)
+          isPackageField(d.getName(), namespace)
         ) {
           result.add(byName.get(fieldName));
         }
