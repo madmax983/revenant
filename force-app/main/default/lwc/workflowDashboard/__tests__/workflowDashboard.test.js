@@ -3337,3 +3337,241 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     expect(JSON.stringify(lastCall)).toContain("STEP_HISTORY_LIMIT");
   });
 });
+
+describe("c-workflow-dashboard platform event headroom (#120)", () => {
+  const CONSEQUENCE = "Suspended workflows can fail to wake";
+
+  beforeEach(() => {
+    getDefinitionTrends.mockResolvedValue({
+      windowKey: "24h",
+      windowHours: 24,
+      rows: [],
+    });
+  });
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  function peRow(name, value, limit, state, percentUsed) {
+    return {
+      name,
+      label: name,
+      value,
+      limit,
+      remaining: Math.max(0, limit - value),
+      percentUsed,
+      percentRemaining: Math.max(0, 100 - percentUsed),
+      state,
+    };
+  }
+
+  function peStatus(rows, state) {
+    return {
+      hasPlatformEventLimits: rows.length > 0,
+      platformEventState: state,
+      platformEventLimits: rows,
+      platformEventWarningPercent: 80,
+      platformEventCriticalPercent: 95,
+    };
+  }
+
+  // Mounts the dashboard with a status payload and opens System Doctor.
+  async function openDoctorWith(extraStatus, attributes = {}) {
+    getWatchdogStatus.mockResolvedValueOnce({
+      isRunning: true,
+      scheduledJobsCount: 0,
+      sleepingInstances: 0,
+      pendingTimeouts: 0,
+      dailyAsyncValue: 0,
+      dailyAsyncLimit: 250000,
+      config: {},
+      ...extraStatus,
+    });
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    Object.assign(element, attributes);
+    document.body.appendChild(element);
+    await flushPromises();
+    findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  function byId(element, id) {
+    return element.shadowRoot.querySelector(`[data-id="${id}"]`);
+  }
+
+  function allById(element, id) {
+    return Array.from(element.shadowRoot.querySelectorAll(`[data-id="${id}"]`));
+  }
+
+  it("shows used and remaining as number and percent with a Healthy state", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [peRow("HourlyPublishedPlatformEvents", 1000, 250000, "HEALTHY", 0.4)],
+        "HEALTHY",
+      ),
+    );
+
+    const rows = allById(element, "pe-row");
+    expect(rows).toHaveLength(1);
+    const text = rows[0].textContent;
+    expect(text).toContain("HourlyPublishedPlatformEvents");
+    expect(text).toContain("1000 / 250000");
+    expect(text).toContain("0.4% used");
+    expect(text).toContain("249000 remaining");
+    expect(text).toContain("99.6%");
+    const badge = rows[0].querySelector('[data-id="pe-row-state"]');
+    expect(badge.textContent).toContain("Healthy");
+    expect(badge.className).toContain("badge-green");
+    expect(byId(element, "pe-panel-state").textContent).toContain("Healthy");
+    expect(byId(element, "pe-thresholds").textContent).toContain(
+      "Warning at 80%",
+    );
+    expect(byId(element, "pe-thresholds").textContent).toContain(
+      "Critical at 95%",
+    );
+    expect(byId(element, "pe-consequence")).toBeNull();
+    expect(byId(element, "pe-unavailable")).toBeNull();
+  });
+
+  it("shows Warning and the consequence at the warning threshold", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [peRow("HourlyPublishedPlatformEvents", 80, 100, "WARNING", 80)],
+        "WARNING",
+      ),
+    );
+
+    const badge = byId(element, "pe-panel-state");
+    expect(badge.textContent).toContain("Warning");
+    expect(badge.className).toContain("badge-orange");
+    const consequence = byId(element, "pe-consequence");
+    expect(consequence).not.toBeNull();
+    expect(consequence.textContent).toContain(CONSEQUENCE);
+    expect(consequence.textContent).toContain("Child-to-parent resumes");
+    expect(consequence.textContent).toContain("Lifecycle events");
+  });
+
+  it("shows Critical as the worst row state and the consequence", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [
+          peRow("HourlyPublishedPlatformEvents", 10, 100, "HEALTHY", 10),
+          peRow("DailyDeliveredPlatformEvents", 96, 100, "CRITICAL", 96),
+        ],
+        "CRITICAL",
+      ),
+    );
+
+    const rows = allById(element, "pe-row");
+    expect(rows).toHaveLength(2);
+    expect(
+      rows[1].querySelector('[data-id="pe-row-state"]').className,
+    ).toContain("badge-red");
+    const badge = byId(element, "pe-panel-state");
+    expect(badge.textContent).toContain("Critical");
+    expect(badge.className).toContain("badge-red");
+    expect(byId(element, "pe-consequence").textContent).toContain(CONSEQUENCE);
+  });
+
+  it("marks the panel Not available when the org has no PE limit", async () => {
+    const element = await openDoctorWith(peStatus([], "UNAVAILABLE"));
+
+    expect(allById(element, "pe-row")).toHaveLength(0);
+    expect(byId(element, "pe-unavailable").textContent).toContain(
+      "Not available",
+    );
+    expect(byId(element, "pe-panel-state").textContent).toContain(
+      "Not available",
+    );
+    expect(byId(element, "pe-consequence")).toBeNull();
+  });
+
+  it("marks the panel Not available when the payload has no PE keys", async () => {
+    const element = await openDoctorWith({});
+
+    expect(allById(element, "pe-row")).toHaveLength(0);
+    expect(byId(element, "pe-unavailable")).not.toBeNull();
+    expect(byId(element, "pe-consequence")).toBeNull();
+  });
+
+  it("uses valid App Builder thresholds to classify the rows", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [peRow("HourlyPublishedPlatformEvents", 60, 100, "HEALTHY", 60)],
+        "HEALTHY",
+      ),
+      { platformEventWarningPercent: 50, platformEventCriticalPercent: 70 },
+    );
+
+    expect(byId(element, "pe-panel-state").textContent).toContain("Warning");
+    expect(
+      allById(element, "pe-row")[0].querySelector('[data-id="pe-row-state"]')
+        .textContent,
+    ).toContain("Warning");
+    expect(byId(element, "pe-thresholds").textContent).toContain(
+      "Warning at 50%",
+    );
+    expect(byId(element, "pe-thresholds").textContent).toContain(
+      "Critical at 70%",
+    );
+    expect(byId(element, "pe-consequence")).not.toBeNull();
+  });
+
+  it("classifies the critical boundary with App Builder thresholds", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [peRow("HourlyPublishedPlatformEvents", 70, 100, "HEALTHY", 70)],
+        "HEALTHY",
+      ),
+      { platformEventWarningPercent: 50, platformEventCriticalPercent: 70 },
+    );
+
+    expect(byId(element, "pe-panel-state").textContent).toContain("Critical");
+  });
+
+  it("applies one App Builder threshold with the server default for the other", async () => {
+    const element = await openDoctorWith(
+      peStatus(
+        [peRow("HourlyPublishedPlatformEvents", 60, 100, "HEALTHY", 60)],
+        "HEALTHY",
+      ),
+      { platformEventWarningPercent: 60 },
+    );
+
+    expect(byId(element, "pe-panel-state").textContent).toContain("Warning");
+    expect(byId(element, "pe-thresholds").textContent).toContain(
+      "Critical at 95%",
+    );
+  });
+
+  it.each([
+    [{ platformEventWarningPercent: 90, platformEventCriticalPercent: 80 }],
+    [{ platformEventWarningPercent: 0, platformEventCriticalPercent: 70 }],
+    [{ platformEventWarningPercent: 50, platformEventCriticalPercent: 101 }],
+    [{ platformEventWarningPercent: "abc" }],
+  ])("ignores invalid App Builder thresholds %j", async (attributes) => {
+    const element = await openDoctorWith(
+      peStatus(
+        [peRow("HourlyPublishedPlatformEvents", 60, 100, "HEALTHY", 60)],
+        "HEALTHY",
+      ),
+      attributes,
+    );
+
+    expect(byId(element, "pe-panel-state").textContent).toContain("Healthy");
+    expect(byId(element, "pe-thresholds").textContent).toContain(
+      "Warning at 80%",
+    );
+    expect(byId(element, "pe-consequence")).toBeNull();
+  });
+});

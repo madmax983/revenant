@@ -565,6 +565,113 @@ public class WorkflowDashboardControllerAuthTest {
     }
   }
 
+  // Issue #120: Platform Event headroom keys are in the payload.
+  @IsTest
+  static void testWatchdogStatusIncludesPlatformEventHeadroom() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+
+      Assert.isTrue(status.containsKey('hasPlatformEventLimits'));
+      Assert.isTrue(status.containsKey('platformEventState'));
+      Assert.isTrue(status.containsKey('platformEventLimits'));
+      Assert.isTrue(status.containsKey('platformEventWarningPercent'));
+      Assert.isTrue(status.containsKey('platformEventCriticalPercent'));
+      // The async keys stay.
+      Assert.isTrue(status.containsKey('dailyAsyncValue'));
+      Assert.isTrue(status.containsKey('hasElasticLimit'));
+
+      Map<String, Object> expected = PlatformEventHeadroom.fromOrgLimits(
+        System.OrgLimits.getMap()
+      );
+      Assert.areEqual(
+        expected.get('hasPlatformEventLimits'),
+        status.get('hasPlatformEventLimits')
+      );
+      List<Map<String, Object>> rows = (List<Map<String, Object>>) status.get(
+        'platformEventLimits'
+      );
+      for (Map<String, Object> row : rows) {
+        Integer value = (Integer) row.get('value');
+        Integer limitValue = (Integer) row.get('limit');
+        Assert.areEqual(
+          PlatformEventHeadroom.classify(
+            value,
+            limitValue,
+            PlatformEventHeadroom.DEFAULT_WARNING_PERCENT,
+            PlatformEventHeadroom.DEFAULT_CRITICAL_PERCENT
+          ),
+          row.get('state')
+        );
+        Assert.areEqual(Math.max(0, limitValue - value), row.get('remaining'));
+      }
+      if (rows.isEmpty()) {
+        Assert.areEqual(
+          PlatformEventHeadroom.STATE_UNAVAILABLE,
+          status.get('platformEventState')
+        );
+      }
+    }
+  }
+
+  // Issue #120: the controller payload gives the correct state at each
+  // boundary. Apex cannot make an OrgLimit, so the test sets the readings.
+  @IsTest
+  static void testWatchdogStatusPlatformEventStateAtBoundaries() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<Integer, String> expectedByUsed = new Map<Integer, String>{
+        0 => PlatformEventHeadroom.STATE_HEALTHY,
+        7999 => PlatformEventHeadroom.STATE_HEALTHY,
+        8000 => PlatformEventHeadroom.STATE_WARNING,
+        9499 => PlatformEventHeadroom.STATE_WARNING,
+        9500 => PlatformEventHeadroom.STATE_CRITICAL,
+        10000 => PlatformEventHeadroom.STATE_CRITICAL
+      };
+      for (Integer used : expectedByUsed.keySet()) {
+        PlatformEventHeadroom.readingsOverride = new List<PlatformEventHeadroom.Reading>{
+          new PlatformEventHeadroom.Reading(
+            'HourlyPublishedPlatformEvents',
+            used,
+            10000
+          )
+        };
+
+        Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+
+        Assert.areEqual(
+          expectedByUsed.get(used),
+          status.get('platformEventState'),
+          'Panel state at ' + used + ' of 10000'
+        );
+        Map<String, Object> row = ((List<Map<String, Object>>) status.get(
+          'platformEventLimits'
+        ))[0];
+        Assert.areEqual(used, row.get('value'));
+        Assert.areEqual(10000 - used, row.get('remaining'));
+        Assert.areEqual(expectedByUsed.get(used), row.get('state'));
+      }
+    }
+  }
+
+  // Issue #120: no Platform Event key gives "not available", not an error.
+  @IsTest
+  static void testWatchdogStatusPlatformEventUnavailable() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      PlatformEventHeadroom.readingsOverride = new List<PlatformEventHeadroom.Reading>();
+
+      Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+
+      Assert.areEqual(false, status.get('hasPlatformEventLimits'));
+      Assert.areEqual(
+        PlatformEventHeadroom.STATE_UNAVAILABLE,
+        status.get('platformEventState')
+      );
+      Assert.isTrue(
+        ((List<Map<String, Object>>) status.get('platformEventLimits'))
+          .isEmpty()
+      );
+    }
+  }
+
   @IsTest
   static void testWatchdogStatusAndEnqueue() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
