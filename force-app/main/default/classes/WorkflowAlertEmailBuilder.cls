@@ -174,6 +174,78 @@ public inherited sharing class WorkflowAlertEmailBuilder {
   }
 
   /**
+   * @description Sends one email and checks the result (issue #113). Keeps
+   * one email invocation free for the caller. Does not throw.
+   * @param mail The email to send.
+   * @return True when the platform accepted the email.
+   */
+  public static Boolean sendEmail(Messaging.SingleEmailMessage mail) {
+    if (
+      mail == null ||
+      Limits.getEmailInvocations() + 1 >= Limits.getLimitEmailInvocations()
+    ) {
+      return false;
+    }
+    try {
+      if (Test.isRunningTest()) {
+        if (WorkflowAlertManager.throwTestException) {
+          throw new IllegalArgumentException('Simulated email exception');
+        }
+      } else {
+        for (
+          Messaging.SendEmailResult result : Messaging.sendEmail(
+            new List<Messaging.SingleEmailMessage>{ mail },
+            false
+          )
+        ) {
+          if (!result.isSuccess()) {
+            return false;
+          }
+        }
+      }
+      WorkflowAlertManager.sentEmailsCount += 1;
+      return true;
+    } catch (Exception ex) {
+      return false;
+    }
+  }
+
+  /**
+   * @description Builds a watchdog stall email (issue #113). Returns null
+   * when no recipient is valid or the build fails.
+   * @param recipients The raw, delimiter-separated recipient address list.
+   * @param message The stall message. It contains no user data.
+   * @return The email message, or null.
+   */
+  public static Messaging.SingleEmailMessage buildWatchdogStallEmail(
+    String recipients,
+    String message
+  ) {
+    try {
+      List<String> toAddresses = parseRecipients(recipients);
+      if (toAddresses.isEmpty()) {
+        return null;
+      }
+      Messaging.SingleEmailMessage mail = new Messaging.SingleEmailMessage();
+      mail.setToAddresses(toAddresses);
+      mail.setSubject('[Revenant Alert] Watchdog Stalled');
+      String htmlBody =
+        '<div style="font-family: sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; max-width: 600px;">' +
+        '<h2 style="color: #e53e3e; margin-top: 0;">Watchdog Stalled</h2>' +
+        '<p>' +
+        message.escapeHtml4() +
+        '</p>' +
+        '<p style="font-size: 14px; color: #718096; margin-bottom: 0;">Open System Doctor in the Workflow Dashboard to examine the watchdog.</p>' +
+        '</div>';
+      mail.setHtmlBody(htmlBody);
+      WorkflowAlertManager.lastHtmlBody = htmlBody;
+      return mail;
+    } catch (Exception ex) {
+      return null;
+    }
+  }
+
+  /**
    * @description Splits, trims and drops blank recipient addresses.
    * @param recipients The raw, delimiter-separated recipient address list.
    * @return The cleaned list of individual recipient addresses.
