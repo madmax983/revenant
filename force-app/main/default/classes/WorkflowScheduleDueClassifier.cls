@@ -58,20 +58,8 @@ public inherited sharing class WorkflowScheduleDueClassifier {
         sched.Last_Fired_Window__c != null &&
         sched.Last_Fired_Window__c == fireTime
       ) {
-        // Window already handled. Backfill the cursor if it's missing so this row
-        // rotates out of future batches instead of being re-selected every sweep.
-        if (sched.Next_Fire_Window__c == null) {
-          state.toUpdate.add(
-            new Workflow_Schedule__c(
-              Id = sched.Id,
-              Next_Fire_Window__c = SalesforceCronTranslator.nextWindow(
-                sched.Cron_Expression__c,
-                fireTime,
-                sched.Time_Zone__c
-              )
-            )
-          );
-        }
+        // Window already handled. Fix the cursor if needed, then rotate out.
+        backfillHandledCursor(sched, fireTime, state);
         return;
       }
       if (
@@ -100,6 +88,39 @@ public inherited sharing class WorkflowScheduleDueClassifier {
       state.dueItems.add(buildDueItem(sched, fireTime));
     } catch (Exception ignored) {
     }
+  }
+
+  /**
+   * @description Fixes the cursor of a schedule whose window is handled. A
+   * missing cursor is backfilled so the row rotates out of future batches
+   * instead of being re-selected every sweep. A past cursor is reseeded too:
+   * a cron or zone edit made in Setup/API does not reseed it, and a past
+   * cursor shows as overdue (issue #126).
+   * @param sched The schedule being classified.
+   * @param fireTime The handled window instant.
+   * @param state The mutable sweep working set the update is queued into.
+   */
+  private static void backfillHandledCursor(
+    Workflow_Schedule__c sched,
+    DateTime fireTime,
+    WorkflowScheduleSweepRunner.SweepState state
+  ) {
+    if (
+      sched.Next_Fire_Window__c != null &&
+      sched.Next_Fire_Window__c > state.now
+    ) {
+      return;
+    }
+    state.toUpdate.add(
+      new Workflow_Schedule__c(
+        Id = sched.Id,
+        Next_Fire_Window__c = SalesforceCronTranslator.nextWindow(
+          sched.Cron_Expression__c,
+          fireTime,
+          sched.Time_Zone__c
+        )
+      )
+    );
   }
 
   /**

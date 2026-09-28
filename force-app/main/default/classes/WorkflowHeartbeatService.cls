@@ -1,12 +1,13 @@
 /**
  * @description Sequences the watchdog heartbeat: the fixed-order body that
  * WorkflowEngine.processWatchdogHeartbeat() delegates to. Runs the timeout,
- * deadline, sleep-resume, unrouted-signal, schedule, debounce, concurrency-
- * reconcile, transient-retry-rescue, orphan-reclaim, and stall-detection phases
- * in strict order, then publishes deferred lifecycle events so a best-effort
- * publish can never spend a DML statement a required section needs. Then it
- * publishes the engine-health snapshot (WorkflowMetricsPublisher, default
- * off) and writes the liveness stamp (WatchdogLiveness).
+ * deadline, sleep-resume, unrouted-signal, schedule, debounce, schedule-health
+ * alert, concurrency-reconcile, transient-retry-rescue, orphan-reclaim, and
+ * stall-detection phases in strict order, then publishes deferred lifecycle
+ * events so a best-effort publish can never spend a DML statement a required
+ * section needs. Then it publishes the engine-health snapshot
+ * (WorkflowMetricsPublisher, default off) and writes the liveness stamp
+ * (WatchdogLiveness).
  *
  * Extracted from WorkflowEngine; the public entry stays on WorkflowEngine as a
  * thin facade so its callers are untouched. All DML and SOQL run in system mode
@@ -61,6 +62,15 @@ public inherited sharing class WorkflowHeartbeatService {
       WorkflowDebouncer.sweep();
     } catch (Exception ignored) {
       // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 3c. Alert on overdue or failed schedules (issue #126). It runs after
+    // the schedule sweep, so a row that this sweep fired is not reported.
+    // It does not write instance, step or schedule rows.
+    try {
+      WorkflowAlertManager.detectAndAlertScheduleHealth(now);
+    } catch (Exception ignored) {
+      // An error here must not stop the watchdog heartbeat.
     }
 
     // 4. Reconcile concurrency slot counters. Recomputes each configured
