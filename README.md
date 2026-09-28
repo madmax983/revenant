@@ -41,6 +41,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 
 - **Platform Event Signaling**: External integrations, webhook listeners, or human-in-the-loop approvals wake up suspended workflows by publishing `Workflow_Event__e` platform events. The resuming step reads the inbound signal name and payload directly from `StepContext` via the signals accessor (e.g. `ctx.signals().getSignal('Approve:Order')`), and the engine marks observed signals consumed at the step's `COMPLETE` transition so at-least-once redelivered duplicates are never double-processed.
 - **Effectively-Once Outbound Emit (`ctx.events().emit()`)**: A step can hand the engine one or more author-owned domain Platform Events to publish mid-workflow — `ctx.events().emit(new Order_Shipped__e(...))` — instead of calling `EventBus.publish()` itself. The engine buffers them and publishes them in the **same transaction that writes the step's append-only `COMPLETE`/`SPLIT` record**, before the next step begins, so retries, yields, suspends, operator re-drives, and at-least-once resumes that re-run `execute()` before that commit publish **nothing**, and a step already durably `COMPLETE` never re-executes and so never re-emits — producer-side effectively-once with no hand-rolled dedup token. Authors keep their own `__e` (use `publishBehavior=PublishAfterCommit`); the engine imposes no envelope. Delivery to subscribers stays at-least-once, so subscribers remain idempotent. This is the mid-flight outbound complement to inbound signals and the terminal lifecycle event. See [OrderChoreographyWorkflowExample](examples/main/default/classes/OrderChoreographyWorkflowExample.cls) (workflow A emits an event that starts workflow B).
+- **Approver Notifications**: A step that waits for a human adds `.withNotification(WorkflowNotification.create(title, body).toInputKey('approverId'))` to its `waitForApproval(...)` or `suspend()` result. The engine sends one native Custom Notification (bell and mobile push) for each logical suspend, after the SUSPEND commits. A rollback or a re-suspend sends nothing. A notification error never stops the SUSPEND. Toggle: `Revenant_Config__mdt.Send_Notifications__c`. See [docs/approver-notifications.md](docs/approver-notifications.md).
 - **Outbound Lifecycle Events**: The engine publishes a `Workflow_Lifecycle__e` platform event (outcome metadata only) each time an instance reaches a terminal state (`Completed`/`Failed`/`Compensated`/`Cancelled`), so a Flow **Pause** element or an external subscriber can react event-driven instead of polling — exactly one event per logical workflow (one per `ContinuedAsNew` chain). Fire-and-forget and operator-toggleable via `Revenant_Config__mdt.Publish_Lifecycle_Events__c`. See [docs/workflow-lifecycle-event.md](docs/workflow-lifecycle-event.md).
 - **Salesforce Flow Interoperability**: Launches or signals workflows using Invocable Actions from Salesforce Flow, or executes standard Autolaunched Flows as steps within a workflow using the generic `WorkflowFlowStep` wrapper.
 - **Custom Metadata Alerts**: Supports operator-configurable failure notification thresholds (consecutive failures, sliding rate counts) using `Workflow_Alert_Config__mdt` custom metadata records.
@@ -268,7 +269,13 @@ public StepResult execute(StepContext ctx) {
         // The second argument is an optional Custom Permission API name the dashboard
         // requires an approver to hold; null leaves the gate unrestricted (pass e.g.
         // 'Workflow_Admin' to restrict who may decide).
-        return StepResult.waitForApproval('PurchaseApproval', null);
+        // withNotification sends one bell and mobile notification to the approver
+        // in the workflow input when the wait commits (see docs/approver-notifications.md).
+        return StepResult.waitForApproval('PurchaseApproval', null)
+            .withNotification(
+                WorkflowNotification.create('Purchase approval needed', 'Approve or reject the purchase.')
+                    .toInputKey('approverId')   // or .toRecipient(userId), .toRecordOwner(recordId)
+            );
         // Need a deadline? Chain the fluent timeout instead of a longer arg list:
         //   return StepResult.waitForApproval('PurchaseApproval', null)
         //       .withApprovalTimeout(86400, 'PurchaseApprovalTimedOut');
@@ -279,6 +286,8 @@ public StepResult execute(StepContext ctx) {
     return StepResult.complete(null, payload);
 }
 ```
+
+The gate notifies the approver one time for each wait. A re-suspend of the same wait sends nothing. You do not write `Messaging.*` code.
 
 **3. DAG-level approve/reject routing** in `getNextStep()`:
 
@@ -864,6 +873,9 @@ Revenant settings can be configured without code modifications by editing the **
 12. **Step History Ceiling** (`Step_History_Ceiling__c` - Number, default `10000`):
    - The engine fails the instance at this number of step rows with `STEP_HISTORY_LIMIT`. Use Continue-As-New to start a new count. `0`: no ceiling. Max `10000`.
    - Cost: when one of the two checks is on, one SOQL (`COUNT()` with `LIMIT`) for each hop.
+13. **Send Notifications** (`Send_Notifications__c` - Checkbox, default `true`):
+   - **`true`**: The engine sends the Custom Notification that a waiting step requests with `StepResult.withNotification(...)`.
+   - **`false`**: The engine sends no notification and writes no anchor row. A request that is already published is logged as `Skipped`. See [docs/approver-notifications.md](docs/approver-notifications.md).
 
 ### Architectural Trade-offs
 

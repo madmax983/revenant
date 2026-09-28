@@ -16,6 +16,9 @@ public inherited sharing class WorkflowEngine {
   // Operator toggle (Revenant_Config__mdt.Publish_Lifecycle_Events__c): when true
   // the engine publishes a Workflow_Lifecycle__e event on terminal transitions.
   public static Boolean publishLifecycleEvents = true;
+  // Operator toggle (Revenant_Config__mdt.Send_Notifications__c, issue #123):
+  // when true the engine sends the Custom Notification of a waiting step.
+  public static Boolean sendNotifications = true;
   // Operator setting (Revenant_Config__mdt.Payload_Codec__c): the PayloadCodec
   // class name. Blank selects the identity codec. See WorkflowPayloadCodecs.
   public static String payloadCodecClass = null;
@@ -129,6 +132,7 @@ public inherited sharing class WorkflowEngine {
           Watchdog_Delay_Minutes__c,
           Use_Dynamic_Scheduling__c,
           Publish_Lifecycle_Events__c,
+          Send_Notifications__c,
           Cascade_Cancel_Children_On_Failure__c,
           Dedup_Window_Minutes__c,
           Stale_Threshold_Minutes__c,
@@ -152,6 +156,9 @@ public inherited sharing class WorkflowEngine {
         }
         if (configs[0].Publish_Lifecycle_Events__c != null) {
           publishLifecycleEvents = configs[0].Publish_Lifecycle_Events__c;
+        }
+        if (configs[0].Send_Notifications__c != null) {
+          sendNotifications = configs[0].Send_Notifications__c;
         }
         if (configs[0].Cascade_Cancel_Children_On_Failure__c != null) {
           cascadeCancelChildrenOnFailure = configs[0]

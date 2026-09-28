@@ -462,6 +462,19 @@ See [docs/strict-determinism.md](docs/strict-determinism.md).
 
 See [docs/step-history-guard.md](docs/step-history-guard.md).
 
+## New (additive): approver notifications
+
+**Issue #123.** No signature changes. Nothing changes until a step calls `withNotification`.
+
+- New author API: `StepResult.withNotification(WorkflowNotification)` and the `WorkflowNotification` builder. New field: `StepResult.StepDirective.notification`.
+- New config field: `Revenant_Config__mdt.Send_Notifications__c` (default on).
+- New metadata: `CustomNotificationType` `Revenant_Workflow_Notification`.
+- `Workflow_Event__e` has a new `Event_Type__c` value: `NOTIFY`, and a new trigger: `WorkflowNotifyTrigger`. A custom subscriber to `Workflow_Event__e` must ignore `NOTIFY`.
+- `Workflow_Log__c` has new rows with `Log_Type__c = Notification`.
+- `ApprovalWorkflowExample` reads the approver from the workflow input key `approverId`. With no approver, it notifies the instance owner.
+
+See [docs/approver-notifications.md](docs/approver-notifications.md).
+
 ---
 
 ## 9. New (additive, non-breaking): `WorkflowInstanceQuery.findInstances`

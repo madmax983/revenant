@@ -267,6 +267,9 @@ public inherited sharing class WorkflowCompensationOutcome {
     WorkflowStepExecStore.saveStepExec(stepExec);
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    // Issue #123: last, after the required DML. Fire-and-forget.
+    outcome.instance = instance;
+    WorkflowNotifier.request(outcome);
   }
 
   private static void handleCompensationSleep(
@@ -319,6 +322,9 @@ public inherited sharing class WorkflowCompensationOutcome {
     WorkflowStepExecStore.saveStepExec(stepExec);
     instance.Status__c = 'Suspended';
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+    // Issue #123: last, after the required DML. Fire-and-forget.
+    outcome.instance = instance;
+    WorkflowNotifier.request(outcome);
   }
 
   private static void handleCompensationRetry(
