@@ -23,9 +23,16 @@ public inherited sharing class WorkflowFleetHealthService {
   // The maximum number of terminal rows that the duration query reads.
   private static final Integer SAMPLE_CAP = 2000;
 
+  // An Apex aggregate query cannot return more than 2,000 rows (no queryMore). The group
+  // count is never more than the instance count. Thus the aggregate runs only when this
+  // number of instances or fewer started in the window.
+  private static final Integer AGGREGATE_MAX = 2000;
+
   // Tests set these caps. They are null in production.
   @TestVisible
   private static Integer countCapOverride = null;
+  @TestVisible
+  private static Integer aggregateMaxOverride = null;
   @TestVisible
   private static Integer sampleCapOverride = null;
 
@@ -97,6 +104,8 @@ public inherited sharing class WorkflowFleetHealthService {
 
   // Adds the status counts of the instances started in the window. Returns true when the
   // window has more than countCap() instances. Then the counts use the newest countCap().
+  // Up to aggregateMax() instances, one aggregate query counts. Above that, a row query
+  // counts.
   private static Boolean addCounts(
     Map<String, DefinitionHealth> byName,
     Datetime since
@@ -111,7 +120,7 @@ public inherited sharing class WorkflowFleetHealthService {
       LIMIT :probeLimit
     ];
 
-    if (inWindow > cap) {
+    if (inWindow > cap || inWindow > aggregateMax()) {
       // A SOQL for loop reads 200 rows at a time. This keeps the heap small.
       for (Workflow_Instance__c inst : [
         SELECT Workflow_Name__c, Status__c
@@ -123,11 +132,11 @@ public inherited sharing class WorkflowFleetHealthService {
       ]) {
         healthFor(byName, inst.Workflow_Name__c).addCount(inst.Status__c, 1);
       }
-      return true;
+      return inWindow > cap;
     }
 
-    // Use a list, not a SOQL for loop. An aggregate for loop fails when it has more than
-    // 2,000 groups.
+    // At most aggregateMax() groups, because each group has one instance or more. The
+    // query reads at most countCap() rows.
     List<AggregateResult> groups = [
       SELECT Workflow_Name__c, Status__c, COUNT(Id) cnt
       FROM Workflow_Instance__c
@@ -171,6 +180,10 @@ public inherited sharing class WorkflowFleetHealthService {
 
   private static Integer countCap() {
     return countCapOverride != null ? countCapOverride : COUNT_CAP;
+  }
+
+  private static Integer aggregateMax() {
+    return aggregateMaxOverride != null ? aggregateMaxOverride : AGGREGATE_MAX;
   }
 
   private static Integer sampleCap() {

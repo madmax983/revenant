@@ -18,8 +18,8 @@ The Salesforce guide says that a `COUNT` query with `GROUP BY` uses one query ro
 
 1. The counts use the instances that started in the window (`CreatedDate`).
 2. A probe query counts these instances: `SELECT COUNT() ... LIMIT 20,001`.
-3. When the count is 20,000 or less, one `COUNT(Id) GROUP BY Workflow_Name__c, Status__c` query gets the exact counts.
-4. When the count is more than 20,000, one row query reads the newest 20,000 instances in a SOQL `for` loop. The result has `countsCapped = true`. The view shows a note.
+3. When the count is 2,000 or less, one `COUNT(Id) GROUP BY Workflow_Name__c, Status__c` query gets the exact counts. An Apex aggregate query cannot return more than 2,000 rows. The group count is never more than the instance count.
+4. When the count is more than 2,000, one row query reads the newest 20,000 instances in a SOQL `for` loop. The counts are exact up to 20,000. Above 20,000, the result has `countsCapped = true` and the view shows a note.
 5. The durations use the instances that got a `Terminal_At__c` in the window. One query reads the newest 2,001 of these rows. Apex uses the first 2,000. When the query returns 2,001 rows, the result has `isSampled = true` and each duration shows "≈".
 6. A definition that has only a finished instance in the window gets a row with `started = 0`.
 7. The map key is the lower-case name, because SOQL `GROUP BY` ignores case.

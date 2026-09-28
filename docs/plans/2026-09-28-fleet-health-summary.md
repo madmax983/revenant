@@ -31,6 +31,7 @@ Show one row for each workflow definition with instances in a rolling window. Ea
 | B13 | Put `DefinitionChanged` in in-flight. | Yes. It is an active status. The issue does not list it because #89 added it later. |
 | B14 | Put `CompensationFailed` in failed. | Yes. The issue asks for it. Its outcome is a failure. |
 | B15 | A `COUNT() LIMIT 20,001` probe. Above 20,000, count the newest 20,000 rows. | Yes (added after review). Safe in both cases of row accounting. |
+| B17 | The aggregate only for 2,000 instances or fewer. Above that, a row query counts. | Yes (added after review). An Apex aggregate query cannot return more than 2,000 rows. |
 | B16 | Durations only for instances that started in the window. | No (changed after review). The maximum can never be more than the window. |
 
 ## Reverse Brainstorming (how to make it fail)
@@ -44,7 +45,7 @@ Show one row for each workflow definition with instances in a rolling window. Ea
 | Divide by zero when no instance is terminal. | The success rate is `null`. The UI shows "—". |
 | Two numbers for one definition confuse the operator. | The view text states which instances each number uses. |
 | A slow response overwrites a newer window. | Each request has an id. The UI discards a response from an older request. |
-| An aggregate `for` loop with more than 2,000 groups fails. | Assign the query to a list. |
+| An aggregate query with more than 2,000 groups fails. | Run the aggregate only for 2,000 instances or fewer. |
 | A failed load looks like "no instances". | An error state that is different from the empty state. |
 
 ## Six Thinking Hats
@@ -69,7 +70,7 @@ Show one row for each workflow definition with instances in a rolling window. Ea
 | AC | Apex test | Jest test |
 |----|-----------|-----------|
 | 1 One row per definition, window | `testOneRowPerDefinitionInWindow`, `testWindowKeyMapping`, `testNameCaseGivesOneRow`, `testDurationIncludesInstancesStartedBeforeWindow` | `lists one row per definition…`, `requests a new window…` |
-| 2 Counts | `testStatusBuckets` | `lists one row per definition…` |
+| 2 Counts | `testStatusBuckets`, `testRowCountsMatchAggregateCounts` | `lists one row per definition…` |
 | 3 Success rate, threshold flag | `testSuccessRateAndSortOrder` | `flags rows below the default 95% threshold`, `flags from the counts…`, `applies an operator threshold…`, `keeps the last threshold…` |
 | 4 Avg and max duration | `testDurations`, `testDurationSampleCap`, `testExactCapIsNotSampled`, `testDurationIncludesInstancesStartedBeforeWindow` | `marks sampled durations as approximate`, `shows no sample or count note…` |
 | 5 Read-only | `testReadOnly` | — |

@@ -411,6 +411,49 @@ private class WorkflowFleetHealthServiceTest {
   }
 
   /**
+   * @description AC2 and AC6: above the aggregate limit and under the count cap, the row
+   * query gives the same exact counts as the aggregate query.
+   */
+  @IsTest
+  static void testRowCountsMatchAggregateCounts() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      seed('RowDef', 'Completed', now.addSeconds(-10), now);
+      seed('RowDef', 'Failed', now.addSeconds(-10), now);
+      seed('RowDef', 'Running', now, null);
+      seed('OtherDef', 'Paused', now, null);
+
+      Test.startTest();
+      Map<String, Object> aggregate = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      WorkflowFleetHealthService.aggregateMaxOverride = 3;
+      Map<String, Object> scanned = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      System.assertEquals(false, scanned.get('countsCapped'), 'Under the cap');
+      for (String name : new List<String>{ 'RowDef', 'OtherDef' }) {
+        Map<String, Object> a = findRow(aggregate, name);
+        Map<String, Object> r = findRow(scanned, name);
+        for (
+          String key : new List<String>{
+            'started',
+            'completed',
+            'failed',
+            'inFlight',
+            'successRate'
+          }
+        ) {
+          System.assertEquals(a.get(key), r.get(key), name + ' ' + key);
+        }
+      }
+      System.assertEquals(3, findRow(scanned, 'RowDef').get('started'));
+    }
+  }
+
+  /**
    * @description AC1: names that differ only in case give one row, as SOQL GROUP BY does.
    */
   @IsTest

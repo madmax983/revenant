@@ -201,8 +201,8 @@ endpoints moved). All three delegate to `inherited sharing` service classes.
   service uses the `RateLimiter` refill formula (`availableTokens`).
 - Fleet Health view (#111): `WorkflowFleetHealthController` →
   `WorkflowFleetHealthService`. It is a separate controller for the same PMD reason.
-  It uses three queries, each with a cap: a count probe, the counts and a duration
-  sample (ADR 0004).
+  It uses three queries, each with a cap: a count probe, the counts (an aggregate up
+  to 2,000 instances, else a row query) and a duration sample (ADR 0004).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,
