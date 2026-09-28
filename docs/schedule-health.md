@@ -97,7 +97,11 @@ flowchart LR
   recipient list, 1 event publish, and 1 delete when no channel sends the
   alert.
 - The alerter keeps 10 DML statements and 10 queries free. It sends a
-  maximum of 10 alerts in each sweep. The next sweep sends the rest.
+  maximum of 10 alerts in each sweep. The next sweep sends the rest. The
+  start position in the list moves each minute, so an alert whose channel
+  fails cannot block the alerts after it.
+- Each event has its own publish result. A partial publish failure releases
+  only the claims of the events that failed.
 - No new scheduled job, custom object or field.
 
 ## Limits

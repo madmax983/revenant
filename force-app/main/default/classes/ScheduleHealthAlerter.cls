@@ -42,7 +42,8 @@ public inherited sharing class ScheduleHealthAlerter {
       }
       ScheduleHealthClock clock = ScheduleHealthClock.forSweep(now);
       List<ScheduleHealthAlert> alerts = unclaimed(
-        buildAlerts(ScheduleHealth.findUnhealthy(clock), clock.graceMinutes)
+        buildAlerts(ScheduleHealth.findUnhealthy(clock), clock.graceMinutes),
+        now
       );
       if (alerts.isEmpty()) {
         return 0;
@@ -103,7 +104,8 @@ public inherited sharing class ScheduleHealthAlerter {
 
   // Drops the alerts that a claim row already covers. Applies the cap.
   private static List<ScheduleHealthAlert> unclaimed(
-    List<ScheduleHealthAlert> alerts
+    List<ScheduleHealthAlert> alerts,
+    Datetime now
   ) {
     if (alerts.isEmpty()) {
       return alerts;
@@ -121,11 +123,29 @@ public inherited sharing class ScheduleHealthAlerter {
     ]) {
       taken.add(row.Fire_Key__c);
     }
-    List<ScheduleHealthAlert> result = new List<ScheduleHealthAlert>();
+    List<ScheduleHealthAlert> free = new List<ScheduleHealthAlert>();
     for (ScheduleHealthAlert alert : alerts) {
-      if (!taken.contains(alert.key) && result.size() < maxAlertsPerSweep) {
-        result.add(alert);
+      if (!taken.contains(alert.key)) {
+        free.add(alert);
       }
+    }
+    return rotateAndCap(free, now);
+  }
+
+  // Applies the cap from a start position that moves each minute. Thus an
+  // alert whose channel fails cannot take the same slot on each sweep and
+  // block the alerts after it.
+  private static List<ScheduleHealthAlert> rotateAndCap(
+    List<ScheduleHealthAlert> free,
+    Datetime now
+  ) {
+    if (free.size() <= maxAlertsPerSweep) {
+      return free;
+    }
+    Integer start = Math.mod((now.getTime() / 60000L).intValue(), free.size());
+    List<ScheduleHealthAlert> result = new List<ScheduleHealthAlert>();
+    for (Integer i = 0; i < maxAlertsPerSweep; i++) {
+      result.add(free[Math.mod(start + i, free.size())]);
     }
     return result;
   }
@@ -179,8 +199,13 @@ public inherited sharing class ScheduleHealthAlerter {
         events.add(alert.toEvent());
       }
     }
-    if (!events.isEmpty() && WorkflowAlertManager.publishEvents(events)) {
-      ScheduleHealthAlert.markAllSent(eventAlerts);
+    // Mark each event on its own result, so a partial failure does not
+    // release the claim of an event that the platform accepted.
+    List<Boolean> results = WorkflowAlertManager.publishEachEvent(events);
+    for (Integer i = 0; i < results.size(); i++) {
+      if (results[i]) {
+        eventAlerts[i].markSent();
+      }
     }
   }
 

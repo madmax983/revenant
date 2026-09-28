@@ -402,6 +402,39 @@ private class ScheduleHealthAlerterTest {
   }
 
   @IsTest
+  static void failingChannelDoesNotStarveLaterAlerts() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      enableDefaultAlerts();
+      // A recipient list with no valid address: the email never sends.
+      WorkflowAlertManager.mockConfigs.put(
+        'BrokenFlow',
+        alertConfig(' ; ', false)
+      );
+      ScheduleHealthAlerter.maxAlertsPerSweep = 1;
+      // The broken schedule has the oldest cursor, so it is first in the list.
+      insertSchedule(
+        'Broken',
+        new Map<String, Object>{
+          'Workflow_Name__c' => 'BrokenFlow',
+          'Next_Fire_Window__c' => System.now().addHours(-3)
+        }
+      );
+      Workflow_Schedule__c good = insertOverdue('Good');
+
+      // Two sweeps one minute apart start at different positions.
+      Datetime first = later();
+      ScheduleHealthAlerter.detectAndAlert(first);
+      ScheduleHealthAlerter.detectAndAlert(first.addMinutes(1));
+
+      List<Workflow_Log__c> logs = claims();
+      Assert.areEqual(1, logs.size(), String.valueOf(logs));
+      Assert.areEqual(good.Id, logs[0].Schedule__c);
+      Assert.areEqual(1, WorkflowAlertManager.publishedEvents.size());
+    }
+  }
+
+  @IsTest
   static void lowBudgetSendsNothing() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       setUp();

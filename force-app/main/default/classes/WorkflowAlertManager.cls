@@ -180,35 +180,52 @@ public inherited sharing class WorkflowAlertManager {
    * @return True when every event was published.
    */
   public static Boolean publishEvents(List<Workflow_Alert__e> events) {
+    List<Boolean> results = publishEachEvent(events);
+    return !results.isEmpty() && !results.contains(false);
+  }
+
+  /**
+   * @description Publishes the events like publishEvents(), but returns one
+   * result for each event, in the same order. A blocked or failed publish
+   * gives false for each event. Does not throw.
+   * @param events The platform events to publish; null or empty is a no-op.
+   * @return One result for each event: true when the platform accepted it.
+   */
+  public static List<Boolean> publishEachEvent(List<Workflow_Alert__e> events) {
+    List<Boolean> results = new List<Boolean>();
     if (events == null || events.isEmpty()) {
-      return false;
+      return results;
+    }
+    for (Integer i = 0; i < events.size(); i++) {
+      results.add(false);
     }
 
-    // Never spend the transaction's last DML statement or DML rows here.
-    // EventBus.publish consumes a DML statement AND one DML row per event; over
-    // budget either throws an uncatchable System.LimitException that would roll
-    // back the terminal-state write — defeating the fire-and-forget contract.
-    if (
-      forceDmlBudgetExhausted ||
-      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
-      Limits.getDmlRows() + events.size() > Limits.getLimitDmlRows()
-    ) {
-      return false;
+    if (!canPublish(events.size())) {
+      return results;
     }
 
     if (Test.isRunningTest()) {
       publishedEvents.addAll(events);
     }
     try {
-      for (Database.SaveResult result : EventBus.publish(events)) {
-        if (!result.isSuccess()) {
-          return false;
-        }
+      List<Database.SaveResult> saveResults = EventBus.publish(events);
+      for (Integer i = 0; i < saveResults.size(); i++) {
+        results[i] = saveResults[i].isSuccess();
       }
-      return true;
     } catch (Exception ignored) {
-      return false;
+      // A failed publish leaves each result false.
     }
+    return results;
+  }
+
+  // Never spend the transaction's last DML statement or DML rows here.
+  // EventBus.publish consumes a DML statement AND one DML row per event; over
+  // budget either throws an uncatchable System.LimitException that would roll
+  // back the terminal-state write — defeating the fire-and-forget contract.
+  private static Boolean canPublish(Integer eventCount) {
+    return !forceDmlBudgetExhausted &&
+      Limits.getDmlStatements() < Limits.getLimitDmlStatements() &&
+      Limits.getDmlRows() + eventCount <= Limits.getLimitDmlRows();
   }
 
   // ---------------------------------------------------------------------------
