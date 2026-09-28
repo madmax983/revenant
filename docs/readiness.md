@@ -1,0 +1,23 @@
+# Install Readiness
+
+The **Readiness** panel is the first panel on the System Doctor tab of the Workflow Dashboard. It tells you if the install is correct. Each `Warn` and `Fail` names the missing item and the fix.
+
+The panel runs when System Doctor opens, on **Refresh Status**, and on **Run Checks**. It shows the round-trip time (target: less than 2 s).
+
+## Checks
+
+| Check                                                                              | Pass                                                                        | Warn                                                                                                       | Fail                                                                                  | Fix                                                                                                                                               |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine config                                                                      | `Revenant_Config__mdt` record `Default` exists.                             | -                                                                                                          | Record is missing. The engine uses built-in defaults.                                 | Setup > Custom Metadata Types > Revenant Config > Manage Records > New. Name: `Default`.                                                          |
+| Failure alerts                                                                     | `Workflow_Alert_Config__mdt` record `Default` exists and can send an alert. | Record is missing, `Enable_Alerts__c` is off, or it has no recipients and no event. Failures alert no one. | -                                                                                     | Setup > Custom Metadata Types > Workflow Alert Config. Name: `Default`. Select Enable Alerts. Set Email Recipients or select Publish Alert Event. |
+| Event trigger                                                                      | `WorkflowEventTrigger` is Active.                                           | -                                                                                                          | Inactive or not deployed. Signals, approvals and child-completion resumes never fire. | Set `<status>Active</status>` in `WorkflowEventTrigger.trigger-meta.xml` and deploy.                                                              |
+| Watchdog chain                                                                     | The watchdog runs. Same signal as the Watchdog Daemon Health panel.         | -                                                                                                          | Stopped. Sleeps, timeouts, retries and stall recovery do not resume.                  | Click **Enqueue Watchdog** on System Doctor.                                                                                                      |
+| Access: `Workflow_Instance__c`, `Workflow_Step_Execution__c`, `Workflow_Signal__c` | This user can read and create the object and its engine fields.             | This user can read but cannot create.                                                                      | This user cannot read the object or a field ("No such column").                       | Assign the `Revenant_Admin` permission set.                                                                                                       |
+
+## Notes
+
+- The access checks use the user that opens the dashboard. A read-only operator (`Revenant_Operator`) gets `Warn`, because only users that start workflows need create access.
+- A new install has no watchdog until the first workflow start or a click on **Enqueue Watchdog**.
+- A check that cannot run gives `Warn` with the error. The other checks still run.
+- The panel only reads. It makes no DML, starts no job, publishes no event, and changes no schema. It uses `getInstance`, describe calls and two bounded SOQL queries (`ApexTrigger`, the latest watchdog instances).
+- Endpoint: `WorkflowReadinessController.getReadinessChecks()`. Both `Revenant_Operator` and `Revenant_Admin` grant it. It uses the dashboard view gate.

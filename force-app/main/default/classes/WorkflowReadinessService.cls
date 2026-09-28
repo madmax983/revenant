@@ -201,7 +201,7 @@ public inherited sharing class WorkflowReadinessService {
       try {
         return evaluate();
       } catch (Exception ex) {
-        return problem(
+        return row(
           STATUS_WARN,
           'This check could not run: ' + ex.getMessage(),
           'Click Run Checks again. If the error stays, send the message to your Salesforce admin.'
@@ -210,18 +210,11 @@ public inherited sharing class WorkflowReadinessService {
     }
 
     protected ReadinessCheck pass(String finding) {
-      return build(STATUS_PASS, finding, null);
+      return row(STATUS_PASS, finding, null);
     }
 
-    protected ReadinessCheck problem(
-      String status,
-      String finding,
-      String remediation
-    ) {
-      return build(status, finding, remediation);
-    }
-
-    private ReadinessCheck build(
+    // Builds a row. A Pass row has no remediation.
+    protected ReadinessCheck row(
       String status,
       String finding,
       String remediation
@@ -247,7 +240,7 @@ public inherited sharing class WorkflowReadinessService {
       if (probe.hasEngineConfig()) {
         return pass('The Default Revenant_Config__mdt record is present.');
       }
-      return problem(
+      return row(
         STATUS_FAIL,
         'No Revenant_Config__mdt record named Default. The engine uses built-in defaults, and you cannot change engine settings.',
         'Setup > Custom Metadata Types > Revenant Config > Manage Records > New. Set Label and Name to Default. Or deploy customMetadata/Revenant_Config.Default.md-meta.xml.'
@@ -265,7 +258,7 @@ public inherited sharing class WorkflowReadinessService {
     protected override ReadinessCheck evaluate() {
       Workflow_Alert_Config__mdt config = probe.defaultAlertConfig();
       if (config == null) {
-        return problem(
+        return row(
           STATUS_WARN,
           'No Workflow_Alert_Config__mdt record named Default. ' +
             NO_ALERT +
@@ -281,7 +274,7 @@ public inherited sharing class WorkflowReadinessService {
       String cause = config.Enable_Alerts__c == true
         ? 'has no Email_Recipients__c and Publish_Alert_Event__c is off.'
         : 'has Enable_Alerts__c off.';
-      return problem(
+      return row(
         STATUS_WARN,
         'The Default Workflow_Alert_Config__mdt record ' +
           cause +
@@ -305,13 +298,13 @@ public inherited sharing class WorkflowReadinessService {
         return pass('WorkflowEventTrigger is Active.');
       }
       if (status == 'Inactive') {
-        return problem(
+        return row(
           STATUS_FAIL,
           'WorkflowEventTrigger is Inactive. ' + NO_FIRE,
           'Set <status>Active</status> in WorkflowEventTrigger.trigger-meta.xml and deploy. In a sandbox, you can also use Setup > Apex Triggers > WorkflowEventTrigger > Edit > Is Active.'
         );
       }
-      return problem(
+      return row(
         STATUS_FAIL,
         'WorkflowEventTrigger is not deployed. ' + NO_FIRE,
         'Deploy triggers/WorkflowEventTrigger.trigger with <status>Active</status> in WorkflowEventTrigger.trigger-meta.xml.'
@@ -330,7 +323,7 @@ public inherited sharing class WorkflowReadinessService {
       if (probe.watchdogRunning()) {
         return pass('The watchdog chain is running.');
       }
-      return problem(
+      return row(
         STATUS_FAIL,
         'The watchdog chain is not running (System Doctor shows Stopped). Sleeps, timeouts, retries, and stall recovery do not resume.',
         'Click Enqueue Watchdog in the Watchdog Daemon Health panel on this tab.'
@@ -404,7 +397,7 @@ public inherited sharing class WorkflowReadinessService {
             String.join(createGaps, ', ') +
             '.';
         }
-        return problem(
+        return row(
           STATUS_FAIL,
           finding,
           'Assign Revenant_Admin to this user: ' +
@@ -413,7 +406,7 @@ public inherited sharing class WorkflowReadinessService {
         );
       }
       if (!createGaps.isEmpty()) {
-        return problem(
+        return row(
           STATUS_WARN,
           'This user can read but cannot create: ' +
             String.join(createGaps, ', ') +

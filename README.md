@@ -836,6 +836,7 @@ Revenant settings can be configured without code modifications by editing the **
 
 The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check configuration settings, and audit watchdog health:
 
+- **Readiness**: A read-only install check list at the top of the tab. It checks the `Default` engine config, the `Default` alert config, the `WorkflowEventTrigger` status, the watchdog chain, and the access of your user to the engine objects and fields. Each `Warn` and `Fail` names the missing item and the fix. See [docs/readiness.md](docs/readiness.md).
 - **Watchdog Health**: Indicates whether the self-chaining watchdog Queueable chain is active (`Running`) or has stalled (`Stopped`).
 - **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
 - **Limits Auditing**: Displays active `CronTrigger` utilization (against the 100-job limit) and pending database sweeps (sleeping instances and step timeouts).
