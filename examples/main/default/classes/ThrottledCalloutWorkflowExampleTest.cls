@@ -74,6 +74,18 @@ public class ThrottledCalloutWorkflowExampleTest {
     ];
   }
 
+  // Callout context whose first HTTP 429 was the given seconds ago.
+  private static StepContext firstThrottleSecondsAgo(Integer seconds) {
+    Long firstMs = System.currentTimeMillis() - seconds * 1000L;
+    return new StepContextTestBuilder()
+      .stepName(CALLOUT)
+      .once(
+        ThrottledCalloutWorkflowExample.FIRST_THROTTLE_KEY,
+        String.valueOf(firstMs)
+      )
+      .build();
+  }
+
   private static StepContext context(String stepName) {
     return new StepContextTestBuilder().stepName(stepName).build();
   }
@@ -225,6 +237,46 @@ public class ThrottledCalloutWorkflowExampleTest {
     }
   }
 
+  @IsTest
+  static void retryBetweenThrottlesKeepsTheKeyAndTheDeadline() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      useBucket(5);
+      MockThrottledApi.queue(429, '5');
+      MockThrottledApi.queue(503, null);
+      MockThrottledApi.queue(429, '5');
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(WF, 'Throttle-Retry', null);
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      harness.disableAutoTimeSkip = true;
+
+      Assert.isTrue(harness.drive().isSleeping, '429 sleeps');
+      Assert.isTrue(harness.fireSleep(CALLOUT).isAwaitingRetry, '503 retries');
+      Assert.isTrue(
+        [
+            SELECT Captured_Values__c
+            FROM Workflow_Step_Execution__c
+            WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :CALLOUT
+            WITH SYSTEM_MODE
+            ORDER BY CreatedDate DESC, Id DESC
+            LIMIT 1
+          ]
+          .Captured_Values__c.contains(
+            ThrottledCalloutWorkflowExample.FIRST_THROTTLE_KEY
+          ),
+        'The retry keeps the time of the first 429'
+      );
+      Assert.isTrue(harness.fireRetry(CALLOUT).isSleeping, '429 sleeps again');
+      WorkflowTestHarness.Result done = harness.fireSleep(CALLOUT);
+      Test.stopTest();
+
+      Assert.areEqual('Completed', done.status, 'Completes after 4 calls');
+      Assert.areEqual(4, MockThrottledApi.calls, 'Four calls');
+      Assert.areEqual(1, MockThrottledApi.effects, 'One effect');
+      Assert.areEqual(1, MockThrottledApi.sentKeys.size(), 'One key');
+      Assert.isTrue(done.compensatedSteps.isEmpty(), 'No rollback');
+    }
+  }
+
   // ─── step unit tests (StepContextTestBuilder) ───────────────────────────
 
   @IsTest
@@ -338,37 +390,23 @@ public class ThrottledCalloutWorkflowExampleTest {
   }
 
   @IsTest
-  static void tooManyRequestsCountsSleepsInStepState() {
+  static void tooManyRequestsBeforeTheDeadlineSleeps() {
     MockThrottledApi.reset();
     MockThrottledApi.queue(429, '7');
-    StepResult.StepDirective d = callout(
-      new StepContextTestBuilder()
-        .stepName(CALLOUT)
-        .stepState(new Map<String, Object>{ 'remoteThrottles' => 3 })
-        .build()
-    );
+    StepResult.StepDirective d = callout(firstThrottleSecondsAgo(60));
     Assert.areEqual(StepResult.ActionType.SLEEP, d.action, '429 sleeps');
-    Map<String, Object> state = (Map<String, Object>) JSON.deserializeUntyped(
-      d.stepStateJson
-    );
-    Assert.areEqual(4, state.get('remoteThrottles'), 'Count goes up by 1');
   }
 
   @IsTest
-  static void endlessTooManyRequestsFailsTheStep() {
+  static void tooManyRequestsAfterTheDeadlineFailsTheStep() {
     MockThrottledApi.reset();
     MockThrottledApi.queue(429, '7');
     StepResult.StepDirective d = callout(
-      new StepContextTestBuilder()
-        .stepName(CALLOUT)
-        .stepState(
-          new Map<String, Object>{
-            'remoteThrottles' => ThrottledCalloutWorkflowExample.MAX_REMOTE_THROTTLES
-          }
-        )
-        .build()
+      firstThrottleSecondsAgo(
+        ThrottledCalloutWorkflowExample.MAX_REMOTE_THROTTLE_SECONDS + 60
+      )
     );
-    Assert.areEqual(StepResult.ActionType.FAIL, d.action, 'Cap stops the loop');
+    Assert.areEqual(StepResult.ActionType.FAIL, d.action, 'Deadline stops it');
     Assert.isTrue(d.failureReason.contains('429'), d.failureReason);
   }
 

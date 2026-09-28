@@ -36,8 +36,10 @@ public inherited sharing class ThrottledCalloutWorkflowExample {
   public static final Integer DEFAULT_RETRY_AFTER_SECONDS = 60;
   /** @description Longest sleep for one HTTP 429. */
   public static final Integer MAX_RETRY_AFTER_SECONDS = 3600;
-  /** @description Number of HTTP 429 sleeps before the step fails. */
-  public static final Integer MAX_REMOTE_THROTTLES = 24;
+  /** @description Time after the first HTTP 429 when the step fails. */
+  public static final Integer MAX_REMOTE_THROTTLE_SECONDS = 86400;
+  /** @description Capture key for the time of the first HTTP 429. */
+  public static final String FIRST_THROTTLE_KEY = 'firstRemoteThrottleMs';
 
   private static final String ACQUIRE_STEP = 'ThrottledCalloutWorkflowExample.AcquireTokenStep';
   private static final String CALLOUT_STEP = 'ThrottledCalloutWorkflowExample.ThrottledCalloutStep';

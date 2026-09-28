@@ -12,6 +12,8 @@ public class MockThrottledApi implements ThrottledCalloutWorkflowExample.Transpo
   public static Integer effects = 0;
   /** @description Idempotency keys of the applied effects. */
   public static Set<String> keys = new Set<String>();
+  /** @description Idempotency keys of all requests. */
+  public static Set<String> sentKeys = new Set<String>();
   /** @description The last request. */
   public static HttpRequest lastRequest;
   private static List<HttpResponse> queued = new List<HttpResponse>();
@@ -23,6 +25,7 @@ public class MockThrottledApi implements ThrottledCalloutWorkflowExample.Transpo
     calls = 0;
     effects = 0;
     keys.clear();
+    sentKeys.clear();
     lastRequest = null;
     queued.clear();
     ThrottledCalloutWorkflowExample.transport = new MockThrottledApi();
@@ -61,6 +64,7 @@ public class MockThrottledApi implements ThrottledCalloutWorkflowExample.Transpo
       : queued.remove(0);
     Integer code = res.getStatusCode();
     String key = req.getHeader('Idempotency-Key');
+    sentKeys.add(key);
     Boolean isSuccess = code >= 200 && code < 300;
     if (isSuccess && (String.isBlank(key) || !keys.contains(key))) {
       effects++;
