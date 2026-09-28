@@ -7,8 +7,13 @@
          is enforced only at the LWC entry point, so the controller's downstream service
          classes need no entry. WorkflowRateLimitController is the endpoint of the
          Rate Limits panel. WorkflowReadinessController is the endpoint of the Readiness
-         panel. WorkflowFleetHealthController is the endpoint of the Fleet Health view. All
-         three only read data and use the same view gate. -->
+         panel. WorkflowFleetHealthController is the endpoint of the Fleet Health view.
+         WorkflowAsyncCapacityController is the endpoint of the Async Apex Capacity panel.
+         All four only read data and use the same view gate. -->
+    <classAccesses>
+        <apexClass>WorkflowAsyncCapacityController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
     <classAccesses>
         <apexClass>WorkflowDashboardController</apexClass>
         <enabled>true</enabled>

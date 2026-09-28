@@ -1,0 +1,84 @@
+<template>
+    <div class="capacity-panel">
+        <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+            <h3 class="slds-text-heading_small">Async Apex Capacity</h3>
+            <template if:true={hasData}>
+                <span data-id="capacity-status" class={statusBadgeClass}>{statusLabel}</span>
+            </template>
+        </div>
+
+        <template if:true={isLoading}>
+            <div data-id="capacity-loading" aria-live="polite" aria-busy="true" class="slds-box slds-text-color_weak slds-text-align_center">
+                Loading async Apex capacity…
+            </div>
+        </template>
+
+        <template if:true={error}>
+            <div data-id="capacity-error" role="alert" class="slds-box slds-text-align_center">
+                <lightning-icon icon-name="utility:warning" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                Async Apex capacity is not available.
+                <div class="slds-text-body_small slds-text-color_weak">{error}</div>
+            </div>
+        </template>
+
+        <template if:true={hasData}>
+            <template if:true={chainAtRisk}>
+                <div data-id="capacity-risk" role="alert" class="slds-notify slds-notify_alert slds-theme_error slds-m-bottom_small">
+                    <lightning-icon icon-name="utility:error" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                    <p><strong>Chain handoff at risk.</strong> The next Queueable handoff can fail. Running instances can stop and not continue.</p>
+                </div>
+            </template>
+
+            <div class="slds-box">
+                <table class="slds-table slds-table_cell-buffer slds-no-row-hover" aria-label="Async Apex capacity">
+                    <thead>
+                        <tr class="slds-line-height_reset">
+                            <th scope="col">Metric</th>
+                            <th scope="col">Used / Limit</th>
+                            <th scope="col">Percent used</th>
+                            <th scope="col">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template for:each={metricRows} for:item="m">
+                            <tr key={m.key} data-id="capacity-metric">
+                                <td>
+                                    {m.label}
+                                    <template if:true={m.isElastic}>
+                                        <div class="slds-text-body_small slds-text-color_weak">Elastic limit</div>
+                                    </template>
+                                </td>
+                                <td>{m.usageLabel}</td>
+                                <td class="capacity-percent">
+                                    <div>{m.percentLabel}</div>
+                                    <lightning-progress-bar value={m.barValue} size="small"></lightning-progress-bar>
+                                </td>
+                                <td><span data-id="metric-status" class={m.badgeClass}>{m.statusLabel}</span></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+                <div data-id="capacity-jobs" class="slds-text-body_small slds-m-top_x-small">{jobCountsLabel}</div>
+                <template if:true={isJobsCapped}>
+                    <div data-id="capacity-capped" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
+                        The counts include the first 2,000 jobs only. The real values are higher.
+                    </div>
+                </template>
+                <template if:true={unsizedBatchesLabel}>
+                    <div data-id="capacity-unsized" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{unsizedBatchesLabel}</div>
+                </template>
+                <div data-id="capacity-action" class="slds-text-body_small slds-m-top_x-small">{actionText}</div>
+                <div data-id="capacity-thresholds" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{thresholdLabel}</div>
+                <template if:true={isInvalidConfig}>
+                    <div data-id="capacity-invalid-config" class="slds-text-body_small slds-text-color_error slds-m-top_x-small">
+                        Revenant_Config__mdt.Async_Capacity_Thresholds__c is not valid. The panel uses the defaults. Use "warn,crit", for example 80,95.
+                    </div>
+                </template>
+                <div data-id="capacity-asof" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{asOfLabel}</div>
+            </div>
+            <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
+                This panel is read-only. Pending executions: 1 for each job. A batch job counts 1 for each chunk that is left, plus 1. The flex queue holds a maximum of 100 batch jobs. Queueable jobs do not go into the flex queue, so the flex queue has no status.
+            </p>
+        </template>
+    </div>
+</template>

@@ -54,4 +54,8 @@
         <field>Step_History_Ceiling__c</field>
         <value xsi:type="xsd:double">10000.0</value>
     </values>
+    <values>
+        <field>Async_Capacity_Thresholds__c</field>
+        <value xsi:type="xsd:string">80,95</value>
+    </values>
 </CustomMetadata>
