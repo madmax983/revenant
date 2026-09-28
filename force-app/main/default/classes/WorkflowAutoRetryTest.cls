@@ -1050,6 +1050,32 @@ public class WorkflowAutoRetryTest {
     }
   }
 
+  @IsTest
+  static void timeoutFallbackRunIgnoresOverrideCap() {
+    System.runAs(runAsUser()) {
+      reset(1);
+      // Issue #103: an override record must not make the fallback non-final.
+      WorkflowRetryConfigResolver.mockRecords = new List<Workflow_Retry_Config__mdt>{
+        new Workflow_Retry_Config__mdt(
+          DeveloperName = 'ProbeOverride',
+          Workflow_Definition__c = PREFIX + 'ProbeWorkflow',
+          Maximum_Attempts__c = 4,
+          Override_Author_Policy__c = true
+        )
+      };
+      runStepDirect(
+        'AR_18b',
+        new Map<String, Object>{ '$timeoutResume' => true }
+      );
+
+      Assert.areEqual(
+        new List<Integer>{ 1 },
+        maxAttemptsSeen,
+        'Fallback run stays final with an override record'
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Unit tests: WorkflowAutoRetry
   // ---------------------------------------------------------------------------

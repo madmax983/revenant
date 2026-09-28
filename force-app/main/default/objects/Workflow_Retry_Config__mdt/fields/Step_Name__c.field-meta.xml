@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Step_Name__c</fullName>
+    <description>Optional. Step name, as in Workflow_Step_Execution__c.Step_Name__c. Blank: the record applies to all steps of the workflow (definition record). A step record has priority over a definition record. For a compensation step, use StepName_Compensate.</description>
+    <externalId>false</externalId>
+    <fieldManageability>SubscriberControlled</fieldManageability>
+    <label>Step Name</label>
+    <length>255</length>
+    <required>false</required>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>
