@@ -93,6 +93,7 @@ A review found more gaps. The example now also:
 | `badRetryAfterUsesDefaultOrCap`                  | 2             |
 | `httpDateRetryAfterSleepsUntilThatTime`          | 2             |
 | `tooManyRequestsBeforeTheDeadlineSleeps`         | 2             |
+| `tooManyRequestsNearTheDeadlineSleepsOnlyToIt`   | contract      |
 | `tooManyRequestsAfterTheDeadlineFailsTheStep`    | contract      |
 | `retryBetweenThrottlesKeepsTheKeyAndTheDeadline` | 3             |
 | `unknownResultRetriesWithTheSameKey`             | 3             |

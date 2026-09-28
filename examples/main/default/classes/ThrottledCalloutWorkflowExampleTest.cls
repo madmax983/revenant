@@ -398,6 +398,22 @@ public class ThrottledCalloutWorkflowExampleTest {
   }
 
   @IsTest
+  static void tooManyRequestsNearTheDeadlineSleepsOnlyToIt() {
+    MockThrottledApi.reset();
+    MockThrottledApi.queue(429, '3600');
+    StepResult.StepDirective d = callout(
+      firstThrottleSecondsAgo(
+        ThrottledCalloutWorkflowExample.MAX_REMOTE_THROTTLE_SECONDS - 10
+      )
+    );
+    Assert.areEqual(StepResult.ActionType.SLEEP, d.action, '429 sleeps');
+    Assert.isTrue(
+      d.sleepDurationSeconds >= 1 && d.sleepDurationSeconds <= 10,
+      'Sleep stops at the deadline: ' + d.sleepDurationSeconds
+    );
+  }
+
+  @IsTest
   static void tooManyRequestsAfterTheDeadlineFailsTheStep() {
     MockThrottledApi.reset();
     MockThrottledApi.queue(429, '7');
