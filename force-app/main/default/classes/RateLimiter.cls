@@ -89,6 +89,67 @@ public inherited sharing class RateLimiter {
     return refillAndConsume(state, config, now);
   }
 
+  /**
+   * @description Returns the tokens in the bucket at nowMs. acquire() uses this formula.
+   * The result is min(capacity, stored tokens + elapsed seconds * refill rate).
+   * A future last-refill time counts as zero elapsed time.
+   * @param state The bucket state row.
+   * @param config The bucket config.
+   * @param nowMs The clock time in epoch milliseconds.
+   * @return The available tokens. The value is not rounded.
+   */
+  public static Decimal availableTokens(
+    Rate_Limit_State__c state,
+    Rate_Limit_Config__mdt config,
+    Long nowMs
+  ) {
+    Decimal elapsed = (Decimal) (nowMs - state.Last_Refill_Time_Ms__c) / 1000.0;
+    elapsed = (elapsed < 0.0) ? 0.0 : elapsed;
+    Decimal calculatedTokens =
+      state.Tokens_Remaining__c + (elapsed * config.Refill_Rate_Per_Second__c);
+    return Math.min(config.Capacity__c, calculatedTokens);
+  }
+
+  /**
+   * @description Returns the seconds until the bucket holds 1 token. It has no jitter.
+   * Use it only when availableTokens is less than 1.
+   * @param availableTokens The value from availableTokens().
+   * @param config The bucket config.
+   * @return The wait in seconds. The value is not rounded.
+   */
+  public static Decimal secondsUntilNextToken(
+    Decimal availableTokens,
+    Rate_Limit_Config__mdt config
+  ) {
+    return (1.0 - availableTokens) / config.Refill_Rate_Per_Second__c;
+  }
+
+  /**
+   * @description Returns true when acquire() accepts the config. It never throws.
+   * It uses the same rule as validateConfig().
+   * @param config The bucket config, or null.
+   * @return True when the config is valid.
+   */
+  public static Boolean isValidConfig(Rate_Limit_Config__mdt config) {
+    return config != null &&
+      config.Capacity__c != null &&
+      config.Refill_Rate_Per_Second__c != null &&
+      config.Capacity__c >= 1.0 &&
+      config.Refill_Rate_Per_Second__c > 0.0;
+  }
+
+  /**
+   * @description Returns all rate-limit configs, keyed by DeveloperName. It uses no SOQL.
+   * In tests, mockConfigs replaces the CMDT records.
+   * @return The configs by integration key.
+   */
+  public static Map<String, Rate_Limit_Config__mdt> configuredLimits() {
+    if (!mockConfigs.isEmpty()) {
+      return new Map<String, Rate_Limit_Config__mdt>(mockConfigs);
+    }
+    return Rate_Limit_Config__mdt.getAll();
+  }
+
   // Resolves the rate-limit config for the key, preferring an injected mock over the
   // CMDT record. Throws when no configuration exists.
   private static Rate_Limit_Config__mdt resolveConfig(String integrationKey) {
@@ -168,16 +229,13 @@ public inherited sharing class RateLimiter {
   }
 
   // Refills the bucket for elapsed time and consumes one token when available.
+  // The Rate Limits panel uses the same refill and wait math.
   private static AcquireResult refillAndConsume(
     Rate_Limit_State__c state,
     Rate_Limit_Config__mdt config,
     Long now
   ) {
-    Decimal elapsed = (Decimal) (now - state.Last_Refill_Time_Ms__c) / 1000.0;
-    elapsed = (elapsed < 0.0) ? 0.0 : elapsed;
-    Decimal calculatedTokens =
-      state.Tokens_Remaining__c + (elapsed * config.Refill_Rate_Per_Second__c);
-    Decimal currentTokens = Math.min(config.Capacity__c, calculatedTokens);
+    Decimal currentTokens = availableTokens(state, config, now);
 
     if (currentTokens >= 1.0) {
       state.Tokens_Remaining__c = currentTokens - 1.0;
@@ -193,7 +251,7 @@ public inherited sharing class RateLimiter {
     // Last_Refill_Time_Ms__c), which correctly refills the token bucket.
 
     // Calculate delay until next token is available
-    Decimal waitTime = (1.0 - currentTokens) / config.Refill_Rate_Per_Second__c;
+    Decimal waitTime = secondsUntilNextToken(currentTokens, config);
     Double jitter = 0.5 + (Math.random() * 1.0); // 0.5 to 1.5 seconds jitter
     Integer sleepSecs = (Integer) Math.ceil(waitTime + jitter);
     return throttled(sleepSecs);

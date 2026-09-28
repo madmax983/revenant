@@ -300,6 +300,13 @@
   );
 }
 
+.text-orange-icon {
+  --slds-c-icon-color-foreground: var(
+    --slds-g-color-palette-orange-50,
+    hsl(30, 90%, 50%)
+  );
+}
+
 .text-red-icon {
   --slds-c-icon-color-foreground: var(
     --slds-g-color-palette-red-50,

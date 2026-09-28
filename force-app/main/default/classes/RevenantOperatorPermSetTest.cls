@@ -365,4 +365,44 @@ public class RevenantOperatorPermSetTest {
       'An operator with the action gate and signal-injection capability should inject a signal'
     );
   }
+
+  /**
+   * @description A read-only operator passes the view gate of the Rate Limits panel (#61)
+   * and gets data. WorkflowRateLimitControllerTest checks the class access.
+   */
+  @IsTest
+  static void testOperatorCanReadRateLimitStatus() {
+    User operator = buildOperatorUser();
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert operator;
+      PermissionSet ps = [
+        SELECT Id
+        FROM PermissionSet
+        WHERE Name = 'Revenant_Operator'
+        LIMIT 1
+      ];
+      insert new PermissionSetAssignment(
+        AssigneeId = operator.Id,
+        PermissionSetId = ps.Id
+      );
+    }
+
+    RateLimiter.mockConfigs.put(
+      'OpApi',
+      (Rate_Limit_Config__mdt) JSON.deserialize(
+        '{"DeveloperName":"OpApi","Capacity__c":3,"Refill_Rate_Per_Second__c":1.0}',
+        Rate_Limit_Config__mdt.class
+      )
+    );
+    System.runAs(operator) {
+      Map<String, Object> result = WorkflowRateLimitController.getRateLimitStatus(
+        'op'
+      );
+      System.assertEquals(
+        1,
+        ((List<Object>) result.get('rows')).size(),
+        'The operator gets one row per config'
+      );
+    }
+  }
 }

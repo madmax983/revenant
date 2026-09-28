@@ -631,6 +631,59 @@
                                     </template>
                                 </div>
 
+                                <!-- Rate Limits (#61): live token buckets, read-only -->
+                                <div class="slds-m-bottom_large">
+                                    <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">
+                                        Rate Limits (token buckets)
+                                        <span data-id="rate-limit-summary" class="slds-m-left_x-small text-orange">{rateLimitSummary}</span>
+                                    </h3>
+                                    <template if:true={showRateLimitLoading}>
+                                        <div class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center">
+                                            Loading rate limits…
+                                        </div>
+                                    </template>
+                                    <template if:true={hasRateLimitRows}>
+                                        <div class="panel-card slds-p-around_medium">
+                                            <div data-id="rate-limit-asof" class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small">{rateLimitAsOfLabel}</div>
+                                            <template for:each={rateLimitRows} for:item="rl">
+                                                <div key={rl.integrationKey} data-id="rate-limit-row" class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-p-vertical_x-small border-bottom">
+                                                    <div>
+                                                        <div class="slds-text-body_regular font-bold">{rl.integrationKey}</div>
+                                                        <div class="slds-text-body_small slds-text-color_weak">{rl.configLabel}</div>
+                                                        <template if:true={rl.isIdle}>
+                                                            <div class="slds-text-body_small slds-text-color_weak">Not used yet · full capacity</div>
+                                                        </template>
+                                                    </div>
+                                                    <div class="slds-text-align_right">
+                                                        <div class="slds-text-body_regular font-bold">{rl.tokensLabel}</div>
+                                                        <div>
+                                                            <template if:true={rl.icon}>
+                                                                <lightning-icon icon-name={rl.icon} size="xx-small" alternative-text={rl.statusLabel} title={rl.statusLabel} class={rl.iconClass}></lightning-icon>
+                                                            </template>
+                                                            <span data-id="rate-limit-status" class={rl.badgeClass}>{rl.statusLabel}</span>
+                                                        </div>
+                                                        <template if:true={rl.nextTokenLabel}>
+                                                            <div data-id="rate-limit-next" class="slds-text-body_small text-orange">{rl.nextTokenLabel}</div>
+                                                        </template>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template if:true={showRateLimitEmpty}>
+                                        <div data-id="rate-limit-empty" class="panel-card slds-p-around_medium slds-text-color_weak slds-text-align_center">
+                                            No rate limits are configured. Add a Rate_Limit_Config__mdt record.
+                                        </div>
+                                    </template>
+                                    <template if:true={rateLimitError}>
+                                        <div data-id="rate-limit-error" class="panel-card slds-p-around_medium slds-text-align_center">
+                                            <lightning-icon icon-name="utility:warning" size="xx-small" alternative-text="Unavailable" class="slds-m-right_xx-small text-red-icon"></lightning-icon>
+                                            Rate limit status is not available.
+                                            <div class="slds-text-body_small slds-text-color_weak">{rateLimitError}</div>
+                                        </div>
+                                    </template>
+                                </div>
+
                                 <!-- Definition Health Trends -->
                                 <div class="slds-m-bottom_large">
                                     <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
