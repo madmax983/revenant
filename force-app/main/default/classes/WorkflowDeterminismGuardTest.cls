@@ -16,6 +16,26 @@ private class WorkflowDeterminismGuardTest {
     }
   }
 
+  /** @description Compensatable fixture step. */
+  public class CompStep implements CompensatableStep {
+    /**
+     * @description Completes.
+     * @param ctx The step context.
+     * @return A completed result.
+     */
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, null);
+    }
+    /**
+     * @description Undoes nothing.
+     * @param ctx The step context.
+     * @return A completed result.
+     */
+    public StepResult compensate(StepContext ctx) {
+      return StepResult.complete(null, null);
+    }
+  }
+
   private static Workflow_Instance__c insertInstance() {
     Workflow_Instance__c inst = new Workflow_Instance__c(
       Workflow_Name__c = 'GuardTestWorkflow',
@@ -38,6 +58,7 @@ private class WorkflowDeterminismGuardTest {
 
   private static WorkflowStepRunner.RunStepContext runContext(String record) {
     WorkflowStepRunner.RunStepContext ctx = new WorkflowStepRunner.RunStepContext();
+    ctx.stepInstance = new PlainStep();
     ctx.stepExec = new Workflow_Step_Execution__c(
       Step_Name__c = 'StepA',
       Decision_Record__c = record
@@ -173,12 +194,7 @@ private class WorkflowDeterminismGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowStepRunner.RunStepContext ctx = runContext(null);
       Assert.isNull(
-        WorkflowDeterminismGuard.verify(
-          null,
-          ctx,
-          new PlainStep(),
-          StepResult.suspend()
-        )
+        WorkflowDeterminismGuard.verify(null, ctx, StepResult.suspend())
       );
       Assert.isNull(ctx.stepExec.Decision_Record__c, 'Off writes no record');
     }
@@ -189,12 +205,7 @@ private class WorkflowDeterminismGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowStepRunner.RunStepContext ctx = runContext(null);
       Assert.isNull(
-        WorkflowDeterminismGuard.verify(
-          'in1',
-          ctx,
-          new PlainStep(),
-          StepResult.suspend()
-        )
+        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.suspend())
       );
       WorkflowDecisionFingerprint.Record rec = WorkflowDecisionFingerprint.parseRecord(
         ctx.stepExec.Decision_Record__c
@@ -209,12 +220,7 @@ private class WorkflowDeterminismGuardTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowStepRunner.RunStepContext ctx = runContext(null);
       Assert.isNull(
-        WorkflowDeterminismGuard.verify(
-          'in1',
-          ctx,
-          new PlainStep(),
-          StepResult.sleep(5)
-        )
+        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.sleep(5))
       );
       Assert.isNull(ctx.stepExec.Decision_Record__c);
     }
@@ -226,12 +232,7 @@ private class WorkflowDeterminismGuardTest {
       String record = recordOf('in1', StepResult.suspend());
       WorkflowStepRunner.RunStepContext ctx = runContext(record);
       Assert.isNull(
-        WorkflowDeterminismGuard.verify(
-          'in1',
-          ctx,
-          new PlainStep(),
-          StepResult.suspend()
-        )
+        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.suspend())
       );
       Assert.areEqual(record, ctx.stepExec.Decision_Record__c);
     }
@@ -246,7 +247,6 @@ private class WorkflowDeterminismGuardTest {
       String message = WorkflowDeterminismGuard.verify(
         'in1',
         ctx,
-        new PlainStep(),
         StepResult.complete('Other', null)
       );
       Assert.isNotNull(message);
@@ -263,18 +263,32 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
+  static void verifyNamesTheCompensationPush() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowStepRunner.RunStepContext ctx = runContext(
+        recordOf('in1', StepResult.suspend())
+      );
+      ctx.stepInstance = new CompStep();
+      String message = WorkflowDeterminismGuard.verify(
+        'in1',
+        ctx,
+        StepResult.complete(null, null)
+      );
+      Assert.isTrue(
+        message.contains('COMPLETE next=- compensate=true'),
+        'The message names the compensation push: ' + message
+      );
+    }
+  }
+
+  @IsTest
   static void verifyFlagsATransientResultOnSameInputs() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowStepRunner.RunStepContext ctx = runContext(
         recordOf('in1', StepResult.suspend())
       );
       Assert.isNotNull(
-        WorkflowDeterminismGuard.verify(
-          'in1',
-          ctx,
-          new PlainStep(),
-          StepResult.sleep(5)
-        ),
+        WorkflowDeterminismGuard.verify('in1', ctx, StepResult.sleep(5)),
         'Same inputs must give the same decision'
       );
     }
@@ -290,7 +304,6 @@ private class WorkflowDeterminismGuardTest {
         WorkflowDeterminismGuard.verify(
           'in2',
           ctx,
-          new PlainStep(),
           StepResult.waitForApproval('K', null)
         )
       );
@@ -312,7 +325,6 @@ private class WorkflowDeterminismGuardTest {
         WorkflowDeterminismGuard.verify(
           'in2',
           ctx,
-          new PlainStep(),
           StepResult.retry(new RetryPolicy())
         )
       );
@@ -330,7 +342,6 @@ private class WorkflowDeterminismGuardTest {
         WorkflowDeterminismGuard.verify(
           'in1',
           ctx,
-          new PlainStep(),
           StepResult.retry(new RetryPolicy())
         ),
         'A thrown error is not a decision'
@@ -347,7 +358,6 @@ private class WorkflowDeterminismGuardTest {
         WorkflowDeterminismGuard.verify(
           'in1',
           ctx,
-          new PlainStep(),
           StepResult.complete('Other', null)
         )
       );

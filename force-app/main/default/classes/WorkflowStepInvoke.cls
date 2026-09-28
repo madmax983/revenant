@@ -22,6 +22,7 @@ public inherited sharing class WorkflowStepInvoke {
       ctx.instance,
       ctx.activeStepName
     );
+    ctx.stepInstance = stepInstance;
 
     // Circuit-breaker admission (issue #128): when the step is CircuitBreakerGuarded
     // and its dependency's breaker is Open, fast-fail by parking instead of executing.
@@ -54,7 +55,6 @@ public inherited sharing class WorkflowStepInvoke {
     outcome.divergence = WorkflowDeterminismGuard.verify(
       determinismInputs,
       ctx,
-      stepInstance,
       result
     );
     WorkflowStepOutcome.handleStepResult(outcome);

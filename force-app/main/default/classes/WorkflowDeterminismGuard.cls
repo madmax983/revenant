@@ -59,15 +59,14 @@ public inherited sharing class WorkflowDeterminismGuard {
    * records or clears the decision on the in-memory step row. The wait
    * handler saves the row, so a record costs no extra DML.
    * @param inputs The digest from captureInputs, or null.
-   * @param ctx The run context with the step row and the thrown error.
-   * @param stepInstance The step that ran.
+   * @param ctx The run context with the step, the step row and the thrown
+   * error.
    * @param result The step result.
    * @return The divergence message, or null.
    */
   public static String verify(
     String inputs,
     WorkflowStepRunner.RunStepContext ctx,
-    WorkflowStep stepInstance,
     StepResult result
   ) {
     // A thrown error is not a decision. Auto-retry handles it.
@@ -77,7 +76,7 @@ public inherited sharing class WorkflowDeterminismGuard {
     Workflow_Step_Execution__c stepExec = ctx.stepExec;
     String decision = WorkflowDecisionFingerprint.describe(
       result,
-      stepInstance instanceof CompensatableStep
+      ctx.stepInstance instanceof CompensatableStep
     );
     WorkflowDecisionFingerprint.Record rec = WorkflowDecisionFingerprint.parseRecord(
       stepExec.Decision_Record__c
