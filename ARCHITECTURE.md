@@ -224,7 +224,7 @@ endpoints moved). All of them delegate to `inherited sharing` service classes.
   service uses the `RateLimiter` refill formula (`availableTokens`).
 - Async Apex Capacity panel (#129): `WorkflowAsyncCapacityController` →
   `WorkflowAsyncCapacityService` → `AsyncCapacityEvaluator` (pure rules). One
-  `AsyncApexJob` aggregate and `System.OrgLimits`. The orchestrator does not
+  `AsyncApexJob` read (max 2,001 rows) and `System.OrgLimits`. The orchestrator does not
   call it. See [docs/async-capacity.md](docs/async-capacity.md).
 - Fleet Health view (#111): `WorkflowFleetHealthController` →
   `WorkflowFleetHealthService`. It is a separate controller for the same PMD reason.

@@ -59,6 +59,11 @@
                     </tbody>
                 </table>
                 <div data-id="capacity-jobs" class="slds-text-body_small slds-m-top_x-small">{jobCountsLabel}</div>
+                <template if:true={isJobsCapped}>
+                    <div data-id="capacity-capped" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
+                        The counts include the first 2,000 jobs only. The real values are higher.
+                    </div>
+                </template>
                 <div data-id="capacity-action" class="slds-text-body_small slds-m-top_x-small">{actionText}</div>
                 <div data-id="capacity-thresholds" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{thresholdLabel}</div>
                 <template if:true={isInvalidConfig}>
@@ -69,7 +74,7 @@
                 <div data-id="capacity-asof" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{asOfLabel}</div>
             </div>
             <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
-                This panel is read-only. Pending jobs = Holding + Queued + Processing. The flex queue holds a maximum of 100 batch jobs. Queueable jobs do not go into the flex queue, so the flex queue has no status.
+                This panel is read-only. Pending executions: 1 for each job. A batch job counts 1 for each chunk that is left, plus 1. The flex queue holds a maximum of 100 batch jobs. Queueable jobs do not go into the flex queue, so the flex queue has no status.
             </p>
         </template>
     </div>

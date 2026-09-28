@@ -353,4 +353,43 @@ describe("c-async-capacity-panel", () => {
       "Elastic limit",
     );
   });
+
+  it("shows the pending executions in the job counts", async () => {
+    const element = await render(
+      envelope({
+        jobCounts: {
+          holding: 0,
+          queued: 1,
+          processing: 1,
+          total: 2,
+          pendingExecutions: 4002,
+          capped: false,
+          flexQueueLimit: 100,
+        },
+      }),
+    );
+    expect(q(element, "capacity-jobs").textContent).toContain(
+      `Pending executions ${(4002).toLocaleString()}`,
+    );
+    expect(q(element, "capacity-capped")).toBeNull();
+  });
+
+  it("says when the job read stopped at its cap", async () => {
+    const element = await render(
+      envelope({
+        jobCounts: {
+          holding: 0,
+          queued: 2000,
+          processing: 0,
+          total: 2000,
+          pendingExecutions: 2000,
+          capped: true,
+          flexQueueLimit: 100,
+        },
+      }),
+    );
+    expect(q(element, "capacity-capped").textContent).toContain(
+      "first 2,000 jobs",
+    );
+  });
 });

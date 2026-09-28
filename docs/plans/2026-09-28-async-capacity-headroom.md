@@ -29,7 +29,7 @@ state before the Queueable chain stops. Read only. No alerts.
 | --- | --------------------------------------------------------------- | --------------------------------------------------------------- |
 | B1  | Use `Limits.getAsyncCalls()` for the daily count.               | No. Reserved. Returns no org data.                              |
 | B2  | Use `OrgLimits` `DailyAsyncApexExecutions`.                     | Yes. Free. Same value as the REST `/limits` resource.           |
-| B3  | One `AsyncApexJob` query, `GROUP BY Status`, three statuses.    | Yes. 1 SOQL, max 3 query rows.                                  |
+| B3  | One `AsyncApexJob` query, `GROUP BY Status`, three statuses.    | Yes. 1 SOQL, max 3 query rows. Changed in round 3.              |
 | B4  | Flex queue metric = `Holding` / 100.                            | Yes. 100 is the platform ceiling.                               |
 | B5  | Metric for `Queued` + `Processing` against an invented ceiling. | No. Queueables have no queue limit. See B13.                    |
 | B6  | Two number fields for warn and critical.                        | No. The issue permits one field.                                |
@@ -59,7 +59,7 @@ state before the Queueable chain stops. Read only. No alerts.
 ## Six Thinking Hats
 
 - **White (facts):** Default daily limit is 250,000 or 200 × licenses. The
-  flex queue holds 100. The read costs 1 SOQL and max 3 query rows.
+  flex queue holds 100. The read costs 1 SOQL (see round 3 for the rows).
 - **Red (feel):** Operators want one word and one color. "Chain handoff at
   risk" must be clear and loud.
 - **Black (risk):** The daily count is a rolling 24 hour value. A burst can
@@ -116,7 +116,7 @@ Percent = round(used / limit × 100, 2), `HALF_UP`. Classify this percent.
   rounding; zero and missing limit; over 100%; worst-status rank;
   `chainAtRisk`.
 - `WorkflowAsyncCapacityServiceTest`: envelope keys; config override;
-  1 SOQL and max 3 query rows with 5 jobs; 0 DML; enqueued job shows in
+  1 SOQL and bounded query rows with 5 jobs; 0 DML; enqueued job shows in
   counts; query error gives `UNKNOWN`; enqueue classes do not name the
   service.
 - `WorkflowAsyncCapacityControllerTest`: denial matches other panels;
@@ -145,3 +145,11 @@ Four review agents (Apex, LWC, security and acceptance criteria, docs):
   `StepGovernor` does.
 - The flex queue has no status. Queueable jobs do not go into it, so it must
   not start "Chain handoff at risk". It stays as a count (`Holding` / 100).
+
+## Review Round 3 (Codex)
+
+- Finding: one batch job with many chunks is 1 pending job, but it needs
+  many executions. The panel can show Healthy.
+- Fix: one row query (max 2,001 rows) replaces the grouped `COUNT`. A batch
+  job counts 1 for each chunk that is left, plus 1. A grouped `SUM()` has no
+  row cap, and a second SOQL breaks the budget of the issue.

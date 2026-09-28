@@ -1,7 +1,8 @@
 /**
  * @description Reads the data for the Async Apex Capacity panel in System Doctor (#129).
- * Cost: max 1 SOQL (one AsyncApexJob aggregate, max 3 query rows). OrgLimits and the
- * config read cost no SOQL. It writes no records. WorkflowOrchestrator does not call it.
+ * Cost: max 1 SOQL (one AsyncApexJob read, max JOB_SCAN_LIMIT + 1 query rows). OrgLimits
+ * and the config read cost no SOQL. It writes no records. WorkflowOrchestrator does not
+ * call it.
  */
 public inherited sharing class WorkflowAsyncCapacityService {
   // System.OrgLimits key of the rolling 24 hour async Apex execution count.
@@ -17,6 +18,10 @@ public inherited sharing class WorkflowAsyncCapacityService {
     JOB_QUEUED,
     JOB_PROCESSING
   };
+
+  // Max job rows that the read counts. One more row tells that the read stopped.
+  @TestVisible
+  private static final Integer JOB_SCAN_LIMIT = 2000;
 
   private class CapacityReadException extends Exception {
   }
@@ -73,36 +78,76 @@ public inherited sharing class WorkflowAsyncCapacityService {
     }
   }
 
-  // One aggregate query. The SOQL reference: COUNT(field) with GROUP BY costs one query
-  // row per group (max 3). The test readCostsAtMostOneSoqlAndNoDml measures this.
+  // One row query, max JOB_SCAN_LIMIT + 1 rows. A grouped SUM() costs one query row
+  // for each job with no cap, so the read counts the rows itself. ORDER BY JobType puts
+  // BatchApex rows (the rows with many chunks) first when the read stops at the cap.
   // Batch jobs in Preparing are not counted.
-  // A failed read leaves jobsKnown false, so the pending jobs metric shows Unknown.
+  // A failed read leaves jobsKnown false, so the pending executions metric shows Unknown.
   private static void readJobCounts(AsyncCapacityEvaluator.Reading r) {
     try {
       if (failJobQuery) {
         throw new CapacityReadException('Test: job query failed');
       }
+      Integer rowLimit = JOB_SCAN_LIMIT + 1;
+      List<AsyncApexJob> jobs = [
+        SELECT Status, JobType, TotalJobItems, JobItemsProcessed
+        FROM AsyncApexJob
+        WHERE Status IN :JOB_STATUSES
+        WITH SYSTEM_MODE
+        ORDER BY JobType ASC
+        LIMIT :rowLimit
+      ];
       Map<String, Integer> byStatus = new Map<String, Integer>{
         JOB_HOLDING => 0,
         JOB_QUEUED => 0,
         JOB_PROCESSING => 0
       };
-      for (AggregateResult ar : [
-        SELECT Status, COUNT(Id) cnt
-        FROM AsyncApexJob
-        WHERE Status IN :JOB_STATUSES
-        WITH SYSTEM_MODE
-        GROUP BY Status
-      ]) {
-        byStatus.put((String) ar.get('Status'), (Integer) ar.get('cnt'));
+      Integer executions = 0;
+      Integer counted = Math.min(jobs.size(), JOB_SCAN_LIMIT);
+      for (Integer i = 0; i < counted; i++) {
+        AsyncApexJob job = jobs[i];
+        byStatus.put(job.Status, byStatus.get(job.Status) + 1);
+        executions += executionsFor(
+          job.JobType,
+          job.TotalJobItems,
+          job.JobItemsProcessed
+        );
       }
       r.holding = byStatus.get(JOB_HOLDING);
       r.queued = byStatus.get(JOB_QUEUED);
       r.processing = byStatus.get(JOB_PROCESSING);
+      r.pendingExecutions = executions;
+      r.jobsCapped = jobs.size() > JOB_SCAN_LIMIT;
       r.jobsKnown = true;
     } catch (Exception ex) {
       r.jobsKnown = false;
     }
+  }
+
+  /**
+   * @description Executions that one pending job still needs. A batch job needs one
+   * for each chunk left plus one for finish (min. 1). A batch worker row needs 0: its
+   * parent batch row counts the chunk. Other jobs need 1.
+   * @param jobType The AsyncApexJob.JobType value.
+   * @param totalItems The AsyncApexJob.TotalJobItems value.
+   * @param processedItems The AsyncApexJob.JobItemsProcessed value.
+   * @return The executions the job still needs.
+   */
+  @TestVisible
+  private static Integer executionsFor(
+    String jobType,
+    Integer totalItems,
+    Integer processedItems
+  ) {
+    if (jobType == 'BatchApexWorker') {
+      return 0;
+    }
+    if (jobType == 'BatchApex') {
+      Integer total = totalItems == null ? 0 : totalItems;
+      Integer done = processedItems == null ? 0 : processedItems;
+      return Math.max(total - done, 0) + 1;
+    }
+    return 1;
   }
 
   // Custom metadata getInstance costs no SOQL.

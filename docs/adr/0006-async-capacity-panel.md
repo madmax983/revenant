@@ -15,12 +15,14 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
 1. Read the daily count from `System.OrgLimits` key
    `DailyAsyncApexExecutions`. `Limits.getAsyncCalls()` is "reserved for
    future use" and gives no org data.
-2. Read job counts with one `AsyncApexJob` aggregate, `GROUP BY Status`, for
-   `Holding`, `Queued` and `Processing`. Max 3 query rows.
+2. Read the `Holding`, `Queued` and `Processing` jobs with one `AsyncApexJob`
+   row query, max 2,001 rows (`ORDER BY JobType`, so batch jobs come first).
+   Count the rows and the executions that they need in Apex.
 3. Two metrics have a status. Both gate the Queueable chain: daily
-   executions, and pending jobs (`Holding` + `Queued` + `Processing`) / daily
-   executions left. Queueable jobs in `Queued` have no queue limit, so the
-   pending jobs use the executions that are left as the limit.
+   executions, and pending executions / daily executions left. A job needs 1
+   execution. A batch job needs 1 for each chunk that is left, plus 1.
+   Queueable jobs in `Queued` have no queue limit, so the pending executions
+   use the executions that are left as the limit.
 4. The flex queue (`Holding` / 100) is a count with no status. Queueable jobs
    do not go into the flex queue, so a full flex queue cannot stop the chain.
 5. When the org has an elastic limit above 0, use it as the daily limit. This
@@ -54,3 +56,8 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
 - Add the metrics to `getWatchdogStatus`: that read runs many queries and the
   stall detector. The capacity read must stay small.
 - Cache the read in a custom setting: it adds a write.
+- Count each pending job as 1 execution: one batch job with many chunks can
+  use all executions that are left, and the panel shows Healthy.
+- A grouped `SUM(TotalJobItems)`: `SUM()` costs one query row for each job,
+  with no cap. A job storm can then stop the read when the operator needs it.
+- A second SOQL for the batch progress: the issue permits 1 SOQL.

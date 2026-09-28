@@ -83,7 +83,7 @@ private class WorkflowAsyncCapacityServiceTest {
   static void readCostsAtMostOneSoqlAndNoDml() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
-      // Five jobs in one status group. A charge of one row per job gives 5 rows or more.
+      // Five queued Queueable jobs. Each one is one pending execution.
       System.enqueueJob(new NoopJob());
       System.enqueueJob(new NoopJob());
       System.enqueueJob(new NoopJob());
@@ -106,8 +106,12 @@ private class WorkflowAsyncCapacityServiceTest {
       Assert.isTrue((Integer) jobs.get('total') >= 5, String.valueOf(jobs));
       Assert.isTrue(queries <= 1, 'The read must cost max 1 SOQL: ' + queries);
       Assert.isTrue(
-        rows <= 3,
-        'The read must cost max 3 query rows (one per status group): ' + rows
+        rows <= WorkflowAsyncCapacityService.JOB_SCAN_LIMIT + 1,
+        'The read must cost max JOB_SCAN_LIMIT + 1 query rows: ' + rows
+      );
+      Assert.isTrue(
+        (Integer) jobs.get('pendingExecutions') >= 5,
+        'Each queued Queueable is one execution: ' + jobs
       );
       Assert.areEqual(0, dml, 'The read must not write');
       Assert.areEqual(
@@ -243,6 +247,40 @@ private class WorkflowAsyncCapacityServiceTest {
           c.Name + ' must not call the capacity read'
         );
       }
+    }
+  }
+
+  @IsTest
+  static void executionsForEachJobType() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Assert.areEqual(
+        1,
+        WorkflowAsyncCapacityService.executionsFor('Queueable', 0, 0)
+      );
+      Assert.areEqual(
+        1,
+        WorkflowAsyncCapacityService.executionsFor('Future', null, null)
+      );
+      Assert.areEqual(
+        0,
+        WorkflowAsyncCapacityService.executionsFor('BatchApexWorker', 5, 1),
+        'The parent batch row counts the chunks'
+      );
+      Assert.areEqual(
+        4001,
+        WorkflowAsyncCapacityService.executionsFor('BatchApex', 5000, 1000),
+        'Chunks left plus finish'
+      );
+      Assert.areEqual(
+        1,
+        WorkflowAsyncCapacityService.executionsFor('BatchApex', 0, 0),
+        'A batch that did not start counts at least 1'
+      );
+      Assert.areEqual(
+        1,
+        WorkflowAsyncCapacityService.executionsFor('BatchApex', 10, 12),
+        'Never below 1'
+      );
     }
   }
 }

@@ -140,13 +140,21 @@ export default class AsyncCapacityPanel extends LightningElement {
     const flexLimit = isMissing(jobs.flexQueueLimit)
       ? 100
       : jobs.flexQueueLimit;
-    return `Flex queue (Holding) ${formatCount(jobs.holding)} / ${formatCount(
+    let label = `Flex queue (Holding) ${formatCount(jobs.holding)} / ${formatCount(
       flexLimit,
     )} · Queued ${formatCount(
       jobs.queued,
     )} · Processing ${formatCount(jobs.processing)} · Total ${formatCount(
       jobs.total,
     )}`;
+    if (!isMissing(jobs.pendingExecutions)) {
+      label += ` · Pending executions ${formatCount(jobs.pendingExecutions)}`;
+    }
+    return label;
+  }
+
+  get isJobsCapped() {
+    return !!(this.data.jobCounts && this.data.jobCounts.capped === true);
   }
 
   get thresholdLabel() {

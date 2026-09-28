@@ -25,10 +25,10 @@ flowchart LR
 
 Two metrics have a status. Both gate the Queueable chain.
 
-| Panel metric                    | Used / limit                                                          | Where an admin sees it                                                                                  |
-| ------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Daily async Apex executions     | `System.OrgLimits` key `DailyAsyncApexExecutions`                     | REST resource `/services/data/vXX.X/limits`, key `DailyAsyncApexExecutions`. CLI: `sf org list limits`. |
-| Pending jobs vs executions left | `Holding` + `Queued` + `Processing` rows / (daily limit − daily used) | **Setup → Apex Jobs** (filter on the status) and the daily value above.                                 |
+| Panel metric                          | Used / limit                                                                                    | Where an admin sees it                                                                                  |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Daily async Apex executions           | `System.OrgLimits` key `DailyAsyncApexExecutions`                                               | REST resource `/services/data/vXX.X/limits`, key `DailyAsyncApexExecutions`. CLI: `sf org list limits`. |
+| Pending executions vs executions left | Executions that the `Holding`, `Queued` and `Processing` jobs need / (daily limit − daily used) | **Setup → Apex Jobs** (filter on the status) and the daily value above.                                 |
 
 The panel also shows these counts. They have no status:
 
@@ -51,10 +51,16 @@ The panel also shows these counts. They have no status:
   jobs do not go into the flex queue. A full flex queue stops new batch jobs,
   not the Queueable chain. Thus the flex queue has no status.
 - Queueable jobs in `Queued` have no queue limit. A maximum of 5 batch jobs
-  can be `Queued` or `Processing`. Thus the panel compares all pending jobs
-  with the daily executions that are left. Each pending job uses one or more
-  executions. A value near 100% tells you that the backlog can use all
-  capacity that is left.
+  can be `Queued` or `Processing`. Thus the panel compares the executions
+  that the pending jobs need with the daily executions that are left. A value
+  near 100% tells you that the backlog can use all capacity that is left.
+- Pending executions: each job counts 1. A batch job (`BatchApex`) counts 1
+  for each chunk that is left (`TotalJobItems` − `JobItemsProcessed`), plus 1
+  for finish. A batch worker row (`BatchApexWorker`) counts 0, because its
+  batch job counts the chunk. A batch job that did not start has
+  `TotalJobItems` = 0, so it counts 1. The value is then too low.
+- The read counts max 2,000 jobs. When more jobs are pending, the panel says
+  so, and the real values are higher. Batch jobs are read first.
 - Batch jobs in `Preparing` are not counted.
 
 ## Status
@@ -69,7 +75,7 @@ the percent that the panel shows.
 | **Critical** | percent ≥ crit                                                  | Pause definitions that are not critical. Stop or move batch jobs. When capacity is normal again, look for orphaned instances.    |
 | **Unknown**  | No limit, a limit of 0 or less, or a failed `AsyncApexJob` read | Capacity data is not available. Examine the org limits (`sf org list limits`) and **Setup → Apex Jobs**. Unknown is not Healthy. |
 
-- When no daily executions are left, the pending jobs metric is Unknown. The
+- When no daily executions are left, the pending executions metric is Unknown. The
   daily metric is then Critical.
 - The overall status is the worst metric. Rank: Critical, Degraded, Unknown,
   Healthy.
@@ -94,9 +100,10 @@ apply to all metrics.
 
 ## Cost
 
-- 1 SOQL for the read: one `AsyncApexJob` aggregate, `COUNT(Id)` with
-  `GROUP BY Status`. The SOQL reference gives one query row for each group,
-  so max 3 query rows. A test measures this with 5 jobs in one group.
+- 1 SOQL for the read: one `AsyncApexJob` row query (`Status`, `JobType`,
+  `TotalJobItems`, `JobItemsProcessed`), max 2,001 query rows. A grouped
+  `SUM()` costs one query row for each job with no cap, so the read counts
+  the rows itself. A test measures the SOQL and the query rows.
 - `System.OrgLimits.getMap()` and `Revenant_Config__mdt.getInstance()`: no
   SOQL.
 - No DML. No event. No job. The read writes no audit record.

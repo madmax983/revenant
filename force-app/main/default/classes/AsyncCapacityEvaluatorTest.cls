@@ -467,4 +467,44 @@ private class AsyncCapacityEvaluatorTest {
       AsyncCapacityEvaluator.worst(new List<String>{ 'BOGUS' })
     );
   }
+
+  @IsTest
+  static void batchChunksCanMakeBacklogCritical() {
+    // One processing batch with 47,999 chunks left and 50,000 executions left.
+    AsyncCapacityEvaluator.Reading r = reading(200000, 250000, 0);
+    r.processing = 1;
+    r.pendingExecutions = 48000;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Map<String, Object> backlog = metricFor(
+      result,
+      AsyncCapacityEvaluator.METRIC_BACKLOG
+    );
+    Assert.areEqual(48000, backlog.get('used'));
+    Assert.areEqual(96.00, backlog.get('percent'));
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_CRITICAL,
+      backlog.get('status')
+    );
+    Assert.areEqual(true, result.get('chainAtRisk'));
+    Map<String, Object> jobs = (Map<String, Object>) result.get('jobCounts');
+    Assert.areEqual(1, jobs.get('total'), 'The job count stays one row');
+    Assert.areEqual(48000, jobs.get('pendingExecutions'));
+  }
+
+  @IsTest
+  static void cappedScanIsFlagged() {
+    AsyncCapacityEvaluator.Reading r = reading(1000, 250000, 0);
+    r.queued = 2000;
+    r.pendingExecutions = 2000;
+    r.jobsCapped = true;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Assert.areEqual(
+      true,
+      metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('capped')
+    );
+    Assert.areEqual(
+      true,
+      ((Map<String, Object>) result.get('jobCounts')).get('capped')
+    );
+  }
 }

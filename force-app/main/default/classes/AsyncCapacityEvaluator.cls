@@ -1,9 +1,10 @@
 /**
  * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
  * thresholds, calculates percentages and gives each metric a status. Metrics: daily
- * executions (used / limit) and pending jobs (Holding + Queued + Processing) / daily
- * executions left. Both gate the Queueable chain. The flex queue (Holding / 100) is a
- * count only: Queueables do not enter it. It does no SOQL, no DML and reads no clock.
+ * executions (used / limit) and pending executions (of the Holding, Queued and
+ * Processing jobs) / daily executions left. Both gate the Queueable chain. The flex
+ * queue (Holding / 100) is a count only: Queueables do not enter it. It does no SOQL,
+ * no DML and reads no clock.
  */
 public inherited sharing class AsyncCapacityEvaluator {
   /** @description Percent is below the warn threshold. */
@@ -24,7 +25,7 @@ public inherited sharing class AsyncCapacityEvaluator {
 
   /** @description Key of the daily async Apex executions metric. */
   public static final String METRIC_DAILY_ASYNC = 'DAILY_ASYNC';
-  /** @description Key of the pending jobs vs daily executions left metric. */
+  /** @description Key of the pending executions vs daily executions left metric. */
   public static final String METRIC_BACKLOG = 'BACKLOG';
 
   /** @description Platform maximum of batch jobs in the flex queue (Holding). */
@@ -38,7 +39,7 @@ public inherited sharing class AsyncCapacityEvaluator {
   // Display label of each metric.
   private static final Map<String, String> LABELS = new Map<String, String>{
     METRIC_DAILY_ASYNC => 'Daily async Apex executions',
-    METRIC_BACKLOG => 'Pending jobs vs executions left'
+    METRIC_BACKLOG => 'Pending executions vs executions left'
   };
 
   // Rank for the overall status. Higher is worse. Unknown is worse than Healthy.
@@ -80,6 +81,12 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer processing;
     /** @description False when the AsyncApexJob read failed. */
     public Boolean jobsKnown = false;
+    /**
+     * @description Executions the pending jobs still need. Null uses the job count.
+     */
+    public Integer pendingExecutions;
+    /** @description True when the job read stopped at its row cap. */
+    public Boolean jobsCapped = false;
   }
 
   /**
@@ -185,9 +192,15 @@ public inherited sharing class AsyncCapacityEvaluator {
       dailyLimit(r)
     );
     daily.put('elastic', usesElastic(r));
+    Map<String, Object> backlog = metric(
+      METRIC_BACKLOG,
+      pendingExecutions(r),
+      executionsLeft(r)
+    );
+    backlog.put('capped', r.jobsCapped);
     List<Map<String, Object>> metrics = new List<Map<String, Object>>{
       daily,
-      metric(METRIC_BACKLOG, pendingJobs(r), executionsLeft(r))
+      backlog
     };
     List<String> statuses = new List<String>();
     for (Map<String, Object> m : metrics) {
@@ -225,6 +238,14 @@ public inherited sharing class AsyncCapacityEvaluator {
     return r.jobsKnown ? r.holding + r.queued + r.processing : null;
   }
 
+  // Executions the pending jobs need. Falls back to the job count.
+  private static Integer pendingExecutions(Reading r) {
+    if (!r.jobsKnown) {
+      return null;
+    }
+    return r.pendingExecutions != null ? r.pendingExecutions : pendingJobs(r);
+  }
+
   // True when the org has an elastic limit above 0. StepGovernor uses the same rule.
   private static Boolean usesElastic(Reading r) {
     return r.dailyElasticLimit != null && r.dailyElasticLimit > 0;
@@ -252,6 +273,8 @@ public inherited sharing class AsyncCapacityEvaluator {
         'queued' => null,
         'processing' => null,
         'total' => null,
+        'pendingExecutions' => null,
+        'capped' => false,
         'flexQueueLimit' => FLEX_QUEUE_LIMIT
       };
     }
@@ -261,6 +284,8 @@ public inherited sharing class AsyncCapacityEvaluator {
       'queued' => r.queued,
       'processing' => r.processing,
       'total' => total,
+      'pendingExecutions' => pendingExecutions(r),
+      'capped' => r.jobsCapped,
       'flexQueueLimit' => FLEX_QUEUE_LIMIT
     };
   }
