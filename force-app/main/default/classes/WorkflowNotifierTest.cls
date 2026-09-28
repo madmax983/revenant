@@ -77,6 +77,77 @@ public class WorkflowNotifierTest {
     }
   }
 
+  /** @description Saga whose compensation waits for an approval. */
+  public class CompensationWaitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{
+        'WorkflowNotifierTest.UndoableStep',
+        'WorkflowNotifierTest.FailStep'
+      };
+    }
+    /**
+     * @description Initial step.
+     * @return UndoableStep.
+     */
+    public String getInitialStep() {
+      return 'WorkflowNotifierTest.UndoableStep';
+    }
+    /**
+     * @description UndoableStep, then FailStep.
+     * @param currentStep Current step.
+     * @param result Result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String currentStep, StepResult result) {
+      return currentStep == 'WorkflowNotifierTest.UndoableStep'
+        ? 'WorkflowNotifierTest.FailStep'
+        : null;
+    }
+  }
+
+  /** @description Compensation waits for 'Approve:Undo' and notifies. */
+  public class UndoableStep implements CompensatableStep {
+    /**
+     * @description Completes.
+     * @param ctx Step context.
+     * @return COMPLETE.
+     */
+    public StepResult execute(StepContext ctx) {
+      return StepResult.complete(null, 'done');
+    }
+    /**
+     * @description Waits for an approval before the undo.
+     * @param ctx Step context.
+     * @return A notified wait, or COMPLETE after the approval.
+     */
+    public StepResult compensate(StepContext ctx) {
+      if (ctx.signals().getSignal('Approve:Undo').isPresent()) {
+        return StepResult.complete(null, 'undone');
+      }
+      return StepResult.waitForApproval('Undo', null)
+        .withNotification(
+          WorkflowNotification.create('Approve the undo', 'The saga failed.')
+            .toRecipient(UserInfo.getUserId())
+        );
+    }
+  }
+
+  /** @description Fails the saga. */
+  public class FailStep implements WorkflowStep {
+    /**
+     * @description Fails.
+     * @param ctx Step context.
+     * @return FAIL.
+     */
+    public StepResult execute(StepContext ctx) {
+      return StepResult.fail('Forced failure');
+    }
+  }
+
   /** @description Timeout route of the timed suspend. */
   public class TimeoutStep implements WorkflowStep {
     /**
@@ -245,6 +316,39 @@ public class WorkflowNotifierTest {
     );
     Assert.areEqual('Completed', done.status);
     Assert.areEqual(1, anchors(instanceId).size(), 'Completion adds no row');
+  }
+
+  @IsTest
+  static void compensationWaitNotifies() {
+    seedType();
+    Test.startTest();
+    Id instanceId = WorkflowEngine.start(
+      'WorkflowNotifierTest.CompensationWaitWorkflow',
+      'notify-compensation',
+      null
+    );
+    WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+    WorkflowTestHarness.Result r = driveAndDeliver(harness);
+    Test.stopTest();
+
+    Assert.areEqual('Suspended', r.status, 'The undo waits for approval');
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      'Approve the undo',
+      WorkflowNotifier.sentNotifications[0].title
+    );
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SENT,
+      anchors(instanceId)[0].Outcome__c
+    );
+
+    WorkflowTestHarness.Result done = harness.injectSignal(
+      'notify-compensation',
+      'Approve:Undo',
+      '{}'
+    );
+    Assert.areEqual('Compensated', done.status);
+    Assert.areEqual(1, anchors(instanceId).size(), 'The undo adds no row');
   }
 
   @IsTest

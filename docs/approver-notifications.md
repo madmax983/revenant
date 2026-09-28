@@ -20,7 +20,7 @@ public StepResult execute(StepContext ctx) {
 }
 ```
 
-`ApprovalWorkflowExample` is the reference. When the input has no `approverId`, the example sends the notification to the owner of the instance.
+`ApprovalWorkflowExample` is the reference. A `compensate()` method can also return a wait with a notification (for example, an approval before an undo). When the input has no `approverId`, the example sends the notification to the owner of the instance.
 
 ## API
 
