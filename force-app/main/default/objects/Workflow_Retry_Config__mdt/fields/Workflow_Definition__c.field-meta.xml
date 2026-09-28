@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Workflow_Definition__c</fullName>
+    <description>Workflow API name, as in Workflow_Instance__c.Workflow_Name__c (for example OrderSaga or Outer.Inner). The match ignores case.</description>
+    <externalId>false</externalId>
+    <fieldManageability>SubscriberControlled</fieldManageability>
+    <label>Workflow Definition</label>
+    <length>255</length>
+    <required>true</required>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

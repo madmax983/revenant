@@ -121,11 +121,15 @@ public inherited sharing class WorkflowCompensationContext {
       : 1;
     Integer maxAttempts = 1;
     Map<String, Object> capturesMap = new Map<String, Object>();
+    String workflowName = run.instance.Workflow_Name__c;
     if (compensatableStepInstance instanceof RetryConfigurable) {
-      RetryPolicy policy = WorkflowRetryScheduling.sanitizePolicy(
-        ((RetryConfigurable) compensatableStepInstance).getRetryPolicy()
-      );
-      maxAttempts = policy.maximumAttempts;
+      // The policy goes through the operator record (issue #103).
+      maxAttempts = WorkflowRetryConfigResolver.resolve(
+          workflowName,
+          stepExec.Step_Name__c,
+          ((RetryConfigurable) compensatableStepInstance).getRetryPolicy()
+        )
+        .maximumAttempts;
     }
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
@@ -146,7 +150,12 @@ public inherited sharing class WorkflowCompensationContext {
         }
       }
     }
-    run.maxAttempts = maxAttempts;
+    // An override record caps the attempts at once (issue #103).
+    run.maxAttempts = WorkflowRetryConfigResolver.overrideMaxAttempts(
+      workflowName,
+      stepExec.Step_Name__c,
+      maxAttempts
+    );
     run.capturesMap = capturesMap;
   }
 

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Override_Author_Policy__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>For incidents. Checked: this record has priority over an author policy in StepResult.retry(policy), RetryConfigurable or AutoRetryConfigurable. Clear (default): the record applies only when the step has no author policy (null or RetryPolicy.fromConfig()).</description>
+    <externalId>false</externalId>
+    <fieldManageability>SubscriberControlled</fieldManageability>
+    <label>Override Author Policy</label>
+    <type>Checkbox</type>
+</CustomField>

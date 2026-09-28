@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <label>PartnerSync</label>
+    <protected>false</protected>
+    <values>
+        <field>Workflow_Definition__c</field>
+        <value xsi:type="xsd:string">RetryConfigWorkflowExample.PartnerSyncWorkflow</value>
+    </values>
+    <values>
+        <field>Step_Name__c</field>
+        <value xsi:nil="true"/>
+    </values>
+    <values>
+        <field>Initial_Interval_Seconds__c</field>
+        <value xsi:type="xsd:double">30.0</value>
+    </values>
+    <values>
+        <field>Backoff_Coefficient__c</field>
+        <value xsi:type="xsd:double">2.0</value>
+    </values>
+    <values>
+        <field>Maximum_Attempts__c</field>
+        <value xsi:type="xsd:double">6.0</value>
+    </values>
+    <values>
+        <field>Override_Author_Policy__c</field>
+        <value xsi:type="xsd:boolean">false</value>
+    </values>
+</CustomMetadata>

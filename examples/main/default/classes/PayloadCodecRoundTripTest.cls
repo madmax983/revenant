@@ -683,6 +683,30 @@ private class PayloadCodecRoundTripTest {
     return snap(result, key, new Set<String>(), new List<Id>());
   }
 
+  // Source: RetryConfigWorkflowExampleTest. The partner API fails three
+  // times. The operator record paces the retries.
+  private static Snapshot runRetryConfig(PayloadCodec codec, String key) {
+    useCodec(codec);
+    MockPartnerApi.reset();
+    MockPartnerApi.outagesLeft = 3;
+    WorkflowRetryConfigResolver.mockRecords = new List<Workflow_Retry_Config__mdt>{
+      new Workflow_Retry_Config__mdt(
+        DeveloperName = 'PartnerSync',
+        Workflow_Definition__c = 'RetryConfigWorkflowExample.PartnerSyncWorkflow',
+        Maximum_Attempts__c = 6
+      )
+    };
+    Id instanceId = WorkflowEngine.start(
+      'RetryConfigWorkflowExample.PartnerSyncWorkflow',
+      key,
+      new Map<String, Object>{ 'orderId' => 'O-2001' }
+    );
+    WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
+      .drive();
+    System.assertEquals(4, MockPartnerApi.calls, 'Three retries, then 200');
+    return snap(result, key, new Set<String>());
+  }
+
   // Source: IdempotentChargeWorkflowExampleTest.
   private static Snapshot runIdempotentCharge(PayloadCodec codec, String key) {
     useCodec(codec);
@@ -1995,6 +2019,20 @@ private class PayloadCodecRoundTripTest {
         MockFlakyOrderServices.lastRefundedChargeId,
         'The AES refund reads the decoded charge id'
       );
+      assertRoundTrip(identity, encoded, aes);
+    }
+  }
+
+  @IsTest
+  static void retryConfigOutageRoundTrips() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Snapshot identity = runRetryConfig(null, 'CodecRetryCfg_Identity');
+      Test.startTest();
+      AesCodec aes = new AesCodec();
+      Snapshot encoded = runRetryConfig(aes, 'CodecRetryCfg_Aes');
+      Test.stopTest();
+
+      System.assertEquals('Completed', identity.status);
       assertRoundTrip(identity, encoded, aes);
     }
   }
