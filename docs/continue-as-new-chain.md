@@ -80,7 +80,7 @@ A `compensate()` instance links to the instance that it compensates. Thus it is 
 Open an instance that has a previous or a next run. The detail pane shows **Continue-As-New Generations**:
 
 - One row for each generation, newest first, with a status badge and the failure category.
-- "X of N generations". `N+` when the total is capped.
+- "Showing X of N generations". `N+` when the total is capped.
 - Click the generation name (or press Enter on it) to open the step timeline of that generation. The list stays.
 - **Show older generations** gets the next page. **Try again** reads the chain again after an error.
 - A poll refreshes the first page when the selected row changed (status or new successor), or when the newest generation is not closed. Older pages that you loaded stay.

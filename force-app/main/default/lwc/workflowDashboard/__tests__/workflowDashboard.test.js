@@ -3559,7 +3559,7 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(rows[1].querySelector(".badge").textContent.trim()).toBe(
       "ContinuedAsNew",
     );
-    expect(chainCount(element)).toBe("2 of 5 generations");
+    expect(chainCount(element)).toBe("Showing 2 of 5 generations");
   });
 
   it("does not call getInstanceChain for a single generation", async () => {
@@ -3639,7 +3639,7 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     expect(rows).toHaveLength(3);
     expect(rows[2].dataset.id).toBe(OLDER_ID);
     expect(rows[2].textContent).toContain("Generation 3");
-    expect(chainCount(element)).toBe("3 of 5 generations");
+    expect(chainCount(element)).toBe("Showing 3 of 5 generations");
     expect(chainButton(element, "chain-load-more")).toBeNull();
   });
 
@@ -3653,7 +3653,7 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
     });
     const element = await mountAndSelect();
 
-    expect(chainCount(element)).toBe("2 of 50000+ generations");
+    expect(chainCount(element)).toBe("Showing 2 of 50000+ generations");
     expect(chainRows(element)[0].textContent).toContain("Generation —");
   });
 
@@ -3772,7 +3772,7 @@ describe("c-workflow-dashboard continue-as-new chain", () => {
       PREV_ID,
       OLDER_ID,
     ]);
-    expect(chainCount(element)).toBe("4 of 6 generations");
+    expect(chainCount(element)).toBe("Showing 4 of 6 generations");
     // All rows were loaded before, so there is no older page.
     expect(chainButton(element, "chain-load-more")).toBeNull();
   });

@@ -399,7 +399,7 @@ export default class WorkflowDashboard extends LightningElement {
 
   get chainCountLabel() {
     const total = `${this.chainTotal}${this.chainTotalCapped ? "+" : ""}`;
-    return `${this.chainGenerations.length} of ${total} generations`;
+    return `Showing ${this.chainGenerations.length} of ${total} generations`;
   }
 
   get hasOlderGenerations() {

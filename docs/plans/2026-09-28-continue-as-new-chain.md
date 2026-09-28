@@ -78,7 +78,7 @@ Steps:
 5. Total: `COUNT()` in the window, `LIMIT` 50,000.
 6. Page: rows in the window (and after the cursor), `LIMIT pageSize + 1`.
 
-Dashboard: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)` maps the page to a `Map`. The LWC shows a "Continue-As-New Generations" section, "X of N generations", and "Show older generations".
+Dashboard: `WorkflowDashboardController.getInstanceChain(instanceId, cursor)` maps the page to a `Map`. The LWC shows a "Continue-As-New Generations" section, "Showing X of N generations", and "Show older generations".
 
 ## Changes After Review
 
