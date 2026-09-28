@@ -93,6 +93,8 @@ public inherited sharing class WorkflowNotifier {
   private static Boolean throwSendException = false;
   @TestVisible
   private static Boolean forceDmlBudgetExhausted = false;
+  @TestVisible
+  private static Boolean forceResultDmlExhausted = false;
 
   /**
    * @description Returns the Fire_Key__c of the anchor row of a step row.
@@ -345,6 +347,11 @@ public inherited sharing class WorkflowNotifier {
       if (anchors.isEmpty()) {
         return;
       }
+      if (!hasResultDml(anchors.size())) {
+        // A send cannot be undone. Send only when the result rows can be saved.
+        publishAgain(anchors);
+        return;
+      }
       List<Workflow_Log__c> deferred = new List<Workflow_Log__c>();
       if (WorkflowEngine.sendNotifications) {
         deferred = sendAll(anchors);
@@ -359,8 +366,26 @@ public inherited sharing class WorkflowNotifier {
           );
         }
       }
-      saveRows(anchors, deferred);
-      publishAgain(deferred);
+      // A deferred request that cannot be published again fails now. Else its
+      // row stays Requested with no event.
+      List<Workflow_Log__c> lost = publishAgain(deferred);
+      for (Workflow_Log__c anchor : lost) {
+        setResult(
+          anchor,
+          null,
+          OUTCOME_FAILED,
+          LEVEL_ERROR,
+          'Publish for a later pass failed'
+        );
+      }
+      Set<Id> lostIds = new Map<Id, Workflow_Log__c>(lost).keySet();
+      List<Workflow_Log__c> waiting = new List<Workflow_Log__c>();
+      for (Workflow_Log__c anchor : deferred) {
+        if (!lostIds.contains(anchor.Id)) {
+          waiting.add(anchor);
+        }
+      }
+      saveRows(anchors, waiting);
     } catch (Exception e) {
       WorkflowLog.error(LOG_TYPE, 'Notify batch failed: ' + e.getMessage());
     }
@@ -685,16 +710,47 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
-  // Publishes the deferred requests again for a later pass.
-  private static void publishAgain(List<Workflow_Log__c> deferred) {
-    if (deferred.isEmpty()) {
-      return;
+  // True when the pass can save its result rows: one update, one publish
+  // for a later pass and one error row.
+  private static Boolean hasResultDml(Integer rowCount) {
+    return !forceResultDmlExhausted &&
+      Limits.getDmlStatements() + 3 <= Limits.getLimitDmlStatements() &&
+      Limits.getDmlRows() + (2 * rowCount) + 1 <= Limits.getLimitDmlRows();
+  }
+
+  // Publishes the deferred requests again for a later pass. Returns the rows
+  // whose publish failed.
+  private static List<Workflow_Log__c> publishAgain(
+    List<Workflow_Log__c> deferred
+  ) {
+    List<Workflow_Log__c> lost = new List<Workflow_Log__c>();
+    if (
+      deferred.isEmpty() ||
+      Limits.getDmlStatements() >= Limits.getLimitDmlStatements() ||
+      Limits.getDmlRows() + deferred.size() > Limits.getLimitDmlRows()
+    ) {
+      return deferred.isEmpty() ? lost : deferred;
     }
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
     for (Workflow_Log__c anchor : deferred) {
       events.add(notifyEvent(anchor.Fire_Key__c, anchor.Workflow_Instance__c));
     }
-    EventBus.publish(events);
+    try {
+      if (Test.isRunningTest() && throwPublishException) {
+        throw new WorkflowEngine.WorkflowException(
+          'Simulated EventBus.publish failure'
+        );
+      }
+      List<Database.SaveResult> results = EventBus.publish(events);
+      for (Integer i = 0; i < results.size(); i++) {
+        if (!results[i].isSuccess()) {
+          lost.add(deferred[i]);
+        }
+      }
+    } catch (Exception e) {
+      return deferred;
+    }
+    return lost;
   }
 
   private static Integer failed(OpenRequest open, String reason) {

@@ -100,6 +100,8 @@ A step that waits again on the same row with a new notification (for example, a 
 - When the anchor insert fails for a reason other than a duplicate key, `request` writes a `Notification` error row.
 - A publish error sets the anchor row to `Failed` (`Level__c = Error`).
 - In the trigger, each request has its own `try`/`catch`. A failed row update writes one error row.
+- The trigger sends only when it can save the result rows. Else it publishes the requests again for a later pass.
+- When the publish for a later pass fails, the row is `Failed`.
 
 `Outcome__c` values:
 
@@ -152,6 +154,8 @@ Test context does not call `Messaging.CustomNotification.send()`. In the engine 
 These members are `@TestVisible private`. In your own tests, read `result.directive().notification`.
 
 ## Known limits
+
+- In rare cases a row stays `Requested` with no event (for example, a platform publish error after the commit). No sweep sends it again yet. See issue #274.
 
 - The notification opens the instance or the target record, not a decision screen. Use a Flow screen, a quick action or the Signal Workflow invocable action to publish the decision.
 - When a matching signal is already buffered, the step resumes at once. The approver still gets the notification.

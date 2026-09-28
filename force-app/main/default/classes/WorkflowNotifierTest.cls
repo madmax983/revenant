@@ -497,6 +497,70 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
+  static void lowResultDmlSendsNothingAndWaits() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-result-dml',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(instanceId);
+    WorkflowNotifier.forceResultDmlExhausted = true;
+    Test.getEventBus().deliver();
+    Assert.areEqual(0, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_REQUESTED,
+      anchors(instanceId)[0].Outcome__c,
+      'No send before the result row can be saved'
+    );
+    // The pass published the request again. The next pass sends it.
+    WorkflowNotifier.forceResultDmlExhausted = false;
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SENT,
+      anchors(instanceId)[0].Outcome__c
+    );
+  }
+
+  @IsTest
+  static void deferredPublishFailureIsLogged() {
+    seedType();
+    WorkflowNotifier.sendCallsPerPass = 1;
+    Test.startTest();
+    Id first = startWorkflow(
+      'notify-defer-fail-1',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    Id second = startWorkflow(
+      'notify-defer-fail-2',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(first);
+    WorkflowEngine.runStep(second);
+    WorkflowNotifier.throwPublishException = true;
+    Test.getEventBus().deliver();
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    List<String> outcomes = new List<String>{
+      anchors(first)[0].Outcome__c,
+      anchors(second)[0].Outcome__c
+    };
+    outcomes.sort();
+    Assert.areEqual(
+      new List<String>{
+        WorkflowNotifier.OUTCOME_FAILED,
+        WorkflowNotifier.OUTCOME_SENT
+      },
+      outcomes,
+      'The deferred request fails. It does not stay Requested.'
+    );
+  }
+
+  @IsTest
   static void tooManyRecipientsForOnePassFails() {
     seedType();
     WorkflowNotifier.sendCallsPerPass = 1;
