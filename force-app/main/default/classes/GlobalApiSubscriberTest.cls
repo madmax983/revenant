@@ -180,7 +180,11 @@ public class GlobalApiSubscriberTest {
         ctx.captures().patched('change-1'),
         ctx.captures().patched('change-2', Datetime.now())
       };
-      for (StepContext.Signal s : ctx.signals().getSignals()) {
+      List<StepContext.Signal> sorted = ctx.signals().getSignals();
+      sorted.sort();
+      Comparable first = sorted.isEmpty() ? null : sorted[0];
+      seen.add(first);
+      for (StepContext.Signal s : sorted) {
         seen.add(String.valueOf(s.signalId) + s.name + s.payload);
       }
       StepContext.ChildOutcome child = ctx.signals().getChildOutcome('child-1');

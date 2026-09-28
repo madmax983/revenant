@@ -383,12 +383,42 @@ const stubAnn = (m) =>
     .map((a) => `@${annotationName(a)} `)
     .join("");
 
+// Methods of the system interfaces that a global class implements.
+const SYSTEM_INTERFACE_METHODS = { comparable: ["compareto"] };
+
+/** Returns the lower-case method names that the class's interfaces require. */
+function requiredMethodNames(t, types) {
+  const names = new Set();
+  for (const r of t.implementsRefs) {
+    let repo = null;
+    renderType(r, t.outer ?? t, types, (rt) => (repo = rt));
+    const methods = repo
+      ? repo.members.map((m) => m.name.toLowerCase())
+      : (SYSTEM_INTERFACE_METHODS[r.getText().toLowerCase()] ?? []);
+    methods.forEach((n) => names.add(n));
+  }
+  return names;
+}
+
+function usesNonGlobalType(m, t, types) {
+  let bad = false;
+  for (const r of [m.returnRef, ...m.params].filter(Boolean)) {
+    renderType(r, t, types, (rt) => {
+      if (!rt.global) bad = true;
+    });
+  }
+  return bad;
+}
+
 function stubType(t, types, indent) {
   const pad = "  ".repeat(indent);
   const inner = [...types.values()].filter((x) => x.outer === t && x.global);
-  const ext = t.extendsRefs.length
+  let ext = t.extendsRefs.length
     ? ` extends ${t.extendsRefs.map(srcType).join(", ")}`
     : "";
+  if (t.implementsRefs.length) {
+    ext += ` implements ${t.implementsRefs.map(srcType).join(", ")}`;
+  }
   if (t.kind === "enum")
     return `${pad}global enum ${t.node.id().getText()} { ${t.enumValues.join(", ")} }\n`;
   const name = t.node.id().getText();
@@ -398,6 +428,16 @@ function stubType(t, types, indent) {
     for (const m of t.members)
       out += `${p2}${srcType(m.returnRef)} ${m.name}(${stubParams(m)});\n`;
   } else {
+    // A class that implements an interface needs its implementing methods.
+    // Keep them public: subscribers cannot call them, as in the package.
+    const required = requiredMethodNames(t, types);
+    for (const m of t.members) {
+      if (m.kind !== "method" || m.global || m.isStatic) continue;
+      if (!required.has(m.name.toLowerCase())) continue;
+      if (usesNonGlobalType(m, t, types)) continue;
+      const body = m.returnRef ? "{ return null; }" : "{}";
+      out += `${p2}public ${srcType(m.returnRef)} ${m.name}(${stubParams(m)}) ${body}\n`;
+    }
     const globalCtors = t.members.filter(
       (m) => m.kind === "constructor" && m.global,
     );
