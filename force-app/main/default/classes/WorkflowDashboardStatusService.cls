@@ -8,7 +8,7 @@ public inherited sharing class WorkflowDashboardStatusService {
   /**
    * @description Returns the watchdog/scheduler health snapshot for the dashboard: recent
    * watchdog jobs, scheduled-job and sleeping-instance counts, pending timeouts, engine
-   * config, paused definitions, and async-apex limit usage.
+   * config, paused definitions, async-apex limit usage, and watchdog liveness.
    * @return A map of the watchdog status fields consumed by the status panel.
    */
   public static Map<String, Object> watchdogStatus() {
@@ -78,12 +78,25 @@ public inherited sharing class WorkflowDashboardStatusService {
         'sleepingInstances' => sleepingInstances,
         'pendingTimeouts' => pendingTimeouts,
         'config' => config,
-        'pausedDefinitions' => pausedDefs
+        'pausedDefinitions' => pausedDefs,
+        'liveness' => livenessMap()
       };
       result.putAll(readAsyncLimits());
       return result;
     } catch (Exception ex) {
       throw new AuraHandledException(ex.getMessage());
+    }
+  }
+
+  // Watchdog liveness (issue #113). Computed on read, so it shows STALE when
+  // the watchdog is dead. Best-effort: a failure gives UNKNOWN.
+  private static Map<String, Object> livenessMap() {
+    try {
+      return WatchdogLiveness.evaluateNow().toMap();
+    } catch (Exception ignored) {
+      return new Map<String, Object>{
+        'state' => WatchdogLiveness.STATE_UNKNOWN
+      };
     }
   }
 

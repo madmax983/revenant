@@ -528,6 +528,29 @@ public class WorkflowDashboardControllerAuthTest {
   }
 
   @IsTest
+  static void testWatchdogStatusShowsLiveness() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.watchdogDelayMinutes = 10;
+      Datetime sweptAt = Datetime.now().addMinutes(-45);
+      insert new Watchdog_Liveness__c(
+        SetupOwnerId = UserInfo.getOrganizationId(),
+        Last_Sweep_At__c = sweptAt,
+        Cadence_Minutes__c = 10
+      );
+
+      Map<String, Object> status = WorkflowDashboardController.getWatchdogStatus();
+
+      Map<String, Object> liveness = (Map<String, Object>) status.get(
+        'liveness'
+      );
+      Assert.areEqual('STALE', liveness.get('state'));
+      Assert.areEqual(sweptAt, liveness.get('lastSweepAt'));
+      Assert.areEqual(20, liveness.get('thresholdMinutes'));
+      Assert.isTrue((Integer) liveness.get('elapsedMinutes') >= 45);
+    }
+  }
+
+  @IsTest
   static void testWatchdogStatusAndEnqueue() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Mock the WatchdogWorkflow instance

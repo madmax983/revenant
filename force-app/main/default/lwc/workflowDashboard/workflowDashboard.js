@@ -1770,6 +1770,48 @@ export default class WorkflowDashboard extends LightningElement {
     this.loadRateLimitStatus();
   }
 
+  // Watchdog liveness (#113). The server computes the state on each read.
+  get watchdogLiveness() {
+    return (this.doctorData && this.doctorData.liveness) || {};
+  }
+
+  get livenessLabel() {
+    const state = this.watchdogLiveness.state;
+    if (state === "HEALTHY") {
+      return "Healthy";
+    }
+    if (state === "STALE") {
+      return "Stale";
+    }
+    return "Unknown";
+  }
+
+  get livenessBadgeClass() {
+    const state = this.watchdogLiveness.state;
+    let color = "badge-grey";
+    if (state === "HEALTHY") {
+      color = "badge-green";
+    } else if (state === "STALE") {
+      color = "badge-red";
+    }
+    return `badge ${color} slds-m-right_small`;
+  }
+
+  get livenessDetail() {
+    const live = this.watchdogLiveness;
+    if (!live.lastSweepAt) {
+      return "No sweep recorded yet.";
+    }
+    const stale =
+      live.thresholdMinutes != null
+        ? ` Stale after ${live.thresholdMinutes} min.`
+        : "";
+    return (
+      `Last sweep ${this.formatDateTime(live.lastSweepAt)} ` +
+      `(${live.elapsedMinutes} min ago).${stale}`
+    );
+  }
+
   get hasConcurrencyRows() {
     return this.concurrencyRows && this.concurrencyRows.length > 0;
   }

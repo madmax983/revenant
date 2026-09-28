@@ -94,8 +94,12 @@ public inherited sharing class WorkflowAlertManager {
     }
   }
 
-  // Alerting only proceeds when enabled and at least one channel is configured.
-  private static Boolean isAlertActionable(Workflow_Alert_Config__mdt config) {
+  /**
+   * @description True when alerts are on and at least one channel is set.
+   * @param config The resolved alert config.
+   * @return True when the config can send an alert.
+   */
+  public static Boolean isAlertActionable(Workflow_Alert_Config__mdt config) {
     if (config == null || !config.Enable_Alerts__c) {
       return false;
     }
@@ -227,5 +231,14 @@ public inherited sharing class WorkflowAlertManager {
    */
   public static void detectAndAlertStalls() {
     WorkflowStallDetector.detectAndAlertStalls();
+  }
+
+  /**
+   * @description Sends one alert when the watchdog heartbeat is stale (issue
+   * #113). Delegates to WatchdogStallDetector.
+   * @return True when this call sent the alert.
+   */
+  public static Boolean detectAndAlertWatchdogStall() {
+    return WatchdogStallDetector.detectAndAlert();
   }
 }

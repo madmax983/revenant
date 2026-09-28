@@ -390,6 +390,10 @@
                                                     <span class="slds-text-body_small slds-text-color_error">Watchdog poller is currently idle or stalled</span>
                                                 </template>
                                             </div>
+                                            <div class="slds-grid slds-grid_vertical-align-center slds-m-top_xx-small">
+                                                <span class={livenessBadgeClass} data-id="watchdog-liveness">{livenessLabel}</span>
+                                                <span class="slds-text-body_small slds-text-color_weak" data-id="watchdog-liveness-detail">{livenessDetail}</span>
+                                            </div>
                                         </div>
                                         <div>
                                             <lightning-button 

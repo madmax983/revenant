@@ -53,6 +53,10 @@ public inherited sharing class WorkflowWatchdog implements Schedulable {
     }
     bootstrapped = true;
 
+    // Stall check (issue #113). It runs here, outside the watchdog chain, so
+    // a dead watchdog is still found. It never throws.
+    WorkflowAlertManager.detectAndAlertWatchdogStall();
+
     try {
       List<Workflow_Instance__c> latestWatchdogs = [
         SELECT Id
