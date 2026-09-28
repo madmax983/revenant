@@ -18,6 +18,7 @@ private class WorkflowReadinessControllerTest {
     Boolean triggerSet = false;
     String triggerStatus;
     Boolean triggerThrows = false;
+    String livenessState;
     Set<Schema.SObjectType> unreadableObjects = new Set<Schema.SObjectType>();
     Set<Schema.SObjectType> uncreatableObjects = new Set<Schema.SObjectType>();
     Set<Schema.SObjectField> unreadableFields = new Set<Schema.SObjectField>();
@@ -36,6 +37,12 @@ private class WorkflowReadinessControllerTest {
         throw new IllegalArgumentException('Probe failed');
       }
       return triggerSet ? triggerStatus : super.eventTriggerStatus();
+    }
+
+    public override String watchdogLivenessState() {
+      return livenessState == null
+        ? super.watchdogLivenessState()
+        : livenessState;
     }
 
     public override Boolean canRead(Schema.SObjectType objectType) {
@@ -470,6 +477,57 @@ private class WorkflowReadinessControllerTest {
       FAIL,
       check('watchdog', checks).status,
       'Readiness agrees with System Doctor'
+    );
+  }
+
+  /**
+   * @description A watchdog record that exists but stopped its sweeps (#113 STALE)
+   * warns and gives the #113 recovery step.
+   */
+  @IsTest
+  static void testStaleWatchdogWarns() {
+    FakeProbe fake = new FakeProbe().withAlert(goodAlert());
+    fake.livenessState = 'STALE';
+    WorkflowReadinessService.probe = fake;
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      seedWatchdog('Suspended');
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessService.ReadinessCheck watchdog = check(
+      'watchdog',
+      checks
+    );
+    System.assertEquals(WARN, watchdog.status, 'A stale chain warns');
+    System.assert(watchdog.finding.contains('Stale'), watchdog.finding);
+    System.assert(
+      watchdog.remediation.contains('Cancel the watchdog instance'),
+      watchdog.remediation
+    );
+    System.assert(
+      watchdog.remediation.contains('Enqueue Watchdog'),
+      watchdog.remediation
+    );
+  }
+
+  /**
+   * @description A running chain with no sweep yet (UNKNOWN) passes. A new chain has
+   * not swept yet.
+   */
+  @IsTest
+  static void testRunningWatchdogWithNoSweepYetPasses() {
+    FakeProbe fake = new FakeProbe().withAlert(goodAlert());
+    fake.livenessState = 'UNKNOWN';
+    WorkflowReadinessService.probe = fake;
+    List<WorkflowReadinessService.ReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      seedWatchdog('Suspended');
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    System.assertEquals(
+      PASS,
+      check('watchdog', checks).status,
+      'UNKNOWN liveness on a running chain passes'
     );
   }
 

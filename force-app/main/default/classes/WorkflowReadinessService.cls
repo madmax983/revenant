@@ -91,6 +91,14 @@ public inherited sharing class WorkflowReadinessService {
     }
 
     /**
+     * @description The watchdog liveness state of System Doctor (#113).
+     * @return 'HEALTHY', 'STALE' or 'UNKNOWN'.
+     */
+    public virtual String watchdogLivenessState() {
+      return null;
+    }
+
+    /**
      * @description True when the running user can read the object.
      * @param objectType The object.
      * @return True when readable.
