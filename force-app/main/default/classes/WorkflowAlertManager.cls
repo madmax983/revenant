@@ -95,7 +95,13 @@ public inherited sharing class WorkflowAlertManager {
   }
 
   // Alerting only proceeds when enabled and at least one channel is configured.
-  private static Boolean isAlertActionable(Workflow_Alert_Config__mdt config) {
+  /**
+   * @description True when the config can send an alert: alerts are on and it has
+   * email recipients or event publish. The Readiness panel (#114) uses it too.
+   * @param config The alert config, or null.
+   * @return True when a failure alert can reach someone.
+   */
+  public static Boolean isAlertActionable(Workflow_Alert_Config__mdt config) {
     if (config == null || !config.Enable_Alerts__c) {
       return false;
     }

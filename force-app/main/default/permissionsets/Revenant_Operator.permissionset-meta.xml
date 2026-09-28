@@ -6,13 +6,18 @@
          signals but cannot reach any state-mutating recovery endpoint. Class-level security
          is enforced only at the LWC entry point, so the controller's downstream service
          classes need no entry. WorkflowRateLimitController is the endpoint of the
-         Rate Limits panel. It only reads data and uses the same view gate. -->
+         Rate Limits panel. WorkflowReadinessController is the endpoint of the Readiness
+         panel. Both only read data and use the same view gate. -->
     <classAccesses>
         <apexClass>WorkflowDashboardController</apexClass>
         <enabled>true</enabled>
     </classAccesses>
     <classAccesses>
         <apexClass>WorkflowRateLimitController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>WorkflowReadinessController</apexClass>
         <enabled>true</enabled>
     </classAccesses>
     <!-- Workflow_Dashboard_View lets the operator pass WorkflowDashboardSupport.checkAuthorization()

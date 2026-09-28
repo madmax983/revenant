@@ -314,6 +314,13 @@
   );
 }
 
+.text-green-icon {
+  --slds-c-icon-color-foreground: var(
+    --slds-g-color-palette-green-50,
+    hsl(145, 60%, 40%)
+  );
+}
+
 .text-weak {
   color: var(--slds-g-color-neutral-base-30, hsl(215, 20%, 30%));
 }
@@ -463,4 +470,18 @@ button.link-button:focus {
 .storage-meter_warning {
   border-left-color: var(--slds-g-color-palette-red-60, hsl(0, 85%, 60%));
   background: var(--slds-g-color-palette-red-95, hsl(0, 85%, 98%));
+}
+
+/* Readiness panel (#114): the fix is select-and-copy text. */
+.readiness-remediation {
+  display: block;
+  margin-top: var(--slds-g-spacing-1, 4px);
+  padding: var(--slds-g-spacing-2, 8px);
+  border-radius: var(--slds-g-radius-border-2, 6px);
+  background: var(--slds-g-color-surface-container-2, hsl(215, 20%, 96%));
+  font-family: var(--slds-g-font-family-monospace, monospace);
+  font-size: var(--slds-g-font-scale-neg-1, 0.8rem);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: all;
 }
