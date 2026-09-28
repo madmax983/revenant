@@ -203,6 +203,10 @@ public inherited sharing class WorkflowStepAdmission {
       instance.Workflow_Name__c,
       locked
     );
+    // Issue #132: wake the rows that rank ahead, so that they go to the gate
+    // now. Do it before the re-drive below, which can spend the only Queueable
+    // of an async transaction. A rollback also discards this wake.
+    ConcurrencyAdmissionOrder.wake(admission.aheadIds);
     if (admission.admitted) {
       commitSlotAcquisitionAndRedrive(instance, resolvedStep);
     } else {
@@ -213,8 +217,6 @@ public inherited sharing class WorkflowStepAdmission {
     // Issue #132: the admit or the park replaced the retry timer. Abort the old
     // timer, so that it cannot re-drive the instance later.
     abortStaleJob(locked.Async_Job_Id__c);
-    // Wake the rows that rank ahead, so that they go to the gate now.
-    ConcurrencyAdmissionOrder.wake(admission.aheadIds);
     return true;
   }
 

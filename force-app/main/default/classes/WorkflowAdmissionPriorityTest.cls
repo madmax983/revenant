@@ -74,6 +74,15 @@ public class WorkflowAdmissionPriorityTest {
     .Concurrency_Slot_Held__c;
   }
 
+  // Wake jobs enqueued in this test, before Test.stopTest runs them.
+  private static Integer wakeJobs() {
+    return [
+      SELECT COUNT()
+      FROM AsyncApexJob
+      WHERE ApexClass.Name = 'ConcurrencyAdmissionWake'
+    ];
+  }
+
   private static Integer cronCount() {
     return [SELECT COUNT() FROM CronTrigger];
   }
@@ -418,6 +427,22 @@ public class WorkflowAdmissionPriorityTest {
     );
   }
 
+  // ── An admit with rows ahead also wakes them ────────────────────────────
+  @IsTest
+  static void testAdmitAlsoWakesRowsAhead() {
+    WorkflowEngine.disableQueueableInTest = false;
+    WorkflowEngine.useDynamicScheduling = false;
+    configure(2, 60);
+    newWaiting('aw-high', 9);
+    Id low = newWaiting('aw-low', 0);
+
+    Test.startTest();
+    WorkflowEngine.runStep(low, null);
+    System.assert(isAdmitted(low), 'Two free slots: low admits');
+    System.assertEquals(1, wakeJobs(), 'The admit also wakes the row ahead');
+    Test.stopTest();
+  }
+
   // ── A yield wakes the rows ahead with one admit-only Queueable ──────────
   @IsTest
   static void testYieldEnqueuesOneWake() {
@@ -428,11 +453,9 @@ public class WorkflowAdmissionPriorityTest {
     Id low = newWaiting('q-low', 0);
 
     Test.startTest();
-    Integer before = Limits.getQueueableJobs();
     WorkflowEngine.runStep(low, null);
-    Integer enqueued = Limits.getQueueableJobs() - before;
     System.assert(!isAdmitted(low), 'Low yields');
-    System.assertEquals(1, enqueued, 'One wake job for the rows ahead');
+    System.assertEquals(1, wakeJobs(), 'One wake job for the rows ahead');
     Test.stopTest();
   }
 

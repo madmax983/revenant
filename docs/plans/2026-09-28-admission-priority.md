@@ -111,4 +111,5 @@ these problems. The fixes replace parts of the decision above.
 | A huge aging value overflows.                                         | Clamp aging to 1–525600.                                                  |
 | Waiting rows from before the upgrade have no queue field (Codex).     | Heartbeat backfill (200 per sweep) and a one-off script.                  |
 | The wake job keeps one savepoint per row (Codex).                     | Release each savepoint in `finally`.                                      |
+| An admit spends the only async Queueable before the wake (Codex).     | Wake before the commit or park.                                           |
 | Admin can edit engine fields.                                         | Read-only in both permission sets.                                        |
