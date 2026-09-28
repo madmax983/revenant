@@ -192,8 +192,10 @@ Setup:
    `DD-API-KEY` header.
 3. Deploy the trigger above.
 4. Add a `PlatformEventSubscriberConfig` for the trigger. Set a running user
-   that has access to the Named Credential. Set a batch size of 10 or less.
-   Then one body stays below the Datadog limit of 5 MB.
+   that has access to the Named Credential. Set the batch size to 1. The
+   shaper makes about 13 series for each definition, so one 100,000-character
+   chunk gives a body of about 1 MB. A larger batch can go above the Datadog
+   limit of 5 MB and the async Apex heap.
 5. Turn on **Publish Metrics Events**.
 
 ## Reference subscriber (external)
