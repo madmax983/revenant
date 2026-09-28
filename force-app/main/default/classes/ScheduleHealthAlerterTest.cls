@@ -422,15 +422,89 @@ private class ScheduleHealthAlerterTest {
       );
       Workflow_Schedule__c good = insertOverdue('Good');
 
-      // Two sweeps one minute apart start at different positions.
+      // Sweep 1 tries "Broken" (first, never tried). It fails and records an
+      // attempt. Sweep 2 tries "Good" first, because it was never tried.
       Datetime first = later();
-      ScheduleHealthAlerter.detectAndAlert(first);
-      ScheduleHealthAlerter.detectAndAlert(first.addMinutes(1));
+      Assert.areEqual(0, ScheduleHealthAlerter.detectAndAlert(first));
+      Assert.areEqual(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Log__c
+          WHERE Log_Type__c = :ScheduleHealthAlert.ATTEMPT_LOG_TYPE
+        ]
+      );
+      Assert.areEqual(
+        1,
+        ScheduleHealthAlerter.detectAndAlert(first.addMinutes(10))
+      );
 
       List<Workflow_Log__c> logs = claims();
       Assert.areEqual(1, logs.size(), String.valueOf(logs));
       Assert.areEqual(good.Id, logs[0].Schedule__c);
       Assert.areEqual(1, WorkflowAlertManager.publishedEvents.size());
+    }
+  }
+
+  @IsTest
+  static void manualRunDoesNotEndAFailureStreak() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      enableDefaultAlerts();
+      Workflow_Schedule__c sched = insertFailed('Manual');
+      Assert.areEqual(1, ScheduleHealthAlerter.detectAndAlert(later()));
+
+      // Run Now writes a Started log, but the scheduled failure stays.
+      insert new Workflow_Log__c(
+        Fire_Key__c = 'ManualKey_manual_1:Started',
+        Log_Type__c = 'ScheduleManualFire',
+        Outcome__c = 'Started',
+        Schedule__c = sched.Id
+      );
+
+      Assert.areEqual(
+        0,
+        ScheduleHealthAlerter.detectAndAlert(later().addHours(1)),
+        'A manual run is not a good scheduled fire'
+      );
+      Assert.areEqual(1, claims().size());
+    }
+  }
+
+  @IsTest
+  static void problemsAfterTheFirstPageAlert() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      enableDefaultAlerts();
+      ScheduleHealth.pageSize = 1;
+      // "Old" sorts first and already has its alert.
+      Workflow_Schedule__c old = insertSchedule(
+        'Old',
+        new Map<String, Object>{
+          'Next_Fire_Window__c' => System.now().addHours(-3)
+        }
+      );
+      insert new Workflow_Log__c(
+        Fire_Key__c = 'ScheduleOverdue:' +
+          old.Id +
+          ':' +
+          old.Next_Fire_Window__c.getTime(),
+        Log_Type__c = ScheduleHealthAlert.LOG_TYPE
+      );
+      Workflow_Schedule__c fresh = insertOverdue('Fresh');
+
+      Assert.areEqual(1, ScheduleHealthAlerter.detectAndAlert(later()));
+
+      Assert.areEqual(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Log__c
+          WHERE
+            Log_Type__c = :ScheduleHealthAlert.LOG_TYPE
+            AND Schedule__c = :fresh.Id
+        ]
+      );
     }
   }
 

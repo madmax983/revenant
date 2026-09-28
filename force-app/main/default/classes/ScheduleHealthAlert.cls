@@ -4,7 +4,7 @@
  * alert event and the alert email. Does no SOQL and no DML.
  * ScheduleHealthAlerter sends it.
  */
-public inherited sharing class ScheduleHealthAlert {
+public inherited sharing class ScheduleHealthAlert implements Comparable {
   /** @description Log_Type__c of the claim row. */
   public static final String LOG_TYPE = 'ScheduleHealthAlert';
   /** @description Alert_Reason__c for an overdue schedule. */
@@ -16,8 +16,17 @@ public inherited sharing class ScheduleHealthAlert {
   /** @description Outcome__c of a failed claim row. */
   public static final String OUTCOME_FAILED = 'Fire failed';
 
+  /** @description Log_Type__c of the row that records an unsent attempt. */
+  public static final String ATTEMPT_LOG_TYPE = 'ScheduleHealthAlertAttempt';
+
+  private static final String ATTEMPT_SUFFIX = ':attempt';
   private static final String OVERDUE_PREFIX = 'ScheduleOverdue:';
   private static final String FAILED_PREFIX = 'ScheduleFailed:';
+
+  // Time of the last unsent attempt, or null when never tried.
+  private Datetime lastAttemptAt;
+  // Position in the candidate list. Keeps the sort order stable.
+  private Integer position = 0;
 
   /** @description The assessed schedule. */
   public ScheduleHealth.Assessment assessment { get; private set; }
@@ -110,6 +119,61 @@ public inherited sharing class ScheduleHealthAlert {
       a.schedule.Id +
       '.';
     return alert;
+  }
+
+  /**
+   * @description Returns the Fire_Key__c of the attempt row.
+   * @return The key plus ":attempt".
+   */
+  public String attemptKey() {
+    return key + ATTEMPT_SUFFIX;
+  }
+
+  /**
+   * @description Sets the queue data that compareTo() uses.
+   * @param position Position in the candidate list.
+   * @param lastAttemptAt Time of the last unsent attempt, or null.
+   */
+  public void setQueueData(Integer position, Datetime lastAttemptAt) {
+    this.position = position;
+    this.lastAttemptAt = lastAttemptAt;
+  }
+
+  /**
+   * @description Sorts the alerts that were never tried first, then the
+   * oldest attempt first, then by list position. Thus an alert whose channel
+   * fails cannot block the alerts after it.
+   * @param other The other alert.
+   * @return A negative number when this alert goes first.
+   */
+  public Integer compareTo(Object other) {
+    ScheduleHealthAlert that = (ScheduleHealthAlert) other;
+    Long mine = lastAttemptAt == null ? -1L : lastAttemptAt.getTime();
+    Long theirs = that.lastAttemptAt == null
+      ? -1L
+      : that.lastAttemptAt.getTime();
+    if (mine != theirs) {
+      return mine < theirs ? -1 : 1;
+    }
+    return position - that.position;
+  }
+
+  /**
+   * @description Builds the row that records an unsent attempt. Upsert it
+   * on Fire_Key__c.
+   * @param attemptedAt The attempt time.
+   * @return The unsaved attempt row.
+   */
+  public Workflow_Log__c toAttempt(Datetime attemptedAt) {
+    return new Workflow_Log__c(
+      Fire_Key__c = attemptKey(),
+      Log_Type__c = ATTEMPT_LOG_TYPE,
+      Level__c = 'Warning',
+      Workflow_Name__c = assessment.schedule.Workflow_Name__c,
+      Fire_Time__c = attemptedAt,
+      Message__c = 'No channel sent the alert. The next sweep tries again: ' +
+        message
+    );
   }
 
   /**

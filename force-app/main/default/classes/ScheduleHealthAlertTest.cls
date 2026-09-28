@@ -254,4 +254,58 @@ private class ScheduleHealthAlertTest {
     Assert.isTrue(alerts[0].sent);
     Assert.isTrue(alerts[1].sent);
   }
+
+  @IsTest
+  static void neverTriedAlertsSortFirstThenOldestAttempt() {
+    ScheduleHealth.Assessment a = assessed(
+      new Map<String, Object>{ 'Next_Fire_Window__c' => T0 },
+      T0.addHours(1)
+    );
+    ScheduleHealthAlert recent = ScheduleHealthAlert.forOverdue(
+      a,
+      config(),
+      10
+    );
+    ScheduleHealthAlert older = ScheduleHealthAlert.forOverdue(a, config(), 10);
+    ScheduleHealthAlert fresh = ScheduleHealthAlert.forOverdue(a, config(), 10);
+    ScheduleHealthAlert fresher = ScheduleHealthAlert.forOverdue(
+      a,
+      config(),
+      10
+    );
+    recent.setQueueData(0, T0.addMinutes(20));
+    older.setQueueData(1, T0.addMinutes(10));
+    fresh.setQueueData(2, null);
+    fresher.setQueueData(3, null);
+    List<ScheduleHealthAlert> alerts = new List<ScheduleHealthAlert>{
+      recent,
+      older,
+      fresher,
+      fresh
+    };
+
+    alerts.sort();
+
+    Assert.areEqual(fresh, alerts[0]);
+    Assert.areEqual(fresher, alerts[1]);
+    Assert.areEqual(older, alerts[2]);
+    Assert.areEqual(recent, alerts[3]);
+  }
+
+  @IsTest
+  static void attemptRowCarriesItsOwnKey() {
+    ScheduleHealth.Assessment a = assessed(
+      new Map<String, Object>{ 'Next_Fire_Window__c' => T0 },
+      T0.addHours(1)
+    );
+    ScheduleHealthAlert alert = ScheduleHealthAlert.forOverdue(a, config(), 10);
+
+    Workflow_Log__c row = alert.toAttempt(T0.addHours(1));
+
+    Assert.areEqual(alert.key + ':attempt', row.Fire_Key__c);
+    Assert.areEqual(alert.attemptKey(), row.Fire_Key__c);
+    Assert.areEqual(ScheduleHealthAlert.ATTEMPT_LOG_TYPE, row.Log_Type__c);
+    Assert.areEqual(T0.addHours(1), row.Fire_Time__c);
+    Assert.isNull(row.Schedule__c, 'Attempt rows stay out of View Logs');
+  }
 }

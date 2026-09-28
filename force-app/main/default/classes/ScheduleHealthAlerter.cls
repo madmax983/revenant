@@ -13,13 +13,15 @@
  * Default. Alerts need Enable_Alerts__c and a channel.
  */
 public inherited sharing class ScheduleHealthAlerter {
-  // Claim insert, event publish and claim release.
-  private static final Integer DML_NEEDED = 3;
-  // Rows: one claim, one event and one release for each alert.
-  private static final Integer ROWS_PER_ALERT = 3;
+  // Claim insert, event publish, claim release and attempt upsert.
+  private static final Integer DML_NEEDED = 4;
+  // Rows: claim, event, release and attempt for each alert.
+  private static final Integer ROWS_PER_ALERT = 4;
   private static final String LOG_SOURCE = 'ScheduleHealthAlert';
-  // Candidate query, last good fire query and claim query.
-  private static final Integer SOQL_NEEDED = 3;
+  // Maximum candidate pages for one sweep.
+  private static final Integer MAX_PAGES = 5;
+  // Candidate pages, last good fire query and claim query.
+  private static final Integer SOQL_NEEDED = MAX_PAGES + 2;
 
   /** @description Maximum alerts for one sweep. The next sweep sends the rest. */
   @TestVisible
@@ -42,8 +44,10 @@ public inherited sharing class ScheduleHealthAlerter {
       }
       ScheduleHealthClock clock = ScheduleHealthClock.forSweep(now);
       List<ScheduleHealthAlert> alerts = unclaimed(
-        buildAlerts(ScheduleHealth.findUnhealthy(clock), clock.graceMinutes),
-        now
+        buildAlerts(
+          ScheduleHealth.findUnhealthyPages(clock, MAX_PAGES),
+          clock.graceMinutes
+        )
       );
       if (alerts.isEmpty()) {
         return 0;
@@ -53,7 +57,7 @@ public inherited sharing class ScheduleHealthAlerter {
         dispatch(alerts);
       } finally {
         // Release runs also when dispatch throws, so no claim stays unsent.
-        sent = release(alerts);
+        sent = release(alerts, now);
       }
       return sent;
     } catch (Exception ex) {
@@ -70,7 +74,7 @@ public inherited sharing class ScheduleHealthAlerter {
     Integer grace
   ) {
     List<ScheduleHealthAlert> alerts = new List<ScheduleHealthAlert>();
-    Map<Id, Datetime> lastGoodFire = ScheduleHealth.lastGoodFireBySchedule(
+    Map<Id, Datetime> lastGoodFire = ScheduleFireHistory.lastGoodFireBySchedule(
       found
     );
     for (ScheduleHealth.Assessment a : found) {
@@ -102,10 +106,10 @@ public inherited sharing class ScheduleHealthAlerter {
       : WorkflowFailureAlertEvaluator.getAlertConfig(sched.Workflow_Name__c);
   }
 
-  // Drops the alerts that a claim row already covers. Applies the cap.
+  // Drops the alerts that a claim row already covers. Puts the alerts that
+  // were never tried first, then the oldest attempt. Applies the cap.
   private static List<ScheduleHealthAlert> unclaimed(
-    List<ScheduleHealthAlert> alerts,
-    Datetime now
+    List<ScheduleHealthAlert> alerts
   ) {
     if (alerts.isEmpty()) {
       return alerts;
@@ -113,39 +117,33 @@ public inherited sharing class ScheduleHealthAlerter {
     Set<String> keys = new Set<String>();
     for (ScheduleHealthAlert alert : alerts) {
       keys.add(alert.key);
+      keys.add(alert.attemptKey());
     }
-    Set<String> taken = new Set<String>();
+    Map<String, Workflow_Log__c> rowsByKey = new Map<String, Workflow_Log__c>();
     for (Workflow_Log__c row : [
-      SELECT Fire_Key__c
+      SELECT Fire_Key__c, Fire_Time__c
       FROM Workflow_Log__c
       WHERE Fire_Key__c IN :keys
       WITH SYSTEM_MODE
     ]) {
-      taken.add(row.Fire_Key__c);
+      rowsByKey.put(row.Fire_Key__c, row);
     }
     List<ScheduleHealthAlert> free = new List<ScheduleHealthAlert>();
     for (ScheduleHealthAlert alert : alerts) {
-      if (!taken.contains(alert.key)) {
-        free.add(alert);
+      if (rowsByKey.containsKey(alert.key)) {
+        continue;
       }
+      Workflow_Log__c attempt = rowsByKey.get(alert.attemptKey());
+      alert.setQueueData(
+        free.size(),
+        attempt == null ? null : attempt.Fire_Time__c
+      );
+      free.add(alert);
     }
-    return rotateAndCap(free, now);
-  }
-
-  // Applies the cap from a start position that moves each minute. Thus an
-  // alert whose channel fails cannot take the same slot on each sweep and
-  // block the alerts after it.
-  private static List<ScheduleHealthAlert> rotateAndCap(
-    List<ScheduleHealthAlert> free,
-    Datetime now
-  ) {
-    if (free.size() <= maxAlertsPerSweep) {
-      return free;
-    }
-    Integer start = Math.mod((now.getTime() / 60000L).intValue(), free.size());
+    free.sort();
     List<ScheduleHealthAlert> result = new List<ScheduleHealthAlert>();
-    for (Integer i = 0; i < maxAlertsPerSweep; i++) {
-      result.add(free[Math.mod(start + i, free.size())]);
+    for (Integer i = 0; i < free.size() && i < maxAlertsPerSweep; i++) {
+      result.add(free[i]);
     }
     return result;
   }
@@ -209,19 +207,31 @@ public inherited sharing class ScheduleHealthAlerter {
     }
   }
 
-  // Deletes the claims of unsent alerts. Returns the sent count.
-  private static Integer release(List<ScheduleHealthAlert> alerts) {
+  // Deletes the claims of unsent alerts and records each attempt, so the
+  // next sweep tries other alerts first. Returns the sent count.
+  private static Integer release(
+    List<ScheduleHealthAlert> alerts,
+    Datetime now
+  ) {
     List<Workflow_Log__c> unsent = new List<Workflow_Log__c>();
+    List<Workflow_Log__c> attempts = new List<Workflow_Log__c>();
     Integer sent = 0;
     for (ScheduleHealthAlert alert : alerts) {
       if (alert.sent) {
         sent++;
       } else {
         unsent.add(alert.claim);
+        attempts.add(alert.toAttempt(now));
       }
     }
     if (!unsent.isEmpty()) {
       Database.delete(unsent, false, AccessLevel.SYSTEM_MODE);
+      Database.upsert(
+        attempts,
+        Workflow_Log__c.Fire_Key__c,
+        false,
+        AccessLevel.SYSTEM_MODE
+      );
     }
     return sent;
   }

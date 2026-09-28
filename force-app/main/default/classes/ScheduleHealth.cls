@@ -31,14 +31,12 @@ public inherited sharing class ScheduleHealth {
     'Invalid time zone'
   };
 
-  /** @description Fire log outcomes that end a failure streak. */
-  public static final Set<String> GOOD_OUTCOMES = new Set<String>{
-    'Started',
-    'Skipped'
-  };
-
-  /** @description Maximum rows that findUnhealthy() reads. */
+  /** @description Maximum rows that one candidate query reads. */
   public static final Integer MAX_ROWS = 200;
+
+  /** @description Rows in one candidate page. */
+  @TestVisible
+  private static Integer pageSize = MAX_ROWS;
 
   /** @description Maximum rows that summary() returns for display. */
   @TestVisible
@@ -169,7 +167,34 @@ public inherited sharing class ScheduleHealth {
    * @return Unhealthy assessments, oldest cursor first.
    */
   public static List<Assessment> findUnhealthy(ScheduleHealthClock clock) {
-    return keepUnhealthy(queryCandidates(clock), clock);
+    return keepUnhealthy(queryCandidates(clock, 0), clock);
+  }
+
+  /**
+   * @description Reads the candidate pages until a page is not full or
+   * maxPages is reached, then returns the unhealthy ones. Thus claimed
+   * problems in the first page cannot hide later problems. One SOQL query
+   * for each page.
+   * @param clock The time values.
+   * @param maxPages The maximum number of pages to read.
+   * @return Unhealthy assessments from all pages read.
+   */
+  public static List<Assessment> findUnhealthyPages(
+    ScheduleHealthClock clock,
+    Integer maxPages
+  ) {
+    List<Assessment> result = new List<Assessment>();
+    for (Integer page = 0; page < maxPages; page++) {
+      List<Workflow_Schedule__c> candidates = queryCandidates(
+        clock,
+        page * pageSize
+      );
+      result.addAll(keepUnhealthy(candidates, clock));
+      if (candidates.size() < pageSize) {
+        break;
+      }
+    }
+    return result;
   }
 
   private static List<Assessment> keepUnhealthy(
@@ -188,10 +213,11 @@ public inherited sharing class ScheduleHealth {
 
   // The SOQL filter is a superset of the rules. assess() decides.
   private static List<Workflow_Schedule__c> queryCandidates(
-    ScheduleHealthClock clock
+    ScheduleHealthClock clock,
+    Integer offset
   ) {
     Datetime cutoff = clock.now.addMinutes(-clock.graceMinutes);
-    Integer maxRows = MAX_ROWS;
+    Integer maxRows = pageSize;
     return [
       SELECT
         Id,
@@ -213,8 +239,9 @@ public inherited sharing class ScheduleHealth {
         AND (Next_Fire_Window__c = NULL
         OR Next_Fire_Window__c < :cutoff)))
       WITH SYSTEM_MODE
-      ORDER BY Next_Fire_Window__c ASC NULLS FIRST, Name ASC
+      ORDER BY Next_Fire_Window__c ASC NULLS FIRST, Name ASC, Id ASC
       LIMIT :maxRows
+      OFFSET :offset
     ];
   }
 
@@ -225,7 +252,7 @@ public inherited sharing class ScheduleHealth {
    */
   public static Map<String, Object> summary() {
     ScheduleHealthClock clock = ScheduleHealthClock.forRead();
-    List<Workflow_Schedule__c> candidates = queryCandidates(clock);
+    List<Workflow_Schedule__c> candidates = queryCandidates(clock, 0);
     List<Assessment> found = keepUnhealthy(candidates, clock);
     Integer overdueCount = 0;
     Integer failedCount = 0;
@@ -241,41 +268,9 @@ public inherited sharing class ScheduleHealth {
       'overdueCount' => overdueCount,
       'failedCount' => failedCount,
       'graceMinutes' => clock.graceMinutes,
-      'truncated' => candidates.size() >= MAX_ROWS ||
+      'truncated' => candidates.size() >= pageSize ||
       found.size() > rows.size(),
       'rows' => rows
     };
-  }
-
-  /**
-   * @description Returns the time of the last Started or Skipped fire log for
-   * each failed schedule. One aggregate query, only when a failed schedule
-   * exists.
-   * @param found The assessments.
-   * @return Last good fire time by schedule Id.
-   */
-  public static Map<Id, Datetime> lastGoodFireBySchedule(
-    List<Assessment> found
-  ) {
-    Set<Id> failedIds = new Set<Id>();
-    for (Assessment a : found) {
-      if (a.lastFireFailed) {
-        failedIds.add(a.schedule.Id);
-      }
-    }
-    Map<Id, Datetime> result = new Map<Id, Datetime>();
-    if (failedIds.isEmpty()) {
-      return result;
-    }
-    for (AggregateResult row : [
-      SELECT Schedule__c sid, MAX(CreatedDate) lastGood
-      FROM Workflow_Log__c
-      WHERE Schedule__c IN :failedIds AND Outcome__c IN :GOOD_OUTCOMES
-      WITH SYSTEM_MODE
-      GROUP BY Schedule__c
-    ]) {
-      result.put((Id) row.get('sid'), (Datetime) row.get('lastGood'));
-    }
-    return result;
   }
 }

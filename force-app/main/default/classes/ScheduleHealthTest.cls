@@ -472,6 +472,22 @@ private class ScheduleHealthTest {
   }
 
   @IsTest
+  static void pagesReachRowsAfterTheFirstPage() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insertMixedSchedules();
+      ScheduleHealth.pageSize = 1;
+      ScheduleHealthClock clock = new ScheduleHealthClock(
+        System.now().addMinutes(30),
+        GRACE,
+        null
+      );
+
+      Assert.areEqual(2, ScheduleHealth.findUnhealthyPages(clock, 5).size());
+      Assert.isTrue(ScheduleHealth.findUnhealthyPages(clock, 1).size() <= 1);
+    }
+  }
+
+  @IsTest
   static void summaryCountsEachProblem() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.watchdogDelayMinutes = GRACE;

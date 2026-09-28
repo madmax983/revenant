@@ -57,15 +57,20 @@ flowchart LR
    | ---------------- | --------------------------------------------------- | ---------------------- |
    | Overdue          | `ScheduleOverdue:<Id>:<Next_Fire_Window__c ms>`     | `Schedule Overdue`     |
    | Last fire failed | `ScheduleFailed:<Id>:<outcome>:<last good fire ms>` | `Schedule Fire Failed` |
-   - Last good fire = the newest `Started` or `Skipped` fire log of the
-     schedule. No log gives `0`.
+   - Last good fire = the newest `Started` or `Skipped` scheduled fire log
+     of the schedule (`ScheduleFire` or `ScheduleDedicatedFire`). A manual
+     **Run Now** does not end a failure streak. No log gives `0`.
    - A missed window keeps its key until the window fires. It sends one
      alert.
    - A failure streak keeps its key until a good fire. It sends one alert.
    - A new missed window, a good fire followed by a new failure, or a
      different failure outcome gives a new key.
-   - If no channel sends the alert, the alerter deletes the claim. The next
-     sweep tries again.
+   - If no channel sends the alert, the alerter deletes the claim and
+     upserts an attempt row (`Log_Type__c` = `ScheduleHealthAlertAttempt`,
+     key + `:attempt`). The next sweep tries again.
+   - Order for the cap: alerts never tried go first, then the oldest
+     attempt. Thus an alert whose channel fails cannot block the alerts
+     after it.
 
 4. **Dashboard.** System Doctor shows a **Schedule Health** panel. It shows
    the counts and one row for each unhealthy schedule (maximum 50). A row
@@ -92,14 +97,14 @@ flowchart LR
 
 - Heartbeat, all schedules healthy: 1 query. No DML.
 - When an unhealthy schedule with an alert config exists: 1 more query on
-  each sweep. A failed schedule adds 1 aggregate query.
+  each sweep. A failed schedule adds 1 aggregate query. When a candidate
+  page is full (200 rows), the alerter reads the next page, to a maximum of
+  5 pages (1,000 rows).
 - For each new problem: 1 claim insert, 1 email invocation for each
-  recipient list, 1 event publish, and 1 delete when no channel sends the
-  alert.
+  recipient list, 1 event publish, and 1 delete plus 1 attempt upsert when
+  no channel sends the alert.
 - The alerter keeps 10 DML statements and 10 queries free. It sends a
-  maximum of 10 alerts in each sweep. The next sweep sends the rest. The
-  start position in the list moves each minute, so an alert whose channel
-  fails cannot block the alerts after it.
+  maximum of 10 alerts in each sweep. The next sweep sends the rest.
 - Each event has its own publish result. A partial publish failure releases
   only the claims of the events that failed.
 - No new scheduled job, custom object or field.
@@ -117,7 +122,8 @@ flowchart LR
   shows "Dedicated (not armed)" for a dedicated schedule without a job.
 - When more than 50 schedules are due at the same time, some fire late.
   The alerter can report them as overdue.
-- The candidate query reads a maximum of 200 rows, oldest cursor first.
+- The alerter reads a maximum of 1,000 unhealthy candidates in each sweep.
+  System Doctor reads the first 200.
 - A fix saved in the UI does not clear `Last_Outcome__c`. The schedule
   shows "Last fire failed" until its next fire.
 - If cleanup deletes a claim row while the problem stays, the problem sends
