@@ -1,0 +1,77 @@
+/**
+ * @description Writes and reads `Error_Details__c` for an explicit failure:
+ * the reason, then `failureData` after a separator. With a payload codec, the
+ * failure data is a stored form (an envelope, or an offload marker for large
+ * data). The identity codec keeps the legacy plaintext value.
+ *
+ * With a codec, the reason cannot contain the separator. Then only the engine
+ * can write a stored form after the last separator, and {@link #resolve} does
+ * not decode ciphertext that was copied into error text.
+ */
+public inherited sharing class WorkflowFailureDetails {
+  private static final String SEPARATOR = '\nfailureData: ';
+  private static final String SAFE_REASON_SEPARATOR = '\n failureData: ';
+  private static final Integer ERROR_DETAILS_LIMIT = 131072;
+
+  /**
+   * @description Builds `Error_Details__c` for an explicit failure. With a
+   * codec, the failure data is encoded and offloaded when it is too large. If
+   * the value is still longer than the field, the reason is shortened. The
+   * failure data never changes. The identity codec keeps the legacy value.
+   * @param stepExec the failed step execution (owner and file title)
+   * @param reason the failure reason
+   * @param failureDataJson the author failure data, or null
+   * @return the Error_Details__c value
+   */
+  public static String build(
+    Workflow_Step_Execution__c stepExec,
+    String reason,
+    String failureDataJson
+  ) {
+    if (WorkflowPayloadCodecs.isIdentity()) {
+      return failureDataJson == null
+        ? reason
+        : reason + SEPARATOR + failureDataJson;
+    }
+    String safeReason = reason == null
+      ? null
+      : reason.replace(SEPARATOR, SAFE_REASON_SEPARATOR);
+    if (failureDataJson == null) {
+      return safeReason;
+    }
+    String stored = WorkflowPayloadOffload.savePayloadIfNeeded(
+      stepExec.Workflow_Instance__c,
+      WorkflowPayloadCodecs.encode(
+        failureDataJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
+      'Output_Failure_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
+    );
+    Integer room = ERROR_DETAILS_LIMIT - SEPARATOR.length() - stored.length();
+    return String.valueOf(safeReason).left(room) + SEPARATOR + stored;
+  }
+
+  /**
+   * @description Decodes the failure data that {@link #build} wrote. The value
+   * after the last separator is decoded only when it is a stored form. Other
+   * text does not change. With the identity codec, the value does not change.
+   * @param details the stored Error_Details__c value
+   * @return the value with plaintext failure data
+   */
+  public static String resolve(String details) {
+    Integer at = details == null ? -1 : details.lastIndexOf(SEPARATOR);
+    if (at < 0) {
+      return details;
+    }
+    String stored = details.substring(at + SEPARATOR.length());
+    Boolean storedForm =
+      WorkflowPayloadCodecs.isEncoded(stored) ||
+      stored.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX);
+    if (!storedForm || WorkflowPayloadCodecs.isIdentity()) {
+      return details;
+    }
+    return details.left(at) +
+      SEPARATOR +
+      WorkflowPayloadOffload.resolvePayload(stored);
+  }
+}

@@ -130,7 +130,7 @@ public inherited sharing class WorkflowSignalOrStartPrepare {
     Workflow_Signal__c sig = new Workflow_Signal__c(
       Workflow_Instance__c = instanceId,
       Signal_Name__c = req.signalName,
-      Payload__c = req.payload,
+      Payload__c = WorkflowSignalPayloads.encode(req.payload),
       Status__c = 'Received'
     );
 
@@ -160,6 +160,8 @@ public inherited sharing class WorkflowSignalOrStartPrepare {
     if (run.signalsToInsert.isEmpty()) {
       return;
     }
+    // Offload large encoded payloads in bulk, after in-batch dedup.
+    WorkflowSignalPayloads.offloadOversized(run.signalsToInsert);
     // Insert signals using allOrNone=false so concurrent duplicates are swallowed as no-ops,
     // but genuine errors are rolled back and thrown.
     Database.SaveResult[] srs = Database.insert(
@@ -169,16 +171,19 @@ public inherited sharing class WorkflowSignalOrStartPrepare {
     );
 
     String genuineError = null;
+    List<Workflow_Signal__c> duplicates = new List<Workflow_Signal__c>();
     for (Integer i = 0; i < srs.size(); i++) {
       Database.SaveResult sr = srs[i];
       if (sr.isSuccess()) {
         run.instancesWithFreshSignal.add(run.signalsInstIds[i]);
-      } else if (
-        !WorkflowStartService.isDuplicateSaveError(sr) && genuineError == null
-      ) {
+      } else if (WorkflowStartService.isDuplicateSaveError(sr)) {
+        duplicates.add(run.signalsToInsert[i]);
+      } else if (genuineError == null) {
         genuineError = sr.getErrors()[0].getMessage();
       }
     }
+    // A duplicate made no signal, so its offload file is not needed.
+    WorkflowSignalPayloads.discardOffloads(duplicates);
 
     if (genuineError != null) {
       Database.rollback(run.sp);

@@ -190,7 +190,10 @@ public inherited sharing class WorkflowFailureService {
     };
     nextStepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      JSON.serialize(errorCaptures),
+      WorkflowPayloadCodecs.encode(
+        JSON.serialize(errorCaptures),
+        CodecContext.PayloadKind.STEP_STATE
+      ),
       'Captures_' + errorStepName.replaceAll('[^a-zA-Z0-9]', '_')
     );
     Database.insert(nextStepExec, true, AccessLevel.SYSTEM_MODE);

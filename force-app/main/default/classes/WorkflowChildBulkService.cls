@@ -92,7 +92,10 @@ public inherited sharing class WorkflowChildBulkService {
       StepResult.ChildRequest req = plan.requests[i];
       inst.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         inst.Id,
-        req.inputJson,
+        WorkflowPayloadCodecs.encode(
+          req.inputJson,
+          CodecContext.PayloadKind.WORKFLOW_INPUT
+        ),
         'Input_Child_' + inst.Id
       );
       instancesToUpdate.add(inst);

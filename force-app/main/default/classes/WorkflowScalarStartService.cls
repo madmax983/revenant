@@ -198,9 +198,12 @@ public inherited sharing class WorkflowScalarStartService {
 
     instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      (req.inputJson != null)
-        ? req.inputJson
-        : ((input != null) ? JSON.serialize(input) : null),
+      WorkflowPayloadCodecs.encode(
+        (req.inputJson != null)
+          ? req.inputJson
+          : ((input != null) ? JSON.serialize(input) : null),
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      ),
       'Input_' + instance.Id
     );
 

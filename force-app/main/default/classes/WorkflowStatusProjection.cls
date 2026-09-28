@@ -120,15 +120,16 @@ public inherited sharing class WorkflowStatusProjection {
     return null;
   }
 
-  // Rehydrates a single output string using the pre-fetched resolved map.
+  // Rehydrates a single output string using the pre-fetched resolved map, then
+  // decodes it with the payload codec.
   private static String rehydrateFromMap(
     String textValue,
     Map<Id, String> resolvedOutputByDocId
   ) {
     Id docId = getOffloadDocId(textValue);
     if (docId != null && resolvedOutputByDocId.containsKey(docId)) {
-      return resolvedOutputByDocId.get(docId);
+      return WorkflowPayloadCodecs.decode(resolvedOutputByDocId.get(docId));
     }
-    return textValue;
+    return WorkflowPayloadCodecs.decode(textValue);
   }
 }

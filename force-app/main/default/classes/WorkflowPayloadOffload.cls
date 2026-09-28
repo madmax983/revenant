@@ -8,6 +8,9 @@
  * keys through {@link WorkflowPayloadOffload#validateCorrelationKey}. Extracted
  * from `WorkflowEngine`; all SOQL and DML execute in system mode so offload and
  * rehydration proceed regardless of the invoking user's object permissions.
+ * It is also the codec seam. Resolve methods decode through
+ * {@link WorkflowPayloadCodecs}. Callers encode author data before they call
+ * `savePayloadIfNeeded`, so the offload check uses the encoded length.
  */
 public inherited sharing class WorkflowPayloadOffload {
   /**
@@ -60,11 +63,13 @@ public inherited sharing class WorkflowPayloadOffload {
    * @description Resolves a possibly-offloaded payload string: when the value is a
    * `{"$attachmentId":...}` marker it fetches and returns the linked
    * ContentVersion body, otherwise the value is returned unchanged. Falls back to
-   * the raw value if the offloaded document cannot be read.
+   * the raw value if the offloaded document cannot be read. Then it decodes the
+   * value with {@link WorkflowPayloadCodecs#decode}.
    * @param textValue the raw (possibly marker) payload string
-   * @return the resolved payload text, or the original value when not offloaded
+   * @return the resolved and decoded payload text
    */
   public static String resolvePayload(String textValue) {
+    String resolved = textValue;
     if (
       String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
     ) {
@@ -80,13 +85,43 @@ public inherited sharing class WorkflowPayloadOffload {
           WITH SYSTEM_MODE
         ];
         if (!cvs.isEmpty()) {
-          return cvs[0].VersionData.toString();
+          resolved = cvs[0].VersionData.toString();
         }
       } catch (Exception ignored) {
         // Offload resolution is best-effort; fall back to the raw stored value.
       }
     }
-    return textValue;
+    // Decode outside the try: a codec failure must not fall back to ciphertext.
+    return WorkflowPayloadCodecs.decode(resolved);
+  }
+
+  /**
+   * @description Resolves a value only to read engine control markers (child,
+   * approval and timeout waits). The engine never encodes these markers. An
+   * encoded value is author data, so this returns null and does not decode it.
+   * Operator views use this, so they never decode author payloads.
+   * @param textValue the raw stored value
+   * @return the resolved control payload, or null for an encoded value
+   */
+  public static String resolveControlPayload(String textValue) {
+    return resolveControlPayloads(new List<String>{ textValue })[0];
+  }
+
+  /**
+   * @description Bulk variant of {@link #resolveControlPayload}. It uses one
+   * ContentVersion query. It never calls the codec, so a value that cannot be
+   * decoded does not stop the batch.
+   * @param rawValues the raw stored values
+   * @return the control payloads (null for encoded values), index-aligned
+   */
+  public static List<String> resolveControlPayloads(List<String> rawValues) {
+    List<String> out = resolveStoredForms(rawValues);
+    for (Integer i = 0; i < out.size(); i++) {
+      if (WorkflowPayloadCodecs.isEncoded(out[i])) {
+        out[i] = null;
+      }
+    }
+    return out;
   }
 
   /**
@@ -96,12 +131,23 @@ public inherited sharing class WorkflowPayloadOffload {
    * signals with large offloaded outputs) would otherwise issue a ContentVersion
    * query per offloaded payload and hit the SOQL-query governor limit after
    * ~100-200 rows, defeating the accessor's design of loading thousands in one
-   * call. Inline (non-marker) payloads and unresolved markers pass through
-   * unchanged, index for index with the input.
+   * call. Inline values and unresolved markers are not rehydrated. The method
+   * decodes each value with {@link WorkflowPayloadCodecs#decode}. The output is
+   * index-aligned with the input.
    * @param rawValues the raw (possibly marker) payload strings to resolve
    * @return the resolved payloads, index-aligned with rawValues
    */
   public static List<String> resolvePayloads(List<String> rawValues) {
+    List<String> out = resolveStoredForms(rawValues);
+    for (Integer i = 0; i < out.size(); i++) {
+      out[i] = WorkflowPayloadCodecs.decode(out[i]);
+    }
+    return out;
+  }
+
+  // Replaces each offload marker with its file text in one query. It does not
+  // decode. Values stay index-aligned with the input.
+  private static List<String> resolveStoredForms(List<String> rawValues) {
     Map<Integer, Id> markerDocByIndex = new Map<Integer, Id>();
     Set<Id> docIds = collectOffloadMarkers(rawValues, markerDocByIndex);
     Map<Id, String> resolvedByDoc = queryResolvedDocs(docIds);
@@ -172,12 +218,14 @@ public inherited sharing class WorkflowPayloadOffload {
   }
 
   /**
-   * @description Offloads an oversized payload to a ContentVersion so it fits
-   * within field limits: when the text exceeds the inline threshold it is stored
-   * as a file and a `{"$attachmentId":...}` marker is returned; otherwise the
-   * value is returned unchanged for inline storage.
+   * @description Offloads an oversized stored value to a ContentVersion so it
+   * fits within field limits: when the text exceeds the inline threshold it is
+   * stored as a file and a `{"$attachmentId":...}` marker is returned; otherwise
+   * the value is returned unchanged for inline storage. It does not encode. For
+   * author data, pass `WorkflowPayloadCodecs.encode(text, kind)`: the offload
+   * test then uses the encoded length, and the file holds ciphertext.
    * @param instanceId Id of the owning instance (links the stored document)
-   * @param textValue the payload text to store
+   * @param textValue the stored text to offload
    * @param title title/filename for the offloaded ContentVersion
    * @return an offload marker string when stored as a file, else the original text
    */

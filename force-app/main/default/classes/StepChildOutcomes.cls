@@ -68,6 +68,8 @@ public inherited sharing class StepChildOutcomes {
   // helper needs a long parameter list.
   private class ChildResolution {
     List<String> rawPayloads = new List<String>();
+    List<Id> signalIds = new List<Id>();
+    List<String> childKeys = new List<String>();
     List<Integer> targetKeyIndex = new List<Integer>();
     List<String> targetType = new List<String>(); // 'completed' or 'failedOutput'
     // Pre-deserialized maps for failed signals so we don't deserialize twice.
@@ -75,10 +77,18 @@ public inherited sharing class StepChildOutcomes {
     Map<Integer, String> resolvedCompleted = new Map<Integer, String>();
     Map<Integer, String> resolvedFailedOutput = new Map<Integer, String>();
 
-    void addRawPayload(String payload, Integer keyIndex, String type) {
+    // The signal name gives the child key and the payload type.
+    void addRawPayload(
+      String payload,
+      StepContext.Signal sig,
+      Integer keyIndex
+    ) {
+      Boolean completed = sig.name.startsWith('ChildCompleted:');
       this.rawPayloads.add(payload);
+      this.signalIds.add(sig.signalId);
+      this.childKeys.add(sig.name.substringAfter(':'));
       this.targetKeyIndex.add(keyIndex);
-      this.targetType.add(type);
+      this.targetType.add(completed ? 'completed' : 'failedOutput');
     }
   }
 
@@ -109,7 +119,7 @@ public inherited sharing class StepChildOutcomes {
 
     if (completedSig.isPresent()) {
       if (String.isNotBlank(completedSig.payload)) {
-        res.addRawPayload(completedSig.payload, i, 'completed');
+        res.addRawPayload(completedSig.payload, completedSig, i);
       }
     } else if (failedSig.isPresent() && String.isNotBlank(failedSig.payload)) {
       collectFailedPayload(i, failedSig, res);
@@ -135,7 +145,7 @@ public inherited sharing class StepChildOutcomes {
       res.failedDataMap.put(i, data);
       Object outputObj = data.get('output');
       if (outputObj instanceof String) {
-        res.addRawPayload((String) outputObj, i, 'failedOutput');
+        res.addRawPayload((String) outputObj, failedSig, i);
       }
     } catch (Exception ignored) {
       // Deserialization failure will be handled during outcome construction
@@ -144,7 +154,8 @@ public inherited sharing class StepChildOutcomes {
 
   /**
    * @description Bulk-resolves the collected child payloads and indexes them by
-   * key index and type.
+   * key index and type. An encoded payload is decoded only when it is the
+   * verified child's own output (see WorkflowChildPayloadProvenance).
    * @param res The shared resolution accumulator to populate.
    */
   private void resolveChildPayloads(ChildResolution res) {
@@ -152,8 +163,18 @@ public inherited sharing class StepChildOutcomes {
       return;
     }
     List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-      res.rawPayloads
+      WorkflowChildPayloadProvenance.trustedOnly(
+        res.rawPayloads,
+        res.signalIds,
+        res.childKeys
+      )
     );
+    for (Integer j = 0; j < resolvedPayloads.size(); j++) {
+      // An untrusted stored form stays as the text that was sent.
+      if (resolvedPayloads[j] == null) {
+        resolvedPayloads[j] = res.rawPayloads[j];
+      }
+    }
     for (Integer j = 0; j < resolvedPayloads.size(); j++) {
       Integer keyIdx = res.targetKeyIndex[j];
       String type = res.targetType[j];

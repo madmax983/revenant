@@ -92,7 +92,10 @@ public inherited sharing class WorkflowApprovalCommandService {
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 50
     ]) {
-      String resolved = WorkflowPayloadOffload.resolvePayload(se.Output__c);
+      // Approval gates are plaintext control markers. Author state is not decoded.
+      String resolved = WorkflowPayloadOffload.resolveControlPayload(
+        se.Output__c
+      );
       if (
         String.isBlank(resolved) || !resolved.contains('waitingForApproval')
       ) {

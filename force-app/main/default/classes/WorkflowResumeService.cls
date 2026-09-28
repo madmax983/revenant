@@ -42,7 +42,10 @@ public inherited sharing class WorkflowResumeService {
     stepExec.Status__c = 'Running';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      payload,
+      WorkflowPayloadCodecs.encode(
+        payload,
+        CodecContext.PayloadKind.SIGNAL_PAYLOAD
+      ),
       'Resume_' + stepExec.Id
     );
     Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(

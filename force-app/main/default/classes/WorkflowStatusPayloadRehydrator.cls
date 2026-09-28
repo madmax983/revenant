@@ -47,10 +47,11 @@ public inherited sharing class WorkflowStatusPayloadRehydrator {
   /**
    * @description Returns the full payload for a stored text value: the rehydrated
    * attachment contents when the value is an offload marker whose attachment was
-   * loaded, otherwise the original text value unchanged.
+   * loaded, otherwise the original text value. Then it decodes the value with
+   * {@link WorkflowPayloadCodecs#decode}.
    * @param textValue The stored field value (an offload marker or an inline payload).
    * @param dataByAttachment The map of offload attachment Ids to rehydrated payload text.
-   * @return The rehydrated payload text, or the original text value when not offloaded.
+   * @return The rehydrated and decoded payload text.
    */
   public static String rehydrate(
     String textValue,
@@ -58,9 +59,9 @@ public inherited sharing class WorkflowStatusPayloadRehydrator {
   ) {
     Id attachmentId = getAttachmentId(textValue);
     if (attachmentId != null && dataByAttachment.containsKey(attachmentId)) {
-      return dataByAttachment.get(attachmentId);
+      return WorkflowPayloadCodecs.decode(dataByAttachment.get(attachmentId));
     }
-    return textValue;
+    return WorkflowPayloadCodecs.decode(textValue);
   }
 
   /**

@@ -115,7 +115,10 @@ public inherited sharing class WorkflowCompensationOutcome {
       String progJson = context.progress().getProgressJson();
       instance.Progress__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
-        progJson,
+        WorkflowPayloadCodecs.encode(
+          progJson,
+          CodecContext.PayloadKind.STEP_STATE
+        ),
         'Progress_' +
         (stepExec != null && String.isNotBlank(stepExec.Step_Name__c)
           ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -128,7 +131,10 @@ public inherited sharing class WorkflowCompensationOutcome {
       String capturedJson = context.captures().getCapturedValuesJson();
       stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
-        capturedJson,
+        WorkflowPayloadCodecs.encode(
+          capturedJson,
+          CodecContext.PayloadKind.STEP_STATE
+        ),
         'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
       );
     }
@@ -170,7 +176,10 @@ public inherited sharing class WorkflowCompensationOutcome {
     stepExec.Status__c = 'Compensated';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().outputJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().outputJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -222,7 +231,10 @@ public inherited sharing class WorkflowCompensationOutcome {
     stepExec.Status__c = 'Running';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().stepStateJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().stepStateJson,
+        CodecContext.PayloadKind.STEP_STATE
+      ),
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -244,7 +256,10 @@ public inherited sharing class WorkflowCompensationOutcome {
     stepExec.Output__c = String.isNotBlank(result.directive().stepStateJson)
       ? WorkflowPayloadOffload.savePayloadIfNeeded(
           instance.Id,
-          result.directive().stepStateJson,
+          WorkflowPayloadCodecs.encode(
+            result.directive().stepStateJson,
+            CodecContext.PayloadKind.STEP_STATE
+          ),
           'State_Suspend_' +
           stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
         )
@@ -263,7 +278,10 @@ public inherited sharing class WorkflowCompensationOutcome {
     stepExec.Status__c = 'Pending';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().stepStateJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().stepStateJson,
+        CodecContext.PayloadKind.STEP_STATE
+      ),
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -354,11 +372,12 @@ public inherited sharing class WorkflowCompensationOutcome {
     // with the author's reason, preserving the remaining LIFO stack for operator
     // resume. Same format as the RETRY-exhausted and thrown-exception paths.
     stepExec.Status__c = 'Failed';
-    stepExec.Error_Details__c = (result.directive().failureDataJson != null)
-      ? result.directive().failureReason +
-        '\nfailureData: ' +
-        result.directive().failureDataJson
-      : result.directive().failureReason;
+    // failureData is author data, so the payload codec encodes it.
+    stepExec.Error_Details__c = WorkflowFailureDetails.build(
+      stepExec,
+      result.directive().failureReason,
+      result.directive().failureDataJson
+    );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
     failCompensationRecoverable(

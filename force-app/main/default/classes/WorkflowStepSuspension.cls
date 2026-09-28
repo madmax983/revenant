@@ -28,7 +28,10 @@ public inherited sharing class WorkflowStepSuspension {
     stepExec.Status__c = 'Running';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().stepStateJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().stepStateJson,
+        CodecContext.PayloadKind.STEP_STATE
+      ),
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -74,7 +77,12 @@ public inherited sharing class WorkflowStepSuspension {
       // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
       // stale yield checkpoints from a prior YIELD in the same execution don't
       // survive into a retry and cause duplicate-spawn collisions.
-      suspendStateJson = result.directive().stepStateJson;
+      // Encode author state here. The timed-suspend marker above is control
+      // data and stays plaintext for the watchdog.
+      suspendStateJson = WorkflowPayloadCodecs.encode(
+        result.directive().stepStateJson,
+        CodecContext.PayloadKind.STEP_STATE
+      );
       // A plain (deadline-less) suspend must not inherit a stale timer left by
       // an earlier timed wait or a manual resume, or the watchdog would wake it
       // early. Reset the deadline defensively (issue #35).
@@ -119,7 +127,10 @@ public inherited sharing class WorkflowStepSuspension {
     stepExec.Status__c = 'Pending';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().stepStateJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().stepStateJson,
+        CodecContext.PayloadKind.STEP_STATE
+      ),
       'State_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -310,9 +321,12 @@ public inherited sharing class WorkflowStepSuspension {
     stepExec.Status__c = 'Completed';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().parallelInputJson != null
-        ? result.directive().parallelInputJson
-        : result.directive().outputJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().parallelInputJson != null
+          ? result.directive().parallelInputJson
+          : result.directive().outputJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
       'Output_Split_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -340,8 +354,12 @@ public inherited sharing class WorkflowStepSuspension {
       pe.Status__c = 'Pending';
       pe.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
+        // The fallback is the stored form saved above, so it is not encoded again.
         result.directive().parallelInputJson != null
-          ? result.directive().parallelInputJson
+          ? WorkflowPayloadCodecs.encode(
+              result.directive().parallelInputJson,
+              CodecContext.PayloadKind.STEP_OUTPUT
+            )
           : stepExec.Output__c,
         'Input_Parallel_' + ps.replaceAll('[^a-zA-Z0-9]', '_')
       );

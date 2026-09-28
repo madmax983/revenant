@@ -49,7 +49,10 @@ public inherited sharing class WorkflowChildService {
 
     instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      inputJson,
+      WorkflowPayloadCodecs.encode(
+        inputJson,
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      ),
       'Input_Child_' + instance.Id
     );
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);

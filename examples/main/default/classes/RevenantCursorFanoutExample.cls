@@ -287,10 +287,16 @@ public inherited sharing class RevenantCursorFanoutExample {
       // Aggregate outputs
       List<Object> aggregatedOutputs = new List<Object>();
       Integer totalProcessed = 0;
+      // Resolve stored outputs in bulk. The engine can offload them. A payload
+      // codec can encode them.
+      List<String> rawOutputs = new List<String>();
       for (Workflow_Instance__c child : childInstances) {
-        if (child.Output__c != null) {
+        rawOutputs.add(child.Output__c);
+      }
+      for (String output : WorkflowPayloadOffload.resolvePayloads(rawOutputs)) {
+        if (output != null) {
           Map<String, Object> childOut = (Map<String, Object>) JSON.deserializeUntyped(
-            child.Output__c
+            output
           );
           aggregatedOutputs.add(childOut);
           Integer processedCount = (Integer) childOut.get('count');

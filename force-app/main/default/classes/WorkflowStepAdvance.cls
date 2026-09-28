@@ -28,7 +28,10 @@ public inherited sharing class WorkflowStepAdvance {
     stepExec.Status__c = 'Completed';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().outputJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().outputJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
       'Output_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -213,7 +216,10 @@ public inherited sharing class WorkflowStepAdvance {
     instance.Status__c = 'Completed';
     instance.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      outputJson,
+      WorkflowPayloadCodecs.encode(
+        outputJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
       payloadLabel
     );
     instance.Current_Step__c = null;

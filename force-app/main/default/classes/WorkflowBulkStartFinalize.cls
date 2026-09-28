@@ -96,7 +96,10 @@ public inherited sharing class WorkflowBulkStartFinalize {
         : ((req.input != null) ? JSON.serialize(req.input) : null);
       instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
-        inputJson,
+        WorkflowPayloadCodecs.encode(
+          inputJson,
+          CodecContext.PayloadKind.WORKFLOW_INPUT
+        ),
         'Input_' + instance.Id
       );
     }

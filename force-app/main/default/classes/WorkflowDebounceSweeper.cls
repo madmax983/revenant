@@ -49,9 +49,8 @@ public inherited sharing class WorkflowDebounceSweeper {
     }
 
     SweepContext ctx = new SweepContext();
-    ctx.dueStates = dueStates;
-    ctx.startRequests = buildStartRequests(dueStates);
     ctx.now = now;
+    buildStartRequests(dueStates, ctx);
 
     fireDueStates(ctx);
   }
@@ -84,15 +83,28 @@ public inherited sharing class WorkflowDebounceSweeper {
 
   /**
    * @description Builds the engine start requests for the due states, preserving
-   * the stored JSON payloads verbatim to avoid re-serialization.
+   * the stored JSON payloads verbatim to avoid re-serialization. A state whose
+   * input cannot be decoded gets retry bookkeeping and no start request, so it
+   * cannot block the other states.
    * @param dueStates The due debounce states to convert.
-   * @return The start requests, index-aligned with dueStates.
+   * @param ctx The sweep working set. It gets the index-aligned due states and
+   *        start requests, and the failed states to update.
    */
-  private static List<WorkflowEngine.StartRequest> buildStartRequests(
-    List<Debounce_State__c> dueStates
+  private static void buildStartRequests(
+    List<Debounce_State__c> dueStates,
+    SweepContext ctx
   ) {
-    List<WorkflowEngine.StartRequest> startRequests = new List<WorkflowEngine.StartRequest>();
+    ctx.dueStates = new List<Debounce_State__c>();
+    ctx.startRequests = new List<WorkflowEngine.StartRequest>();
     for (Debounce_State__c state : dueStates) {
+      String inputJson;
+      try {
+        inputJson = WorkflowPayloadCodecs.decode(state.Input_Json__c);
+      } catch (WorkflowPayloadCodecs.PayloadCodecException ex) {
+        recordRetry(state, ex, ctx.now);
+        ctx.toUpdate.add(state);
+        continue;
+      }
       Map<String, String> attributes = WorkflowInvocableInputParser.parseAttributesJsonLenient(
         state.Attributes_Json__c
       );
@@ -104,11 +116,11 @@ public inherited sharing class WorkflowDebounceSweeper {
           null
         )
         .withAttributes(attributes);
-      req.inputJson = state.Input_Json__c;
+      req.inputJson = inputJson;
       req.causationId = state.Causation_Id__c;
-      startRequests.add(req);
+      ctx.dueStates.add(state);
+      ctx.startRequests.add(req);
     }
-    return startRequests;
   }
 
   /**
@@ -120,7 +132,9 @@ public inherited sharing class WorkflowDebounceSweeper {
   private static void fireDueStates(SweepContext ctx) {
     Savepoint sp = Database.setSavepoint();
     try {
-      WorkflowEngine.startOrGet(ctx.startRequests);
+      if (!ctx.startRequests.isEmpty()) {
+        WorkflowEngine.startOrGet(ctx.startRequests);
+      }
       ctx.toDelete.addAll(ctx.dueStates);
     } catch (Exception ex) {
       Database.rollback(sp);

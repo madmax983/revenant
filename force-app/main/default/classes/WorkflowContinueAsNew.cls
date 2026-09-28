@@ -95,7 +95,10 @@ public inherited sharing class WorkflowContinueAsNew {
     stepExec.Status__c = 'ContinuedAsNew';
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
-      result.directive().continuation.nextInputJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().continuation.nextInputJson,
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      ),
       'ContinueInput_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
@@ -241,7 +244,10 @@ public inherited sharing class WorkflowContinueAsNew {
     // Set input and save payload
     nextInstance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       nextInstance.Id,
-      result.directive().continuation.nextInputJson,
+      WorkflowPayloadCodecs.encode(
+        result.directive().continuation.nextInputJson,
+        CodecContext.PayloadKind.WORKFLOW_INPUT
+      ),
       'Input_' + nextInstance.Id
     );
 
@@ -323,11 +329,12 @@ public inherited sharing class WorkflowContinueAsNew {
     // Plain-text schema matches RETRY/crash paths. When failureData is present
     // the raw JSON is appended on a second line for downstream inspection without
     // needing to detect a JSON envelope.
-    stepExec.Error_Details__c = (result.directive().failureDataJson != null)
-      ? result.directive().failureReason +
-        '\nfailureData: ' +
-        result.directive().failureDataJson
-      : result.directive().failureReason;
+    // failureData is author data, so the payload codec encodes it.
+    stepExec.Error_Details__c = WorkflowFailureDetails.build(
+      stepExec,
+      result.directive().failureReason,
+      result.directive().failureDataJson
+    );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
     // Circuit-breaker failure sink (issue #128): a deliberate terminal failure of a

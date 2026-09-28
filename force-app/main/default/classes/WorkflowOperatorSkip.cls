@@ -253,9 +253,14 @@ public inherited sharing class WorkflowOperatorSkip {
         'Supplied output size exceeds maximum allowed limit of 250KB.'
       );
     }
-    if (suppliedOutputJson.contains('"$attachmentId"')) {
+    String reserved = WorkflowPayloadCodecs.findReservedMarker(
+      suppliedOutputJson
+    );
+    if (reserved != null) {
       throw new WorkflowEngine.WorkflowException(
-        'Operator-supplied payload cannot contain reserved "$attachmentId" markers.'
+        'Operator-supplied payload cannot contain reserved "' +
+          reserved +
+          '" markers.'
       );
     }
     try {
@@ -282,7 +287,10 @@ public inherited sharing class WorkflowOperatorSkip {
     skipExec.Input__c = run.latestExec.Input__c;
     skipExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       run.instanceId,
-      run.suppliedOutputJson,
+      WorkflowPayloadCodecs.encode(
+        run.suppliedOutputJson,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      ),
       'Output_' + run.stepName.replaceAll('[^a-zA-Z0-9]', '_')
     );
     Database.insert(skipExec, true, AccessLevel.SYSTEM_MODE);
@@ -295,7 +303,10 @@ public inherited sharing class WorkflowOperatorSkip {
    */
   private static void logOperatorSkipIntervention(ResumeSkipRun run) {
     Workflow_Instance__c instance = run.instance;
-    String suppliedOutputJson = run.suppliedOutputJson;
+    // With a payload codec active, the log gets a redaction note.
+    String suppliedOutputJson = WorkflowPayloadCodecs.redactForLog(
+      run.suppliedOutputJson
+    );
     String msg =
       'User ' +
       UserInfo.getUserName() +

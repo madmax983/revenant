@@ -79,7 +79,10 @@ public inherited sharing class WorkflowOutcomePrepare {
       String progJson = context.progress().getProgressJson();
       freshInstance.Progress__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         freshInstance.Id,
-        progJson,
+        WorkflowPayloadCodecs.encode(
+          progJson,
+          CodecContext.PayloadKind.STEP_STATE
+        ),
         'Progress_' +
         (stepExec != null && String.isNotBlank(stepExec.Step_Name__c)
           ? stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
@@ -168,7 +171,10 @@ public inherited sharing class WorkflowOutcomePrepare {
       String capturedJson = context.captures().getCapturedValuesJson();
       stepExec.Captured_Values__c = WorkflowPayloadOffload.savePayloadIfNeeded(
         instance.Id,
-        capturedJson,
+        WorkflowPayloadCodecs.encode(
+          capturedJson,
+          CodecContext.PayloadKind.STEP_STATE
+        ),
         'Captures_' + stepExec.Step_Name__c.replaceAll('[^a-zA-Z0-9]', '_')
       );
     }

@@ -11,6 +11,9 @@ public inherited sharing class WorkflowPayloadService {
   @TestVisible
   private static final Integer PAYLOAD_DISPLAY_LIMIT = 50000;
 
+  /** @description Display text for an encoded payload. */
+  public static final String REDACTED_PAYLOAD = WorkflowPayloadCodecs.REDACTED_PAYLOAD;
+
   private static Id getAttachmentId(String textValue) {
     if (
       String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
@@ -51,7 +54,7 @@ public inherited sharing class WorkflowPayloadService {
   // Resolves a payload field for display: returns the (possibly truncated) text and, when
   // the value is attachment-backed and was truncated, records a download descriptor for
   // the full ContentDocument under fieldKey in res.payloadFiles so the UI can offer the
-  // file.
+  // file. An encoded payload shows REDACTED_PAYLOAD and gets no download link.
   private static String resolveAndRecordPayload(
     String textValue,
     String fieldKey,
@@ -65,6 +68,9 @@ public inherited sharing class WorkflowPayloadService {
       attachmentId != null && res.attachmentIdToData.containsKey(attachmentId)
     ) {
       String full = res.attachmentIdToData.get(attachmentId);
+      if (WorkflowPayloadCodecs.isEncoded(full)) {
+        return REDACTED_PAYLOAD;
+      }
       if (full != null && full.length() > PAYLOAD_DISPLAY_LIMIT) {
         res.payloadFiles.put(
           fieldKey,
@@ -77,6 +83,9 @@ public inherited sharing class WorkflowPayloadService {
         );
       }
       return truncatePayload(full);
+    }
+    if (WorkflowPayloadCodecs.isEncoded(textValue)) {
+      return REDACTED_PAYLOAD;
     }
     return truncatePayload(textValue);
   }

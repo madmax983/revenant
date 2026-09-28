@@ -35,6 +35,12 @@ public inherited sharing class WorkflowSignalBatchWake {
       return null;
     }
     System.Savepoint sp = Database.setSavepoint();
+    // Offload large encoded payloads in bulk, after in-batch dedup.
+    List<Workflow_Signal__c> allRows = new List<Workflow_Signal__c>(
+      part.unkeyedSignals
+    );
+    allRows.addAll(part.keyedSignals);
+    WorkflowSignalPayloads.offloadOversized(allRows);
 
     // Insert unkeyed signals (plain insert, unchanged at-least-once behavior).
     if (!part.unkeyedSignals.isEmpty()) {
@@ -65,6 +71,7 @@ public inherited sharing class WorkflowSignalBatchWake {
       AccessLevel.SYSTEM_MODE
     );
     String genuineError = null;
+    List<Workflow_Signal__c> duplicates = new List<Workflow_Signal__c>();
     for (Integer i = 0; i < srs.size(); i++) {
       Database.SaveResult sr = srs[i];
       if (sr.isSuccess()) {
@@ -72,12 +79,15 @@ public inherited sharing class WorkflowSignalBatchWake {
         continue;
       }
       if (WorkflowStartService.isDuplicateSaveError(sr)) {
+        duplicates.add(part.keyedSignals[i]);
         continue;
       }
       if (genuineError == null) {
         genuineError = sr.getErrors()[0].getMessage();
       }
     }
+    // A duplicate made no signal, so its offload file is not needed.
+    WorkflowSignalPayloads.discardOffloads(duplicates);
     if (genuineError != null) {
       Database.rollback(sp);
       throw new WorkflowEngine.WorkflowException(
