@@ -44,38 +44,20 @@ public inherited sharing class WorkflowArchiveSnapshot {
   }
 
   /**
-   * @description Returns the leading candidates whose step rows fit the
-   * budget. The first candidate always fits, so the sweep moves forward.
-   * @param candidates the candidates, in sweep order
-   * @param maxStepRows the step row budget
-   * @return the leading candidates that fit
+   * @description Counts the step rows of one instance, up to a cap. The cap
+   * bounds the query rows.
+   * @param instanceId the instance
+   * @param cap the maximum count
+   * @return the step row count, at most `cap`
    */
-  public static List<Workflow_Instance__c> fitToStepBudget(
-    List<Workflow_Instance__c> candidates,
-    Integer maxStepRows
-  ) {
-    Set<Id> ids = new Map<Id, Workflow_Instance__c>(candidates).keySet();
-    Map<Id, Integer> counts = new Map<Id, Integer>();
-    for (AggregateResult ar : [
-      SELECT Workflow_Instance__c instId, COUNT(Id) total
+  public static Integer countSteps(Id instanceId, Integer cap) {
+    return [
+      SELECT COUNT()
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :ids
+      WHERE Workflow_Instance__c = :instanceId
       WITH SYSTEM_MODE
-      GROUP BY Workflow_Instance__c
-    ]) {
-      counts.put((Id) ar.get('instId'), (Integer) ar.get('total'));
-    }
-    List<Workflow_Instance__c> fitted = new List<Workflow_Instance__c>();
-    Integer used = 0;
-    for (Workflow_Instance__c inst : candidates) {
-      Integer rows = counts.containsKey(inst.Id) ? counts.get(inst.Id) : 0;
-      if (!fitted.isEmpty() && used + rows > maxStepRows) {
-        break;
-      }
-      fitted.add(inst);
-      used += rows;
-    }
-    return fitted;
+      LIMIT :cap
+    ];
   }
 
   private static WorkflowArchiveRecord toRecord(Workflow_Instance__c inst) {

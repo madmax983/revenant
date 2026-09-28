@@ -1,10 +1,11 @@
 /**
- * @description System workflow that archives old terminal instances to the
- * configured {@link WorkflowArchiveSink}, then purges them. Offline sweep in
+ * @description System workflow that archives terminal instances to the
+ * configured {@link WorkflowArchiveSink}, then purges them. It selects
+ * instances that were created more than `archiveAfterDays` days ago. Offline sweep in
  * bounded, resumable batches. See {@link WorkflowArchiveSweep}.
  *
  * Input (all optional):
- * - `archiveAfterDays`: minimum age in days. Default:
+ * - `archiveAfterDays`: minimum age in days (from `CreatedDate`). Default:
  *   `Revenant_Config__mdt.Archive_After_Days__c`, else 30.
  * - `batchSize`: instances in one batch. Default and maximum 20.
  *
@@ -47,6 +48,11 @@ public inherited sharing class ArchiveWorkflow implements WorkflowDefinition {
     public Integer archivedCount = 0;
     /** @description True when archival was off, so nothing ran. */
     public Boolean archivalDisabled = false;
+    /**
+     * @description Instances with too many step rows to archive. They stay in
+     * primary storage. See {@link WorkflowArchiveSweep}.
+     */
+    public List<Id> skippedInstanceIds = new List<Id>();
   }
 
   /**
@@ -76,12 +82,18 @@ public inherited sharing class ArchiveWorkflow implements WorkflowDefinition {
         WorkflowArchive.archiveAfterDays(),
         WorkflowArchiveSweep.MAX_ARCHIVE_BATCH_SIZE
       );
+      params.excludeIds.addAll(state.skippedInstanceIds);
       WorkflowArchiveSweep.BatchResult batch = WorkflowArchiveSweep.runBatch(
         params,
         WorkflowArchive.sink()
       );
       state.archivedCount += batch.purgedCount;
-      if (batch.hasMore) {
+      Boolean hasMore = WorkflowArchiveSweep.recordSkips(
+        params,
+        batch,
+        state.skippedInstanceIds
+      );
+      if (hasMore) {
         return StepResult.yield(JSON.serialize(state));
       }
       return StepResult.complete(null, state);

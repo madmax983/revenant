@@ -566,7 +566,7 @@
         <readable>true</readable>
     </fieldPermissions>
 
-    <!-- Archive Big Objects (issue #105). Index fields are required, so they have no field permission. -->
+    <!-- Archive Big Objects (issue #105). Read only: only the sweep writes, in system mode. Index fields are required, so they have no field permission. -->
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Archive__b.Archived_At__c</field>

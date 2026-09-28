@@ -106,6 +106,19 @@ public inherited sharing class WorkflowArchiveCsv {
     ) {
       throw new WorkflowArchive.ArchiveException('Not a workflow archive CSV');
     }
+    try {
+      return toRecord(rows);
+    } catch (WorkflowArchive.ArchiveException e) {
+      throw e;
+    } catch (Exception e) {
+      // Do not echo the bad value. It can be payload text.
+      throw new WorkflowArchive.ArchiveException(
+        'Bad value in workflow archive CSV: ' + e.getTypeName()
+      );
+    }
+  }
+
+  private static WorkflowArchiveRecord toRecord(List<List<String>> rows) {
     List<String> h = rows[1];
     WorkflowArchiveRecord r = new WorkflowArchiveRecord();
     r.instanceId = toId(h[2]);

@@ -42,12 +42,12 @@ archival is on. `WorkflowArchive` reads archived history back.
 | A retry writes duplicate archive rows. | Big Object index overwrites. CSV sink checks titles first. |
 | `CleanupWorkflow` purges without an archive when archival is on. | `CleanupWorkflow` uses the same sweep and archives first. |
 | Config read fails and the sweep purges unarchived rows. | Fail closed: the sweep throws. |
-| Heap or SOQL rows overflow on big instances. | Chunk has at most 20 instances and 1000 step rows. The first instance always goes, so the sweep moves forward. |
+| Heap or SOQL rows overflow on big instances. | Batch has at most 20 instances, 500 step rows and a quarter of the heap. A larger instance stays in primary storage and the output names it. |
 | Archive mutates the append-only trail. | Snapshot is SOQL only. A test checks 0 DML. |
 | Offloaded file is lost without a record. | `$archiveDropped` marker plus `droppedPayloadCount`. |
 | Tests write real Big Object rows. | Salesforce forbids that. The sink has a `@TestVisible` store seam. |
-| A callout sink runs in `CleanupWorkflow`. | Platform throws before any DML. Nothing is deleted. Docs say: use `ArchiveWorkflow`. |
-| Archival off changes today's cleanup. | Sink is null. The sweep path is the same code as before. Old tests stay green. |
+| `insertImmediate` or a callout runs after engine DML. | Both sweep steps are `CalloutStep`s. A test sink makes a callout through the engine. |
+| Archival off changes cleanup. | Sink is null, so the purge path is the same. New: one config read, and a config read failure stops the step. |
 
 ## 3. Six thinking hats
 
@@ -71,3 +71,23 @@ archival is on. `WorkflowArchive` reads archived history back.
 3. Code: API, DTO, snapshot, sweep, sinks, `ArchiveWorkflow`.
 4. Refactor `CleanupWorkflow` and `CleanupDocumentPurger` onto the sweep.
 5. Docs: `docs/archive.md`, ADR 0003, README.
+
+## 5. Review results
+
+Four review agents (correctness, platform limits, security, tests and docs)
+found issues. We fixed them:
+
+- `CleanupWorkflow`'s step is now a `CalloutStep`. Before, the default Big
+  Object sink failed there, because `insertImmediate` follows callout rules.
+- Heap bound for each batch, a step bound for each instance, and a skip list.
+  Before, one large instance could stop the sweep.
+- Step counts use `COUNT() ... LIMIT` for each instance, so they use few
+  query rows.
+- The CSV sink finds files by marked fields, not by title. It uses an
+  optional `Revenant_Archive` library for reader access.
+- Reads load one instance or one file at a time. Correlation key match is
+  case-sensitive (`equals`).
+- The dropped marker cannot make `Error_Details__c` too long.
+- Error messages do not echo payload text.
+- The Admin permission set has read access only on the Big Objects.
+- A config seam lets tests read config values without the org record.

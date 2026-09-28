@@ -10,11 +10,12 @@
  * - `Archive_After_Days__c`: default age for `ArchiveWorkflow`. Blank is 30.
  *
  * Fail closed: when the config cannot be read, `isEnabled` throws. The sweep
- * then purges nothing.
+ * then purges nothing. When the `Default` record does not exist, archival is
+ * off.
  */
 public inherited sharing class WorkflowArchive {
   /** @description Maximum number of records a correlation key read returns. */
-  public static final Integer MAX_READ_RECORDS = 50;
+  public static final Integer MAX_READ_RECORDS = 10;
   /** @description Default archive age in days. */
   public static final Integer DEFAULT_ARCHIVE_AFTER_DAYS = 30;
 
@@ -103,6 +104,21 @@ public inherited sharing class WorkflowArchive {
   }
 
   /**
+   * @description Returns the lookup hash of a correlation key. Sinks use it
+   * where an index cannot hold the full key.
+   * @param correlationKey the key. Null hashes as blank.
+   * @return the SHA-256 hex, 64 characters
+   */
+  public static String hashCorrelationKey(String correlationKey) {
+    return EncodingUtil.convertToHex(
+      Crypto.generateDigest(
+        'SHA-256',
+        Blob.valueOf(correlationKey == null ? '' : correlationKey)
+      )
+    );
+  }
+
+  /**
    * @description Makes a sink from a class name. Blank selects
    * {@link BigObjectArchiveSink}. The lookup uses {@link WorkflowTypeResolver},
    * so namespaced and subscriber classes resolve.
@@ -176,17 +192,31 @@ public inherited sharing class WorkflowArchive {
         WITH SYSTEM_MODE
         LIMIT 1
       ];
-      if (configs.isEmpty()) {
-        return;
-      }
-      Revenant_Config__mdt cfg = configs[0];
-      enabled = cfg.Archive_Enabled__c == true;
-      sinkClass = cfg.Archive_Sink__c;
-      if (cfg.Archive_After_Days__c != null && cfg.Archive_After_Days__c >= 0) {
-        afterDays = cfg.Archive_After_Days__c.intValue();
-      }
+      applyConfig(configs.isEmpty() ? null : configs[0]);
     } catch (Exception e) {
       configFailed = true;
+    }
+  }
+
+  /**
+   * @description Applies a config record. Null (no `Default` record) turns
+   * archival off. A negative age uses the default.
+   * @param cfg the config record, or null
+   */
+  @TestVisible
+  private static void applyConfig(Revenant_Config__mdt cfg) {
+    loaded = true;
+    configFailed = false;
+    activeSink = null;
+    enabled = cfg != null && cfg.Archive_Enabled__c == true;
+    sinkClass = cfg == null ? null : cfg.Archive_Sink__c;
+    afterDays = DEFAULT_ARCHIVE_AFTER_DAYS;
+    if (
+      cfg != null &&
+      cfg.Archive_After_Days__c != null &&
+      cfg.Archive_After_Days__c >= 0
+    ) {
+      afterDays = cfg.Archive_After_Days__c.intValue();
     }
   }
 }

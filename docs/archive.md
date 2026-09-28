@@ -4,7 +4,8 @@
 Archival copies that history to cold storage first. Cold storage does not use
 primary data storage. Operators can read the history for years.
 
-Archival is off by default. When it is off, `CleanupWorkflow` works as before.
+Archival is off by default. When it is off, `CleanupWorkflow` purges as it
+did before archival existed.
 
 ## How it works
 
@@ -19,12 +20,19 @@ flowchart LR
 ```
 
 - The sweep selects `Completed`, `Failed`, `Compensated`, `Cancelled` and
-  `ContinuedAsNew` instances that are older than the age threshold.
-- Each batch has at most 20 instances and 1000 step rows. The first instance
-  always goes, so the sweep moves forward.
+  `ContinuedAsNew` instances that were created more than N days ago. The
+  oldest go first.
+- A batch has at most 20 instances, 500 step rows and a quarter of the heap.
+  The first instance always goes, so the sweep moves forward.
+- An instance with more than 500 step rows is not archived and not purged.
+  The run output lists it in `skippedInstanceIds`. Later batches of the run
+  skip it.
 - The sweep reads the rows. It never changes a `Workflow_Step_Execution__c`
   row. `Compensation_Stack__c` and `Terminal_At__c` do not change.
 - The sweep runs as a workflow, not on the orchestrator hot path.
+- Both sweep steps are `CalloutStep`s. The engine does no DML before the
+  step, and the sweep does no DML before `write`. So
+  `Database.insertImmediate` and callout sinks work.
 
 ## Turn it on
 
@@ -34,9 +42,12 @@ Edit the **Default** record of `Revenant_Config__mdt`:
 |---|---|
 | `Archive_Enabled__c` | Checked. |
 | `Archive_Sink__c` | Blank for `BigObjectArchiveSink`, or `CsvArchiveSink`, or your class. |
-| `Archive_After_Days__c` | Default age for `ArchiveWorkflow`. Blank is 30. |
+| `Archive_After_Days__c` | Default age for `ArchiveWorkflow`. Blank or negative is 30. |
 
-Then start the sweep. For example, schedule it once a day:
+If the config cannot be read, the sweep throws and deletes nothing. If the
+`Default` record does not exist, archival is off.
+
+Then start the sweep. For example, run this from a daily scheduled job:
 
 ```apex
 WorkflowEngine.start(
@@ -51,20 +62,24 @@ WorkflowEngine.start(
 | `archiveAfterDays` | `Archive_After_Days__c`, else 30 | 0 or more |
 | `batchSize` | 20 | More than 0. Maximum 20. |
 
-`CleanupWorkflow` also archives first when archival is on. It uses its own
-`retentionDays` input. So a scheduled cleanup never purges history that is
-not archived.
+With archival on, `CleanupWorkflow` also archives first. It uses its own
+`retentionDays` input. So a scheduled cleanup does not purge history that the
+archive does not have.
+
+Run the sweep as one dedicated integration user.
 
 ## Read archived history
 
 ```apex
 // By instance Id: one sink read.
 WorkflowArchiveRecord r = WorkflowArchive.getArchivedHistory(instanceId);
-for (WorkflowArchiveRecord.Step s : r.steps) {
-  System.debug(s.sequence + ' ' + s.stepName + ' ' + s.status);
+if (r != null) {
+  for (WorkflowArchiveRecord.Step s : r.steps) {
+    System.debug(s.sequence + ' ' + s.stepName + ' ' + s.status);
+  }
 }
 
-// By correlation key: at most 50 records.
+// By exact correlation key (case-sensitive): at most 10 records.
 List<WorkflowArchiveRecord> runs = WorkflowArchive.findArchivedHistory('order-42');
 ```
 
@@ -73,18 +88,19 @@ Reads work also when archival is off. A step has the same facts as
 duration and the compensation flag. It also has the stored error details.
 
 `isTruncated()` is true when the reader got fewer steps than the sweep
-archived. The Big Object sink reads at most 10 000 rows in one call.
+archived.
 
 ## Payload policy
 
-| Data | Archive |
+| Data | What the archive does |
 |---|---|
-| Inline `Input__c`, `Output__c`, step `Error_Details__c` | Copied in stored form. Codec ciphertext stays ciphertext. |
-| Offloaded payload (`{"$attachmentId":...}`) | Not copied. Replaced by `{"$archiveDropped":"offloaded payload not archived"}`. `droppedPayloadCount` counts it. |
-| Offloaded `failureData` in `Error_Details__c` | The reason is kept. The data part is replaced by the marker and counted. |
-| Step `Input__c`, `Output__c`, `Captured_Values__c`, signals | Not archived. `getHistory` does not show them either. |
+| Inline `Input__c`, `Output__c`, step `Error_Details__c` | The archive copies the stored form. Codec ciphertext stays ciphertext. |
+| Offloaded payload (`{"$attachmentId":...}`) | The archive does not copy it. It writes `{"$archiveDropped":"offloaded payload not archived"}` and adds 1 to `droppedPayloadCount`. |
+| Offloaded `failureData` in `Error_Details__c` | The archive keeps the reason and replaces the data part with the marker. It adds 1 to `droppedPayloadCount`. |
+| Step `Input__c`, `Output__c`, `Captured_Values__c`, signals | The archive does not copy them. `getHistory` does not show them either. |
 
-The purge then deletes the engine files, as `CleanupWorkflow` does today.
+Then the purge deletes the engine files, as `CleanupWorkflow` does without
+archival.
 
 ## Shipped sinks
 
@@ -97,16 +113,25 @@ The purge then deletes the engine files, as `CleanupWorkflow` does today.
   hex of the correlation key. Reads compare the full key.
 - `insertImmediate` overwrites a row with the same index. A retry makes no
   duplicate.
-- A read by Id uses 1 SOQL query. A read by key uses 2.
+- A read by Id uses 1 SOQL query. A read by key uses 1 query, then 1 query for
+  each match.
+- Only the sweep writes, in system mode. The permission sets give read access
+  only.
 
 ### `CsvArchiveSink`
 
 - One CSV file (`ContentVersion`) for each instance. Files use file storage,
   not data storage.
-- Title: `WorkflowArchive_<instanceId>_<correlationKey>`.
+- The sink marks each file with `Revenant_Archive_Instance_Id__c` and
+  `Revenant_Archive_Key_Hash__c`, and finds files only by these fields. No
+  permission set gives access to them, so a user cannot plant a file that the
+  sink trusts. A new version that a user uploads has no mark, so the sink
+  ignores it.
 - The file is not linked to the instance, so the purge does not delete it.
-- The sweep user owns the file. A reader needs file access, for example
-  "Query All Files" or a library share.
+- File access: create a library with the API name `Revenant_Archive`. Add
+  the sweep user and the readers as members. The sink then puts each file in
+  it. Without the library, only the sweep user and users with "Query All
+  Files" see the files.
 - Format: see `WorkflowArchiveCsv`. A value that starts with `=`, `+`, `-`,
   `@`, a tab, a carriage return or `'` gets a `'` prefix, so a spreadsheet
   does not run it as a formula.
@@ -139,11 +164,10 @@ Rules:
 - `write` must be idempotent for each instance Id.
 - `write` must throw when a record is not stored. The sweep then deletes
   nothing.
-- A callout sink works only in `ArchiveWorkflow`. Its step is a
-  `CalloutStep`, and the sweep does no DML before `write`. `CleanupWorkflow`
-  has DML before `write`, so a callout there fails and nothing is deleted.
-- Each batch calls `write` once. Keep the callouts per batch below the limit
-  of 100.
+- `write` can make callouts. Each batch calls `write` once, with at most 20
+  records. Keep below the limit of 100 callouts.
+- Do not put payload text in an exception message. The message goes to the
+  step error, which operators can read.
 
 ## Limits
 

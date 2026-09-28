@@ -13,6 +13,11 @@ public class WorkflowArchiveTestSink implements WorkflowArchiveSink {
   public Boolean failWrites = false;
   /** @description DML statements used before the first `write` call. */
   public Integer dmlBeforeFirstWrite;
+  /**
+   * @description When true, `write` makes one HTTP callout first. A callout
+   * after uncommitted DML throws, so it proves the sweep order. Set a mock.
+   */
+  public Boolean calloutOnWrite = false;
 
   /**
    * @description Stores the records, or throws when `failWrites` is true.
@@ -23,6 +28,13 @@ public class WorkflowArchiveTestSink implements WorkflowArchiveSink {
       dmlBeforeFirstWrite = Limits.getDmlStatements();
     }
     writeCalls++;
+    if (calloutOnWrite) {
+      HttpRequest req = new HttpRequest();
+      req.setEndpoint('https://archive.example.com/put');
+      req.setMethod('PUT');
+      req.setBody(String.valueOf(records.size()));
+      new Http().send(req);
+    }
     if (failWrites) {
       throw new WorkflowArchive.ArchiveException('Test sink write failure');
     }
@@ -56,7 +68,7 @@ public class WorkflowArchiveTestSink implements WorkflowArchiveSink {
   ) {
     List<WorkflowArchiveRecord> out = new List<WorkflowArchiveRecord>();
     for (WorkflowArchiveRecord r : store.values()) {
-      if (r.correlationKey == correlationKey) {
+      if (correlationKey.equals(r.correlationKey)) {
         out.add(r);
       }
     }
@@ -81,8 +93,7 @@ public class WorkflowArchiveTestSink implements WorkflowArchiveSink {
       Correlation_Key__c = correlationKey,
       Input__c = '{"amount":42}',
       Output__c = '{"chargeId":"ch_1"}',
-      Error_Message__c = status == 'Failed' ? 'Card declined' : null,
-      Terminal_At__c = Datetime.now().addDays(-ageDays)
+      Error_Message__c = status == 'Failed' ? 'Card declined' : null
     );
     insert inst;
     Test.setCreatedDate(inst.Id, Datetime.now().addDays(-ageDays));

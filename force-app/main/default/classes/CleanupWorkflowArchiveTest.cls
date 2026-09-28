@@ -83,4 +83,69 @@ private class CleanupWorkflowArchiveTest {
     System.assertEquals(false, exists(done.Id), 'Purged as before');
     System.assertEquals(0, sink.writeCalls, 'Sink not called');
   }
+
+  private class OkResponse implements HttpCalloutMock {
+    public HttpResponse respond(HttpRequest req) {
+      HttpResponse res = new HttpResponse();
+      res.setStatusCode(200);
+      return res;
+    }
+  }
+
+  @IsTest
+  static void calloutSinkWorksThroughTheEngine() {
+    WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
+    sink.calloutOnWrite = true;
+    WorkflowArchive.configure(true, sink);
+    Workflow_Instance__c done = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'order-1',
+      40
+    );
+    Test.setMock(HttpCalloutMock.class, new OkResponse());
+
+    Test.startTest();
+    Id runId = WorkflowEngine.start(
+      'CleanupWorkflow',
+      'Cleanup_Callout_1',
+      new Map<String, Object>{ 'retentionDays' => 30 }
+    );
+    Test.stopTest();
+
+    System.assertEquals(
+      'Completed',
+      [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :runId].Status__c,
+      'Cleanup completed'
+    );
+    System.assertEquals(false, exists(done.Id), 'Purged');
+    System.assertNotEquals(null, sink.store.get(done.Id), 'Archived first');
+  }
+
+  @IsTest
+  static void purgeStepIsACalloutStep() {
+    System.assert(
+      new CleanupWorkflow.PurgeOldInstancesStep() instanceof CalloutStep,
+      'insertImmediate and callout sinks need no DML before execute'
+    );
+  }
+
+  @IsTest
+  static void configReadFailureDeletesNothing() {
+    WorkflowArchive.simulateConfigReadFailure();
+    Workflow_Instance__c done = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'order-1',
+      40
+    );
+
+    Boolean threw = false;
+    try {
+      runCleanup();
+    } catch (WorkflowArchive.ArchiveException e) {
+      threw = true;
+    }
+
+    System.assert(threw, 'Fail closed');
+    System.assertEquals(true, exists(done.Id), 'Nothing purged');
+  }
 }

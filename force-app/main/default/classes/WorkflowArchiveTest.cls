@@ -4,13 +4,56 @@
  */
 @IsTest
 private class WorkflowArchiveTest {
-  @IsTest
-  static void archivalIsOffByDefault() {
-    System.assertEquals(
-      false,
-      WorkflowArchive.isEnabled(),
-      'Archival is opt-in'
+  private static Revenant_Config__mdt config(String fieldsJson) {
+    return (Revenant_Config__mdt) JSON.deserialize(
+      fieldsJson,
+      Revenant_Config__mdt.class
     );
+  }
+
+  @IsTest
+  static void archivalIsOffWithoutConfigValues() {
+    WorkflowArchive.applyConfig(config('{}'));
+    System.assertEquals(false, WorkflowArchive.isEnabled(), 'Opt-in');
+    System.assertEquals(30, WorkflowArchive.archiveAfterDays(), 'Default age');
+    System.assert(
+      WorkflowArchive.sink() instanceof BigObjectArchiveSink,
+      'Default sink'
+    );
+  }
+
+  @IsTest
+  static void missingDefaultRecordTurnsArchivalOff() {
+    WorkflowArchive.applyConfig(null);
+    System.assertEquals(false, WorkflowArchive.isEnabled(), 'No record');
+  }
+
+  @IsTest
+  static void configValuesAreRead() {
+    WorkflowArchive.applyConfig(
+      config(
+        '{"Archive_Enabled__c":true,"Archive_Sink__c":"CsvArchiveSink","Archive_After_Days__c":90}'
+      )
+    );
+    System.assertEquals(true, WorkflowArchive.isEnabled(), 'Enabled');
+    System.assertEquals(90, WorkflowArchive.archiveAfterDays(), 'Age');
+    System.assert(
+      WorkflowArchive.sink() instanceof CsvArchiveSink,
+      'Configured sink'
+    );
+  }
+
+  @IsTest
+  static void negativeAgeUsesDefault() {
+    WorkflowArchive.applyConfig(config('{"Archive_After_Days__c":-5}'));
+    System.assertEquals(30, WorkflowArchive.archiveAfterDays(), 'Default');
+  }
+
+  @IsTest
+  static void realConfigReadDoesNotThrow() {
+    // Reads the org record. Only the type of the answer is checked, so an
+    // org that turns archival on does not break this test.
+    System.assertNotEquals(null, WorkflowArchive.isEnabled(), 'Answer');
   }
 
   @IsTest
@@ -57,11 +100,18 @@ private class WorkflowArchiveTest {
   }
 
   @IsTest
-  static void archiveAfterDaysDefaultsTo30() {
+  static void hashIsStableAndCaseSensitive() {
+    String h = WorkflowArchive.hashCorrelationKey('Order-1');
+    System.assertEquals(64, h.length(), 'SHA-256 hex');
     System.assertEquals(
-      30,
-      WorkflowArchive.archiveAfterDays(),
-      'Default archive age'
+      h,
+      WorkflowArchive.hashCorrelationKey('Order-1'),
+      'Stable'
+    );
+    System.assertNotEquals(
+      h,
+      WorkflowArchive.hashCorrelationKey('order-1'),
+      'Case matters'
     );
   }
 

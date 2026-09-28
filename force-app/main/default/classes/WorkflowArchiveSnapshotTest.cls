@@ -6,11 +6,19 @@
 private class WorkflowArchiveSnapshotTest {
   @IsTest
   static void buildCopiesOutcomeAndTimelineLikeGetHistory() {
+    Workflow_Instance__c parent = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'parent-1',
+      40
+    );
     Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
       'Failed',
       'order-1',
       40
     );
+    inst.Parent_Instance__c = parent.Id;
+    inst.Failure_Category__c = 'STEP_EXCEPTION';
+    update inst;
     List<Workflow_Step_Execution__c> steps = WorkflowArchiveTestSink.insertSteps(
       inst.Id,
       new List<String>{ 'ChargeCard', 'ChargeCard_Compensate' }
@@ -32,12 +40,24 @@ private class WorkflowArchiveSnapshotTest {
     WorkflowArchiveRecord r = records[0];
     System.assertEquals(inst.Id, r.instanceId, 'Instance Id');
     System.assertEquals('order-1', r.correlationKey, 'Correlation key');
+    System.assertEquals(
+      'WorkflowEngineTest.HappyWorkflow',
+      r.workflowName,
+      'Workflow name'
+    );
+    System.assertEquals('STEP_EXCEPTION', r.failureCategory, 'Category');
+    System.assertEquals(parent.Id, r.parentInstanceId, 'Parent');
+    Workflow_Instance__c stored = [
+      SELECT CreatedDate, Terminal_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :inst.Id
+    ];
+    System.assertEquals(stored.CreatedDate, r.createdAt, 'Created time');
+    System.assertEquals(stored.Terminal_At__c, r.terminalAt, 'Terminal time');
     System.assertEquals('Failed', r.status, 'Status');
     System.assertEquals('Card declined', r.errorMessage, 'Error message');
     System.assertEquals('{"amount":42}', r.input, 'Input stored form');
     System.assertEquals('{"chargeId":"ch_1"}', r.output, 'Output stored form');
-    System.assertNotEquals(null, r.terminalAt, 'Terminal time');
-    System.assertNotEquals(null, r.createdAt, 'Created time');
     System.assertNotEquals(null, r.archivedAt, 'Archive time');
     System.assertEquals(2, r.stepCount, 'Step count');
     System.assertEquals(0, r.droppedPayloadCount, 'Nothing dropped');
@@ -169,6 +189,30 @@ private class WorkflowArchiveSnapshotTest {
   }
 
   @IsTest
+  static void droppedMarkerKeepsErrorDetailsInsideTheField() {
+    String sep = '\nfailureData: ';
+    String marker = '{"$attachmentId":"069000000000004AAA"}';
+    String full =
+      'x'.repeat(131072 - sep.length() - marker.length()) +
+      sep +
+      marker;
+    String replaced = WorkflowFailureDetails.replaceOffloadedData(
+      full,
+      WorkflowArchiveRecord.DROPPED_MARKER
+    );
+    System.assertEquals(131072, replaced.length(), 'Fits the field');
+    System.assert(
+      replaced.endsWith(sep + WorkflowArchiveRecord.DROPPED_MARKER),
+      'Marker kept'
+    );
+    System.assertEquals(
+      null,
+      WorkflowFailureDetails.replaceOffloadedData('plain', 'm'),
+      'No offloaded data'
+    );
+  }
+
+  @IsTest
   static void buildReturnsEmptyForNoIds() {
     System.assertEquals(
       0,
@@ -183,34 +227,25 @@ private class WorkflowArchiveSnapshotTest {
   }
 
   @IsTest
-  static void fitKeepsFirstAndStopsAtStepBudget() {
-    Workflow_Instance__c big = WorkflowArchiveTestSink.insertInstance(
+  static void countStepsStopsAtCap() {
+    Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
       'Completed',
-      'big',
-      40
-    );
-    Workflow_Instance__c small = WorkflowArchiveTestSink.insertInstance(
-      'Completed',
-      'small',
+      'k',
       40
     );
     WorkflowArchiveTestSink.insertSteps(
-      big.Id,
+      inst.Id,
       new List<String>{ 'A', 'B', 'C' }
     );
-    WorkflowArchiveTestSink.insertSteps(small.Id, new List<String>{ 'A' });
-
-    List<Workflow_Instance__c> fitted = WorkflowArchiveSnapshot.fitToStepBudget(
-      new List<Workflow_Instance__c>{ big, small },
-      2
+    System.assertEquals(
+      3,
+      WorkflowArchiveSnapshot.countSteps(inst.Id, 10),
+      'All'
     );
-    System.assertEquals(1, fitted.size(), 'First always fits, then stop');
-    System.assertEquals(big.Id, fitted[0].Id, 'Order kept');
-
-    fitted = WorkflowArchiveSnapshot.fitToStepBudget(
-      new List<Workflow_Instance__c>{ small, big },
-      4
+    System.assertEquals(
+      2,
+      WorkflowArchiveSnapshot.countSteps(inst.Id, 2),
+      'Cap'
     );
-    System.assertEquals(2, fitted.size(), 'Both fit in budget 4');
   }
 }

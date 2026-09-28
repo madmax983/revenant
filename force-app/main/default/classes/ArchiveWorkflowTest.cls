@@ -178,7 +178,7 @@ private class ArchiveWorkflowTest {
   }
 
   @IsTest
-  static void rerunDoesNotDuplicate() {
+  static void rerunAfterArchiveWithoutPurgeCompletesThePurge() {
     WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
     WorkflowArchive.configure(true, sink);
     Workflow_Instance__c done = WorkflowArchiveTestSink.insertInstance(
@@ -264,23 +264,29 @@ private class ArchiveWorkflowTest {
 
   @IsTest
   static void defaultAgeComesFromConfig() {
-    WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
-    WorkflowArchive.configure(true, sink);
+    WorkflowArchive.applyConfig(
+      (Revenant_Config__mdt) JSON.deserialize(
+        '{"Archive_Enabled__c":true,"Archive_After_Days__c":60}',
+        Revenant_Config__mdt.class
+      )
+    );
+    // Keep the config age. Replace only the sink.
+    WorkflowArchive.configure(true, new WorkflowArchiveTestSink());
     Workflow_Instance__c old = WorkflowArchiveTestSink.insertInstance(
       'Completed',
       'old',
-      40
+      70
     );
     Workflow_Instance__c young = WorkflowArchiveTestSink.insertInstance(
       'Completed',
       'young',
-      5
+      40
     );
 
     runStep(null, null);
 
-    System.assertEquals(false, exists(old.Id), 'Older than 30 days');
-    System.assertEquals(true, exists(young.Id), 'Younger than 30 days');
+    System.assertEquals(false, exists(old.Id), 'Older than 60 days');
+    System.assertEquals(true, exists(young.Id), 'Younger than 60 days');
   }
 
   @IsTest

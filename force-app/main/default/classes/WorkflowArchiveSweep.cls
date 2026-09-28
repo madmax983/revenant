@@ -11,14 +11,24 @@
  *
  * If `write` throws, step 3 does not run. A retry writes the same records
  * again. The sink contract makes that safe.
+ *
+ * Archive bounds for each batch: at most 20 instances, 500 step rows and a
+ * quarter of the heap. The first instance always goes, so the sweep moves
+ * forward. An instance with more than 500 step rows is not archived and not
+ * purged. The batch result names it, and the next batches skip it.
  */
 public inherited sharing class WorkflowArchiveSweep {
   /** @description Maximum instances in one batch without archival. */
   public static final Integer MAX_BATCH_SIZE = 50;
   /** @description Maximum instances in one batch with archival (heap bound). */
   public static final Integer MAX_ARCHIVE_BATCH_SIZE = 20;
-  /** @description Maximum step rows in one archive batch (heap and row bound). */
-  public static final Integer MAX_ARCHIVE_STEP_ROWS = 1000;
+  /** @description Maximum step rows in one archive batch and one instance. */
+  public static final Integer MAX_ARCHIVE_STEP_ROWS = 500;
+  /** @description Maximum Ids that a run keeps as skipped. */
+  public static final Integer MAX_SKIPPED_IDS = 2000;
+
+  @TestVisible
+  private static Integer maxStepRows = MAX_ARCHIVE_STEP_ROWS;
 
   /**
    * @description Parsed sweep input.
@@ -28,6 +38,8 @@ public inherited sharing class WorkflowArchiveSweep {
     public Integer ageDays;
     /** @description Requested batch size. */
     public Integer batchSize;
+    /** @description Instances that earlier batches skipped. */
+    public Set<Id> excludeIds = new Set<Id>();
   }
 
   /**
@@ -38,6 +50,8 @@ public inherited sharing class WorkflowArchiveSweep {
     public Integer purgedCount = 0;
     /** @description True when more candidates can remain. */
     public Boolean hasMore = false;
+    /** @description Instances too large to archive. Kept in primary storage. */
+    public List<Id> skippedInstanceIds = new List<Id>();
   }
 
   /**
@@ -95,32 +109,117 @@ public inherited sharing class WorkflowArchiveSweep {
     BatchResult result = new BatchResult();
     List<Workflow_Instance__c> candidates = queryCandidates(
       Datetime.now().addDays(-p.ageDays),
-      limitSize
+      limitSize,
+      p.excludeIds
     );
     if (candidates.isEmpty()) {
       return result;
     }
-    List<Workflow_Instance__c> fitted = sink == null
-      ? candidates
-      : WorkflowArchiveSnapshot.fitToStepBudget(
-          candidates,
-          MAX_ARCHIVE_STEP_ROWS
-        );
-    CleanupDocumentPurger.PurgeChunk chunk = CleanupDocumentPurger.planChunk(
-      fitted
-    );
-    if (sink != null) {
-      sink.write(WorkflowArchiveSnapshot.build(chunk.instanceIdsToPurge));
+    CleanupDocumentPurger.PurgeChunk chunk;
+    if (sink == null) {
+      chunk = CleanupDocumentPurger.planChunk(candidates);
+    } else {
+      Map<Id, WorkflowArchiveRecord> records = snapshotWithinBounds(
+        candidates,
+        result
+      );
+      chunk = CleanupDocumentPurger.planChunk(
+        selectInOrder(candidates, records.keySet())
+      );
+      List<WorkflowArchiveRecord> toWrite = new List<WorkflowArchiveRecord>();
+      for (Workflow_Instance__c inst : chunk.instancesToPurge) {
+        toWrite.add(records.get(inst.Id));
+      }
+      if (!toWrite.isEmpty()) {
+        sink.write(toWrite);
+      }
     }
     CleanupDocumentPurger.deleteDocuments(chunk);
     deleteInstances(chunk);
     result.purgedCount = chunk.instancesToPurge.size();
     // More can remain when this batch did not take every candidate, or when
-    // the query filled the batch.
+    // the query filled the batch. A batch that only found known skips stops.
     result.hasMore =
-      candidates.size() > chunk.instancesToPurge.size() ||
-      candidates.size() == limitSize;
+      (result.purgedCount > 0 || !result.skippedInstanceIds.isEmpty()) &&
+      (candidates.size() > result.purgedCount ||
+      candidates.size() == limitSize);
     return result;
+  }
+
+  /**
+   * @description Adds a batch's skipped Ids to the run's exclude set, up to
+   * {@link #MAX_SKIPPED_IDS}.
+   * @param p the run input
+   * @param batch the batch result
+   * @param skipped the run's skipped Ids, updated in place
+   * @return true when the run must yield for another batch. A batch that
+   *         purged nothing and recorded no new skip ends the run, so a full
+   *         skip list cannot loop.
+   */
+  public static Boolean recordSkips(
+    Params p,
+    BatchResult batch,
+    List<Id> skipped
+  ) {
+    Integer added = 0;
+    for (Id instanceId : batch.skippedInstanceIds) {
+      if (skipped.size() >= MAX_SKIPPED_IDS) {
+        break;
+      }
+      skipped.add(instanceId);
+      p.excludeIds.add(instanceId);
+      added++;
+    }
+    return batch.hasMore && (batch.purgedCount > 0 || added > 0);
+  }
+
+  // Copies candidates in order until a bound is hit. The first archivable
+  // candidate always goes. An instance over the step bound is skipped.
+  private static Map<Id, WorkflowArchiveRecord> snapshotWithinBounds(
+    List<Workflow_Instance__c> candidates,
+    BatchResult result
+  ) {
+    Map<Id, WorkflowArchiveRecord> records = new Map<Id, WorkflowArchiveRecord>();
+    Integer heapBudget = Limits.getLimitHeapSize() / 4;
+    Integer stepsUsed = 0;
+    for (Workflow_Instance__c inst : candidates) {
+      Integer steps = WorkflowArchiveSnapshot.countSteps(
+        inst.Id,
+        maxStepRows + 1
+      );
+      if (steps > maxStepRows) {
+        result.skippedInstanceIds.add(inst.Id);
+        continue;
+      }
+      if (
+        !records.isEmpty() &&
+        (stepsUsed + steps > maxStepRows ||
+        Limits.getHeapSize() > heapBudget)
+      ) {
+        break;
+      }
+      List<WorkflowArchiveRecord> built = WorkflowArchiveSnapshot.build(
+        new Set<Id>{ inst.Id }
+      );
+      if (!built.isEmpty()) {
+        records.put(inst.Id, built[0]);
+        stepsUsed += steps;
+      }
+    }
+    return records;
+  }
+
+  private static List<Workflow_Instance__c> selectInOrder(
+    List<Workflow_Instance__c> candidates,
+    Set<Id> ids
+  ) {
+    List<Workflow_Instance__c> out = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : candidates) {
+      if (ids.contains(inst.Id)) {
+        out.add(inst);
+      }
+    }
+    return out;
   }
 
   private static Map<String, Object> deserializeInput(String inputJson) {
@@ -145,7 +244,8 @@ public inherited sharing class WorkflowArchiveSweep {
 
   private static List<Workflow_Instance__c> queryCandidates(
     Datetime threshold,
-    Integer limitSize
+    Integer limitSize,
+    Set<Id> excludeIds
   ) {
     return [
       SELECT Id
@@ -159,6 +259,7 @@ public inherited sharing class WorkflowArchiveSweep {
           'ContinuedAsNew'
         )
         AND CreatedDate < :threshold
+        AND Id NOT IN :excludeIds
       WITH SYSTEM_MODE
       ORDER BY CreatedDate ASC
       LIMIT :limitSize

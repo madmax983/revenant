@@ -36,6 +36,11 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
    */
   public class PurgeState {
     public Integer deletedCount;
+    /**
+     * @description With archival on: instances too large to archive. They stay
+     * in primary storage. Null when none were skipped.
+     */
+    public List<Id> skippedInstanceIds;
   }
 
   // inherited sharing: the step runs in the engine's (caller's) context. Every SOQL
@@ -48,8 +53,12 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
    * instances and their signals, and yields to continue when more remain. When
    * archival is on (`Revenant_Config__mdt.Archive_Enabled__c`), it archives each
    * chunk to the configured {@link WorkflowArchiveSink} before it deletes it.
+   *
+   * It is a {@link CalloutStep}, so the engine does no DML before `execute`.
+   * `Database.insertImmediate` and a callout sink need that. The step has no
+   * timeout and no auto-retry policy, so the marker changes nothing else.
    */
-  public inherited sharing class PurgeOldInstancesStep implements WorkflowStep {
+  public inherited sharing class PurgeOldInstancesStep implements WorkflowStep, CalloutStep {
     /**
      * @description Executes one bounded purge batch, deleting qualified documents and
      * instances and yielding if further candidates remain.
@@ -69,12 +78,26 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
       WorkflowArchiveSink sink = WorkflowArchive.isEnabled()
         ? WorkflowArchive.sink()
         : null;
+      if (state.skippedInstanceIds != null) {
+        params.excludeIds.addAll(state.skippedInstanceIds);
+      }
       WorkflowArchiveSweep.BatchResult batch = WorkflowArchiveSweep.runBatch(
         params,
         sink
       );
       state.deletedCount += batch.purgedCount;
-      if (batch.hasMore) {
+      Boolean hasMore = batch.hasMore;
+      if (!batch.skippedInstanceIds.isEmpty()) {
+        if (state.skippedInstanceIds == null) {
+          state.skippedInstanceIds = new List<Id>();
+        }
+        hasMore = WorkflowArchiveSweep.recordSkips(
+          params,
+          batch,
+          state.skippedInstanceIds
+        );
+      }
+      if (hasMore) {
         return StepResult.yield(JSON.serialize(state));
       }
       return StepResult.complete(null, state);

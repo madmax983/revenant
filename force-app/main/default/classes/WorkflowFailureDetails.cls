@@ -52,8 +52,9 @@ public inherited sharing class WorkflowFailureDetails {
   }
 
   /**
-   * @description Replaces failure data that is in an offload file. The reason
-   * does not change. The archive uses it, because the purge deletes the file.
+   * @description Replaces failure data that is in an offload file. The archive
+   * uses it, because the purge deletes the file. The reason is shortened when
+   * the result is longer than the field.
    * @param details the stored Error_Details__c value
    * @param replacement the text to put in place of the offload marker
    * @return the new value, or null when no failure data is offloaded
@@ -70,7 +71,11 @@ public inherited sharing class WorkflowFailureDetails {
     ) {
       return null;
     }
-    return details.left(at) + SEPARATOR + replacement;
+    Integer room =
+      ERROR_DETAILS_LIMIT -
+      SEPARATOR.length() -
+      replacement.length();
+    return details.left(Math.min(at, room)) + SEPARATOR + replacement;
   }
 
   /**

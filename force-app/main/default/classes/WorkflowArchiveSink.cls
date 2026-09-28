@@ -12,8 +12,8 @@
  * - `write` must throw when it cannot store all records. The sweep then
  *   deletes nothing.
  * - `write` must not change the records it gets.
- * - A callout is permitted only in `ArchiveWorkflow`. `CleanupWorkflow` has
- *   DML before `write`.
+ * - `write` can make callouts. Both sweep steps are `CalloutStep`s, and the
+ *   sweep does no DML before `write`. Each batch calls `write` once.
  * - Read methods must not do DML. Return steps in `sequence` order.
  * - Use a public class with a public no-argument constructor.
  */

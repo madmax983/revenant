@@ -121,7 +121,7 @@ private class BigObjectArchiveSinkTest {
     System.assertEquals(1, mem.keys.size(), 'One key row');
     Workflow_Archive_Key__b key = mem.keys.values()[0];
     System.assertEquals(
-      BigObjectArchiveSink.hashKey('order-1'),
+      WorkflowArchive.hashCorrelationKey('order-1'),
       key.Key_Hash__c,
       'Key hash'
     );
@@ -197,7 +197,7 @@ private class BigObjectArchiveSinkTest {
     mem.keys.put(
       'collision',
       new Workflow_Archive_Key__b(
-        Key_Hash__c = BigObjectArchiveSink.hashKey('order-1'),
+        Key_Hash__c = WorkflowArchive.hashCorrelationKey('order-1'),
         Instance_Id__c = other.instanceId,
         Correlation_Key__c = 'order-other'
       )
@@ -267,7 +267,14 @@ private class BigObjectArchiveSinkTest {
       );
     } catch (WorkflowArchive.ArchiveException e) {
       threw = true;
-      System.assert(e.getMessage().contains('bad row'), e.getMessage());
+      System.assert(
+        e.getMessage().contains('FIELD_INTEGRITY_EXCEPTION'),
+        e.getMessage()
+      );
+      System.assert(
+        !e.getMessage().contains('bad row'),
+        'Error text can echo payload data, so it is not copied'
+      );
     }
     System.assert(threw, 'Failed row must throw');
   }
@@ -283,5 +290,39 @@ private class BigObjectArchiveSinkTest {
       sink.readByInstanceIds(new Set<Id>()).size(),
       'No Ids'
     );
+  }
+
+  @IsTest
+  static void correlationKeyMatchIsCaseSensitive() {
+    useMemoryStore();
+    BigObjectArchiveSink sink = new BigObjectArchiveSink();
+    sink.write(new List<WorkflowArchiveRecord>{ record('Order-1') });
+    System.assertEquals(
+      1,
+      sink.readByCorrelationKey('Order-1').size(),
+      'Exact'
+    );
+    System.assertEquals(
+      0,
+      sink.readByCorrelationKey('order-1').size(),
+      'Other case'
+    );
+  }
+
+  @IsTest
+  static void readByIdsUsesOneQueryPerId() {
+    MemoryStore mem = useMemoryStore();
+    BigObjectArchiveSink sink = new BigObjectArchiveSink();
+    WorkflowArchiveRecord a = record('a');
+    WorkflowArchiveRecord b = record('b');
+    sink.write(new List<WorkflowArchiveRecord>{ a, b });
+
+    List<WorkflowArchiveRecord> read = sink.readByInstanceIds(
+      new Set<Id>{ a.instanceId, b.instanceId }
+    );
+
+    System.assertEquals(2, read.size(), 'Both instances');
+    System.assertEquals(2, read[0].steps.size(), 'Full timeline');
+    System.assertEquals(2, read[1].steps.size(), 'Full timeline');
   }
 }

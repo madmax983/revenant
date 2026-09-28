@@ -102,14 +102,43 @@ private class WorkflowArchiveCsvTest {
 
   @IsTest
   static void fromCsvRejectsBadInput() {
-    for (String bad : new List<String>{ null, '', 'x,y\n', 'a,"open' }) {
+    String badId =
+      WorkflowArchiveCsv.HEADER +
+      '\ninstance,0,secret-payload' +
+      ','.repeat(16) +
+      '\n';
+    for (String bad : new List<String>{ null, '', 'x,y\n', 'a,"open', badId }) {
       Boolean threw = false;
       try {
         WorkflowArchiveCsv.fromCsv(bad);
       } catch (WorkflowArchive.ArchiveException e) {
         threw = true;
+        System.assert(
+          !e.getMessage().contains('secret-payload'),
+          'The error must not echo the bad value'
+        );
       }
       System.assert(threw, 'Bad CSV must throw: ' + bad);
     }
+  }
+
+  @IsTest
+  static void formulaLikeValuesArePrefixedAndRoundTrip() {
+    WorkflowArchiveRecord r = sampleRecord();
+    r.workflowName = '=HYPERLINK("x")';
+    r.status = '-1';
+    r.errorMessage = '\'quoted';
+    r.input = '@SUM(A1)';
+
+    String csv = WorkflowArchiveCsv.toCsv(r);
+    List<String> row = WorkflowArchiveCsv.parse(csv)[1];
+    System.assertEquals('\'=HYPERLINK("x")', row[4], 'Formula prefixed');
+    System.assertEquals('\'-1', row[6], 'Minus prefixed');
+
+    WorkflowArchiveRecord back = WorkflowArchiveCsv.fromCsv(csv);
+    System.assertEquals(r.workflowName, back.workflowName, 'Round trip =');
+    System.assertEquals(r.status, back.status, 'Round trip -');
+    System.assertEquals(r.errorMessage, back.errorMessage, 'Round trip quote');
+    System.assertEquals(r.input, back.input, 'Round trip @');
   }
 }

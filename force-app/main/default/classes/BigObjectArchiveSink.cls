@@ -15,8 +15,9 @@
  * Tests cannot write Big Objects. Tests replace {@link Store}.
  */
 public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSink {
-  /** @description Maximum number of timeline rows one read returns. */
-  public static final Integer MAX_READ_ROWS = 10000;
+  /** @description Maximum timeline rows read for one instance. */
+  public static final Integer MAX_READ_ROWS_PER_INSTANCE =
+    WorkflowArchiveSweep.MAX_ARCHIVE_STEP_ROWS + 1;
 
   @TestVisible
   private static Store store = new Store();
@@ -107,7 +108,7 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
       }
       keys.add(
         new Workflow_Archive_Key__b(
-          Key_Hash__c = hashKey(r.correlationKey),
+          Key_Hash__c = WorkflowArchive.hashCorrelationKey(r.correlationKey),
           Instance_Id__c = r.instanceId,
           Correlation_Key__c = r.correlationKey
         )
@@ -120,30 +121,38 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
       throw e;
     } catch (Exception e) {
       throw new WorkflowArchive.ArchiveException(
-        'Big Object archive write failed: ' + e.getMessage()
+        'Big Object archive write failed: ' + e.getTypeName()
       );
     }
   }
 
   /**
-   * @description Reads archived records by instance Id. One SOQL query.
+   * @description Reads archived records by instance Id. One SOQL query for
+   * each Id, so a large timeline cannot hide another instance.
    * @param instanceIds the instance Ids
    * @return one record for each archived Id
    */
   public List<WorkflowArchiveRecord> readByInstanceIds(Set<Id> instanceIds) {
-    if (instanceIds == null || instanceIds.isEmpty()) {
-      return new List<WorkflowArchiveRecord>();
+    List<WorkflowArchiveRecord> out = new List<WorkflowArchiveRecord>();
+    if (instanceIds == null) {
+      return out;
     }
-    Set<String> ids = new Set<String>();
     for (Id instanceId : instanceIds) {
-      ids.add(String.valueOf(instanceId));
+      out.addAll(
+        toRecords(
+          store.queryTimeline(
+            new Set<String>{ String.valueOf(instanceId) },
+            MAX_READ_ROWS_PER_INSTANCE
+          )
+        )
+      );
     }
-    return toRecords(store.queryTimeline(ids, MAX_READ_ROWS));
+    return out;
   }
 
   /**
-   * @description Reads archived records by exact correlation key. Two SOQL
-   * queries.
+   * @description Reads archived records by exact correlation key. One SOQL
+   * query for the key index, then one for each match.
    * @param correlationKey the correlation key
    * @return the matching records
    */
@@ -153,30 +162,16 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
     Set<Id> ids = new Set<Id>();
     for (
       Workflow_Archive_Key__b row : store.queryKeys(
-        hashKey(correlationKey),
+        WorkflowArchive.hashCorrelationKey(correlationKey),
         WorkflowArchive.MAX_READ_RECORDS
       )
     ) {
-      if (row.Correlation_Key__c == correlationKey) {
+      // Apex `==` ignores case. `equals` does not.
+      if (correlationKey.equals(row.Correlation_Key__c)) {
         ids.add(Id.valueOf(row.Instance_Id__c));
       }
     }
     return readByInstanceIds(ids);
-  }
-
-  /**
-   * @description Returns the index hash of a correlation key.
-   * @param correlationKey the key. Null hashes as blank.
-   * @return 64 hex characters
-   */
-  @TestVisible
-  private static String hashKey(String correlationKey) {
-    return EncodingUtil.convertToHex(
-      Crypto.generateDigest(
-        'SHA-256',
-        Blob.valueOf(correlationKey == null ? '' : correlationKey)
-      )
-    );
   }
 
   /**
@@ -187,12 +182,13 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
   private static void checkResults(List<Database.SaveResult> results) {
     for (Database.SaveResult result : results) {
       if (!result.isSuccess()) {
-        List<String> messages = new List<String>();
+        // Status codes only: an error message can echo payload text.
+        List<String> codes = new List<String>();
         for (Database.Error err : result.getErrors()) {
-          messages.add(err.getMessage());
+          codes.add(String.valueOf(err.getStatusCode()));
         }
         throw new WorkflowArchive.ArchiveException(
-          'Big Object archive row failed: ' + String.join(messages, '; ')
+          'Big Object archive row failed: ' + String.join(codes, '; ')
         );
       }
     }
