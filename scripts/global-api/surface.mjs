@@ -73,6 +73,7 @@ function collectType(decl, mods, outer, file, types) {
     ),
     node,
     extendsRefs: [],
+    implementsRefs: [],
     members: [],
     enumValues: enm
       ? (enm.enumConstants()?.id_list() ?? []).map((i) => i.getText())
@@ -82,6 +83,8 @@ function collectType(decl, mods, outer, file, types) {
   types.set(qname.toLowerCase(), type);
   if (cls) {
     if (cls.typeRef()) type.extendsRefs.push(cls.typeRef());
+    if (cls.typeList())
+      type.implementsRefs.push(...cls.typeList().typeRef_list());
     for (const bd of cls.classBody().classBodyDeclaration_list()) {
       const md = bd.memberDeclaration();
       if (!md) continue;
@@ -242,6 +245,9 @@ function typeLine(t, types) {
   let line = `global ${t.kind} ${t.name}`;
   if (t.extendsRefs.length) {
     line += ` extends ${t.extendsRefs.map((r) => renderType(r, t.outer ?? t, types)).join(", ")}`;
+  }
+  if (t.implementsRefs.length) {
+    line += ` implements ${t.implementsRefs.map((r) => renderType(r, t.outer ?? t, types)).join(", ")}`;
   }
   if (t.kind === "enum") line += ` { ${t.enumValues.join(", ")} }`;
   return line;

@@ -97,7 +97,7 @@ StepContext.signals(): StepSignals
 StepContext.captures(): StepCaptures
 StepContext.retry(): StepRetryInfo
 global enum StepContext.Level { INFO, WARN, ERROR }
-global class StepContext.Signal
+global class StepContext.Signal implements Comparable
 StepContext.Signal.name: String { get }
 StepContext.Signal.payload: String { get }
 StepContext.Signal.isPresent(): Boolean

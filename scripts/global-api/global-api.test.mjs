@@ -135,6 +135,19 @@ test("checker: renders read-only properties, fields, and qualified inner types",
   ]);
 });
 
+test("checker: renders implements on a global class", () => {
+  const m = buildModel(
+    parseSources({
+      "S.cls":
+        "global class S implements Comparable, Q { public Integer compareTo(Object o) { return 0; } } ",
+      "Q.cls": "global interface Q {}",
+    }),
+  );
+  assert.ok(
+    surfaceLines(m).includes("global class S implements Comparable, Q"),
+  );
+});
+
 test("checker: lists the implicit global constructor, but not for exceptions or explicit ones", () => {
   const m = buildModel(
     parseSources({
