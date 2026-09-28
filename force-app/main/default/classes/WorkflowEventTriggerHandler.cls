@@ -49,11 +49,12 @@ public inherited sharing class WorkflowEventTriggerHandler {
     // 2b. Reap children of failed parents (own savepoint; catches its errors)
     WorkflowCascadeCancel.handleEvents(cascadeEvents);
 
-    // 2c. Send approver notifications (never throws)
-    WorkflowNotifier.handleEvents(notifyEvents);
-
     // 3. Publish throttled events in a single bulk DML statement
     publishThrottledEvents();
+
+    // 4. Send approver notifications last (never throws). A send cannot be
+    // undone: no later step may throw and roll back its Sent row.
+    WorkflowNotifier.handleEvents(notifyEvents);
   }
 
   private void routeEvent(Workflow_Event__e event) {

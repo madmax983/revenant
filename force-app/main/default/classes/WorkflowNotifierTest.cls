@@ -375,6 +375,29 @@ public class WorkflowNotifierTest {
   }
 
   @IsTest
+  static void copiesInOneBatchSendOnce() {
+    seedType();
+    Test.startTest();
+    Id instanceId = startWorkflow(
+      'notify-copies',
+      new Map<String, Object>{ 'recipient' => userId() }
+    );
+    WorkflowEngine.runStep(instanceId);
+    Workflow_Event__e evt = WorkflowNotifier.publishedEvents[0];
+    // At-least-once delivery: two copies of one event in one batch.
+    WorkflowNotifier.handleEvents(
+      new List<Workflow_Event__e>{ evt, evt.clone() }
+    );
+    Test.stopTest();
+
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
+    Assert.areEqual(
+      WorkflowNotifier.OUTCOME_SENT,
+      anchors(instanceId)[0].Outcome__c
+    );
+  }
+
+  @IsTest
   static void nonUserRecipientsAreIgnored() {
     seedType();
     Account acct = new Account(Name = 'Not a recipient');

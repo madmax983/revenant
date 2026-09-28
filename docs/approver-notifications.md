@@ -73,7 +73,7 @@ sequenceDiagram
 2. `request` inserts one anchor row in `Workflow_Log__c` (`Log_Type__c = Notification`, `Outcome__c = Requested`). The key is `Notify:<stepExecId>` in the unique `Fire_Key__c`. The insert uses `allOrNone = false`.
 3. When the insert succeeds, `request` publishes one `NOTIFY` `Workflow_Event__e`.
 4. `WorkflowEventTriggerHandler` gives max 200 `NOTIFY` events to `WorkflowNotifier.handleEvents` in a new transaction. It publishes the other `NOTIFY` events again for a later pass.
-5. `handleEvents` sends the notification. It sets the anchor row to `Sent`, `Failed` or `Skipped`. It does not send a request whose row is already `Sent`.
+5. `handleEvents` runs last in the trigger, after all steps that can throw. It sends the notification. It sets the anchor row to `Sent`, `Failed` or `Skipped`. It sends one time for each key in a pass. It does not send a request whose row is already `Sent`.
 
 ## One time for each logical suspend
 
@@ -84,7 +84,7 @@ A logical suspend is one `Workflow_Step_Execution__c` row. A resume uses the sam
 | `execute()` runs again before the SUSPEND commits (rollback, retry, crash) | The anchor row and the event roll back. The engine sends nothing. The next run sends one time. |
 | A signal wakes the step and it suspends again on the same row | The anchor insert fails on the duplicate key. The engine sends nothing. |
 | An operator resume on the same row | The engine sends nothing. |
-| The platform delivers the `NOTIFY` event again | The row is `Sent`. The engine sends nothing. |
+| The platform delivers the `NOTIFY` event again | The row is `Sent`, or the copy is in the same pass. The engine sends nothing. |
 | A new visit of the step (a loop) | A new row. One new notification. |
 
 You do not supply a dedup token.

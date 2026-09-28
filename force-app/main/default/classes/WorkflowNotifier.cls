@@ -344,7 +344,8 @@ public inherited sharing class WorkflowNotifier {
     return requests;
   }
 
-  // Removes the requests whose anchor row is already Sent (a replayed event).
+  // Removes the requests whose anchor row is already Sent (a replayed event)
+  // and the copies of a request in the same batch.
   private static List<Map<String, Object>> removeSent(
     List<Map<String, Object>> requests
   ) {
@@ -364,10 +365,13 @@ public inherited sharing class WorkflowNotifier {
     ]) {
       sent.add(row.Fire_Key__c.toLowerCase());
     }
+    // Keep one request for each key: the batch can hold copies of one event.
     List<Map<String, Object>> open = new List<Map<String, Object>>();
     for (Map<String, Object> req : requests) {
-      if (!sent.contains(((String) req.get('key')).toLowerCase())) {
+      String key = ((String) req.get('key')).toLowerCase();
+      if (!sent.contains(key)) {
         open.add(req);
+        sent.add(key);
       }
     }
     return open;
