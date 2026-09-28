@@ -33,6 +33,12 @@ public inherited sharing class WorkflowCancellation {
     'DefinitionChanged'
   };
 
+  // Statuses of a node whose rollback already runs.
+  private static final Set<String> ROLLBACK_STATUSES = new Set<String>{
+    'Cancelling',
+    'Compensating'
+  };
+
   private static final String CANCELLED_MESSAGE = 'Cancelled by user.';
   private static final String CANCELLING_MESSAGE = 'Cancelled by user. Compensating.';
 
@@ -79,6 +85,31 @@ public inherited sharing class WorkflowCancellation {
    */
   public static void cascadeCancelNodes(List<Id> orderedIds) {
     cancelNodes(orderedIds, true, null, new Set<String>{ 'Cancelling' });
+  }
+
+  /**
+   * @description Bulk cancel entry (issue #107). Cancels the roots and their
+   * active descendants in one set-based pass. Skips missing and terminal nodes.
+   * With compensations, it also skips nodes that already roll back
+   * (`Cancelling`, `Compensating`), so a repeat does not start a second rollback.
+   * @param rootIds the instances to cancel, in order
+   * @param runCompensations true to roll back completed steps
+   * @return the Ids (roots and descendants) that this call cancelled
+   */
+  public static Set<Id> cancelInstances(
+    List<Id> rootIds,
+    Boolean runCompensations
+  ) {
+    if (rootIds == null || rootIds.isEmpty()) {
+      return new Set<Id>();
+    }
+    Boolean withRollback = runCompensations == true;
+    return cancelNodes(
+      collectActiveTree(rootIds),
+      withRollback,
+      null,
+      withRollback ? ROLLBACK_STATUSES : new Set<String>()
+    );
   }
 
   /**
@@ -254,8 +285,9 @@ public inherited sharing class WorkflowCancellation {
    * @param runCompensations true to roll back completed steps via saga compensation
    * @param requiredId a node that must exist (else not-found exception), or null
    * @param skipStatuses extra statuses to leave untouched
+   * @return the Ids of the nodes that this call cancelled
    */
-  private static void cancelNodes(
+  private static Set<Id> cancelNodes(
     List<Id> orderedIds,
     Boolean runCompensations,
     Id requiredId,
@@ -285,8 +317,9 @@ public inherited sharing class WorkflowCancellation {
         targets.add(instance);
       }
     }
+    Set<Id> targetIds = new Map<Id, Workflow_Instance__c>(targets).keySet();
     if (targets.isEmpty()) {
-      return;
+      return targetIds;
     }
 
     // Plan first: it changes records in memory only, so a malformed stack throws
@@ -296,9 +329,7 @@ public inherited sharing class WorkflowCancellation {
     cancelActiveStepExecs(targets);
 
     // Abort all scheduled jobs for these nodes (sleeps, retries, timeouts)
-    WorkflowOrchestratorEnqueue.abortScheduledJobs(
-      new Map<Id, Workflow_Instance__c>(targets).keySet()
-    );
+    WorkflowOrchestratorEnqueue.abortScheduledJobs(targetIds);
 
     WorkflowCompensation.preCreateFirstCompensationSteps(plan.compensating);
     Database.update(targets, true, AccessLevel.SYSTEM_MODE);
@@ -315,6 +346,7 @@ public inherited sharing class WorkflowCancellation {
     // publish never spends DML that a node write still needs.
     WorkflowParentNotifier.notifyParentCompletion(plan.terminal);
     WorkflowLifecyclePublisher.publish(plan.terminal);
+    return targetIds;
   }
 
   /**

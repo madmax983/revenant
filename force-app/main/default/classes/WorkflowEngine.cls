@@ -842,6 +842,16 @@ public inherited sharing class WorkflowEngine {
   }
 
   /**
+   * Cancels a workflow instance (and its active descendants) and aborts
+   * scheduled jobs. Optionally runs saga compensations.
+   * @param instanceId Id of the target instance to cancel (with its active descendants)
+   * @param runCompensations true to roll back completed steps; null means false
+   */
+  public static void cancel(Id instanceId, Boolean runCompensations) {
+    cancelInstance(instanceId, runCompensations == true);
+  }
+
+  /**
    * @description Cancels a workflow instance, aborts scheduled jobs, and
    * optionally runs saga compensations across the instance and its active
    * descendant tree. Thin dispatcher preserved for the engine's internal cancel
