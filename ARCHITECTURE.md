@@ -126,6 +126,8 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WorkflowJobLiveness`, `WorkflowJobLivenessService`
 - `WorkflowOrphanReclaimSweep`, `WorkflowReclaim`, `WorkflowReclaimPlanner`,
   `WorkflowDeadlineSweep`
+- `WorkflowBatchAwaitSweep` (section 1c: wakes an instance whose awaited
+  batch job ended), `WorkflowBatchJobs`, `WorkflowBatchStep` (issue #138)
 - `WorkflowStallDetectionService`, `WorkflowStallDetector`,
   `WorkflowStallConfigResolver`
 - `WorkflowAlertManager`, `WorkflowAlertEmailBuilder`,

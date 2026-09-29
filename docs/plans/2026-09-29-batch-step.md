@@ -20,41 +20,41 @@ Run an existing `Database.Batchable` as one durable step. The step launches the 
 
 ## Brainstorm (options)
 
-| #   | Idea                                                                          | Keep?                                                                                  |
-| --- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| B1  | Step sleeps and polls `AsyncApexJob` on each wake.                            | No. The AC asks for a tracked field and the watchdog.                                  |
-| B2  | `finish()` sends a signal.                                                    | No. The `Batchable` must not know Revenant.                                            |
-| B3  | New Platform Event from a trigger on `AsyncApexJob`.                          | No. No trigger on that object. The AC forbids a new event.                             |
-| B4  | Indexed field `Awaited_Batch_Job_Id__c` on the instance. The watchdog reads it. | Yes.                                                                                   |
-| B5  | Launch in a `CaptureProducer` through `once()`.                               | Yes. Launch and capture commit together. The lint does not flag it.                    |
-| B6  | Sweep resumes the instance itself.                                            | No. It copies pause, hold and park rules.                                              |
-| B7  | Sweep sets `Sleep_Until__c = now`. Section 2 resumes it in the same heartbeat. | Yes. It uses the existing resume path and its rules.                                   |
-| B8  | Engine sets the field from a new `StepResult` directive.                      | Yes. `withAwaitedBatchJob(Id)`, `public`, not `global`.                                |
-| B9  | `prepareStepOutcome` writes the field for each outcome.                       | Yes. A result without a job clears the field. No stale value stays.                    |
-| B10 | Output keys use the `AsyncApexJob` names.                                     | Yes. No false "record" names.                                                          |
-| B11 | `failOnError` option: a failed batch returns `StepResult.fail`.               | Yes. The shortest path to compensation.                                                |
-| B12 | A virtual `bind(ctx)` hook. A subclass gives the class, scope and input.      | Yes. This is the "one binding" of the success metric.                                  |
-| B13 | Abort the batch on cancel.                                                    | No. Out of scope. Document it.                                                         |
-| B14 | Support parallel branches.                                                    | No. One field holds one job. The step fails before launch in a parallel branch.        |
-| B15 | A missing `AsyncApexJob` row is terminal (`NotFound`).                        | Yes. A purged row must not stall the instance.                                         |
-| B16 | Test seams for launch and job rows in a helper class.                         | Yes. Tests cannot insert `AsyncApexJob`.                                               |
+| #   | Idea                                                                            | Keep?                                                                           |
+| --- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| B1  | Step sleeps and polls `AsyncApexJob` on each wake.                              | No. The AC asks for a tracked field and the watchdog.                           |
+| B2  | `finish()` sends a signal.                                                      | No. The `Batchable` must not know Revenant.                                     |
+| B3  | New Platform Event from a trigger on `AsyncApexJob`.                            | No. No trigger on that object. The AC forbids a new event.                      |
+| B4  | Indexed field `Awaited_Batch_Job_Id__c` on the instance. The watchdog reads it. | Yes.                                                                            |
+| B5  | Launch in a `CaptureProducer` through `once()`.                                 | Yes. Launch and capture commit together. The lint does not flag it.             |
+| B6  | Sweep resumes the instance itself.                                              | No. It copies pause, hold and park rules.                                       |
+| B7  | Sweep sets `Sleep_Until__c = now`. Section 2 resumes it in the same heartbeat.  | Yes. It uses the existing resume path and its rules.                            |
+| B8  | Engine sets the field from a new `StepResult` directive.                        | Yes. `withAwaitedBatchJob(Id)`, `public`, not `global`.                         |
+| B9  | `prepareStepOutcome` writes the field for each outcome.                         | Yes. A result without a job clears the field. No stale value stays.             |
+| B10 | Output keys use the `AsyncApexJob` names.                                       | Yes. No false "record" names.                                                   |
+| B11 | `failOnError` option: a failed batch returns `StepResult.fail`.                 | Yes. The shortest path to compensation.                                         |
+| B12 | A virtual `bind(ctx)` hook. A subclass gives the class, scope and input.        | Yes. This is the "one binding" of the success metric.                           |
+| B13 | Abort the batch on cancel.                                                      | No. Out of scope. Document it.                                                  |
+| B14 | Support parallel branches.                                                      | No. One field holds one job. The step fails before launch in a parallel branch. |
+| B15 | A missing `AsyncApexJob` row is terminal (`NotFound`).                          | Yes. A purged row must not stall the instance.                                  |
+| B16 | Test seams for launch and job rows in a helper class.                           | Yes. Tests cannot insert `AsyncApexJob`.                                        |
 
 ## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                                                    | Prevention                                                                                         |
-| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| A re-run launches a second batch.                                              | `once()` holds the job Id. The launch and the capture commit in one transaction. Test: re-entrant hop. |
-| Auto-retry rolls back to a savepoint after the launch.                         | No code that can throw runs after the launch in `execute()`.                                      |
-| The sweep wakes a sleep or a retry early because of a stale field.            | B9 clears the field. The sweep also needs `Sleep_Until__c = null`.                                 |
-| The sweep resumes the instance two times.                                      | The sweep locks the rows and clears the field in the same update. Test: second sweep does nothing. |
-| A paused definition resumes.                                                   | Section 2 holds it. The sweep only sets the wake time.                                             |
-| A large backlog of waiting instances starves terminal ones.                    | The candidate read has no lock and a limit of 2,000. The platform limits active batches to about 105. |
-| The job row is purged while the watchdog is down.                              | B15.                                                                                               |
-| A malformed field value throws in the sweep and stops the heartbeat.           | The sweep wakes the row. The step reads its own capture. The heartbeat catches sweep errors.      |
-| Two parallel branches overwrite one field.                                     | B14.                                                                                               |
-| A `Completed` job with chunk errors routes as a success.                       | `succeeded` is true only for `Completed` and 0 errors.                                             |
-| The author reads "record counts" but gets chunk counts.                        | B10. The doc says what the counts are.                                                             |
-| The step reads an uncommitted job in the launch transaction.                   | The first run suspends at once. It does not read the job.                                          |
+| Way to fail                                                          | Prevention                                                                                             |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| A re-run launches a second batch.                                    | `once()` holds the job Id. The launch and the capture commit in one transaction. Test: re-entrant hop. |
+| Auto-retry rolls back to a savepoint after the launch.               | No code that can throw runs after the launch in `execute()`.                                           |
+| The sweep wakes a sleep or a retry early because of a stale field.   | B9 clears the field. The sweep also needs `Sleep_Until__c = null`.                                     |
+| The sweep resumes the instance two times.                            | The sweep locks the rows and clears the field in the same update. Test: second sweep does nothing.     |
+| A paused definition resumes.                                         | Section 2 holds it. The sweep only sets the wake time.                                                 |
+| A large backlog of waiting instances starves terminal ones.          | The candidate read has no lock and a limit of 2,000. The platform limits active batches to about 105.  |
+| The job row is purged while the watchdog is down.                    | B15.                                                                                                   |
+| A malformed field value throws in the sweep and stops the heartbeat. | The sweep wakes the row. The step reads its own capture. The heartbeat catches sweep errors.           |
+| Two parallel branches overwrite one field.                           | B14.                                                                                                   |
+| A `Completed` job with chunk errors routes as a success.             | `succeeded` is true only for `Completed` and 0 errors.                                                 |
+| The author reads "record counts" but gets chunk counts.              | B10. The doc says what the counts are.                                                                 |
+| The step reads an uncommitted job in the launch transaction.         | The first run suspends at once. It does not read the job.                                              |
 
 ## Six Thinking Hats
 
@@ -78,12 +78,12 @@ Run an existing `Database.Batchable` as one durable step. The step launches the 
 
 ## Test Plan (RED first)
 
-| Test                                   | Proves                                                   |
-| -------------------------------------- | -------------------------------------------------------- |
+| Test                                   | Proves                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `WorkflowBatchStepTest`                | Launch once, suspend, re-entrant hop, outcomes, input errors, `failOnError`, binding, parallel refusal. |
-| `WorkflowBatchJobsTest`                | Terminal filter, `NotFound`, outcome keys, real launch in a test. |
-| `WorkflowBatchAwaitSweepTest`          | Wake on terminal job, no wake on running job, other waits, exactly once, heartbeat resume. |
-| `StepResultTest`                       | `withAwaitedBatchJob` rules.                             |
-| `WorkflowOutcomePrepare` (through E2E) | Field set on suspend, cleared on complete.               |
-| `BatchStepWorkflowExampleTest`         | Success path with a real batch, failure path with compensation, one launch. |
-| `report-types.test.mjs` (existing)     | The new field is shown or excluded on purpose.           |
+| `WorkflowBatchJobsTest`                | Terminal filter, `NotFound`, outcome keys, real launch in a test.                                       |
+| `WorkflowBatchAwaitSweepTest`          | Wake on terminal job, no wake on running job, other waits, exactly once, heartbeat resume.              |
+| `StepResultTest`                       | `withAwaitedBatchJob` rules.                                                                            |
+| `WorkflowOutcomePrepare` (through E2E) | Field set on suspend, cleared on complete.                                                              |
+| `BatchStepWorkflowExampleTest`         | Success path with a real batch, failure path with compensation, one launch.                             |
+| `report-types.test.mjs` (existing)     | The new field is shown or excluded on purpose.                                                          |
