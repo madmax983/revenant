@@ -27,7 +27,9 @@ necessary. The next start uses the new value.
   in-flight instances of the definition. The emergency stop parks only new
   starts.
 - The capacity status is the overall status of the System Doctor **Async Apex
-  Capacity** panel. The thresholds are `Async_Capacity_Thresholds__c`. See
+  Capacity** panel. The brake uses the same #129 read. It adds no reader. That
+  read uses `System.OrgLimits`, because `Limits.getLimitAsyncCalls()` is
+  "reserved for future use". The thresholds are `Async_Capacity_Thresholds__c`. See
   [async-capacity.md](async-capacity.md).
 - With all three controls off, admission is the same as before this feature.
 
