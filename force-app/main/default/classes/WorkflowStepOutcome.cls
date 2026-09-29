@@ -40,6 +40,7 @@ public inherited sharing class WorkflowStepOutcome {
         Previous_Run_At__c,
         Concurrency_Parked__c,
         Concurrency_Slot_Held__c,
+        Global_Admission__c,
         CreatedDate,
         Progress__c,
         Causation_Id__c,

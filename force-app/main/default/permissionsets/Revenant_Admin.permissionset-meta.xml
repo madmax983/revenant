@@ -10,6 +10,10 @@
         <enabled>true</enabled>
     </classAccesses>
     <classAccesses>
+        <apexClass>WorkflowGlobalAdmissionController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
         <apexClass>WorkflowDashboardController</apexClass>
         <enabled>true</enabled>
     </classAccesses>
@@ -182,6 +186,11 @@
     <fieldPermissions>
         <editable>true</editable>
         <field>Workflow_Instance__c.Admission_Priority__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Instance__c.Global_Admission__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>

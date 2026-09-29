@@ -208,6 +208,14 @@ a concurrency limit to *new* work; the ceiling becomes exact once the pre-gate i
 reach a terminal state. To enforce the ceiling immediately on a busy workflow, enable the
 config during a quiet window (or let the existing instances finish first).
 
+## Global ceiling
+
+For one ceiling on all definitions together, set
+`Global_Max_Active_Instances__c` on `Revenant_Config__mdt`. The global gate
+runs at the same first hop. A braked start parks before the definition gate.
+The gate takes the global slot after the definition slot. See
+[global-admission-brake.md](global-admission-brake.md).
+
 ## Scope
 
 This slice is a per-workflow-definition ceiling only. Priority sets the

@@ -163,7 +163,13 @@ public inherited sharing class ConcurrencyAdmissionOrder {
     if (COMPENSATION_STATUSES.contains(row.Status__c)) {
       row.Concurrency_Parked__c = false;
     }
-    row.Admission_Queue__c = isWaiting(row) ? row.Workflow_Name__c : null;
+    // Issue #136: a start that the global brake parked waits for the brake,
+    // not for a definition slot. It stays out of the queue, so it cannot make
+    // a candidate yield.
+    row.Admission_Queue__c = isWaiting(row) &&
+      row.Global_Admission__c != GlobalAdmissionPolicy.STATE_PARKED
+      ? row.Workflow_Name__c
+      : null;
   }
 
   /**
@@ -209,6 +215,8 @@ public inherited sharing class ConcurrencyAdmissionOrder {
           AND Concurrency_Parked__c = TRUE
           AND Concurrency_Slot_Held__c = FALSE
           AND Status__c IN :WAITING_STATUSES
+          AND (Global_Admission__c = NULL
+          OR Global_Admission__c != :GlobalAdmissionPolicy.STATE_PARKED)
         WITH SYSTEM_MODE
         ORDER BY Id ASC
         LIMIT :maxRows
@@ -222,6 +230,8 @@ public inherited sharing class ConcurrencyAdmissionOrder {
         AND Concurrency_Parked__c = TRUE
         AND Concurrency_Slot_Held__c = FALSE
         AND Status__c IN :WAITING_STATUSES
+        AND (Global_Admission__c = NULL
+        OR Global_Admission__c != :GlobalAdmissionPolicy.STATE_PARKED)
         AND Id > :afterId
       WITH SYSTEM_MODE
       ORDER BY Id ASC

@@ -9,9 +9,14 @@
          Rate Limits panel. WorkflowReadinessController is the endpoint of the Readiness
          panel. WorkflowFleetHealthController is the endpoint of the Fleet Health view.
          WorkflowAsyncCapacityController is the endpoint of the Async Apex Capacity panel.
-         All four only read data and use the same view gate. -->
+         WorkflowGlobalAdmissionController is the endpoint of the Global Admission panel.
+         All of them only read data and use the same view gate. -->
     <classAccesses>
         <apexClass>WorkflowAsyncCapacityController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>WorkflowGlobalAdmissionController</apexClass>
         <enabled>true</enabled>
     </classAccesses>
     <classAccesses>
@@ -315,6 +320,11 @@
     <fieldPermissions>
         <editable>false</editable>
         <field>Workflow_Instance__c.Admission_Priority__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
+        <field>Workflow_Instance__c.Global_Admission__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>

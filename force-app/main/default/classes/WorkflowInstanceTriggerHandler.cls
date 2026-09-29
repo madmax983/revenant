@@ -56,6 +56,8 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
   // slot-held flag is cleared in-place (no extra DML) to guard against double-release;
   // decrements are grouped by workflow definition and applied once below.
   private final Map<String, Integer> slotsToRelease = new Map<String, Integer>();
+  // Global slots to give back (issue #136).
+  private Integer globalSlotsToRelease = 0;
 
   /**
    * @description Constructs the handler with the trigger's new records, old-map,
@@ -115,11 +117,17 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
       clearFailureCategoryIfResolved(instance);
       clearHoldOffForwardPath(instance);
       accumulateSlotRelease(instance, isTerminal, wasTerminal);
+      // Issue #136: the global slot, with the same first-terminal rule.
+      globalSlotsToRelease += GlobalAdmissionGate.onSave(
+        instance,
+        isUpdate && isTerminal && !wasTerminal
+      );
       // Issue #132: after the slot release, so the flags are final.
       ConcurrencyAdmissionOrder.syncQueueField(instance);
     }
 
     releaseSlots();
+    releaseGlobalSlots();
   }
 
   // A cancelled, finished or compensating row is never held (issue #119).
@@ -226,6 +234,21 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     } catch (Exception ignored) {
       // Fire-and-forget: a failed release must never roll back the terminal-state
       // write. The watchdog reconcile sweep reclaims any leaked slot.
+    }
+  }
+
+  // Issue #136. After the definition counters, so `$global` is the last counter
+  // lock. A failed release does not stop the save. The heartbeat reconcile
+  // corrects the count.
+  private void releaseGlobalSlots() {
+    if (globalSlotsToRelease <= 0) {
+      return;
+    }
+    try {
+      GlobalAdmissionGate.release(globalSlotsToRelease);
+    } catch (Exception ignored) {
+      // The watchdog reconcile corrects the count.
+      globalSlotsToRelease = 0;
     }
   }
 }

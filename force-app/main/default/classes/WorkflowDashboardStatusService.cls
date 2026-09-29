@@ -316,9 +316,11 @@ public inherited sharing class WorkflowDashboardStatusService {
     try {
       // Bounded well above any realistic governed-workflow count (one row per durable
       // Concurrency_State__c counter) so the result set is never truncated.
+      // The global brake row (issue #136) has its own panel.
       List<Concurrency_State__c> states = [
         SELECT Workflow_Definition__c, In_Flight_Count__c
         FROM Concurrency_State__c
+        WHERE Workflow_Definition__c != :GlobalAdmissionGate.COUNTER_KEY
         WITH SYSTEM_MODE
         ORDER BY Workflow_Definition__c ASC
         LIMIT 50000

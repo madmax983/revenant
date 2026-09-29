@@ -233,6 +233,13 @@ endpoints moved). All six delegate to `inherited sharing` service classes.
   `WorkflowAsyncCapacityService` → `AsyncCapacityEvaluator` (pure rules). One
   `AsyncApexJob` read (max 2,001 rows) and `System.OrgLimits`. The orchestrator does not
   call it. See [docs/async-capacity.md](docs/async-capacity.md).
+- Global admission brake (#136): `GlobalAdmissionPolicy` (pure rules),
+  `GlobalAdmissionBrake` (config and reads, start marker), `GlobalAdmissionGate`
+  (the `$global` counter row, release, reconcile, audit). The start path and the
+  first-hop gate in `WorkflowStepAdmission` use it. The panel is
+  `WorkflowGlobalAdmissionController` → `GlobalAdmissionStatusService`. An
+  in-flight instance never reaches the brake. See
+  [docs/global-admission-brake.md](docs/global-admission-brake.md).
 - Readiness panel (#114): `WorkflowReadinessController` →
   `WorkflowReadinessService` (rows: top-level `WorkflowReadinessCheck` DTO). It is a separate controller for the same PMD
   reason. The watchdog check uses `WorkflowDashboardStatusService.watchdogRunning`,

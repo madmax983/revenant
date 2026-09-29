@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <isExposed>false</isExposed>
+    <masterLabel>Global Admission Panel</masterLabel>
+    <description>System Doctor panel: global admission brake state (Open or Braked), the reasons and the parked start count.</description>
+</LightningComponentBundle>

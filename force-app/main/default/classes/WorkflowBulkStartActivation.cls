@@ -1,7 +1,8 @@
 /**
  * @description Post-insert activation for the bulk workflow start pipeline
- * ({@link WorkflowBulkStartService}). Applies the operator pause gate and the
- * concurrency-bounded timeout-deferral gate to freshly-inserted instances,
+ * ({@link WorkflowBulkStartService}). Applies the operator pause gate, the
+ * global admission brake (issue #136) and the concurrency-bounded
+ * timeout-deferral gate to freshly-inserted instances,
  * seeds their initial `Workflow_Step_Execution__c` logs, and schedules timeout
  * jobs plus enqueues orchestrators for the eligible (non-parked) instances.
  * Mirrors the scalar admission gates in `WorkflowScalarStartService.doStart`.
@@ -56,25 +57,58 @@ public inherited sharing class WorkflowBulkStartActivation {
   ) {
     List<Workflow_Instance__c> deferredToMark = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c instance : insertedInstances) {
-      if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+      Boolean paused = parkedIds.contains(instance.Id);
+      // Issue #136: the global brake marks the start (see doStart). The brake
+      // reads the decision one time for the batch.
+      String globalState = GlobalAdmissionBrake.stampAtStart(instance, paused);
+      if (
+        globalState != null ||
+        ConcurrencyGate.isConfigured(instance.Workflow_Name__c)
+      ) {
         deferTimeoutIds.add(instance.Id);
         // Durable awaiting-admission marker (see doStart): the pre-start watchdog
         // keys its null-deadline skip off this, not the live CMDT, so a ceiling added
         // later cannot silence a genuine unbounded pre-start watchdog. Cleared on
         // admission. Parked-at-start instances are handled by instancesToPark below.
-        if (!parkedIds.contains(instance.Id)) {
-          deferredToMark.add(
-            new Workflow_Instance__c(
-              Id = instance.Id,
-              Concurrency_Parked__c = true
-            )
-          );
+        if (!paused) {
+          deferredToMark.add(markedCopy(instance));
         }
       }
     }
     if (!deferredToMark.isEmpty()) {
       Database.update(deferredToMark, true, AccessLevel.SYSTEM_MODE);
     }
+  }
+
+  // The fields that the start gates set, for the update of a row that the
+  // pause gate did not park.
+  private static Workflow_Instance__c markedCopy(
+    Workflow_Instance__c instance
+  ) {
+    Workflow_Instance__c row = new Workflow_Instance__c(
+      Id = instance.Id,
+      Concurrency_Parked__c = true
+    );
+    if (instance.Global_Admission__c != null) {
+      row.Global_Admission__c = instance.Global_Admission__c;
+      row.Status__c = instance.Status__c;
+      row.Sleep_Until__c = instance.Sleep_Until__c;
+    }
+    return row;
+  }
+
+  // Ids of the starts that the global brake parked (issue #136). They get no
+  // first hop.
+  private static Set<Id> globalParkedIds(
+    List<Workflow_Instance__c> insertedInstances
+  ) {
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Instance__c instance : insertedInstances) {
+      if (instance.Global_Admission__c == GlobalAdmissionPolicy.STATE_PARKED) {
+        ids.add(instance.Id);
+      }
+    }
+    return ids;
   }
 
   /**
@@ -124,7 +158,8 @@ public inherited sharing class WorkflowBulkStartActivation {
 
   /**
    * @description §8: schedule timeout jobs for non-parked, non-deferred instances
-   * and enqueue orchestrators for all non-parked instances.
+   * and enqueue orchestrators for all non-parked instances. A start that the
+   * global brake parked (issue #136) gets neither.
    * @param insertedInstances the freshly-inserted instances to activate
    * @param parkedIds Ids parked by the pause gate (skipped entirely)
    * @param deferTimeoutIds Ids whose timeout is deferred to admission
@@ -136,8 +171,11 @@ public inherited sharing class WorkflowBulkStartActivation {
   ) {
     List<Workflow_Instance__c> instancesToSchedule = new List<Workflow_Instance__c>();
     List<Id> instanceIds = new List<Id>();
+    Set<Id> globalParked = globalParkedIds(insertedInstances);
     for (Workflow_Instance__c instance : insertedInstances) {
-      if (parkedIds.contains(instance.Id)) {
+      if (
+        parkedIds.contains(instance.Id) || globalParked.contains(instance.Id)
+      ) {
         continue;
       }
       instanceIds.add(instance.Id);
@@ -152,6 +190,9 @@ public inherited sharing class WorkflowBulkStartActivation {
     }
     if (!instanceIds.isEmpty()) {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIds);
+    } else if (!globalParked.isEmpty()) {
+      // Only the watchdog sweep re-drives a parked start (issue #136).
+      WorkflowWatchdog.bootstrap();
     }
   }
 }

@@ -25,6 +25,18 @@ public inherited sharing class WorkflowHeartbeatService {
    * lifecycle publish follows the required work, then the liveness stamp.
    */
   public static void runWatchdogHeartbeat() {
+    // Issue #136: a terminal transition in this heartbeat does not lock the
+    // global counter. Step 7a applies it, after the last instance lock. The
+    // finally block applies it if step 7a does not run.
+    GlobalAdmissionGate.deferReleasesToReconcile();
+    try {
+      runHeartbeatSteps();
+    } finally {
+      GlobalAdmissionGate.endDeferral();
+    }
+  }
+
+  private static void runHeartbeatSteps() {
     Datetime now = WorkflowEngine.mockNow != null
       ? WorkflowEngine.mockNow
       : System.now();
@@ -117,6 +129,16 @@ public inherited sharing class WorkflowHeartbeatService {
       WorkflowAlertManager.detectAndAlertStalls();
     } catch (Exception ignored) {
       // Best-effort stall detection; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 7a. Issue #136: reconcile the global slot count and record an emergency
+    // stop change. After the last instance lock, so the heartbeat locks `$global`
+    // last, as the gate does. Before the best-effort publishes, which can
+    // spend the DML budget.
+    try {
+      GlobalAdmissionGate.reconcile();
+    } catch (Exception ignored) {
+      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
     // All required heartbeat work (timed-out-step failures, sleep resumptions,

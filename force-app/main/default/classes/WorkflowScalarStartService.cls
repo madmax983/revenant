@@ -4,7 +4,8 @@
  * dedup within the configured window ({@link WorkflowStartDedup}), build the
  * instance ({@link WorkflowStartInstanceBuilder}), insert under the unique-index
  * DUPLICATE_VALUE concurrency backstop, seed the initial step execution, and
- * apply the operator pause gate and concurrency-bounded timeout deferral.
+ * apply the operator pause gate, the global admission brake (issue #136) and
+ * concurrency-bounded timeout deferral.
  * Extracted from `WorkflowStartService`, which retains the public start facades
  * and delegates the scalar path here via the boolean-free
  * {@link #doStartGetOrStart} / {@link #doStartSingleton} entry points (the
@@ -218,9 +219,15 @@ public inherited sharing class WorkflowScalarStartService {
     // admission path re-arms it via reArmTimeoutsForResume). Otherwise a still-Pending
     // step sitting in the event/queue backlog during a burst could be failed by the
     // timeout sweep before it ever reaches the gate to park.
-    Boolean deferTimeoutForConcurrency = ConcurrencyGate.isConfigured(
-      instance.Workflow_Name__c
+    // Issue #136: the global brake marks the start (0 SOQL when no control is
+    // set). A parked start is Suspended now and gets no first hop.
+    String globalState = GlobalAdmissionBrake.stampAtStart(
+      instance,
+      parkAtStart
     );
+    Boolean deferTimeoutForConcurrency =
+      ConcurrencyGate.isConfigured(instance.Workflow_Name__c) ||
+      globalState != null;
     // Stamp the durable awaiting-admission marker at deferral time. The pre-start
     // watchdog (WorkflowTimeoutJob) keys its null-deadline skip off this marker, not
     // the live CMDT, so a ceiling added later cannot retroactively silence a genuine
@@ -243,6 +250,14 @@ public inherited sharing class WorkflowScalarStartService {
     // enqueue; the watchdog re-drives held work on resume.
     if (parkAtStart) {
       return parkStartInstance(instance);
+    }
+    // The engine does not drop this start. The watchdog sleep sweep sends it
+    // to the gate after the brake opens.
+    if (globalState == GlobalAdmissionPolicy.STATE_PARKED) {
+      // Only the watchdog sweep re-drives a parked start. A normal start
+      // bootstraps the watchdog in its enqueue, so this start does too.
+      WorkflowWatchdog.bootstrap();
+      return new WorkflowEngine.StartResult(instance.Id).markNew();
     }
 
     return finalizeStart(instance, deferTimeoutForConcurrency);

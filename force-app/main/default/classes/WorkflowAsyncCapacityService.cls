@@ -2,7 +2,9 @@
  * @description Reads the data for the Async Apex Capacity panel in System Doctor (#129).
  * Cost: max 1 SOQL (one AsyncApexJob read, max JOB_SCAN_LIMIT + 1 query rows). OrgLimits
  * and the config read cost no SOQL. It writes no records. WorkflowOrchestrator does not
- * call it.
+ * call it. The global brake (#136) calls `currentStatus` when its auto-brake is on: at a
+ * new start, at the first hop of a start that waits, and in the watchdog sweep. An
+ * in-flight instance does not call it.
  */
 public inherited sharing class WorkflowAsyncCapacityService {
   // System.OrgLimits key of the rolling 24 hour async Apex execution count.
@@ -45,6 +47,20 @@ public inherited sharing class WorkflowAsyncCapacityService {
       return readCapacity();
     } catch (Exception ex) {
       throw WorkflowDashboardSupport.auraError(ex.getMessage());
+    }
+  }
+
+  /**
+   * @description Gives the overall status for the global admission brake
+   * (issue #136). No gate. Cost: max 1 SOQL. The brake calls it one time for
+   * each transaction, never for an in-flight instance.
+   * @return HEALTHY, DEGRADED, CRITICAL or UNKNOWN, or null when the read fails.
+   */
+  public static String currentStatus() {
+    try {
+      return (String) readCapacity().get('status');
+    } catch (Exception ex) {
+      return null;
     }
   }
 

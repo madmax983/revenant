@@ -58,4 +58,16 @@
         <field>Async_Capacity_Thresholds__c</field>
         <value xsi:type="xsd:string">80,95</value>
     </values>
+    <values>
+        <field>Auto_Brake_On_Capacity__c</field>
+        <value xsi:type="xsd:boolean">false</value>
+    </values>
+    <values>
+        <field>Emergency_Stop__c</field>
+        <value xsi:type="xsd:boolean">false</value>
+    </values>
+    <values>
+        <field>Global_Max_Active_Instances__c</field>
+        <value xsi:nil="true"/>
+    </values>
 </CustomMetadata>

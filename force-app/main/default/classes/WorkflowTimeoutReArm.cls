@@ -60,14 +60,17 @@ public inherited sharing class WorkflowTimeoutReArm {
   private static Set<Id> collectConcurrencyDeferIds(Set<Id> instanceIds) {
     Set<Id> deferIds = new Set<Id>();
     for (Workflow_Instance__c inst : [
-      SELECT Id, Workflow_Name__c, Concurrency_Slot_Held__c
+      SELECT Id, Workflow_Name__c, Concurrency_Slot_Held__c, Global_Admission__c
       FROM Workflow_Instance__c
       WHERE Id IN :instanceIds
       WITH SYSTEM_MODE
     ]) {
+      // Issue #136: a start that waits for the global gate also gets its
+      // deadline at admission.
       if (
-        !inst.Concurrency_Slot_Held__c &&
-        ConcurrencyGate.isConfigured(inst.Workflow_Name__c)
+        GlobalAdmissionPolicy.isAwaiting(inst.Global_Admission__c) ||
+        (!inst.Concurrency_Slot_Held__c &&
+        ConcurrencyGate.isConfigured(inst.Workflow_Name__c))
       ) {
         deferIds.add(inst.Id);
       }

@@ -57,9 +57,12 @@ public inherited sharing class ConcurrencyReconciler {
     Set<String> onlyWorkflows
   ) {
     if (onlyWorkflows == null) {
+      // The global brake row (issue #136) is not a definition counter. It has
+      // its own reconcile (GlobalAdmissionGate.reconcile).
       return [
         SELECT Workflow_Definition__c, In_Flight_Count__c
         FROM Concurrency_State__c
+        WHERE Workflow_Definition__c != :GlobalAdmissionGate.COUNTER_KEY
         WITH SYSTEM_MODE
         LIMIT 50000
         FOR UPDATE

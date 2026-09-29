@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Global_Admission__c</fullName>
+    <description>The engine sets this value (issue #136). Awaiting: a new start that must pass the global gate at its first hop. Parked: a new start that the global brake parked. Held: the instance holds one global slot. Blank: not governed. Do not edit.</description>
+    <externalId>true</externalId>
+    <label>Global Admission</label>
+    <length>10</length>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>false</unique>
+</CustomField>

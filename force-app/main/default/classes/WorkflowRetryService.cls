@@ -44,6 +44,9 @@ public inherited sharing class WorkflowRetryService {
     }
     instance.Error_Message__c = null;
     instance.Failure_Category__c = null;
+    // Issue #136: a retried instance counts toward the global ceiling. It
+    // takes a slot and does not park.
+    GlobalAdmissionGate.countRetry(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
 
     // Enqueue the orchestrator to resume execution
@@ -74,7 +77,9 @@ public inherited sharing class WorkflowRetryService {
         Error_Message__c,
         Compensation_Stack__c,
         Workflow_Name__c,
-        Failure_Category__c
+        Failure_Category__c,
+        Parent_Instance__c,
+        Global_Admission__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
