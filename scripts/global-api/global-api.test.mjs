@@ -1,9 +1,7 @@
 // Frozen global API checks (issue #122). Run: npm run test:global-api
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,6 +23,12 @@ import {
   stubSources,
   surfaceLines,
 } from "./surface.mjs";
+import {
+  META,
+  apexLsClasspath,
+  apexLsErrors,
+  apexLsMissing,
+} from "./apex-ls.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
@@ -408,17 +412,6 @@ test("the subscriber fixture writes no read-only global property", () => {
 
 // ─── Packaged view: compile against the global API only ───────────────────
 
-function apexLsClasspath() {
-  if (process.env.APEX_LS_CLASSPATH) return process.env.APEX_LS_CLASSPATH;
-  const local = join(HERE, ".apex-ls", "lib");
-  return existsSync(local) ? join(local, "*") : null;
-}
-
-const META =
-  '<?xml version="1.0" encoding="UTF-8"?>\n' +
-  '<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">' +
-  "<apiVersion>67.0</apiVersion><status>Active</status></ApexClass>\n";
-
 function writeProject(dir, namespace, files, dependency) {
   const classesDir = join(dir, "src", "classes");
   mkdirSync(classesDir, { recursive: true });
@@ -438,46 +431,14 @@ function writeProject(dir, namespace, files, dependency) {
   }
 }
 
-/** Runs apex-ls on a workspace. Returns the error and missing-type messages. */
-function apexLsErrors(classpath, workspace) {
-  const run = spawnSync(
-    "java",
-    [
-      "-cp",
-      classpath,
-      "io.github.apexdevtools.apexls.CheckForIssues",
-      "-n",
-      "-f",
-      "json",
-      "-w",
-      workspace,
-    ],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  if (run.error) throw run.error;
-  // apex-ls exits 0 with no issue and 4 with issues.
-  if (![0, 4].includes(run.status) || !run.stdout.includes("{")) {
-    throw new Error(`apex-ls failed (exit ${run.status}): ${run.stderr}`);
-  }
-  const json = JSON.parse(run.stdout.slice(run.stdout.indexOf("{")));
-  return json.files.flatMap((f) =>
-    f.messages.map(
-      (m) =>
-        `${f.path.split(/[\\/]/).pop()}:${m.start.line} ${m.category}: ${m.message}`,
-    ),
-  );
-}
-
 test("packaged view: the subscriber fixture compiles in a foreign namespace", (t) => {
-  const classpath = apexLsClasspath();
-  const java = spawnSync("java", ["-version"]);
-  if (!classpath || java.status !== 0) {
-    const why =
-      "needs Java and apex-ls (run scripts/global-api/fetch-apex-ls.sh)";
+  const why = apexLsMissing();
+  if (why) {
     if (process.env.REQUIRE_APEX_LS) assert.fail(why);
     t.skip(why);
     return;
   }
+  const classpath = apexLsClasspath();
   const work = mkdtempSync(join(tmpdir(), "revenant-global-api-"));
   try {
     const engineDir = join(work, ENGINE_NS);

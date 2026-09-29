@@ -4,6 +4,8 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 
 <img width="3726" height="1832" alt="Screenshot 2026-06-24 100608" src="https://github.com/user-attachments/assets/6056cf52-6918-45bc-bf20-03590460aa7d" />
 
+> **New to Revenant?** Run your first durable workflow in less than 10 minutes: see the **[Quickstart](docs/quickstart.md)**.
+
 > **Upgrading from an earlier build?** The public API was reshaped around request objects, `StepContext` accessor sub-objects (`ctx.signals()`, `ctx.events()`, `ctx.captures()`, …), and a fluent `StepResult` builder. See **[MIGRATION.md](MIGRATION.md)** for the full list of breaking changes and old→new mappings.
 
 ---
@@ -815,6 +817,7 @@ Admins can subscribe to `Workflow_Alert__e` via a standard record-triggered Flow
   - `classes/` - Framework classes, queueables, finalizers, and scheduling utilities.
   - `objects/` - Core database schemas (`Workflow_Instance__c`, `Workflow_Step_Execution__c`), Platform Events, and Custom Metadata Types.
   - `lwc/` - Responsive visual monitoring timeline dashboard.
+- `examples/quickstart/` - `HelloWorkflow`, the two-step [Quickstart](docs/quickstart.md) example, and its read-only check.
 - `examples/main/default/` - Reference Architectures
   - `classes/` - Onboarding, Saga rollback, version upgrades, Apex Cursor parallel processing, HTTP Callout/Timeout Watchdog, and parent→child workflow composition implementations.
   - `triggers/` - Opportunity stage triggers demonstrating automated workflow instantiation.
@@ -828,6 +831,8 @@ Admins can subscribe to `Workflow_Alert__e` via a standard record-triggered Flow
 sf project deploy start          # deploy to default scratch org
 sf apex run test -w 10           # run the full test suite
 npm run test:global-api          # check the frozen global API (docs/global-api.md)
+npm run test:quickstart          # check the quickstart runner, doc and scripts
+npm run quickstart               # deploy, run and verify HelloWorkflow (docs/quickstart.md)
 ```
 
 For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.

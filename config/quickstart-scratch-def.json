@@ -1,0 +1,5 @@
+{
+  "orgName": "Revenant Quickstart",
+  "edition": "developer",
+  "features": ["ApexUserModeWithPermset"]
+}
