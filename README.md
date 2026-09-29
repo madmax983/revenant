@@ -55,6 +55,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Async Apex Capacity Headroom**: System Doctor shows how much async Apex capacity the org has left: daily executions and pending executions. Each metric is Healthy, Degraded, Critical or Unknown. A Critical metric shows **Chain handoff at risk** before the Queueable chain stops. Read-only. 1 SOQL for the read. No new object. See [docs/async-capacity.md](docs/async-capacity.md).
 - **Global Admission Brake**: Three controls on `Revenant_Config__mdt` park new starts for all definitions: `Emergency_Stop__c`, `Auto_Brake_On_Capacity__c` (park while async capacity is Critical) and `Global_Max_Active_Instances__c`. In-flight instances continue and drain. After the brake opens, the next watchdog sweep sends parked starts to the gate. No new object, no new scheduled job. With all controls off, nothing changes. See [docs/global-admission-brake.md](docs/global-admission-brake.md).
 - **Watchdog Liveness**: Each complete watchdog sweep writes its time. System Doctor shows Healthy, Stale or Unknown. A stall sends one alert. The check runs outside the watchdog. It can find a dead watchdog. See [docs/watchdog-liveness.md](docs/watchdog-liveness.md).
+- **Native Report Types**: Two Custom Report Types, `Revenant Workflow Instances` and `Revenant Workflow Instances with Step Executions`, let an admin make reports, dashboards and scheduled digests. No code. Fields that can contain a pointer or an encoded value are not in the types. See [docs/report-types.md](docs/report-types.md).
 - **Declarative Recurring Schedules (0-slot)**: Create a `Workflow_Schedule__c` record to run any workflow on a cron cadence — no Apex, and **zero additional scheduled-job slots** beyond the existing watchdog. See [docs/recurring-schedules.md](docs/recurring-schedules.md).
 - **Schedule Health**: An enabled 0-slot schedule that does not fire within one sweep interval of its window shows as **Overdue**. A schedule whose last fire failed shows as **Last fire failed**. System Doctor and the Schedule Manager show both. Each problem sends one alert. No new job slot. See [docs/schedule-health.md](docs/schedule-health.md).
 
@@ -828,6 +829,7 @@ Admins can subscribe to `Workflow_Alert__e` via a standard record-triggered Flow
   - `classes/` - Framework classes, queueables, finalizers, and scheduling utilities.
   - `objects/` - Core database schemas (`Workflow_Instance__c`, `Workflow_Step_Execution__c`), Platform Events, and Custom Metadata Types.
   - `lwc/` - Responsive visual monitoring timeline dashboard.
+  - `reportTypes/` - Custom Report Types for Reports and Dashboards ([docs/report-types.md](docs/report-types.md)).
 - `tools/revenant-lint/` - Rust core of the [determinism lint](docs/determinism-lint.md): lexer, rules, native CLI, and wasm build.
 - `tools/sf-plugin-revenant/` - `sf revenant lint determinism` plugin. It loads the wasm core.
 - `examples/quickstart/` - `HelloWorkflow`, the two-step [Quickstart](docs/quickstart.md) example, and its read-only check.
@@ -845,6 +847,7 @@ sf project deploy start          # deploy to default scratch org
 sf apex run test -w 10           # run the full test suite
 npm run test:global-api          # check the frozen global API (docs/global-api.md)
 npm run test:quickstart          # check the quickstart runner, doc and scripts
+npm run test:report-types        # check the Custom Report Types (docs/report-types.md)
 npm run quickstart               # deploy, run and verify HelloWorkflow (docs/quickstart.md)
 npm run test:determinism-lint    # Rust core and sf plugin tests (docs/determinism-lint.md)
 ```
