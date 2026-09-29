@@ -5,7 +5,8 @@
     "test:unit:coverage": "sfdx-lwc-jest --coverage",
     "test:global-api": "node --test scripts/global-api/global-api.test.mjs",
     "test:quickstart": "node --test scripts/quickstart/smoke.test.mjs scripts/quickstart/quickstart.test.mjs",
-    "quickstart": "node scripts/quickstart/smoke.mjs"
+    "quickstart": "node scripts/quickstart/smoke.mjs",
+    "test:determinism-lint": "cargo test --manifest-path tools/revenant-lint/Cargo.toml && npm --prefix tools/sf-plugin-revenant ci && npm --prefix tools/sf-plugin-revenant run build && npm --prefix tools/sf-plugin-revenant test"
   },
   "devDependencies": {
     "@apexdevtools/apex-parser": "5.2.0",

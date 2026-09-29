@@ -581,6 +581,16 @@ static void onboardingWorkflowIsWellFormed() {
 
 `validate` flags: a definition class that doesn't resolve or doesn't implement `WorkflowDefinition`; a `getInitialStep()` that is blank or not contained in `getSteps()`; any `getSteps()` entry that doesn't resolve to an instantiable `WorkflowStep`/`CompensatableStep`; and duplicate `getSteps()` entries. It additionally runs a **best-effort** transition probe that drives `getNextStep(...)` for each declared step and flags any returned successor not in `getSteps()` — best-effort because `getNextStep` is data-dependent and cannot be fully enumerated. Inspect `result.defects` (each has a `code`, `stepName`, and `message`) or `result.getMessages()` for the full list. This is why `getSteps()` is part of the `WorkflowDefinition` contract: it is the authoritative step inventory the validator checks the DAG against.
 
+#### Lint step code for replay safety (`sf` plugin)
+
+`WorkflowValidator` checks the DAG. It does not read step code. A step that calls `Datetime.now()`, `Math.random()`, `UserInfo`, or `System.enqueueJob()` gets a new result each time the engine runs it again. The determinism lint finds these calls in the source, before deploy:
+
+```bash
+sf revenant lint determinism        # exit 1 on a HIGH defect
+```
+
+A call in a `CaptureProducer` (read through `once()`) is safe. See **[docs/determinism-lint.md](docs/determinism-lint.md)**.
+
 Where `WorkflowValidator` checks the _definition's shape_, the next section validates _each invocation's payload_.
 
 ---
@@ -817,6 +827,8 @@ Admins can subscribe to `Workflow_Alert__e` via a standard record-triggered Flow
   - `classes/` - Framework classes, queueables, finalizers, and scheduling utilities.
   - `objects/` - Core database schemas (`Workflow_Instance__c`, `Workflow_Step_Execution__c`), Platform Events, and Custom Metadata Types.
   - `lwc/` - Responsive visual monitoring timeline dashboard.
+- `tools/revenant-lint/` - Rust core of the [determinism lint](docs/determinism-lint.md): lexer, rules, native CLI, and wasm build.
+- `tools/sf-plugin-revenant/` - `sf revenant lint determinism` plugin. It loads the wasm core.
 - `examples/quickstart/` - `HelloWorkflow`, the two-step [Quickstart](docs/quickstart.md) example, and its read-only check.
 - `examples/main/default/` - Reference Architectures
   - `classes/` - Onboarding, Saga rollback, version upgrades, Apex Cursor parallel processing, HTTP Callout/Timeout Watchdog, and parent→child workflow composition implementations.
@@ -833,6 +845,7 @@ sf apex run test -w 10           # run the full test suite
 npm run test:global-api          # check the frozen global API (docs/global-api.md)
 npm run test:quickstart          # check the quickstart runner, doc and scripts
 npm run quickstart               # deploy, run and verify HelloWorkflow (docs/quickstart.md)
+npm run test:determinism-lint    # Rust core and sf plugin tests (docs/determinism-lint.md)
 ```
 
 For testing patterns — `WorkflowTestHarness`, step-level unit tests, governor limit guidance, and when to use each — see **[docs/testing.md](docs/testing.md)**.

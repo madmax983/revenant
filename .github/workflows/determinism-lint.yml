@@ -1,0 +1,75 @@
+# Determinism lint gate (issue #135).
+# rust: fmt, clippy (pedantic, nursery), tests. Then the lint runs on this repo.
+# That step reports only, until the example hazards are corrected.
+# plugin: builds the wasm core and runs the sf plugin tests.
+name: Determinism Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/**"
+      - "force-app/**"
+      - "examples/**"
+      - ".github/workflows/determinism-lint.yml"
+  pull_request:
+    paths:
+      - "tools/**"
+      - "force-app/**"
+      - "examples/**"
+      - ".github/workflows/determinism-lint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: determinism-lint-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: tools/revenant-lint
+
+jobs:
+  rust:
+    name: Rust core
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (wasm)
+        run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
+      - name: Test
+        run: cargo test
+      - name: Dogfood (report only)
+        run: cargo run --quiet -- --fail-on never ../../force-app ../../examples
+
+  plugin:
+    name: sf plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/sf-plugin-revenant
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Build the wasm core
+        run: npm run build
+      - name: Test
+        run: npm test

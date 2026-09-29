@@ -1,0 +1,37 @@
+{
+  "name": "@revenant/plugin-revenant",
+  "description": "Salesforce CLI plugin for Revenant. Finds replay-unsafe calls in workflow steps before deploy.",
+  "version": "0.1.0",
+  "private": true,
+  "license": "(MIT OR Apache-2.0)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "files": [
+    "src",
+    "lib/revenant_lint.wasm"
+  ],
+  "scripts": {
+    "build": "node scripts/build-wasm.mjs",
+    "test": "node --test test/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@oclif/core": "^4.14.0",
+    "@salesforce/sf-plugins-core": "^13.0.4"
+  },
+  "oclif": {
+    "commands": "./src/commands",
+    "bin": "sf",
+    "topicSeparator": " ",
+    "topics": {
+      "revenant": {
+        "description": "Commands for the Revenant durable execution engine."
+      },
+      "revenant:lint": {
+        "description": "Static checks for Revenant workflow code."
+      }
+    }
+  }
+}

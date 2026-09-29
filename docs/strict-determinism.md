@@ -1,6 +1,6 @@
 # Strict Determinism Mode
 
-Issue #102. The engine can find a step that makes a different routing decision when it runs again with the same inputs. It fails the instance before the decision is written. Use this mode in development and staging.
+Issue #102. The engine can find a step that makes a different routing decision when it runs again with the same inputs. It fails the instance before the decision is written. Use this mode in development and staging. To find replay-unsafe calls before deploy, use the [determinism lint](determinism-lint.md).
 
 ## Why a step runs again
 
