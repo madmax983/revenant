@@ -6,7 +6,7 @@
   "license": "(MIT OR Apache-2.0)",
   "type": "module",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.19.0"
   },
   "files": [
     "src",

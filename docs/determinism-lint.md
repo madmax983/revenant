@@ -8,7 +8,7 @@ The engine runs a step again after a wait, `RETRY`, `SLEEP` or `YIELD`. A call t
 
 The core is Rust, compiled to WebAssembly. The `sf` plugin and the native CLI use the same core.
 
-Build and link the `sf` plugin (Node 22, Rust with the `wasm32-unknown-unknown` target):
+Build and link the `sf` plugin (Node 22.19 or later, Rust with the `wasm32-unknown-unknown` target):
 
 ```bash
 rustup target add wasm32-unknown-unknown
