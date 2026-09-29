@@ -49,6 +49,20 @@ public inherited sharing class WorkflowAsyncCapacityService {
   }
 
   /**
+   * @description Gives the overall status for the global admission brake
+   * (issue #136). No gate. Cost: max 1 SOQL. The brake calls it only for a new
+   * start that it governs, never for an in-flight instance.
+   * @return HEALTHY, DEGRADED, CRITICAL or UNKNOWN, or null when the read fails.
+   */
+  public static String currentStatus() {
+    try {
+      return (String) readCapacity().get('status');
+    } catch (Exception ex) {
+      return null;
+    }
+  }
+
+  /**
    * @description Reads the org limit, the job counts and the thresholds. No gate.
    * @return The capacity envelope.
    */

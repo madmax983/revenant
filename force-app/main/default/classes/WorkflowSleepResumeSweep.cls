@@ -51,6 +51,9 @@ public inherited sharing class WorkflowSleepResumeSweep {
     List<Workflow_Instance__c> readyToResume = new List<Workflow_Instance__c>();
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
+      // Issue #136: while the global brake is on, a parked start stays parked.
+      // It is not selected, so it costs no async job and fills no batch slot.
+      Set<String> heldGlobalStates = GlobalAdmissionBrake.sweepExclusions();
       readyToResume = [
         SELECT
           Id,
@@ -75,6 +78,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
           AND Sleep_Until__c <= :now
           AND Workflow_Name__c NOT IN :pausedDefNames
           AND Held_At__c = NULL
+          AND (Global_Admission__c = NULL
+          OR Global_Admission__c NOT IN :heldGlobalStates)
         WITH SYSTEM_MODE
         LIMIT :watchdogResumeBatchSize
         FOR UPDATE

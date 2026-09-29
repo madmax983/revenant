@@ -186,6 +186,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Instance__c.Global_Admission__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Instance__c.Concurrency_Parked__c</field>
         <readable>true</readable>
     </fieldPermissions>

@@ -157,6 +157,7 @@ public inherited sharing class WorkflowStepRunner {
         Previous_Run_At__c,
         Concurrency_Slot_Held__c,
         Concurrency_Parked__c,
+        Global_Admission__c,
         CreatedDate,
         Failure_Category__c,
         Causation_Id__c,

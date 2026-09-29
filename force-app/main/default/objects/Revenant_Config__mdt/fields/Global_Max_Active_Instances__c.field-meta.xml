@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Global_Max_Active_Instances__c</fullName>
+    <description>Org-wide maximum of admitted top-level instances for all definitions together (issue #136). When the count is at this value, a new start parks until a slot is free. Blank, 0 or negative: no ceiling. Children and Continue-As-New successors do not take a new slot.</description>
+    <externalId>false</externalId>
+    <fieldManageability>SubscriberControlled</fieldManageability>
+    <inlineHelpText>Blank means no ceiling. A new start parks when this number of instances holds a global slot.</inlineHelpText>
+    <label>Global Max Active Instances</label>
+    <precision>9</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>

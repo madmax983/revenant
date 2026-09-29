@@ -87,6 +87,15 @@ public inherited sharing class WorkflowHeartbeatService {
       // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
+    // 4-global. Issue #136: reconcile the global slot count and record an
+    // emergency stop change. After the definition counters (same lock order as
+    // the gate).
+    try {
+      GlobalAdmissionGate.reconcile();
+    } catch (Exception ignored) {
+      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
+    }
+
     // 4a. Issue #132: put waiting rows from before admission priority into the
     // indexed admission queue, so that the gate sees them.
     try {

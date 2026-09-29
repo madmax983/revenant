@@ -1,0 +1,62 @@
+<template>
+    <div class="admission-panel">
+        <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+            <h3 class="slds-text-heading_small">Global Admission</h3>
+            <template if:true={hasData}>
+                <span data-id="admission-state" class={stateBadgeClass}>{stateLabel}</span>
+            </template>
+        </div>
+
+        <template if:true={isLoading}>
+            <div data-id="admission-loading" aria-live="polite" aria-busy="true" class="slds-box slds-text-color_weak slds-text-align_center">
+                Loading global admission…
+            </div>
+        </template>
+
+        <template if:true={error}>
+            <div data-id="admission-error" role="alert" class="slds-box slds-text-align_center">
+                <lightning-icon icon-name="utility:warning" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                Global admission state is not available.
+                <div class="slds-text-body_small slds-text-color_weak">{error}</div>
+            </div>
+        </template>
+
+        <template if:true={hasData}>
+            <template if:true={isBraked}>
+                <div data-id="admission-braked" role="alert" class="slds-notify slds-notify_alert slds-theme_error slds-m-bottom_small">
+                    <lightning-icon icon-name="utility:error" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                    <div>
+                        <p><strong>New starts park.</strong> In-flight instances continue.</p>
+                        <ul class="slds-list_horizontal slds-has-dividers_left">
+                            <template for:each={reasonRows} for:item="r">
+                                <li key={r.key} data-id="admission-reason" class="slds-item">{r.label}</li>
+                            </template>
+                        </ul>
+                    </div>
+                </div>
+            </template>
+            <template if:true={isUngoverned}>
+                <div data-id="admission-ungoverned" class="slds-text-body_small slds-text-color_weak slds-m-bottom_x-small">
+                    No global control is set. Admission is the same as before.
+                </div>
+            </template>
+
+            <div class="slds-box">
+                <dl class="slds-list_horizontal slds-wrap">
+                    <dt class="slds-item_label slds-text-color_weak">Emergency stop</dt>
+                    <dd class="slds-item_detail" data-id="admission-stop">{stopLabel}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Auto-brake on Critical capacity</dt>
+                    <dd class="slds-item_detail" data-id="admission-auto">{autoBrakeLabel}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Global slots used / ceiling</dt>
+                    <dd class="slds-item_detail" data-id="admission-ceiling">{ceilingLabel}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Starts parked by the brake</dt>
+                    <dd class="slds-item_detail" data-id="admission-parked">{parkedLabel}</dd>
+                </dl>
+                <div data-id="admission-asof" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{asOfLabel}</div>
+            </div>
+            <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
+                To stop all new starts, go to Setup &gt; Custom Metadata Types &gt; Revenant Config &gt; Default and select Emergency Stop. Clear it to admit the parked starts again. The watchdog admits them at its next sweep.
+            </p>
+        </template>
+    </div>
+</template>

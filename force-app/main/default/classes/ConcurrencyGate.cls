@@ -220,11 +220,12 @@ public inherited sharing class ConcurrencyGate {
   /**
    * @description Locks the workflow's counter row, lazily provisioning it on first use.
    * Mirrors RateLimiter's duplicate-insert race recovery: a concurrent first-use insert
-   * that loses the unique-key race is caught and the winner's row is re-locked.
+   * that loses the unique-key race is caught and the winner's row is re-locked. The
+   * global brake (issue #136) also uses it for its reserved row.
    * @param workflowName The workflow definition name whose counter row to lock or provision.
    * @return The locked counter row for the workflow.
    */
-  private static Concurrency_State__c lockOrProvision(String workflowName) {
+  public static Concurrency_State__c lockOrProvision(String workflowName) {
     List<Concurrency_State__c> states = lockExistingState(workflowName);
     if (!states.isEmpty()) {
       return states[0];
@@ -232,7 +233,8 @@ public inherited sharing class ConcurrencyGate {
 
     Concurrency_State__c state = new Concurrency_State__c(
       Workflow_Definition__c = workflowName,
-      In_Flight_Count__c = 0
+      In_Flight_Count__c = 0,
+      Emergency_Stop_Seen__c = false
     );
     try {
       insert as system state;
@@ -251,7 +253,7 @@ public inherited sharing class ConcurrencyGate {
       return new List<Concurrency_State__c>();
     }
     return [
-      SELECT In_Flight_Count__c
+      SELECT In_Flight_Count__c, Emergency_Stop_Seen__c
       FROM Concurrency_State__c
       WHERE Workflow_Definition__c = :workflowName
       WITH SYSTEM_MODE
@@ -276,7 +278,7 @@ public inherited sharing class ConcurrencyGate {
       throw e;
     }
     List<Concurrency_State__c> existing = [
-      SELECT In_Flight_Count__c
+      SELECT In_Flight_Count__c, Emergency_Stop_Seen__c
       FROM Concurrency_State__c
       WHERE Workflow_Definition__c = :workflowName
       WITH SYSTEM_MODE

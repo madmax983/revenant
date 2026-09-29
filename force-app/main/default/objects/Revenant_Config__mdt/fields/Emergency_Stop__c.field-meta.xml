@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Emergency_Stop__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>When you select this box, all new starts park (issue #136). In-flight instances continue. This is not the definition pause. Clear the box to admit the parked starts again. The watchdog records each change in Workflow_Log__c. Default: off.</description>
+    <externalId>false</externalId>
+    <fieldManageability>SubscriberControlled</fieldManageability>
+    <inlineHelpText>Parks all new starts. In-flight instances continue.</inlineHelpText>
+    <label>Emergency Stop</label>
+    <type>Checkbox</type>
+</CustomField>

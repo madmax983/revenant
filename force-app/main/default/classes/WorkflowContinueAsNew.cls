@@ -114,6 +114,12 @@ public inherited sharing class WorkflowContinueAsNew {
     // The successor seed carries the new key and the hold (issue #119).
     Workflow_Instance__c seed = WorkflowInstanceHold.successorHold(instance);
     seed.Correlation_Key__c = newKey;
+    // Issue #136: the chain keeps its one global slot. The successor takes it,
+    // and the trigger does not release it on ContinuedAsNew. Read it before the
+    // update below.
+    if (instance.Global_Admission__c == GlobalAdmissionPolicy.STATE_HELD) {
+      seed.Global_Admission__c = GlobalAdmissionPolicy.STATE_HELD;
+    }
 
     // Mark current instance as ContinuedAsNew
     instance.Status__c = 'ContinuedAsNew';
@@ -193,6 +199,7 @@ public inherited sharing class WorkflowContinueAsNew {
       // The successor continues the held run, so it parks at its first gate.
       Held_At__c = seed.Held_At__c,
       Hold_Reason__c = seed.Hold_Reason__c,
+      Global_Admission__c = seed.Global_Admission__c,
       // Issue #132: the successor keeps the admission priority of the run. It
       // gets a new rank key from its own start time.
       Admission_Priority__c = ConcurrencyAdmissionOrder.resolvePriority(

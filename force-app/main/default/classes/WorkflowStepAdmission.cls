@@ -132,7 +132,12 @@ public inherited sharing class WorkflowStepAdmission {
     if (instance.Concurrency_Slot_Held__c) {
       return false;
     }
-    if (ConcurrencyGate.isConfigured(instance.Workflow_Name__c)) {
+    // Issue #136: a new start that waits for the global gate. An in-flight
+    // instance has no such marker, so the brake never stops it.
+    if (
+      GlobalAdmissionPolicy.isAwaiting(instance.Global_Admission__c) ||
+      ConcurrencyGate.isConfigured(instance.Workflow_Name__c)
+    ) {
       return admitConfiguredInstance(instance);
     }
     // Otherwise unbounded (no ceiling): fall through and run exactly as today. If
@@ -166,8 +171,9 @@ public inherited sharing class WorkflowStepAdmission {
     return false;
   }
 
-  // Configured (bounded) admission: re-read under a lock, then acquire a slot and
-  // re-drive, or park for a later re-attempt. Always handles the delivery.
+  // Gated admission (a definition ceiling, or a start that waits for the global
+  // gate): re-read under a lock, then acquire the slots and re-drive, or park for a
+  // later re-attempt. Always handles the delivery.
   private static Boolean admitConfiguredInstance(
     Workflow_Instance__c instance
   ) {
@@ -177,13 +183,23 @@ public inherited sharing class WorkflowStepAdmission {
         Concurrency_Slot_Held__c,
         Status__c,
         Admission_Key__c,
-        Async_Job_Id__c
+        Async_Job_Id__c,
+        Global_Admission__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
       FOR UPDATE
     ];
-    if (locked.Concurrency_Slot_Held__c) {
+    // The locked value is the truth for the global marker.
+    instance.Global_Admission__c = locked.Global_Admission__c;
+    Boolean awaitingGlobal = GlobalAdmissionPolicy.isAwaiting(
+      locked.Global_Admission__c
+    );
+    if (
+      locked.Concurrency_Slot_Held__c ||
+      (!awaitingGlobal &&
+      !ConcurrencyGate.isConfigured(instance.Workflow_Name__c))
+    ) {
       // A concurrent delivery already admitted this instance; its re-hop drives
       // the step. This delivery is a safe no-op.
       return true;
@@ -204,6 +220,14 @@ public inherited sharing class WorkflowStepAdmission {
 
     String resolvedStep = resolveStepForAdmission(instance);
 
+    // Issue #136: a braked start parks before the definition gate, so it takes
+    // no definition slot and wakes no row.
+    if (awaitingGlobal && GlobalAdmissionBrake.evaluate().braked) {
+      abortStaleJob(locked.Async_Job_Id__c);
+      GlobalAdmissionGate.parkStart(instance);
+      return true;
+    }
+
     ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
       instance.Workflow_Name__c,
       locked
@@ -216,13 +240,36 @@ public inherited sharing class WorkflowStepAdmission {
     // the old timer first, so that it cannot re-drive the instance later and
     // its scheduled-job slot is free for the new timer.
     abortStaleJob(locked.Async_Job_Id__c);
-    if (admission.admitted) {
-      commitSlotAcquisitionAndRedrive(instance, resolvedStep);
-    } else {
+    if (!admission.admitted) {
       // Ceiling full, or higher-ranked rows wait: park and re-attempt admission
       // through the existing sleep/watchdog resume plumbing.
       parkForConcurrency(instance, resolvedStep);
+      return true;
     }
+    String globalState = instance.Global_Admission__c;
+    if (awaitingGlobal) {
+      // Issue #136: the locked acquire is the backstop for a race on the last
+      // global slot. Lock order: the definition row, then the global row.
+      GlobalAdmissionGate.AcquireResult globalSlot = GlobalAdmissionGate.tryAcquire(
+        GlobalAdmissionBrake.evaluate().inputs.ceiling
+      );
+      if (!globalSlot.admitted) {
+        if (admission.slotConsumed) {
+          ConcurrencyGate.release(instance.Workflow_Name__c, 1);
+        }
+        GlobalAdmissionGate.parkStart(instance);
+        return true;
+      }
+      globalState = globalSlot.slotConsumed
+        ? GlobalAdmissionPolicy.STATE_HELD
+        : null;
+    }
+    commitSlotAcquisitionAndRedrive(
+      instance,
+      resolvedStep,
+      admission.slotConsumed,
+      globalState
+    );
     return true;
   }
 
@@ -265,9 +312,12 @@ public inherited sharing class WorkflowStepAdmission {
   // re-arm the step's watchdog deadline, and re-drive in a fresh transaction.
   private static void commitSlotAcquisitionAndRedrive(
     Workflow_Instance__c instance,
-    String resolvedStep
+    String resolvedStep,
+    Boolean definitionSlot,
+    String globalState
   ) {
-    instance.Concurrency_Slot_Held__c = true;
+    instance.Concurrency_Slot_Held__c = definitionSlot;
+    instance.Global_Admission__c = globalState;
     instance.Concurrency_Parked__c = false;
     instance.Current_Step__c = resolvedStep;
     instance.Status__c = 'Running';
@@ -326,6 +376,11 @@ public inherited sharing class WorkflowStepAdmission {
     instance.Status__c = 'Suspended';
     instance.Concurrency_Parked__c = true;
     instance.Concurrency_Slot_Held__c = false;
+    // Issue #136: the definition ceiling parks it, not the brake. It still
+    // waits for the global gate.
+    if (GlobalAdmissionPolicy.isAwaiting(instance.Global_Admission__c)) {
+      instance.Global_Admission__c = GlobalAdmissionPolicy.STATE_AWAITING;
+    }
     instance.Sleep_Until__c = DateTime.now().addSeconds(retrySeconds);
     instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
       instance.Id,

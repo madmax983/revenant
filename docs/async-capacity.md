@@ -116,12 +116,19 @@ apply to all metrics.
 - No DML. No event. No job. The read writes no audit record.
 - `WorkflowOrchestrator` and the classes that call `System.enqueueJob()` do
   not call the read. A test examines their source.
+- The global admission brake (#136) calls the read through
+  `WorkflowAsyncCapacityService.currentStatus()` when `Auto_Brake_On_Capacity__c`
+  is on. It calls it only for a new start that it governs, once for each
+  transaction. An in-flight instance does not call it.
 - The view gate (`WorkflowDashboardSupport.checkAuthorization`) can add its
   own SOQL. That cost is the same for all panels.
 
 ## Limits
 
 - The panel is a snapshot. It does not alert. Alerts are #127.
-- The panel does not throttle starts. Throttling is #91 and #28.
+- The panel does not throttle starts. To park new starts while the status is
+  Critical, set `Auto_Brake_On_Capacity__c`. See
+  [global-admission-brake.md](global-admission-brake.md). Per-definition
+  throttling is #91 and #28.
 - A burst can change the status from Degraded to Critical in minutes. Click
   **Refresh Status** to see the new values.
