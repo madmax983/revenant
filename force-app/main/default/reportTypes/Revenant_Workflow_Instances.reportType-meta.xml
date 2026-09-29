@@ -3,7 +3,7 @@
     <baseObject>Workflow_Instance__c</baseObject>
     <category>other</category>
     <deployed>true</deployed>
-    <description>Revenant workflow instances. One row for each instance. Payload fields are not in this type. They can hold a storage pointer, not the value.</description>
+    <description>Revenant workflow instances. One row for each instance. Fields that can contain a pointer or an encoded value are not in this type. This is not access control.</description>
     <label>Revenant Workflow Instances</label>
     <sections>
         <columns>

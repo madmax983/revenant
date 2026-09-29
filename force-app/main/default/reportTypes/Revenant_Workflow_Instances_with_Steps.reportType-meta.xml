@@ -3,7 +3,7 @@
     <baseObject>Workflow_Instance__c</baseObject>
     <category>other</category>
     <deployed>true</deployed>
-    <description>Revenant workflow instances and their step executions. An instance with no step row also shows. Payload fields are not in this type. They can hold a storage pointer, not the value.</description>
+    <description>Revenant workflow instances and their step executions. An instance with no step row also shows. Fields that can contain a pointer or an encoded value are not in this type. This is not access control.</description>
     <join>
         <outerJoin>true</outerJoin>
         <relationship>Workflow_Step_Executions__r</relationship>

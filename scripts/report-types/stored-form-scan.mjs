@@ -1,16 +1,20 @@
 // Finds the fields to which the engine Apex writes a stored form (issue #137).
-// A stored form is a file pointer or an encoded value, not the value.
-// The scan follows a direct assignment, put('X__c', ...), a local variable,
-// a method that returns a stored form, and a copy of a stored-form field.
-// It matches a field by name only. It does not know the object.
+// A stored form is a pointer to a file or an encoded value, not the value.
+// The scan follows: an assignment (= and +=), put('X__c', ...), two local
+// variables in one method, a static method that returns a stored form, and a
+// field copy (x.A__c = y.B__c). It matches a field by name only.
+// It does not follow: inner class or instance calls, property getters,
+// method parameters, put() with a non-literal key, a copy in an expression,
+// and trigger files.
 
 const SEEDS = [
   "WorkflowPayloadOffload.savePayloadIfNeeded",
   "WorkflowPayloadCodecs.encode",
 ];
 const KEYWORDS = new Set(["if", "for", "while", "catch", "switch", "return"]);
-const FIELD_ASSIGN = /(\w+__c)\s*=(?![=>])/g;
-const VAR_ASSIGN = /\b([A-Za-z_]\w*)\s*=(?![=>])/g;
+// `(?!\s*:)` skips a SOQL bind such as `WHERE Name__c = :n`.
+const FIELD_ASSIGN = /(\w+__c)\s*\+?=(?![=>]|\s*:)/g;
+const VAR_ASSIGN = /\b([A-Za-z_]\w*)\s*\+?=(?![=>]|\s*:)/g;
 
 /** Replaces comments and the text in string literals with spaces. Keeps the length. */
 export function mask(source) {
@@ -116,16 +120,18 @@ function writerCalls(file, writers) {
     )) {
       const before = file.masked.slice(0, c.index).trimEnd();
       const word = /(\w+)$/.exec(before)?.[1];
-      // Skip a qualified call and a declaration (`String name(`).
-      if (before.endsWith(".") || (word && word !== "return")) continue;
+      // Skip a qualified call and a declaration (`String name(`, `List<X> name(`).
+      const declaration =
+        /[>\]]$/.test(before) || (word && !["return", "else"].includes(word));
+      if (before.endsWith(".") || declaration) continue;
       calls.push(c.index);
     }
   }
   return calls;
 }
 
-/** Records where the stored form at `idx` goes. Follows one local variable. */
-function sink(file, idx, found, followVariable = true) {
+/** Records where the stored form at `idx` goes. Follows up to `hops` local variables. */
+function sink(file, idx, found, hops = 2) {
   const { masked, source } = file;
   const start = statementStart(masked, idx);
   const head = masked.slice(start, idx);
@@ -137,20 +143,19 @@ function sink(file, idx, found, followVariable = true) {
     const key = /^(\w+__c)'/.exec(source.slice(at))?.[1];
     if (key) return found.fields.add(key);
   }
-  if (/^\s*return\b/.test(head)) {
+  if (/\breturn\b/.test(head)) {
     const method = enclosingMethod(masked, idx);
     if (method) found.writers.add(`${file.cls}.${method.name}`);
     return;
   }
   const variable = lastGroup(head, VAR_ASSIGN);
-  if (!followVariable || !variable) return;
-  const end = statementEnd(masked, idx);
-  const stop = enclosingMethod(masked, idx)?.close ?? masked.length;
+  const method = enclosingMethod(masked, idx);
+  if (!hops || !variable || !method) return;
   const use = new RegExp(`\\b${variable}\\b`, "g");
-  use.lastIndex = end;
+  use.lastIndex = statementEnd(masked, idx);
   let u;
-  while ((u = use.exec(masked)) && u.index < stop) {
-    sink(file, u.index, found, false);
+  while ((u = use.exec(masked)) && u.index < method.close) {
+    sink(file, u.index, found, hops - 1);
   }
 }
 
@@ -178,7 +183,8 @@ export function scanStoredFormFields(files, { copyFrom = [] } = {}) {
       for (const idx of writerCalls(file, found.writers))
         sink(file, idx, found);
       for (const c of file.masked.matchAll(copy)) {
-        if (copyFrom.includes(c[2]) || found.fields.has(c[2])) {
+        const source = copyFrom.includes(c[2]) || found.fields.has(c[2]);
+        if (source && c[1] !== c[2]) {
           found.fields.add(c[1]);
         }
       }

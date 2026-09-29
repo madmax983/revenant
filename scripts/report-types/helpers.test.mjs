@@ -171,3 +171,61 @@ test("scan handles spaced dots, comments with ; and copies of a pointer field", 
     ["Current_Step__c", "Error_Message__c", "Hold_Reason__c"],
   );
 });
+
+test("scan does not count a self-copy and needs a real writer", () => {
+  assert.deepEqual(
+    scan(
+      cls(
+        "A",
+        `void m() {
+          n.Input__c = old.Input__c;
+          n.Progress__c = old.Progress__c;
+        }`,
+      ),
+      { copyFrom: ["Input__c", "Progress__c"] },
+    ),
+    [],
+  );
+});
+
+test("scan skips SOQL binds and follows unbraced returns, += and two locals", () => {
+  assert.deepEqual(
+    scan(
+      cls(
+        "A",
+        `void m() {
+          r.Hold_Reason__c = foo([SELECT Id FROM X WHERE Name__c = :n], ${ENCODE});
+          String a = ${ENCODE};
+          String b = a;
+          i.Current_Step__c = b;
+          String c = 'x';
+          c += ${ENCODE};
+          i.Error_Message__c = c;
+        }`,
+      ),
+      cls(
+        "H",
+        `public static String w(Boolean c) {
+          if (c) return ${ENCODE};
+          else return null;
+        }
+        public static List<String> encode(String x) { return null; }`,
+      ),
+      cls("B", `void m() { i.Causation_Id__c = H.w(true); }`),
+    ),
+    [
+      "Causation_Id__c",
+      "Current_Step__c",
+      "Error_Message__c",
+      "Hold_Reason__c",
+    ],
+  );
+});
+
+test("parseXml rejects a raw & in an attribute", () => {
+  assert.throws(() => parseXml('<a x="b & c"></a>'));
+});
+
+test("checkOrder matches a schema name literally", () => {
+  assert.throws(() => checkOrder(parseXml("<r><aXb/></r>"), { r: ["a.b"] }));
+});

@@ -36,8 +36,8 @@ const REPORT_TYPE_SCHEMA = {
   columns: ["checkedByDefault", "field", "table"],
 };
 
-// Fields that can hold a pointer to a file or an encoded value.
-const POINTER_FIELDS = {
+// Fields that can hold a stored form: a pointer to a file or an encoded value.
+const STORED_FORM_FIELDS = {
   [INSTANCE]: ["Input__c", "Output__c", "Progress__c"],
   [STEP]: ["Input__c", "Output__c", "Captured_Values__c", "Error_Details__c"],
 };
@@ -232,13 +232,13 @@ test("each column is a real field of its table, once", () => {
   }
 });
 
-test("no type shows a pointer field or an engine internal", () => {
+test("no type shows a stored-form field or an engine internal", () => {
   for (const name of Object.values(TYPES)) {
     const type = loadType(name);
     for (const table of [INSTANCE, STEPS_TABLE]) {
       const object = objectOf(table);
       const hidden = [
-        ...POINTER_FIELDS[object],
+        ...STORED_FORM_FIELDS[object],
         ...Object.keys(INTERNAL_FIELDS[object]),
       ];
       const leaks = shown(type, table).filter((f) => hidden.includes(f));
@@ -255,7 +255,7 @@ test("each custom field is shown or excluded on purpose", () => {
   ]) {
     const decided = new Set([
       ...shown(withSteps, table),
-      ...POINTER_FIELDS[object],
+      ...STORED_FORM_FIELDS[object],
       ...Object.keys(INTERNAL_FIELDS[object]),
     ]);
     const open = [...FIELDS[object].keys()].filter((f) => !decided.has(f));
@@ -269,17 +269,19 @@ test("each custom field is shown or excluded on purpose", () => {
   assert.deepEqual(shown(instances, INSTANCE), shown(withSteps, INSTANCE));
 });
 
-test("the pointer fields are the fields that the engine Apex writes a stored form to", () => {
+test("the stored-form fields are the fields that the engine Apex writes a stored form to", () => {
   const dir = join(ROOT, MAIN, "classes");
   const files = readdirSync(dir)
     .filter((f) => f.endsWith(".cls"))
     .map((f) => ({ name: f, source: readFileSync(join(dir, f), "utf8") }));
-  const pointers = [...new Set(Object.values(POINTER_FIELDS).flat())].sort();
+  const expected = [
+    ...new Set(Object.values(STORED_FORM_FIELDS).flat()),
+  ].sort();
   const known = new Set([...FIELDS[INSTANCE].keys(), ...FIELDS[STEP].keys()]);
-  const found = [...scanStoredFormFields(files, { copyFrom: pointers })]
+  const found = [...scanStoredFormFields(files)]
     .filter((f) => known.has(f))
     .sort();
-  assert.deepEqual(found, pointers);
+  assert.deepEqual(found, expected);
   // The scan knows the field name only. Thus no column can have a found name.
   for (const name of Object.values(TYPES)) {
     const leaks = loadType(name).columns.filter((c) => found.includes(c.field));
@@ -336,7 +338,7 @@ test("the doc names the types, the excluded fields, access and plaintext columns
     assert.ok(doc.includes(text), `${DOC} does not name ${text}`);
   }
   const excluded = [
-    ...Object.values(POINTER_FIELDS).flat(),
+    ...Object.values(STORED_FORM_FIELDS).flat(),
     ...Object.values(INTERNAL_FIELDS).flatMap(Object.keys),
   ];
   for (const f of new Set(excluded)) {

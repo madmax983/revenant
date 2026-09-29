@@ -1,4 +1,5 @@
-// Strict parser for the small XML subset in Salesforce metadata files (issue #137).
+// Strict parser for the XML subset in Metadata API retrieve output (issue #137).
+// No CDATA, no single-quoted attributes, no raw > in text. `text` is not decoded.
 
 const RAW_AMPERSAND = /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/;
 
@@ -29,6 +30,7 @@ export function parseXml(source) {
       if (top.name !== m[2]) throw new Error(`</${m[2]}> closes <${top.name}>`);
       stack.pop();
     } else {
+      if (RAW_AMPERSAND.test(m[3])) throw new Error("raw & in an attribute");
       const node = { name: m[2], children: [], text: "" };
       top.children.push(node);
       if (!m[4]) stack.push(node);
@@ -46,7 +48,9 @@ function checkText(node) {
     throw new Error(`<${node.name}> has text next to child elements`);
   }
   if (!node.children.length && node.text !== node.text.trim()) {
-    throw new Error(`<${node.name}> text has spaces at the start or end`);
+    throw new Error(
+      `<${node.name}> text has spaces at the start or end (style rule)`,
+    );
   }
   node.children.forEach(checkText);
 }
@@ -64,7 +68,7 @@ export function checkOrder(node, schema) {
   }
   const pattern = spec
     .map((s) => {
-      const name = s.replace(/[?+]$/, "");
+      const name = s.replace(/[?+]$/, "").replace(/[.\-]/g, "\\$&");
       const quant = s.endsWith("?") ? "?" : s.endsWith("+") ? "+" : "";
       return `(?:${name},)${quant}`;
     })

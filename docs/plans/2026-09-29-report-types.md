@@ -9,9 +9,9 @@ Give admins Custom Report Types for `Workflow_Instance__c` and `Workflow_Step_Ex
 - Both objects have `enableReports` set to true.
 - The step object is the detail of a master-detail to the instance. Relationship name: `Workflow_Step_Executions`.
 - The report type category is a fixed list in the Metadata API. An org cannot add a category. There is no "Revenant Workflows" category.
-- The engine can write a pointer or an encoded value to five fields: `Input__c`, `Output__c`, `Progress__c`, `Captured_Values__c` and `Error_Details__c`. `Compensation_Stack__c` contains engine JSON. `getStatus` reads the value. A report cannot.
+- The engine can write a pointer or an encoded value to five fields: `Input__c`, `Output__c`, `Progress__c`, `Captured_Values__c` and `Error_Details__c`. `Compensation_Stack__c` contains engine JSON. A stored form is a pointer or an encoded value. `WorkflowStatusRead.getStatus` reads the value. A report cannot.
 - The step object has no start or end time field. `CreatedDate` is the row start. `LastModifiedDate` is the last write.
-- No org was available. Node runs the static tests. The quickstart smoke deploys `force-app` to a scratch org in CI when the Dev Hub secret is set.
+- The author had no org. Node runs the static tests. The quickstart smoke deploys `force-app` to a scratch org in CI when the Dev Hub secret is set.
 
 ## Brainstorm (options)
 
@@ -23,7 +23,7 @@ Give admins Custom Report Types for `Workflow_Instance__c` and `Workflow_Step_Ex
 | B4  | Step as base object.                                                    | No. Type 2 covers it. The acceptance criteria ask for the instance as parent. |
 | B5  | Custom category "Revenant Workflows".                                   | No. The platform does not allow it. Use `other`.                              |
 | B6  | Label prefix "Revenant" on both types.                                  | Yes. A search for "Revenant" in Report Builder finds both.                    |
-| B7  | Include all fields.                                                     | No. Pointer fields show a marker, not a value.                                |
+| B7  | Include all fields.                                                     | No. Pointer fields show a pointer, not a value.                               |
 | B8  | Leave pointer fields out of the type.                                   | Yes. Stronger than "not checked by default".                                  |
 | B9  | Lookup columns (parent workflow name through `Parent_Instance__c`).     | No. The test cannot check the field path without an org. Follow-up.           |
 | B10 | A duration formula field.                                               | No. AC 4 forbids new fields. Doc gives a row-level formula.                   |
@@ -72,7 +72,7 @@ Default columns (checked):
 | Instance (type 2) | `Name`, `Workflow_Name__c`, `Status__c`, `Correlation_Key__c`                                                                                                                                                                                            |
 | Step (type 2)     | `Name`, `Step_Name__c`, `Status__c`, `Retry_Count__c`, `Transient_Retry_Count__c`, `CreatedDate`, `LastModifiedDate`                                                                                                                                     |
 
-Excluded: the five pointer fields and the engine internals, `Compensation_Stack__c` also (see the test).
+Excluded: the five pointer fields and the engine internals. `Compensation_Stack__c` is an engine internal (see the test).
 
 ## Tasks
 
@@ -94,3 +94,15 @@ Excluded: the five pointer fields and the engine internals, `Compensation_Stack_
 | Digest filter missed `CompensationFailed`. `LAST N DAYS:1` sent twice.   | `YESTERDAY` and `Failed`, `CompensationFailed`.                   |
 | A dashboard cannot use a private report.                                 | Doc: save in a shared folder.                                     |
 | The doc framed excluded fields as safety.                                | Doc: "This is not access control."                                |
+
+## Review Round 2 (fixed)
+
+| Finding                                                                | Fix                                                                     |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| A self-copy (`Input__c = old.Input__c`) confirmed the expected answer. | The copy rule skips a self-copy. The test scans with no `copyFrom`.     |
+| A SOQL bind (`Name__c = :n`) hid the real target field.                | The assignment regex skips `= :`.                                       |
+| Unbraced `return`, `+=` and a second local were not followed.          | The scan follows them. The module header lists what it does not follow. |
+| The doc named `WorkflowEngine.getStatus`.                              | `WorkflowStatusRead.getStatus`.                                         |
+| The report type descriptions used the old terms.                       | "pointer or encoded value" and "not access control".                    |
+| The duration formula had no parentheses.                               | `(LastModifiedDate - CreatedDate) * 1440`.                              |
+| Procedure steps had many instructions.                                 | One or two instructions for each step.                                  |

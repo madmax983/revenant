@@ -1,6 +1,6 @@
 # Custom Report Types
 
-Issue #137. Two Custom Report Types let an admin make reports, dashboards and scheduled digests about workflow runs, with no code. The types are metadata only. They add no field, object or Apex class.
+Issue #137. Two Custom Report Types let an admin make reports, dashboards and scheduled digests about workflow instances, with no code. The types are metadata only. They add no field, object or Apex class.
 
 ## Report types
 
@@ -35,20 +35,21 @@ These fields can contain a pointer or an encoded value:
 | `Workflow_Instance__c`       | `Input__c`, `Output__c`, `Progress__c`                            |
 | `Workflow_Step_Execution__c` | `Input__c`, `Output__c`, `Captured_Values__c`, `Error_Details__c` |
 
-- **Pointer.** When a value has more than 100,000 characters, the engine puts it in a file. The field then contains a pointer such as `{"$attachmentId":"069..."}`.
-- **Encoded value.** When a payload codec is set, the field contains an encoded value. `Error_Details__c` contains the encoded failure data after the reason.
+- **Pointer.** When the stored text has more than 100,000 characters, the engine puts it in a file. The field then contains a pointer such as `{"$attachmentId":"069..."}`.
+- **Encoded value.** When you set a payload codec, the field contains an encoded value.
+- `Error_Details__c` contains the reason. When you set a codec, the pointer or the encoded value comes after the reason. With no codec, this field contains plaintext only.
 
-`WorkflowEngine.getStatus` reads the file and decodes the value. A report cannot do this. Thus the types do not include these fields.
+`WorkflowStatusRead.getStatus` reads the file and decodes the value. A report cannot do this. Thus the types do not include these fields.
 
 The types also do not include engine internals: `Active_Correlation_Key__c`, `Admission_Key__c`, `Async_Job_Id__c`, `Compensation_Stack__c`, `Definition_Fingerprint__c`, `Definition_Shape__c` and `Decision_Record__c`. The step field `Workflow_Instance__c` is not a column, because the instance section shows the parent.
 
-**This is not access control.** With no codec, these fields often contain the plaintext payload. The platform also makes standard report types for these objects (`Workflow Instances`, `Workflow Instances with Workflow Step Executions`). They show all fields. This includes the payload fields. A user who can read a field and has **Create and Customize Reports** can report on it. To stop this, remove the field read access, or limit the report permission and the report folders.
+**This is not access control.** With no codec, these fields contain the plaintext value or a pointer. The platform also makes standard report types for these objects (`Workflow Instances`, `Workflow Instances with Workflow Step Executions`). They show all fields. This includes these fields. A user who can read a field and has **Create and Customize Reports** can report on it. To stop this, remove the field read access, or limit the report permission and the report folders.
 
 ## Plaintext columns
 
-The payload codec does not encode these columns. See [What stays plaintext](payload-codec.md#what-stays-plaintext).
+The payload codec does not encode these columns. For the codec scope, see [What stays plaintext](payload-codec.md#what-stays-plaintext).
 
-- `Error_Message__c` (checked by default): engine text, exception messages and fail reasons.
+- `Error_Message__c` (checked by default in the first type): engine text, exception messages and fail reasons.
 - `Hold_Reason__c`: operator text.
 - `Correlation_Key__c`, `Root_Correlation_Key__c`, `Causation_Id__c`: caller keys.
 
@@ -62,23 +63,28 @@ Field visibility follows field-level security. A user sees a column only if the 
 
 You do not write code.
 
-1. Open **Reports**. Click **New Report**. Search for `Revenant`. Select **Revenant Workflow Instances**. Click **Start Report**.
-2. In **Filters**, set **Show Me** to all workflow instances and **Created Date** to **All Time**.
-3. Add a filter: **Terminal At** equals `YESTERDAY`.
-4. In **Group Rows**, add **Workflow Name**, then **Status**.
-5. Click **Save**. Type the name `Workflow outcomes, yesterday`. Select a shared folder. A dashboard cannot use a report in **Private Reports**.
-6. Open **Dashboards**. Click **New Dashboard**. Type a name, select a folder and click **Create**. Click **+ Component**. Select the report. Select a stacked bar chart. Click **Add**, then click **Save**.
-7. Open the report. Click **Save As**. Type the name `Failed instances, yesterday`. Add a filter: **Status** equals `Failed`, `CompensationFailed`. To include runs that the engine rolled back, also add `Compensated`. Click **Save**.
-8. Click **Subscribe**. Set the frequency to **Daily** and a time. Click **Save**.
+1. Open **Reports** and click **New Report**.
+2. Search for `Revenant`. Select **Revenant Workflow Instances** and click **Start Report**.
+3. In **Filters**, set **Show Me** to all workflow instances.
+4. Set **Created Date** to **All Time**.
+5. Add the filter **Terminal At** equals `YESTERDAY`.
+6. In **Group Rows**, add **Workflow Name**, then **Status**.
+7. Click **Save**. Type the name `Workflow outcomes, yesterday` and select a shared folder. A dashboard cannot use a report in **Private Reports**.
+8. Open **Dashboards** and click **New Dashboard**. Type a name, select a folder and click **Create**.
+9. Click **+ Component** and select the report. Select a stacked bar chart and click **Add**. Click **Save**.
+10. Open the report and click **Save As**. Type the name `Failed instances, yesterday`.
+11. Add the filter **Status** equals `Failed`, `CompensationFailed`. To include instances that the engine rolled back, also add `Compensated`. Click **Save**.
+12. Click **Subscribe**. Set the frequency to **Daily**, set a time and click **Save**.
 
 ## Step duration
 
 The step object has no start or end time field. Use the row timestamps:
 
 1. Make a report with **Revenant Workflow Instances with Step Executions**.
-2. Add a filter: step **Status** equals `Completed`.
-3. Click **Add Row-Level Formula**. Set the output type to **Number** with 2 decimal places. Insert the step **Last Modified Date**, a minus sign and the step **Created Date**. Then multiply by `1440` to get minutes.
-4. Group by **Workflow Name** and **Step Name**. Show the average of the formula.
+2. Add the filter step **Status** equals `Completed`.
+3. Click **Add Row-Level Formula**. Set the output type to **Number** with 2 decimal places.
+4. Type the formula `(LastModifiedDate - CreatedDate) * 1440`. Use the step fields from the field list. The result is in minutes.
+5. Group by **Workflow Name** and **Step Name**. Show the average of the formula.
 
 The time starts when the engine inserts the step row. It includes the queue wait, each retry wait, and each suspend or approval wait.
 
@@ -97,7 +103,7 @@ The time starts when the engine inserts the step row. It includes the queue wait
 - the default-column table in this doc against the XML;
 - each column is a field of its object;
 - each custom field is in a type or in an excluded list;
-- no column has the name of a field that the engine Apex writes a pointer or an encoded value to. The scan follows assignments, `put` calls, local variables, helper methods and field copies. It knows the field name only;
+- no column has the name of a field that the engine Apex writes a pointer or an encoded value to. The scan follows assignments, `put` calls, local variables, helper methods and field copies. It knows the field name only. The header of `scripts/report-types/stored-form-scan.mjs` lists what it does not follow;
 - `Revenant_Operator` and `Revenant_Admin` can read each column.
 
 The quickstart smoke (`.github/workflows/quickstart.yml`) deploys `force-app` to a scratch org. That deploy includes the report types. The smoke runs only when the `DEVHUB_SFDX_AUTH_URL` secret is set.
