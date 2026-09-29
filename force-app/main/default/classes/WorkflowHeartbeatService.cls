@@ -25,6 +25,18 @@ public inherited sharing class WorkflowHeartbeatService {
    * lifecycle publish follows the required work, then the liveness stamp.
    */
   public static void runWatchdogHeartbeat() {
+    // Issue #136: a terminal transition in this heartbeat does not lock the
+    // global counter. Step 7a applies it, after the last instance lock. The
+    // finally block applies it if step 7a does not run.
+    GlobalAdmissionGate.deferReleasesToReconcile();
+    try {
+      runHeartbeatSteps();
+    } finally {
+      GlobalAdmissionGate.endDeferral();
+    }
+  }
+
+  private static void runHeartbeatSteps() {
     Datetime now = WorkflowEngine.mockNow != null
       ? WorkflowEngine.mockNow
       : System.now();
@@ -35,10 +47,6 @@ public inherited sharing class WorkflowHeartbeatService {
     // done, so the best-effort publish can never spend a DML statement the
     // resume section needs.
     List<Workflow_Instance__c> watchdogTerminalInstances = new List<Workflow_Instance__c>();
-
-    // Issue #136: a terminal transition in this heartbeat does not lock the
-    // global counter now. Step 7c applies it, after the last instance lock.
-    GlobalAdmissionGate.deferReleasesToReconcile();
 
     // 1. Process timed-out steps.
     WorkflowTimeoutSweep.processTimedOutSteps(now, watchdogTerminalInstances);
@@ -123,6 +131,16 @@ public inherited sharing class WorkflowHeartbeatService {
       // Best-effort stall detection; a failure here must not abort the watchdog heartbeat.
     }
 
+    // 7a. Issue #136: reconcile the global slot count and record an emergency
+    // stop change. After the last instance lock, so the heartbeat locks `$global`
+    // last, as the gate does. Before the best-effort publishes, which can
+    // spend the DML budget.
+    try {
+      GlobalAdmissionGate.reconcile();
+    } catch (Exception ignored) {
+      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
+    }
+
     // All required heartbeat work (timed-out-step failures, sleep resumptions,
     // and schedule sweeps) is now done, so the best-effort lifecycle publish
     // runs after it with no risk of starving a required update/enqueue of its DML budget.
@@ -135,15 +153,6 @@ public inherited sharing class WorkflowHeartbeatService {
       WorkflowMetricsPublisher.publishSnapshot(now);
     } catch (Exception ignored) {
       // A failed snapshot must not stop the watchdog heartbeat.
-    }
-
-    // 7c. Issue #136: reconcile the global slot count and record an emergency
-    // stop change. Last, so the heartbeat locks `$global` after all instance
-    // rows, as the gate does.
-    try {
-      GlobalAdmissionGate.reconcile();
-    } catch (Exception ignored) {
-      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
     // 8. Write the liveness stamp (issue #113). Only a complete sweep gets

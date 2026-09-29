@@ -89,11 +89,11 @@ flowchart TD
      does not enqueue the first hop.
    - Open with a ceiling: the start gets `Awaiting`. Its first hop takes the
      slot.
-   - Open with a ceiling, and a parked start waits: the new start parks
-     behind it. It enqueues one admit-only wake (#132
-     `ConcurrencyAdmissionWake`) for the oldest parked starts, max the free
-     slots and max 10. Thus a new start cannot take the slot of an older
-     start, and a free slot does not wait for the watchdog sweep.
+   - Open with a ceiling, and parked starts wait: the new start sends the
+     oldest parked starts to the gate (RUN_STEP events, max the free slots
+     and max 10). If they fill the free slots, the new start parks behind
+     them. Thus a new start cannot take the slot of an older start, and a
+     free slot does not wait for the watchdog sweep.
 2. **First hop.** The gate locks the instance row. Then:
    - Braked: the start parks. It takes no definition slot.
    - If the brake is open, the definition gate (#91) runs as before.
@@ -111,15 +111,18 @@ flowchart TD
    `CompensationFailed` keeps the slot.
 5. **Continue-As-New.** The successor takes the slot of its predecessor. The
    trigger does not release it on `ContinuedAsNew`. A chain holds one slot.
-6. **Operator retry.** A retry of a failed top-level instance takes a slot. It
-   does not park. The count can go above the ceiling until work completes.
-7. **Reconcile.** At the end of each watchdog sweep, the engine sets the count
-   to the number of non-terminal `Held` instances. This corrects the count
-   after a crash.
+6. **Operator retry.** A retry of a failed top-level instance gets `Held`. It
+   does not park and takes no counter lock. The next reconcile counts it. The
+   count can go above the ceiling until work completes.
+7. **Reconcile.** Near the end of each watchdog sweep, after the last instance
+   lock, the engine sets the count to the number of non-terminal `Held`
+   instances. This corrects the count after a crash. If the transaction has
+   too little SOQL, DML or query-row budget left, the reconcile does not
+   change the count.
 
 Lock order: the instance row, then the definition row, then `$global`. In the
 watchdog sweep, a terminal transition does not lock `$global`. The reconcile
-at the end of the sweep applies it.
+applies it. If the reconcile does not run, the sweep applies it at its end.
 
 ## What The Brake Does Not Stop
 
@@ -146,13 +149,15 @@ transaction. A bulk start reads the brake one time.
 | Auto-brake on     | +1 (`AsyncApexJob`, max 2,001 rows)  | Same as emergency stop                          | 1 less when braked    |
 | Ceiling set       | +1 (`$global` row), +1 (parked rows) | Same as emergency stop                          | 1 less when braked    |
 
-A start that parks behind a backlog uses one Queueable (the wake) for each
-transaction, not one first hop for each start. A parked start also calls the
-watchdog bootstrap, as a normal start does in its enqueue.
+A start that finds a parked backlog publishes one RUN_STEP event for each
+backlog row (max 10), one time for each transaction. It uses no Queueable. A
+parked start also calls the watchdog bootstrap, as a normal start does in its
+enqueue.
 
 - Max +3 SOQL. The config is custom metadata (no SOQL).
 - The parked-row read runs only below the ceiling. It is indexed and reads
-  max 10 rows.
+  max 10 rows. When it finds rows, the start publishes max 10 RUN_STEP
+  events.
 - First hop of an `Awaiting` or `Parked` start:
   - the instance lock (1 SOQL);
   - the brake read (as above);
@@ -164,9 +169,11 @@ watchdog bootstrap, as a normal start does in its enqueue.
   - the parked-start read (1 SOQL, indexed) when the budget is above 0;
   - the `$global` lock in the reconcile (1 SOQL).
 - Watchdog sweep, when a control is set: the brake read (as above).
-- Watchdog sweep, when the `$global` row exists:
+- Watchdog sweep, when the `$global` row exists, or a ceiling or the
+  emergency stop is set:
   - +1 `COUNT()` (one query row for each held slot);
-  - +1 counter update when the count changes;
+  - +1 insert of the row on first use;
+  - +1 counter update when the count or the emergency stop changes;
   - +1 audit insert when the emergency stop changes.
 - System Doctor read: max 3 SOQL. No DML.
 
@@ -220,16 +227,17 @@ more than 200 starts takes more than one sweep.
   operator retry. Instances from before the ceiling, children and engine
   workflows do not count. When you set a ceiling on a busy org, the count is
   exact after that work completes. #91 has the same limit.
-- With a ceiling and a parked backlog, new starts also park. They wake the
-  oldest parked starts. If no new start arrives, the watchdog sweep admits
-  the backlog.
+- With a ceiling, a new start parks when parked starts fill the free slots.
+  It sends the oldest parked starts to the gate. If no new start arrives, the
+  watchdog sweep sends the backlog.
 - A parked row that is held (#119) or on a paused definition is not a
   backlog. It does not make new starts park.
 - Priority (#132) applies in one definition only. The brake admits parked
   starts in start order, for all definitions.
 - The brake sends no alert. Alerts are #127 and #42.
 - The watchdog polls the emergency stop. If an operator engages and releases
-  it between two sweeps, no audit row is written.
+  it between two sweeps, no audit row is written. The row update and the
+  audit row commit together, so a failed insert does not lose a change.
 - While braked, some paths still send one hop for each start. The gate then
   parks the start again. These paths are: the pause drainer after a
   definition resume, a hold release, and a #91 retry timer of a start that

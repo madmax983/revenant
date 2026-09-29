@@ -136,6 +136,16 @@ public class GlobalAdmissionStartTest {
     return rows.isEmpty() ? null : rows[0].In_Flight_Count__c;
   }
 
+  private static void setGlobalCount(Integer value) {
+    Concurrency_State__c row = [
+      SELECT Id
+      FROM Concurrency_State__c
+      WHERE Workflow_Definition__c = :GlobalAdmissionGate.COUNTER_KEY
+    ];
+    row.In_Flight_Count__c = value;
+    update row;
+  }
+
   private static Integer executedSteps(Id id) {
     return [
       SELECT COUNT()
@@ -178,6 +188,8 @@ public class GlobalAdmissionStartTest {
         Limits.getQueueableJobs(),
         'The first hop is enqueued as today'
       );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
     }
   }
@@ -225,6 +237,8 @@ public class GlobalAdmissionStartTest {
         Limits.getQueueableJobs(),
         'A braked start does not enqueue the first hop'
       );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
 
       Workflow_Instance__c r = reload(id);
@@ -253,6 +267,8 @@ public class GlobalAdmissionStartTest {
       Integer before = Limits.getQueueableJobs();
       List<Id> ids = WorkflowEngine.start(reqs);
       Assert.areEqual(before, Limits.getQueueableJobs(), 'No first hop');
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
       for (Workflow_Instance__c r : [
         SELECT Status__c, Global_Admission__c, Concurrency_Parked__c
@@ -398,6 +414,8 @@ public class GlobalAdmissionStartTest {
         Limits.getQueueableJobs(),
         'A braked backlog costs no async job'
       );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
       Assert.areEqual('Suspended', reload(id).Status__c, 'Still parked');
     }
@@ -424,6 +442,8 @@ public class GlobalAdmissionStartTest {
         Limits.getQueueableJobs(),
         'The sweep re-drives the parked start to the gate'
       );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
     }
   }
@@ -471,6 +491,8 @@ public class GlobalAdmissionStartTest {
         Limits.getQueueableJobs(),
         'The sweep sends one start for one free slot'
       );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
     }
   }
@@ -497,6 +519,8 @@ public class GlobalAdmissionStartTest {
         Limits.getQueueableJobs(),
         'The sweep sends the parked start to the gate'
       );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
     }
   }
@@ -634,25 +658,66 @@ public class GlobalAdmissionStartTest {
         In_Flight_Count__c = 1
       );
       configure(false, false, 1);
-      startOne('wake-1');
-      Concurrency_State__c row = [
-        SELECT Id
-        FROM Concurrency_State__c
-        WHERE Workflow_Definition__c = :GlobalAdmissionGate.COUNTER_KEY
-      ];
-      row.In_Flight_Count__c = 0;
-      update row;
+      Id oldest = startOne('wake-1');
+      setGlobalCount(0);
       GlobalAdmissionBrake.resetCache();
       Test.startTest();
       Integer before = Limits.getQueueableJobs();
-      startOne('wake-2');
-      startOne('wake-3');
+      Id second = startOne('wake-2');
+      Id third = startOne('wake-3');
       Assert.areEqual(
         before + 1,
         Limits.getQueueableJobs(),
-        'One admit-only wake for the transaction, no first hop'
+        'One wake for the oldest start, no first hop for the new starts'
       );
+      // The admitted start must not run its step in this test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_HELD,
+        reload(oldest).Global_Admission__c,
+        'The wake admits the oldest start'
+      );
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        reload(second).Global_Admission__c,
+        'The newer start waits'
+      );
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        reload(third).Global_Admission__c,
+        'The newest start waits'
+      );
+    }
+  }
+
+  @IsTest
+  static void smallBacklogDoesNotParkTheNewStart() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert new Concurrency_State__c(
+        Workflow_Definition__c = GlobalAdmissionGate.COUNTER_KEY,
+        In_Flight_Count__c = 3
+      );
+      configure(false, false, 3);
+      startOne('small-1');
+      setGlobalCount(1);
+      GlobalAdmissionBrake.resetCache();
+      Test.startTest();
+      Integer before = Limits.getQueueableJobs();
+      Id newer = startOne('small-2');
+      Assert.areEqual(
+        before + 2,
+        Limits.getQueueableJobs(),
+        'The wake for the old start and the first hop of the new start'
+      );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
+      Test.stopTest();
+      Assert.areNotEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        reload(newer).Global_Admission__c,
+        'Two free slots, one parked start: the new start does not park'
+      );
     }
   }
 
@@ -680,6 +745,28 @@ public class GlobalAdmissionStartTest {
         GlobalAdmissionPolicy.STATE_AWAITING,
         reload(newer).Global_Admission__c,
         'A held row cannot block new starts'
+      );
+    }
+  }
+
+  @IsTest
+  static void pausedParkedRowIsNotABacklog() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      insert new Concurrency_State__c(
+        Workflow_Definition__c = GlobalAdmissionGate.COUNTER_KEY,
+        In_Flight_Count__c = 1
+      );
+      configure(false, false, 1);
+      WorkflowEngine.start(TWO_STEP_WF, 'nobl-p1', null);
+      WorkflowPauseGate.pauseDefinition(TWO_STEP_WF, 'test');
+      setGlobalCount(0);
+      GlobalAdmissionBrake.resetCache();
+      Id newer = startOne('nobl-p2');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_AWAITING,
+        reload(newer).Global_Admission__c,
+        'A parked row of a paused definition cannot block new starts'
       );
     }
   }
@@ -733,6 +820,8 @@ public class GlobalAdmissionStartTest {
         Limits.getQueueableJobs(),
         'No first hop and no wake'
       );
+      // The re-drive after an admission must not chain in a test.
+      WorkflowEngine.disableQueueableInTest = true;
       Test.stopTest();
       Assert.areEqual(
         GlobalAdmissionPolicy.STATE_PARKED,

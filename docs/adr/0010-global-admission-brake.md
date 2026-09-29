@@ -38,17 +38,23 @@ change to the in-flight handoff.
 7. A parked start has a due sleep time and no timer job. The main sleep query
    does not select it. A second, bounded query sends parked starts to the
    gate, oldest first, max the free slots. While braked, it sends none.
-8. With a ceiling and a parked backlog, a new start parks behind the backlog
-   and wakes the oldest parked starts with one #132 admit-only wake. Thus the
-   order is first in, first out, and a free slot does not wait for the sweep.
+8. With a ceiling, a new start that finds parked starts sends the oldest to
+   the gate with RUN_STEP events (max the free slots, max 10). If they fill
+   the free slots, the new start parks behind them. Thus the order is first
+   in, first out, and a free slot does not wait for the sweep. The wake uses
+   no Queueable, so it cannot take the only Queueable of an async caller.
 9. A parked start stays out of the #132 definition queue, so it cannot make a
    definition candidate yield.
 10. Release on the first terminal transition. Continue-As-New moves the slot to
-    the successor. An operator retry takes a slot and does not park. The
+    the successor. An operator retry gets `Held` with no counter lock (a bulk
+    redrive retries many rows in one transaction) and does not park. The
     heartbeat reconciles the count to the non-terminal `Held` rows.
 11. In the heartbeat, a terminal transition does not lock `$global`. The
-    reconcile runs last and applies it. Thus the heartbeat does not hold
-    `$global` while it locks instance rows.
+    reconcile runs after the last instance lock and applies it. A `finally`
+    block applies it if the reconcile does not run. Thus the heartbeat does
+    not hold `$global` while it locks instance rows. The reconcile checks its
+    SOQL, DML and query-row budget first. The counter update and the audit row
+    commit together.
 12. A failed counter lock at the gate admits the start as `Held`. The
     reconcile counts it.
 13. Children, starts with a parent, Continue-As-New successors, manual

@@ -110,8 +110,9 @@ public inherited sharing class GlobalAdmissionPolicy {
    * @description Gives the marker for a new top-level start.
    * @param d The brake decision.
    * @param paused True when the definition pause parks the start.
-   * @param parkedBacklog True when a parked start waits. With a ceiling, a new
-   * start then parks behind it, so the oldest start goes first.
+   * @param parkedBacklog True when parked starts fill the free slots. With a
+   * ceiling, a new start then parks behind them, so the oldest start goes
+   * first.
    * @return Parked (braked, or a ceiling with a backlog, and not paused),
    * Awaiting (paused, or open with a ceiling), or null (not governed, or open
    * with no ceiling).

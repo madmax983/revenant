@@ -423,7 +423,9 @@ public class GlobalAdmissionGateTest {
         reload(a).Global_Admission__c,
         'The retry holds a slot'
       );
-      Assert.areEqual(1, globalCount(), 'The retry is counted');
+      Assert.areEqual(0, globalCount(), 'The retry takes no counter lock');
+      GlobalAdmissionGate.reconcile();
+      Assert.areEqual(1, globalCount(), 'The reconcile counts the retry');
     }
   }
 
@@ -437,7 +439,29 @@ public class GlobalAdmissionGateTest {
       update new Workflow_Instance__c(Id = a, Status__c = 'Completed');
       Assert.areEqual(1, globalCount(), 'No $global lock yet');
       GlobalAdmissionGate.reconcile();
+      GlobalAdmissionGate.endDeferral();
       Assert.areEqual(0, globalCount(), 'The reconcile applies it');
+    }
+  }
+
+  @IsTest
+  static void endDeferralAppliesReleasesWithNoReconcile() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(false, 5);
+      Id a = admitted(WF, 'hb-b');
+      admitted(WF, 'hb-c');
+      GlobalAdmissionGate.deferReleasesToReconcile();
+      update new Workflow_Instance__c(Id = a, Status__c = 'Completed');
+      Assert.areEqual(2, globalCount(), 'Deferred');
+      GlobalAdmissionGate.endDeferral();
+      Assert.areEqual(
+        1,
+        globalCount(),
+        'Applied when the reconcile did not run'
+      );
+      update new Workflow_Instance__c(Id = a, Status__c = 'Failed');
+      Assert.areEqual(1, globalCount(), 'Normal mode again, no double release');
     }
   }
 

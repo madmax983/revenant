@@ -8,7 +8,8 @@
  * - Auto-brake on: +1 SOQL, the #129 AsyncApexJob read (max 2,001 rows).
  * - Ceiling set: +1 SOQL, the global counter row (no lock). A start below the
  *   ceiling also reads the oldest parked starts (+1 SOQL, indexed, max 10
- *   rows). If they exist, it parks and wakes them with one Queueable.
+ *   rows). If they exist, it sends them to the gate (RUN_STEP events). It
+ *   parks when they fill the free slots.
  *
  * A read that fails does not brake (fail open). No method here throws.
  */
@@ -101,12 +102,17 @@ public inherited sharing class GlobalAdmissionBrake {
     }
     try {
       GlobalAdmissionPolicy.Decision d = evaluate();
-      Boolean backlog =
+      Boolean backlog = false;
+      if (
         d.governed &&
         !d.braked &&
         paused != true &&
-        d.inputs.ceiling != null &&
-        !parkedBacklog(d).isEmpty();
+        d.inputs.ceiling != null
+      ) {
+        // Park only when the backlog fills the free slots. Else the start
+        // takes a free slot, and the wake admits the backlog.
+        backlog = parkedBacklog(d).size() >= freeSlots(d);
+      }
       return GlobalAdmissionPolicy.startState(d, paused, backlog);
     } catch (Exception ex) {
       return null;
@@ -123,10 +129,10 @@ public inherited sharing class GlobalAdmissionBrake {
     }
     cachedBacklog = new List<Id>();
     try {
-      Integer free = d.inputs.inFlight == null
-        ? ConcurrencyAdmissionOrder.MAX_WAKES
-        : d.inputs.ceiling - d.inputs.inFlight;
-      Integer rowLimit = Math.min(free, ConcurrencyAdmissionOrder.MAX_WAKES);
+      Integer rowLimit = Math.min(
+        freeSlots(d),
+        ConcurrencyAdmissionOrder.MAX_WAKES
+      );
       if (rowLimit <= 0 || WorkflowPauseGate.wildcardPaused()) {
         return cachedBacklog;
       }
@@ -151,16 +157,28 @@ public inherited sharing class GlobalAdmissionBrake {
     return cachedBacklog;
   }
 
-  // A start that parks behind the backlog wakes the oldest parked starts with
-  // one admit-only Queueable (#132 ConcurrencyAdmissionWake), one time for each
-  // transaction. It uses the async job that its own first hop would use, so
-  // free slots do not wait for the next watchdog sweep.
+  // Free global slots from the lock-free count. An unread count gives the
+  // wake batch size (fail open).
+  private static Integer freeSlots(GlobalAdmissionPolicy.Decision d) {
+    if (d.inputs.inFlight == null) {
+      return ConcurrencyAdmissionOrder.MAX_WAKES;
+    }
+    return Math.max(0, d.inputs.ceiling - d.inputs.inFlight);
+  }
+
+  // A start that finds a backlog sends the oldest parked starts to the gate,
+  // one time for each transaction. It uses the normal RUN_STEP path (a
+  // platform event), not a Queueable, so it does not use the Queueable of the
+  // caller. The gate admits each start or parks it again. It never runs a step
+  // before admission.
   private static void wakeBacklog() {
     if (backlogWoken || cachedBacklog == null || cachedBacklog.isEmpty()) {
       return;
     }
     backlogWoken = true;
-    ConcurrencyAdmissionOrder.wake(cachedBacklog);
+    if (!(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)) {
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(cachedBacklog);
+    }
   }
 
   /**
@@ -190,8 +208,8 @@ public inherited sharing class GlobalAdmissionBrake {
     if (state == GlobalAdmissionPolicy.STATE_PARKED) {
       instance.Status__c = 'Suspended';
       instance.Sleep_Until__c = DateTime.now();
-      wakeBacklog();
     }
+    wakeBacklog();
     return state;
   }
 

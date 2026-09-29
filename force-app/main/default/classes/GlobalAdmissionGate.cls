@@ -8,7 +8,8 @@
  * - Acquire: at the first hop of a new start, under the instance lock.
  * - Release: on the first terminal transition. Continue-As-New moves the slot
  *   to the successor, so it does not release.
- * - Operator retry of a failed instance: takes a slot and does not park.
+ * - Operator retry of a failed instance: marked Held, does not park. The
+ *   reconcile counts it.
  * - Reconcile: the watchdog heartbeat sets the count to the number of
  *   non-terminal holders. It also records emergency stop changes.
  *
@@ -27,9 +28,14 @@ public inherited sharing class GlobalAdmissionGate {
   @TestVisible
   private static Boolean failLock = false;
 
-  // In the heartbeat, releases wait for the reconcile at the end, so the
+  // In the heartbeat, releases wait for the reconcile near the end, so the
   // heartbeat does not hold `$global` while it locks instance rows.
   private static Boolean deferRelease = false;
+  private static Integer deferredCount = 0;
+  // Budget that reconcile needs: 3 SOQL (row lock, provision re-read, count)
+  // and 3 DML (provision insert, row update, audit insert).
+  private static final Integer RECONCILE_SOQL = 3;
+  private static final Integer RECONCILE_DML = 3;
 
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -113,35 +119,25 @@ public inherited sharing class GlobalAdmissionGate {
   }
 
   /**
-   * @description Takes a global slot for an operator retry of a failed
-   * top-level instance. It never parks: the count can go above the ceiling
-   * until work completes. No-op with no ceiling, for a child and for an engine
-   * workflow.
+   * @description Marks an operator retry of a failed top-level instance as
+   * Held. It never parks: the count can go above the ceiling until work
+   * completes. The next reconcile adds it to the count. No-op with no
+   * ceiling, for a child and for an engine workflow.
    * @param instance The instance, with Parent_Instance__c, Workflow_Name__c
    * and Global_Admission__c. The method sets Global_Admission__c in memory.
    */
   public static void countRetry(Workflow_Instance__c instance) {
-    Integer ceiling = GlobalAdmissionBrake.configuredCeiling();
     if (
-      ceiling == null ||
+      GlobalAdmissionBrake.configuredCeiling() == null ||
       instance.Parent_Instance__c != null ||
       instance.Global_Admission__c == GlobalAdmissionPolicy.STATE_HELD ||
       WorkflowPauseGate.isEngineWorkflow(instance.Workflow_Name__c)
     ) {
       return;
     }
-    try {
-      Concurrency_State__c state = ConcurrencyGate.lockOrProvision(COUNTER_KEY);
-      state.In_Flight_Count__c =
-        (state.In_Flight_Count__c == null
-          ? 0
-          : state.In_Flight_Count__c.intValue()) + 1;
-      update as system state;
-    } catch (Exception ex) {
-      // Fail open: the next reconcile counts the slot.
-      instance.Global_Admission__c = GlobalAdmissionPolicy.STATE_HELD;
-      return;
-    }
+    // No counter lock here: a bulk redrive retries many rows in one
+    // transaction, and a lock would break the lock order. The next reconcile
+    // counts the slot.
     instance.Global_Admission__c = GlobalAdmissionPolicy.STATE_HELD;
   }
 
@@ -208,11 +204,15 @@ public inherited sharing class GlobalAdmissionGate {
 
   /**
    * @description Gives back global slots. The count does not go below 0. In
-   * the heartbeat, the reconcile at the end applies the release.
+   * the heartbeat, the engine keeps the count and the reconcile applies it.
    * @param count The number of slots.
    */
   public static void release(Integer count) {
-    if (count == null || count <= 0 || deferRelease) {
+    if (count == null || count <= 0) {
+      return;
+    }
+    if (deferRelease) {
+      deferredCount += count;
       return;
     }
     ConcurrencyGate.release(COUNTER_KEY, count);
@@ -220,20 +220,46 @@ public inherited sharing class GlobalAdmissionGate {
 
   /**
    * @description Starts the heartbeat mode: `release` does not lock
-   * `$global`. Call `reconcile` at the end of the heartbeat.
+   * `$global`. Call `reconcile`, then `endDeferral` in a finally block.
    */
   public static void deferReleasesToReconcile() {
     deferRelease = true;
+    deferredCount = 0;
   }
 
   /**
-   * @description Last heartbeat step. Sets the count to the non-terminal
-   * holders, so it also applies the releases of this transaction. Records an
-   * emergency stop change. With no row and no emergency stop, it uses 1 SOQL
-   * and stops.
+   * @description Stops the heartbeat mode. If the reconcile did not apply the
+   * deferred releases, this applies them. Best effort: it does not throw.
+   */
+  public static void endDeferral() {
+    Integer pending = deferredCount;
+    deferRelease = false;
+    deferredCount = 0;
+    if (pending <= 0) {
+      return;
+    }
+    try {
+      ConcurrencyGate.release(COUNTER_KEY, pending);
+    } catch (Exception ex) {
+      // The next reconcile corrects the count.
+      return;
+    }
+  }
+
+  /**
+   * @description Heartbeat step. Sets the count to the non-terminal holders,
+   * so it also applies the releases of this heartbeat. Records an emergency
+   * stop change. With no row, no emergency stop and no ceiling, it uses 1 SOQL
+   * and stops. It stops with no change when the transaction has too little
+   * SOQL, DML or query-row budget left.
    */
   public static void reconcile() {
-    deferRelease = false;
+    if (
+      Limits.getQueries() + RECONCILE_SOQL > Limits.getLimitQueries() ||
+      Limits.getDmlStatements() + RECONCILE_DML > Limits.getLimitDmlStatements()
+    ) {
+      return;
+    }
     Boolean stop = GlobalAdmissionBrake.emergencyStopConfigured();
     List<Concurrency_State__c> rows = [
       SELECT Id, In_Flight_Count__c, Emergency_Stop_Seen__c
@@ -243,18 +269,20 @@ public inherited sharing class GlobalAdmissionGate {
       LIMIT 1
       FOR UPDATE
     ];
-    // A fail-open admit can mark a start Held with no row. With a ceiling, the
-    // reconcile makes the row and counts it.
+    // A fail-open admit or a retry can mark a start Held with no row. With a
+    // ceiling, the reconcile makes the row and counts it.
     if (
       rows.isEmpty() &&
       !stop &&
       GlobalAdmissionBrake.configuredCeiling() == null
     ) {
+      deferredCount = 0;
       return;
     }
     Concurrency_State__c row = rows.isEmpty()
       ? ConcurrencyGate.lockOrProvision(COUNTER_KEY)
       : rows[0];
+    Integer rowsLeft = Limits.getLimitQueryRows() - Limits.getQueryRows();
     Integer truth = [
       SELECT COUNT()
       FROM Workflow_Instance__c
@@ -262,27 +290,52 @@ public inherited sharing class GlobalAdmissionGate {
         Global_Admission__c = :GlobalAdmissionPolicy.STATE_HELD
         AND Status__c NOT IN :TERMINAL_STATUSES
       WITH SYSTEM_MODE
+      LIMIT :rowsLeft
     ];
+    Boolean countKnown = truth < rowsLeft;
     Boolean changed = false;
     if (
-      row.In_Flight_Count__c == null ||
-      row.In_Flight_Count__c.intValue() != truth
+      countKnown &&
+      (row.In_Flight_Count__c == null ||
+      row.In_Flight_Count__c.intValue() != truth)
     ) {
       row.In_Flight_Count__c = truth;
       changed = true;
+    }
+    if (countKnown) {
+      // The true count includes the releases of this heartbeat.
+      deferredCount = 0;
     }
     Boolean stopChanged = row.Emergency_Stop_Seen__c != stop;
     if (stopChanged) {
       row.Emergency_Stop_Seen__c = stop;
       changed = true;
     }
-    if (changed) {
-      update as system row;
+    saveReconcile(row, changed, stopChanged, stop);
+  }
+
+  // The row update and the audit row go together. If one fails, both roll
+  // back, so the next sweep sees the change again and writes the audit row.
+  private static void saveReconcile(
+    Concurrency_State__c row,
+    Boolean changed,
+    Boolean stopChanged,
+    Boolean stop
+  ) {
+    if (!changed) {
+      return;
     }
-    // After the row update: if the update fails, no audit row is written, and
-    // the next sweep writes it one time.
-    if (stopChanged) {
-      writeStopAudit(stop);
+    Savepoint sp = Database.setSavepoint();
+    try {
+      update as system row;
+      if (stopChanged) {
+        writeStopAudit(stop);
+      }
+    } catch (Exception ex) {
+      Database.rollback(sp);
+      throw ex;
+    } finally {
+      Database.releaseSavepoint(sp);
     }
   }
 
