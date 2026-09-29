@@ -67,7 +67,7 @@ private class HelloWorkflowTest {
     System.assertEquals(
       '"Hello, Ada!"',
       greet('Ada'),
-      'A text input is the name'
+      'A string input is the name'
     );
     System.assertEquals(
       '"Hello, World!"',

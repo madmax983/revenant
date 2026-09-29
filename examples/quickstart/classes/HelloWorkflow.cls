@@ -40,7 +40,7 @@ public inherited sharing class HelloWorkflow implements WorkflowDefinition {
    */
   public class GreetStep implements WorkflowStep {
     /**
-     * @description Reads the name. The start input is `{"name": "..."}` or a text.
+     * @description Reads the name. The start input is `{"name": "..."}` or a string.
      * A missing or blank name gives "World".
      * @param ctx The step context.
      * @return Complete, with the greeting as output.

@@ -1,7 +1,8 @@
 # Quickstart gate (issue #133).
 # static: Node tests and an apex-ls compile of the Hello classes and scripts. No secret.
 # smoke: a new scratch org. It deploys, runs HelloWorkflow and verifies it. It records
-# the time from deploy start to Completed and fails over QUICKSTART_MAX_SECONDS.
+# the time from deploy start to Completed. It fails if the time is more than
+# QUICKSTART_MAX_SECONDS.
 # The smoke job needs the DEVHUB_SFDX_AUTH_URL secret. Without it, the job skips.
 name: Quickstart
 

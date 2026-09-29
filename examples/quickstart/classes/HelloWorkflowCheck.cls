@@ -23,7 +23,7 @@ public inherited sharing class HelloWorkflowCheck {
     private Result(Workflow_Instance__c run) {
       instanceId = run.Id;
       status = run.Status__c;
-      // Not less than 0, if the two clocks differ.
+      // If the clocks differ, use 0, not a negative time.
       elapsedMillis = Math.max(
         0L,
         run.Terminal_At__c.getTime() - run.CreatedDate.getTime()

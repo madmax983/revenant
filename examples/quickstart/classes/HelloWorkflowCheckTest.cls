@@ -42,11 +42,11 @@ private class HelloWorkflowCheckTest {
 
   @IsTest
   static void failsWithTheErrorOfAFailedRun() {
-    insertRun('Failed', 'Step blew up', Datetime.now());
+    insertRun('Failed', 'Step failed', Datetime.now());
     String message = verifyError();
     System.assert(message.contains('Failed'), 'Must give status: ' + message);
     System.assert(
-      message.contains('Step blew up'),
+      message.contains('Step failed'),
       'Must give the error: ' + message
     );
   }
