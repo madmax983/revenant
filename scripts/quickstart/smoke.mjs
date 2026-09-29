@@ -31,9 +31,12 @@ const FLAGS = {
   "--result-file": "resultFile",
 };
 const TEXT_FLAGS = new Set(["targetOrg", "resultFile"]);
-// An alias or a username. No shell characters: on Windows, `sf` runs in cmd.exe.
-const ORG_PATTERN = /^[\w.@+-]+$/;
+// On Windows, `sf` runs in cmd.exe. cmd.exe changes these characters, also in quotes.
+const CMD_UNSAFE = /["%^!&|<>]/;
 const QUERY_ATTEMPTS = 3;
+// A hung `sf` call stops after this time. The deploy has its own --wait.
+const SF_TIMEOUT_MS = 2 * 60 * 1000;
+const DEPLOY_TIMEOUT_MS = 40 * 60 * 1000;
 const USAGE = `Usage: node scripts/quickstart/smoke.mjs [options]
   --target-org <alias>     Org to use (default: the sf default org)
   --max-seconds <n>        Budget from deploy start to Completed (default ${DEFAULTS.maxSeconds})
@@ -44,8 +47,8 @@ const USAGE = `Usage: node scripts/quickstart/smoke.mjs [options]
 /** A smoke step failed. The message tells the user what to do. */
 export class SmokeError extends Error {}
 
-/** Reads the command-line flags. */
-export function parseArgs(argv) {
+/** Reads the command-line flags. `platform` is for the tests. */
+export function parseArgs(argv, platform = process.platform) {
   const options = { ...DEFAULTS };
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i];
@@ -55,8 +58,10 @@ export function parseArgs(argv) {
     if (value === undefined || value.startsWith("--")) {
       throw new SmokeError(`${flag} needs a value`);
     }
-    if (key === "targetOrg" && !ORG_PATTERN.test(value)) {
-      throw new SmokeError(`${flag} has a character that is not permitted`);
+    if (key === "targetOrg" && platform === "win32" && CMD_UNSAFE.test(value)) {
+      throw new SmokeError(
+        `${flag} has a character that cmd.exe changes: " % ^ ! & | < >`,
+      );
     }
     if (TEXT_FLAGS.has(key)) {
       options[key] = value;
@@ -278,10 +283,12 @@ function seconds(ms) {
 
 /** Runs the real `sf`. On Windows, `sf` is a .cmd file, so it needs a shell. */
 function realSf(args) {
+  const timeout = args[0] === "project" ? DEPLOY_TIMEOUT_MS : SF_TIMEOUT_MS;
   const opts = {
     cwd: ROOT,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    timeout,
     env: { ...process.env, SF_AUTOUPDATE_DISABLE: "true" },
   };
   const run =
@@ -291,6 +298,15 @@ function realSf(args) {
           shell: true,
         })
       : spawnSync("sf", args, opts);
+  if (run.error?.code === "ETIMEDOUT") {
+    // A failed call, not a crash: the poll tries a failed query again.
+    const command = `sf ${args.slice(0, 2).join(" ")}`;
+    return {
+      status: 1,
+      stdout: "",
+      stderr: `${command} timed out after ${timeout / 1000} s`,
+    };
+  }
   if (run.error) {
     throw new SmokeError(
       `Cannot run sf (${run.error.message}). ` +
@@ -300,7 +316,7 @@ function realSf(args) {
   return run;
 }
 
-/** No argument has a double quote or a %: parseArgs and instanceIdFrom prevent it. */
+/** No argument has a CMD_UNSAFE character: parseArgs and instanceIdFrom prevent it. */
 function quoteForCmd(arg) {
   return /^[\w./:=@+-]+$/.test(arg) ? arg : `"${arg}"`;
 }
@@ -311,12 +327,15 @@ function writeSummary(text) {
   }
 }
 
-async function main(argv) {
-  if (argv.includes("--help") || argv.includes("-h")) {
-    console.log(USAGE);
-    return 0;
-  }
-  const options = parseArgs(argv);
+function writeResult(options, record) {
+  if (!options?.resultFile) return;
+  const file = resolve(options.resultFile);
+  mkdirSync(dirname(file), { recursive: true });
+  const full = { ...record, maxSeconds: options.maxSeconds };
+  writeFileSync(file, `${JSON.stringify(full, null, 2)}\n`);
+}
+
+async function main(argv, options) {
   const result = await runSmoke({
     sf: realSf,
     now: Date.now,
@@ -325,12 +344,7 @@ async function main(argv) {
     options,
   });
   writeSummary(summaryMarkdown(result, options.maxSeconds));
-  if (options.resultFile) {
-    const file = resolve(options.resultFile);
-    mkdirSync(dirname(file), { recursive: true });
-    const record = { ...result, maxSeconds: options.maxSeconds };
-    writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
-  }
+  writeResult(options, { ok: result.withinBudget, ...result });
   console.log(`Deploy to Completed: ${result.budgetMessage}`);
   return result.withinBudget ? 0 : 1;
 }
@@ -339,14 +353,25 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  main(process.argv.slice(2)).then(
-    (code) => process.exit(code),
-    (error) => {
-      const message =
-        error instanceof SmokeError ? error.message : (error.stack ?? error);
-      console.error(`Quickstart smoke failed: ${message}`);
-      writeSummary(`### Quickstart smoke\n\nFAILED: ${message}\n`);
-      process.exit(1);
-    },
-  );
+  const argv = process.argv.slice(2);
+  let options;
+  const fail = (error) => {
+    const message =
+      error instanceof SmokeError ? error.message : (error.stack ?? error);
+    console.error(`Quickstart smoke failed: ${message}`);
+    writeSummary(`### Quickstart smoke\n\nFAILED: ${message}\n`);
+    // Keep a record of the failure too.
+    writeResult(options, { ok: false, error: String(message) });
+    process.exit(1);
+  };
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    fail(error);
+  }
+  main(argv, options).then((code) => process.exit(code), fail);
 }

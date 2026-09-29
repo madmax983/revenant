@@ -140,6 +140,7 @@ private class HelloWorkflowCheckTest {
       Status__c = status,
       Error_Message__c = error
     );
+    // WorkflowInstanceTrigger sets Terminal_At__c on insert for a terminal status.
     insert as system run;
     Test.setCreatedDate(run.Id, createdDate);
     return run.Id;

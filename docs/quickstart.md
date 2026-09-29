@@ -129,9 +129,9 @@ sf data query --query "SELECT Step_Name__c, Status__c, Error_Details__c FROM Wor
 
 ## CI
 
-The workflow `.github/workflows/quickstart.yml` runs this path on each push to `main` and on each pull request that changes the engine or the quickstart files. You can also start it by hand (Actions > Quickstart > Run workflow).
+The workflow `.github/workflows/quickstart.yml` runs when a push to `main` or a pull request changes the engine or the quickstart files. You can also start it by hand (Actions > Quickstart > Run workflow).
 
 - **Static checks**: Node tests of the runner and of this page. apex-ls compiles the Hello classes and the two scripts.
-- **Scratch org smoke**: a new scratch org, then `scripts/quickstart/smoke.mjs`. The job summary shows the time from deploy start to `Completed`. The job fails if that time is more than `QUICKSTART_MAX_SECONDS` (600). Then it runs the Hello Apex tests.
+- **Scratch org smoke**: a new scratch org, then `scripts/quickstart/smoke.mjs`. The job summary shows the time from deploy start to `Completed`. The job fails if that time is more than `QUICKSTART_MAX_SECONDS` (600). If the smoke passes, the job runs the Hello Apex tests.
 
-The smoke job needs the repository secret `DEVHUB_SFDX_AUTH_URL`. To get the value: `sf org display --verbose --target-org devhub`, then copy **Sfdx Auth Url**. Without the secret, the smoke job skips with a warning, and CI records no time. Each smoke run also uploads the times as the `quickstart-smoke` artifact (JSON).
+The smoke job needs the repository secret `DEVHUB_SFDX_AUTH_URL`. To get the value: `sf org display --verbose --target-org devhub`, then copy **Sfdx Auth Url**. Without the secret, the smoke job skips with a warning, and CI records no time. Each smoke run also uploads its result as the `quickstart-smoke` artifact (JSON): the times, or the error.

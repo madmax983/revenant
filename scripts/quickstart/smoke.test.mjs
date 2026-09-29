@@ -146,15 +146,30 @@ test("parseArgs: reads each flag", () => {
   );
 });
 
-test("parseArgs: accepts an alias or a username, and rejects shell characters", () => {
+test("parseArgs: accepts each alias and username on macOS and Linux", () => {
+  for (const org of ["dev+1@example.com", "my alias", "o'brien@x.com", "a&b"]) {
+    assert.equal(parseArgs(["--target-org", org], "linux").targetOrg, org);
+  }
+});
+
+test("parseArgs: rejects cmd.exe characters in --target-org on Windows", () => {
   assert.equal(
-    parseArgs(["--target-org", "dev+1@example.com"]).targetOrg,
-    "dev+1@example.com",
+    parseArgs(["--target-org", "o'brien+1@x.com"], "win32").targetOrg,
+    "o'brien+1@x.com",
   );
-  for (const bad of ["a&b", "a%PATH%", 'a"b', "a b", "a^b", "a|b"]) {
+  for (const bad of [
+    'a"b',
+    "a%PATH%",
+    "a^b",
+    "a!b",
+    "a&b",
+    "a|b",
+    "a<b",
+    "a>b",
+  ]) {
     assert.throws(
-      () => parseArgs(["--target-org", bad]),
-      /--target-org has a character that is not permitted/,
+      () => parseArgs(["--target-org", bad], "win32"),
+      /--target-org has a character that cmd\.exe changes/,
       bad,
     );
   }

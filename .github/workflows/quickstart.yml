@@ -23,6 +23,8 @@ on:
       - "docs/quickstart.md"
       - "README.md"
       - "sfdx-project.json"
+      - ".gitmodules"
+      - "lib/chunkedcursoriterator"
       - "package.json"
       - ".github/workflows/quickstart.yml"
   pull_request:
@@ -38,6 +40,8 @@ on:
       - "docs/quickstart.md"
       - "README.md"
       - "sfdx-project.json"
+      - ".gitmodules"
+      - "lib/chunkedcursoriterator"
       - "package.json"
       - ".github/workflows/quickstart.yml"
   workflow_dispatch:
