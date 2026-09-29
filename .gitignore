@@ -17,3 +17,6 @@ node_modules/
 scripts/global-api/.apex-ls
 # Jest coverage output
 coverage/
+
+# Rust build output (tools/revenant-lint)
+target/

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6534a75f5d9534102186c28ed5e1d141bc0d87cd0ddacc0d566bfef5a4269b3d # shrinks to h = "Datetime.now()"
+cc 61e94fb484c6c0d20ef83d4416ed907f841c205b0c1eb8b65c9f4e4d133cc1a2 # shrinks to body = "\r\n", h = "Datetime.now()", crlf = true

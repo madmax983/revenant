@@ -1,0 +1,39 @@
+[package]
+name = "revenant-lint"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Deploy-time determinism lint for Revenant workflow steps (issue #135)."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+# rlib: the native CLI and tests. cdylib: the wasm core of the sf plugin.
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "revenant-lint"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.11.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
