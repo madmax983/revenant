@@ -222,11 +222,34 @@ public class GlobalAdmissionGateTest {
       WorkflowEngine.disableQueueableInTest = true;
       configure(false, 5);
       Id a = WorkflowEngine.start(WF, 'dup-a', null);
-      WorkflowEngine.runStep(a, null);
-      WorkflowEngine.runStep(a, null);
-      WorkflowEngine.runStep(a, null);
+      // Two deliveries read the row before either one takes the lock.
+      Workflow_Instance__c first = staleRead(a);
+      Workflow_Instance__c second = staleRead(a);
+      WorkflowStepAdmission.admitOrParkForConcurrency(first);
+      WorkflowStepAdmission.admitOrParkForConcurrency(second);
       Assert.areEqual(1, globalCount(), 'Redelivery does not double count');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_HELD,
+        reload(a).Global_Admission__c,
+        'Held once'
+      );
     }
+  }
+
+  // The fields that the step runner reads with no lock.
+  private static Workflow_Instance__c staleRead(Id id) {
+    return [
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Status__c,
+        Current_Step__c,
+        Concurrency_Slot_Held__c,
+        Concurrency_Parked__c,
+        Global_Admission__c
+      FROM Workflow_Instance__c
+      WHERE Id = :id
+    ];
   }
 
   @IsTest
@@ -317,6 +340,104 @@ public class GlobalAdmissionGateTest {
         successor.Status__c,
         'A running chain is not parked'
       );
+    }
+  }
+
+  @IsTest
+  static void fullGlobalCeilingGivesBackTheDefinitionSlot() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      ConcurrencyGate.mockConfigs.put(
+        'GlobalAdmissionGateTest_WaitWorkflow',
+        (Concurrency_Config__mdt) JSON.deserialize(
+          '{"DeveloperName":"GlobalAdmissionGateTest_WaitWorkflow","Max_Concurrent_Instances__c":5}',
+          Concurrency_Config__mdt.class
+        )
+      );
+      configure(false, 1);
+      Id a = WorkflowEngine.start(WF, 'def-full-a', null);
+      Id b = WorkflowEngine.start(WF, 'def-full-b', null);
+      WorkflowEngine.runStep(a, null);
+      WorkflowEngine.runStep(b, null);
+      Assert.areEqual(1, globalCount(), 'One global slot');
+      Assert.areEqual(
+        1,
+        [
+          SELECT In_Flight_Count__c
+          FROM Concurrency_State__c
+          WHERE Workflow_Definition__c = :WF
+        ]
+        .In_Flight_Count__c,
+        'b gave back its definition slot'
+      );
+      Workflow_Instance__c rb = [
+        SELECT Global_Admission__c, Concurrency_Slot_Held__c
+        FROM Workflow_Instance__c
+        WHERE Id = :b
+      ];
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        rb.Global_Admission__c,
+        'b parks'
+      );
+      Assert.isFalse(rb.Concurrency_Slot_Held__c, 'b holds no slot');
+    }
+  }
+
+  @IsTest
+  static void rollbackOfAWaitingStartClearsTheMarker() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(false, 5);
+      Id a = WorkflowEngine.start(WF, 'rb-a', null);
+      update new Workflow_Instance__c(Id = a, Status__c = 'Cancelling');
+      Assert.isNull(reload(a).Global_Admission__c, 'A rollback never waits');
+      Assert.isNull(globalCount(), 'No slot taken or given back');
+    }
+  }
+
+  @IsTest
+  static void heldRollbackReleasesOnceAtTheEnd() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(false, 5);
+      Id a = admitted(WF, 'rb-held');
+      update new Workflow_Instance__c(Id = a, Status__c = 'Cancelling');
+      Assert.areEqual(1, globalCount(), 'A rollback keeps the slot');
+      update new Workflow_Instance__c(Id = a, Status__c = 'Cancelled');
+      Assert.areEqual(0, globalCount(), 'Released at the terminal status');
+    }
+  }
+
+  @IsTest
+  static void operatorRetryTakesASlot() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(false, 5);
+      Id a = admitted(WF, 'retry-a');
+      update new Workflow_Instance__c(Id = a, Status__c = 'Failed');
+      Assert.areEqual(0, globalCount(), 'Released on Failed');
+      WorkflowRetryService.retryWorkflow(a);
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_HELD,
+        reload(a).Global_Admission__c,
+        'The retry holds a slot'
+      );
+      Assert.areEqual(1, globalCount(), 'The retry is counted');
+    }
+  }
+
+  @IsTest
+  static void heartbeatAppliesReleasesAtTheEnd() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(false, 5);
+      Id a = admitted(WF, 'hb-a');
+      GlobalAdmissionGate.deferReleasesToReconcile();
+      update new Workflow_Instance__c(Id = a, Status__c = 'Completed');
+      Assert.areEqual(1, globalCount(), 'No $global lock yet');
+      GlobalAdmissionGate.reconcile();
+      Assert.areEqual(0, globalCount(), 'The reconcile applies it');
     }
   }
 

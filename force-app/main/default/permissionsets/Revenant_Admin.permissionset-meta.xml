@@ -10,6 +10,10 @@
         <enabled>true</enabled>
     </classAccesses>
     <classAccesses>
+        <apexClass>WorkflowGlobalAdmissionController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
         <apexClass>WorkflowDashboardController</apexClass>
         <enabled>true</enabled>
     </classAccesses>

@@ -114,7 +114,13 @@ public inherited sharing class WorkflowStepAdmission {
     // already-Paused row is just a no-op until the drain flips it to Running.
     if (definitionPaused && instance.Status__c != 'Paused') {
       instance.Status__c = 'Paused';
-      Database.update(instance, true, AccessLevel.SYSTEM_MODE);
+      // Write the status only. The instance was read with no lock, so a full
+      // write can put back stale slot fields (issue #136).
+      Database.update(
+        new Workflow_Instance__c(Id = instance.Id, Status__c = 'Paused'),
+        true,
+        AccessLevel.SYSTEM_MODE
+      );
     }
 
     return true;
@@ -248,8 +254,8 @@ public inherited sharing class WorkflowStepAdmission {
     }
     String globalState = instance.Global_Admission__c;
     if (awaitingGlobal) {
-      // Issue #136: the locked acquire is the backstop for a race on the last
-      // global slot. Lock order: the definition row, then the global row.
+      // Issue #136: the locked acquire prevents two starts from taking the
+      // last global slot. Lock order: the definition row, then the global row.
       GlobalAdmissionGate.AcquireResult globalSlot = GlobalAdmissionGate.tryAcquire(
         GlobalAdmissionBrake.evaluate().inputs.ceiling
       );

@@ -51,9 +51,9 @@ public inherited sharing class WorkflowSleepResumeSweep {
     List<Workflow_Instance__c> readyToResume = new List<Workflow_Instance__c>();
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
-      // Issue #136: when a control is set, the main query does not select a
-      // start that the brake parked. redriveParkedStarts sends those starts.
-      Set<String> excludedGlobalStates = GlobalAdmissionBrake.sweepExclusions();
+      // Issue #136: the main query does not select a start that the brake
+      // parked, so a parked backlog cannot fill the batch of in-flight
+      // sleepers. redriveParkedStarts sends those starts, bounded.
       redriveParkedStarts(now, pausedDefNames);
       readyToResume = [
         SELECT
@@ -80,7 +80,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
           AND Workflow_Name__c NOT IN :pausedDefNames
           AND Held_At__c = NULL
           AND (Global_Admission__c = NULL
-          OR Global_Admission__c NOT IN :excludedGlobalStates)
+          OR Global_Admission__c != :GlobalAdmissionPolicy.STATE_PARKED)
         WITH SYSTEM_MODE
         LIMIT :watchdogResumeBatchSize
         FOR UPDATE
@@ -108,10 +108,11 @@ public inherited sharing class WorkflowSleepResumeSweep {
     flushSleepResumptions(b);
   }
 
-  // Issue #136: sends due parked starts to the gate, not more than the free
-  // global slots. While braked, the budget is 0 and the sweep sends none, so a
-  // braked backlog uses no async job. The row stays Suspended; the gate owns
-  // the change, as for a concurrency-parked sleeper.
+  // Issue #136: sends due parked starts to the gate, oldest start first, not
+  // more than the free global slots. While braked, the budget is 0 and the
+  // sweep sends none, so a braked backlog uses no async job. The row stays
+  // Suspended. The gate changes it, as for a concurrency-parked sleeper.
+  // Cost: 1 SOQL (indexed) when the budget is above 0.
   private static void redriveParkedStarts(
     Datetime now,
     Set<String> pausedDefNames
@@ -133,7 +134,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
         AND Workflow_Name__c NOT IN :pausedDefNames
         AND Held_At__c = NULL
       WITH SYSTEM_MODE
-      ORDER BY Sleep_Until__c ASC, Id ASC
+      ORDER BY CreatedDate ASC, Id ASC
       LIMIT :budget
     ]) {
       ids.add(inst.Id);

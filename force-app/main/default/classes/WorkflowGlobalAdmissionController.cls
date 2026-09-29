@@ -5,7 +5,7 @@
 public inherited sharing class WorkflowGlobalAdmissionController {
   /**
    * @description Returns the global admission state. Not cacheable: the state
-   * changes each minute.
+   * can change at any time.
    * @return A map with state, reason, reasons, controls and parkedCount.
    */
   @AuraEnabled

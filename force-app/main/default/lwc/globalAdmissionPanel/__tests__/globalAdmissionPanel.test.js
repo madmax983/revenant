@@ -142,10 +142,15 @@ describe("c-global-admission-panel", () => {
     );
   });
 
-  it("shows an error when the read fails", async () => {
+  it("shows an error when the data is not valid", async () => {
     const element = await render({ body: { message: "No access" } });
-    // A resolved value with no state is not valid data.
-    expect(q(element, "admission-error")).not.toBeNull();
+    expect(q(element, "admission-error").textContent).toContain(
+      "No data was returned.",
+    );
+  });
+
+  it("shows the server message when the read fails", async () => {
+    const element = await render({ body: { message: "No access" } });
     getGlobalAdmission.mockRejectedValue({ body: { message: "No access" } });
     const failed = createElement("c-global-admission-panel", {
       is: GlobalAdmissionPanel,
@@ -153,6 +158,44 @@ describe("c-global-admission-panel", () => {
     document.body.appendChild(failed);
     await flushPromises();
     expect(q(failed, "admission-error").textContent).toContain("No access");
-    expect(element).not.toBeNull();
+    expect(q(element, "admission-state")).toBeNull();
+  });
+
+  it("uses the error message, else a fallback", async () => {
+    let element = await render(new Error("Boom"));
+    expect(q(element, "admission-error").textContent).toContain("Boom");
+    document.body.removeChild(element);
+    element = await render(new Error(""));
+    expect(q(element, "admission-error").textContent).toContain(
+      "Unknown error",
+    );
+  });
+
+  it("hides the loading state after the read", async () => {
+    const element = await render(envelope());
+    expect(q(element, "admission-loading")).toBeNull();
+    expect(q(element, "admission-ungoverned")).toBeNull();
+    expect(q(element, "admission-asof").textContent).toContain("As of");
+  });
+
+  it("shows Off, a missing capacity and a missing count", async () => {
+    let element = await render(envelope({ autoBrake: false }));
+    expect(q(element, "admission-auto").textContent).toBe("Off");
+    expect(q(element, "admission-stop").textContent).toBe("Off");
+    document.body.removeChild(element);
+    element = await render(
+      envelope({
+        autoBrake: true,
+        capacityStatus: null,
+        ceiling: 10,
+        inFlight: null,
+      }),
+    );
+    expect(q(element, "admission-auto").textContent).toBe(
+      "On (capacity not available)",
+    );
+    expect(q(element, "admission-ceiling").textContent).toBe(
+      `— / ${(10).toLocaleString()}`,
+    );
   });
 });

@@ -15,7 +15,7 @@
 
         <template if:true={error}>
             <div data-id="admission-error" role="alert" class="slds-box slds-text-align_center">
-                <lightning-icon icon-name="utility:warning" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                <lightning-icon icon-name="utility:warning" size="xx-small" alternative-text="Warning" class="slds-m-right_xx-small"></lightning-icon>
                 Global admission state is not available.
                 <div class="slds-text-body_small slds-text-color_weak">{error}</div>
             </div>
@@ -23,8 +23,9 @@
 
         <template if:true={hasData}>
             <template if:true={isBraked}>
-                <div data-id="admission-braked" role="alert" class="slds-notify slds-notify_alert slds-theme_error slds-m-bottom_small">
-                    <lightning-icon icon-name="utility:error" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                <div data-id="admission-braked" role="status" class="slds-notify slds-notify_alert slds-theme_error slds-m-bottom_small">
+                    <span class="slds-assistive-text">Error</span>
+                    <lightning-icon icon-name="utility:error" size="x-small" variant="inverse" alternative-text="Braked" class="slds-m-right_x-small"></lightning-icon>
                     <div>
                         <p><strong>New starts park.</strong> In-flight instances continue.</p>
                         <ul class="slds-list_horizontal slds-has-dividers_left">
@@ -49,13 +50,13 @@
                     <dd class="slds-item_detail" data-id="admission-auto">{autoBrakeLabel}</dd>
                     <dt class="slds-item_label slds-text-color_weak">Global slots used / ceiling</dt>
                     <dd class="slds-item_detail" data-id="admission-ceiling">{ceilingLabel}</dd>
-                    <dt class="slds-item_label slds-text-color_weak">Starts parked by the brake</dt>
+                    <dt class="slds-item_label slds-text-color_weak">Starts that the brake parked</dt>
                     <dd class="slds-item_detail" data-id="admission-parked">{parkedLabel}</dd>
                 </dl>
                 <div data-id="admission-asof" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{asOfLabel}</div>
             </div>
             <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
-                To stop all new starts, go to Setup &gt; Custom Metadata Types &gt; Revenant Config &gt; Default and select Emergency Stop. Clear it to admit the parked starts again. The watchdog admits them at its next sweep.
+                To stop all new starts, go to Setup &gt; Custom Metadata Types &gt; Revenant Config &gt; Manage Records &gt; Default. Select Emergency Stop. To admit the parked starts again, clear Emergency Stop. The next watchdog sweep sends them to the gate.
             </p>
         </template>
     </div>

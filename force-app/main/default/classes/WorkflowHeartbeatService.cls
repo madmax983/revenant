@@ -36,6 +36,10 @@ public inherited sharing class WorkflowHeartbeatService {
     // resume section needs.
     List<Workflow_Instance__c> watchdogTerminalInstances = new List<Workflow_Instance__c>();
 
+    // Issue #136: a terminal transition in this heartbeat does not lock the
+    // global counter now. Step 7c applies it, after the last instance lock.
+    GlobalAdmissionGate.deferReleasesToReconcile();
+
     // 1. Process timed-out steps.
     WorkflowTimeoutSweep.processTimedOutSteps(now, watchdogTerminalInstances);
 
@@ -87,15 +91,6 @@ public inherited sharing class WorkflowHeartbeatService {
       // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
-    // 4-global. Issue #136: reconcile the global slot count and record an
-    // emergency stop change. After the definition counters (same lock order as
-    // the gate).
-    try {
-      GlobalAdmissionGate.reconcile();
-    } catch (Exception ignored) {
-      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
-    }
-
     // 4a. Issue #132: put waiting rows from before admission priority into the
     // indexed admission queue, so that the gate sees them.
     try {
@@ -140,6 +135,15 @@ public inherited sharing class WorkflowHeartbeatService {
       WorkflowMetricsPublisher.publishSnapshot(now);
     } catch (Exception ignored) {
       // A failed snapshot must not stop the watchdog heartbeat.
+    }
+
+    // 7c. Issue #136: reconcile the global slot count and record an emergency
+    // stop change. Last, so the heartbeat locks `$global` after all instance
+    // rows, as the gate does.
+    try {
+      GlobalAdmissionGate.reconcile();
+    } catch (Exception ignored) {
+      // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
     // 8. Write the liveness stamp (issue #113). Only a complete sweep gets

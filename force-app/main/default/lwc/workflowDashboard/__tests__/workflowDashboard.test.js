@@ -27,6 +27,13 @@ jest.mock(
   () => ({ default: jest.fn(() => Promise.resolve()) }),
   { virtual: true },
 );
+import getGlobalAdmission from "@salesforce/apex/WorkflowGlobalAdmissionController.getGlobalAdmission";
+
+jest.mock(
+  "@salesforce/apex/WorkflowGlobalAdmissionController.getGlobalAdmission",
+  () => ({ default: jest.fn(() => Promise.resolve()) }),
+  { virtual: true },
+);
 import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardCommandController.enqueueWatchdog";
 import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
@@ -5941,6 +5948,31 @@ describe("c-workflow-dashboard async capacity panel (#129)", () => {
     await flushPromises();
     await flushPromises();
     expect(getAsyncCapacity).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the Global Admission panel and reads it again on Refresh Status (#136)", async () => {
+    getGlobalAdmission.mockResolvedValue({
+      state: "BRAKED",
+      governed: true,
+      reason: "EMERGENCY_STOP",
+      reasons: ["EMERGENCY_STOP"],
+      emergencyStop: true,
+      parkedCount: 3,
+    });
+    const element = await openDoctor();
+    const panel = element.shadowRoot.querySelector("c-global-admission-panel");
+    expect(panel).not.toBeNull();
+    await flushPromises();
+    expect(
+      panel.shadowRoot.querySelector('[data-id="admission-braked"]'),
+    ).not.toBeNull();
+    expect(getGlobalAdmission).toHaveBeenCalledTimes(1);
+    findButton(element, (btn) => btn.label === "Refresh Status").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    expect(getGlobalAdmission).toHaveBeenCalledTimes(2);
   });
 });
 

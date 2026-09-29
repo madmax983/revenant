@@ -5,6 +5,7 @@
     <description>When you select this box, a new start parks while the async Apex capacity status is Critical (issue #136). The status is the System Doctor capacity status (issue #129, Async_Capacity_Thresholds__c). Unknown does not park. In-flight instances continue. Default: off.</description>
     <externalId>false</externalId>
     <fieldManageability>SubscriberControlled</fieldManageability>
+    <inlineHelpText>Parks new starts while async capacity is Critical.</inlineHelpText>
     <label>Auto Brake On Capacity</label>
     <type>Checkbox</type>
 </CustomField>

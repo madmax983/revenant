@@ -384,11 +384,6 @@ public class GlobalAdmissionStartTest {
       configure(true, false, null);
       Id id = startOne('sweep-1');
       Assert.areEqual(
-        new Set<String>{ GlobalAdmissionPolicy.STATE_PARKED },
-        GlobalAdmissionBrake.sweepExclusions(),
-        'Governed: the main query skips parked starts'
-      );
-      Assert.areEqual(
         0,
         GlobalAdmissionBrake.parkedResumeBudget(200),
         'Braked: send none'
@@ -414,9 +409,10 @@ public class GlobalAdmissionStartTest {
       configure(true, false, null);
       startOne('sweep-2');
       configure(false, false, null);
-      Assert.isTrue(
-        GlobalAdmissionBrake.sweepExclusions().isEmpty(),
-        'Not governed: the main query takes parked starts'
+      Assert.areEqual(
+        200,
+        GlobalAdmissionBrake.parkedResumeBudget(200),
+        'Not governed: the batch size'
       );
       Test.startTest();
       Integer before = Limits.getQueueableJobs();
@@ -582,8 +578,167 @@ public class GlobalAdmissionStartTest {
       WorkflowEngine.runStep(id, null);
       Workflow_Instance__c r = reload(id);
       Assert.areEqual('Running', r.Status__c, 'Admitted');
-      Assert.isNull(r.Global_Admission__c, 'Admitted with no slot');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_HELD,
+        r.Global_Admission__c,
+        'Admitted and marked, so the release stays correct'
+      );
       Assert.isNull(globalCount(), 'No counter written');
+      GlobalAdmissionGate.failLock = false;
+      GlobalAdmissionGate.reconcile();
+      Assert.areEqual(1, globalCount(), 'The reconcile counts the slot');
+    }
+  }
+
+  // ── Order under a ceiling ──────────────────────────────────────────────────
+
+  @IsTest
+  static void newStartParksBehindAParkedBacklog() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      insert new Concurrency_State__c(
+        Workflow_Definition__c = GlobalAdmissionGate.COUNTER_KEY,
+        In_Flight_Count__c = 1
+      );
+      configure(false, false, 1);
+      Id older = startOne('fifo-1');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        reload(older).Global_Admission__c,
+        'The full ceiling parks the older start'
+      );
+
+      Concurrency_State__c row = [
+        SELECT Id
+        FROM Concurrency_State__c
+        WHERE Workflow_Definition__c = :GlobalAdmissionGate.COUNTER_KEY
+      ];
+      row.In_Flight_Count__c = 0;
+      update row;
+      GlobalAdmissionBrake.resetCache();
+
+      Id newer = startOne('fifo-2');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        reload(newer).Global_Admission__c,
+        'A slot is free, but the newer start parks behind the older one'
+      );
+    }
+  }
+
+  @IsTest
+  static void startBehindABacklogWakesTheOldest() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert new Concurrency_State__c(
+        Workflow_Definition__c = GlobalAdmissionGate.COUNTER_KEY,
+        In_Flight_Count__c = 1
+      );
+      configure(false, false, 1);
+      startOne('wake-1');
+      Concurrency_State__c row = [
+        SELECT Id
+        FROM Concurrency_State__c
+        WHERE Workflow_Definition__c = :GlobalAdmissionGate.COUNTER_KEY
+      ];
+      row.In_Flight_Count__c = 0;
+      update row;
+      GlobalAdmissionBrake.resetCache();
+      Test.startTest();
+      Integer before = Limits.getQueueableJobs();
+      startOne('wake-2');
+      startOne('wake-3');
+      Assert.areEqual(
+        before + 1,
+        Limits.getQueueableJobs(),
+        'One admit-only wake for the transaction, no first hop'
+      );
+      Test.stopTest();
+    }
+  }
+
+  @IsTest
+  static void heldOrPausedParkedRowIsNotABacklog() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      insert new Concurrency_State__c(
+        Workflow_Definition__c = GlobalAdmissionGate.COUNTER_KEY,
+        In_Flight_Count__c = 1
+      );
+      configure(false, false, 1);
+      Id older = startOne('nobl-1');
+      update new Workflow_Instance__c(Id = older, Held_At__c = DateTime.now());
+      Concurrency_State__c row = [
+        SELECT Id
+        FROM Concurrency_State__c
+        WHERE Workflow_Definition__c = :GlobalAdmissionGate.COUNTER_KEY
+      ];
+      row.In_Flight_Count__c = 0;
+      update row;
+      GlobalAdmissionBrake.resetCache();
+      Id newer = startOne('nobl-2');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_AWAITING,
+        reload(newer).Global_Admission__c,
+        'A held row cannot block new starts'
+      );
+    }
+  }
+
+  // ── Pause and hold with the brake ──────────────────────────────────────────
+
+  @IsTest
+  static void pausedStartIsGatedAfterThePause() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(true, false, null);
+      WorkflowPauseGate.pauseDefinition(WF, 'test');
+      Id id = startOne('pause-1');
+      Workflow_Instance__c r = reload(id);
+      Assert.areEqual('Paused', r.Status__c, 'The pause parks it');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_AWAITING,
+        r.Global_Admission__c,
+        'The gate decides after the pause'
+      );
+
+      WorkflowPauseGate.resumeDefinition(WF);
+      update new Workflow_Instance__c(Id = id, Status__c = 'Running');
+      WorkflowEngine.runStep(id, null);
+
+      r = reload(id);
+      Assert.areEqual('Suspended', r.Status__c, 'The brake parks it');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        r.Global_Admission__c,
+        'Parked by the brake'
+      );
+      Assert.areEqual(0, executedSteps(id), 'No step ran');
+    }
+  }
+
+  @IsTest
+  static void signalOrStartParksTheNewStart() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      configure(true, false, null);
+      WorkflowEngine.SignalOrStartRequest req = new WorkflowEngine.SignalOrStartRequest(
+        new WorkflowEngine.StartRequest(WF, 'sos-1', null),
+        'go',
+        '{}'
+      );
+      Test.startTest();
+      Integer before = Limits.getQueueableJobs();
+      Id id = WorkflowEngine.signalOrStart(req).instanceId;
+      Assert.areEqual(
+        before,
+        Limits.getQueueableJobs(),
+        'No first hop and no wake'
+      );
+      Test.stopTest();
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        reload(id).Global_Admission__c,
+        'Parked by the brake'
+      );
     }
   }
 

@@ -251,9 +251,12 @@ public inherited sharing class WorkflowScalarStartService {
     if (parkAtStart) {
       return parkStartInstance(instance);
     }
-    // Admitted later, not dropped: the watchdog sleep sweep re-drives it to the
-    // gate after the brake opens.
+    // The engine does not drop this start. The watchdog sleep sweep sends it
+    // to the gate after the brake opens.
     if (globalState == GlobalAdmissionPolicy.STATE_PARKED) {
+      // Only the watchdog sweep re-drives a parked start. A normal start
+      // bootstraps the watchdog in its enqueue, so this start does too.
+      WorkflowWatchdog.bootstrap();
       return new WorkflowEngine.StartResult(instance.Id).markNew();
     }
 

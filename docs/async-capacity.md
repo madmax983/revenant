@@ -118,8 +118,9 @@ apply to all metrics.
   not call the read. A test examines their source.
 - The global admission brake (#136) calls the read through
   `WorkflowAsyncCapacityService.currentStatus()` when `Auto_Brake_On_Capacity__c`
-  is on. It calls it only for a new start that it governs, once for each
-  transaction. An in-flight instance does not call it.
+  is on: at a new start, at the first hop of a start that waits, and in the
+  watchdog sweep. It calls it one time for each transaction. An in-flight
+  instance does not call it.
 - The view gate (`WorkflowDashboardSupport.checkAuthorization`) can add its
   own SOQL. That cost is the same for all panels.
 

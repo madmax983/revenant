@@ -2,11 +2,13 @@
  * @description Reads the global admission brake (issue #136) and marks new
  * top-level starts.
  *
- * Cost per transaction (the decision is cached):
+ * Cost per transaction (the engine keeps the decision for the transaction):
  * - No control set: 0 SOQL. The config is custom metadata.
  * - Emergency stop on: 0 SOQL.
  * - Auto-brake on: +1 SOQL, the #129 AsyncApexJob read (max 2,001 rows).
- * - Ceiling set: +1 SOQL, the global counter row (no lock).
+ * - Ceiling set: +1 SOQL, the global counter row (no lock). A start below the
+ *   ceiling also reads the oldest parked starts (+1 SOQL, indexed, max 10
+ *   rows). If they exist, it parks and wakes them with one Queueable.
  *
  * A read that fails does not brake (fail open). No method here throws.
  */
@@ -26,6 +28,10 @@ public inherited sharing class GlobalAdmissionBrake {
 
   // Per-transaction decision. Null = not read yet.
   private static GlobalAdmissionPolicy.Decision cached;
+  // Per-transaction oldest parked starts. Null = not read yet.
+  private static List<Id> cachedBacklog;
+  // True after this transaction woke the backlog one time.
+  private static Boolean backlogWoken = false;
 
   /**
    * @description Gives the brake decision. Cached for the transaction. With
@@ -57,6 +63,14 @@ public inherited sharing class GlobalAdmissionBrake {
   }
 
   /**
+   * @description Gives the configured global ceiling. Reads the config only.
+   * @return The positive ceiling, or null.
+   */
+  public static Integer configuredCeiling() {
+    return configInputs().ceiling;
+  }
+
+  /**
    * @description Tells if the emergency stop is on. Reads the config only.
    * @return True when the emergency stop is on.
    */
@@ -70,6 +84,8 @@ public inherited sharing class GlobalAdmissionBrake {
   @TestVisible
   private static void resetCache() {
     cached = null;
+    cachedBacklog = null;
+    backlogWoken = false;
   }
 
   /**
@@ -84,17 +100,74 @@ public inherited sharing class GlobalAdmissionBrake {
       return null;
     }
     try {
-      return GlobalAdmissionPolicy.startState(evaluate(), paused);
+      GlobalAdmissionPolicy.Decision d = evaluate();
+      Boolean backlog =
+        d.governed &&
+        !d.braked &&
+        paused != true &&
+        d.inputs.ceiling != null &&
+        !parkedBacklog(d).isEmpty();
+      return GlobalAdmissionPolicy.startState(d, paused, backlog);
     } catch (Exception ex) {
       return null;
     }
   }
 
+  // The oldest starts that the brake parked and that can run now (not held,
+  // not paused), max the free slots and max the wake batch. A new start parks
+  // behind them, so it cannot take the slot of an older start. A read that
+  // fails gives an empty list (fail open).
+  private static List<Id> parkedBacklog(GlobalAdmissionPolicy.Decision d) {
+    if (cachedBacklog != null) {
+      return cachedBacklog;
+    }
+    cachedBacklog = new List<Id>();
+    try {
+      Integer free = d.inputs.inFlight == null
+        ? ConcurrencyAdmissionOrder.MAX_WAKES
+        : d.inputs.ceiling - d.inputs.inFlight;
+      Integer rowLimit = Math.min(free, ConcurrencyAdmissionOrder.MAX_WAKES);
+      if (rowLimit <= 0 || WorkflowPauseGate.wildcardPaused()) {
+        return cachedBacklog;
+      }
+      Set<String> pausedNames = WorkflowPauseGate.pausedNames();
+      for (Workflow_Instance__c row : [
+        SELECT Id
+        FROM Workflow_Instance__c
+        WHERE
+          Global_Admission__c = :GlobalAdmissionPolicy.STATE_PARKED
+          AND Status__c = 'Suspended'
+          AND Held_At__c = NULL
+          AND Workflow_Name__c NOT IN :pausedNames
+        WITH SYSTEM_MODE
+        ORDER BY CreatedDate ASC, Id ASC
+        LIMIT :rowLimit
+      ]) {
+        cachedBacklog.add(row.Id);
+      }
+    } catch (Exception ex) {
+      cachedBacklog = new List<Id>();
+    }
+    return cachedBacklog;
+  }
+
+  // A start that parks behind the backlog wakes the oldest parked starts with
+  // one admit-only Queueable (#132 ConcurrencyAdmissionWake), one time for each
+  // transaction. It uses the async job that its own first hop would use, so
+  // free slots do not wait for the next watchdog sweep.
+  private static void wakeBacklog() {
+    if (backlogWoken || cachedBacklog == null || cachedBacklog.isEmpty()) {
+      return;
+    }
+    backlogWoken = true;
+    ConcurrencyAdmissionOrder.wake(cachedBacklog);
+  }
+
   /**
    * @description Sets the marker on a new start before the start saves it. A
-   * parked start gets Suspended and a due sleep time, so the watchdog sleep
-   * sweep re-drives it after the brake opens. A start under a parent is not
-   * marked: it is part of a running root.
+   * parked start gets Suspended and a due sleep time. The watchdog sleep sweep
+   * sends it to the gate after the brake opens. The method does not mark a
+   * start that has a parent: the root already holds a slot.
    * @param instance The new instance, not saved yet with these fields.
    * @param paused True when the definition pause parks the start.
    * @return The marker, or null.
@@ -117,20 +190,9 @@ public inherited sharing class GlobalAdmissionBrake {
     if (state == GlobalAdmissionPolicy.STATE_PARKED) {
       instance.Status__c = 'Suspended';
       instance.Sleep_Until__c = DateTime.now();
+      wakeBacklog();
     }
     return state;
-  }
-
-  /**
-   * @description Gives the markers that the main watchdog sleep query must not
-   * select. When a control is set, parked starts go through
-   * `parkedResumeBudget` instead, so they do not fill the main batch.
-   * @return {Parked} when a control is set, else an empty set. 0 SOQL.
-   */
-  public static Set<String> sweepExclusions() {
-    return isGoverned()
-      ? new Set<String>{ GlobalAdmissionPolicy.STATE_PARKED }
-      : new Set<String>();
   }
 
   /**
@@ -138,13 +200,13 @@ public inherited sharing class GlobalAdmissionBrake {
    * the gate. The number is not more than the free global slots, so a sweep
    * does not send starts that only park again.
    * @param maxRows The sweep batch size.
-   * @return 0 when braked or not governed (the main query then takes them),
-   * the free slots (max maxRows) with a ceiling, else maxRows.
+   * @return 0 when braked, the free slots (max maxRows) with a ceiling, else
+   * maxRows. With no control set, maxRows (0 SOQL).
    */
   public static Integer parkedResumeBudget(Integer maxRows) {
     try {
       if (!isGoverned()) {
-        return 0;
+        return maxRows;
       }
       GlobalAdmissionPolicy.Decision d = evaluate();
       if (d.braked) {

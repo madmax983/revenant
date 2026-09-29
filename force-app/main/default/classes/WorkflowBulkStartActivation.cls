@@ -58,8 +58,8 @@ public inherited sharing class WorkflowBulkStartActivation {
     List<Workflow_Instance__c> deferredToMark = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c instance : insertedInstances) {
       Boolean paused = parkedIds.contains(instance.Id);
-      // Issue #136: the global brake marks the start (see doStart). The
-      // decision is read once for the batch.
+      // Issue #136: the global brake marks the start (see doStart). The brake
+      // reads the decision one time for the batch.
       String globalState = GlobalAdmissionBrake.stampAtStart(instance, paused);
       if (
         globalState != null ||
@@ -190,6 +190,9 @@ public inherited sharing class WorkflowBulkStartActivation {
     }
     if (!instanceIds.isEmpty()) {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(instanceIds);
+    } else if (!globalParked.isEmpty()) {
+      // Only the watchdog sweep re-drives a parked start (issue #136).
+      WorkflowWatchdog.bootstrap();
     }
   }
 }

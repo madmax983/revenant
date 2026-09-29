@@ -26,6 +26,7 @@ public inherited sharing class GlobalAdmissionStatusService {
 
   private static Map<String, Object> build(GlobalAdmissionPolicy.Decision d) {
     GlobalAdmissionPolicy.Inputs i = d.inputs;
+    Integer countLimit = PARKED_COUNT_CAP + 1;
     Integer parked = [
       SELECT COUNT()
       FROM Workflow_Instance__c
@@ -33,7 +34,7 @@ public inherited sharing class GlobalAdmissionStatusService {
         Global_Admission__c = :GlobalAdmissionPolicy.STATE_PARKED
         AND Status__c = 'Suspended'
       WITH SYSTEM_MODE
-      LIMIT :PARKED_COUNT_CAP + 1
+      LIMIT :countLimit
     ];
     return new Map<String, Object>{
       'asOfMs' => System.currentTimeMillis(),

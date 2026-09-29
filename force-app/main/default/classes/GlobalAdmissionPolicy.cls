@@ -21,9 +21,6 @@ public inherited sharing class GlobalAdmissionPolicy {
   /** @description The global slot count is at the ceiling. */
   public static final String REASON_CEILING = 'CEILING';
 
-  // The #129 status that engages the auto-brake.
-  private static final String CAPACITY_CRITICAL = 'CRITICAL';
-
   /** @description The values that the brake reads. Null means not read. */
   public class Inputs {
     /** @description Emergency stop config. */
@@ -40,7 +37,7 @@ public inherited sharing class GlobalAdmissionPolicy {
 
   /** @description The brake decision. */
   public class Decision {
-    /** @description True when a control is set. False means today's behavior. */
+    /** @description True when a control is set. False: admission is the same as before #136. */
     public Boolean governed = false;
     /** @description True when new starts park. */
     public Boolean braked = false;
@@ -64,7 +61,10 @@ public inherited sharing class GlobalAdmissionPolicy {
     if (i.emergencyStop == true) {
       d.reasons.add(REASON_EMERGENCY_STOP);
     }
-    if (i.autoBrake == true && i.capacityStatus == CAPACITY_CRITICAL) {
+    if (
+      i.autoBrake == true &&
+      i.capacityStatus == AsyncCapacityEvaluator.STATUS_CRITICAL
+    ) {
       d.reasons.add(REASON_CAPACITY_CRITICAL);
     }
     if (i.ceiling != null && i.inFlight != null && i.inFlight >= i.ceiling) {
@@ -100,18 +100,38 @@ public inherited sharing class GlobalAdmissionPolicy {
    * @description Gives the marker for a new top-level start.
    * @param d The brake decision.
    * @param paused True when the definition pause parks the start.
-   * @return Parked (braked, not paused), Awaiting (paused, or open with a
-   * ceiling), or null (not governed, or open with no ceiling).
+   * @return The marker. See the three-argument overload.
    */
   public static String startState(Decision d, Boolean paused) {
+    return startState(d, paused, false);
+  }
+
+  /**
+   * @description Gives the marker for a new top-level start.
+   * @param d The brake decision.
+   * @param paused True when the definition pause parks the start.
+   * @param parkedBacklog True when a parked start waits. With a ceiling, a new
+   * start then parks behind it, so the oldest start goes first.
+   * @return Parked (braked, or a ceiling with a backlog, and not paused),
+   * Awaiting (paused, or open with a ceiling), or null (not governed, or open
+   * with no ceiling).
+   */
+  public static String startState(
+    Decision d,
+    Boolean paused,
+    Boolean parkedBacklog
+  ) {
     if (d == null || !d.governed) {
       return null;
     }
-    if (d.braked) {
-      return paused == true ? STATE_AWAITING : STATE_PARKED;
-    }
-    if (paused == true || d.inputs.ceiling != null) {
+    if (paused == true) {
       return STATE_AWAITING;
+    }
+    if (d.braked) {
+      return STATE_PARKED;
+    }
+    if (d.inputs.ceiling != null) {
+      return parkedBacklog == true ? STATE_PARKED : STATE_AWAITING;
     }
     return null;
   }

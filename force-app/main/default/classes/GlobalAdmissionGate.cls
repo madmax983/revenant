@@ -2,16 +2,20 @@
  * @description Global slot counter of the admission brake (issue #136). The
  * count lives on one reserved `Concurrency_State__c` row, `$global`. A `$` is
  * not legal in an Apex class name, so no definition counter can use this key.
- * The row is changed only under `FOR UPDATE`, as the #91 counters are.
+ * The engine changes the row only under a `FOR UPDATE` lock, as for the #91
+ * counters.
  *
  * - Acquire: at the first hop of a new start, under the instance lock.
  * - Release: on the first terminal transition. Continue-As-New moves the slot
  *   to the successor, so it does not release.
- * - Reconcile: the watchdog heartbeat resets the count to the true number of
+ * - Operator retry of a failed instance: takes a slot and does not park.
+ * - Reconcile: the watchdog heartbeat sets the count to the number of
  *   non-terminal holders. It also records emergency stop changes.
  *
- * A lock that fails admits with no slot (fail open). The brake writes no step
- * row and does not touch the compensation stack.
+ * Lock order: the instance row, then the definition row, then `$global` last.
+ * A lock that fails admits the start as Held; the next reconcile corrects the
+ * count (fail open). The brake writes no step row and does not change the
+ * compensation stack.
  */
 public inherited sharing class GlobalAdmissionGate {
   /** @description The reserved counter key. */
@@ -22,6 +26,10 @@ public inherited sharing class GlobalAdmissionGate {
   // Test hook. When true, the counter lock throws.
   @TestVisible
   private static Boolean failLock = false;
+
+  // In the heartbeat, releases wait for the reconcile at the end, so the
+  // heartbeat does not hold `$global` while it locks instance rows.
+  private static Boolean deferRelease = false;
 
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -44,7 +52,10 @@ public inherited sharing class GlobalAdmissionGate {
   public class AcquireResult {
     /** @description True when the start may run. */
     public Boolean admitted = false;
-    /** @description True when the start took a global slot. */
+    /**
+     * @description True when the start holds a global slot. After a failed
+     * lock it is also true: the next reconcile counts the slot.
+     */
     public Boolean slotConsumed = false;
   }
 
@@ -94,17 +105,51 @@ public inherited sharing class GlobalAdmissionGate {
       update as system state;
       r.slotConsumed = true;
     } catch (Exception ex) {
-      // Fail open: admit with no slot. The brake must not drop the chain.
-      r.slotConsumed = false;
+      // Fail open: admit. The brake must not drop the chain. Mark the start
+      // Held, so the next reconcile counts it and the release stays correct.
+      r.slotConsumed = true;
     }
     return r;
+  }
+
+  /**
+   * @description Takes a global slot for an operator retry of a failed
+   * top-level instance. It never parks: the count can go above the ceiling
+   * until work completes. No-op with no ceiling, for a child and for an engine
+   * workflow.
+   * @param instance The instance, with Parent_Instance__c, Workflow_Name__c
+   * and Global_Admission__c. The method sets Global_Admission__c in memory.
+   */
+  public static void countRetry(Workflow_Instance__c instance) {
+    Integer ceiling = GlobalAdmissionBrake.configuredCeiling();
+    if (
+      ceiling == null ||
+      instance.Parent_Instance__c != null ||
+      instance.Global_Admission__c == GlobalAdmissionPolicy.STATE_HELD ||
+      WorkflowPauseGate.isEngineWorkflow(instance.Workflow_Name__c)
+    ) {
+      return;
+    }
+    try {
+      Concurrency_State__c state = ConcurrencyGate.lockOrProvision(COUNTER_KEY);
+      state.In_Flight_Count__c =
+        (state.In_Flight_Count__c == null
+          ? 0
+          : state.In_Flight_Count__c.intValue()) + 1;
+      update as system state;
+    } catch (Exception ex) {
+      // Fail open: the next reconcile counts the slot.
+      instance.Global_Admission__c = GlobalAdmissionPolicy.STATE_HELD;
+      return;
+    }
+    instance.Global_Admission__c = GlobalAdmissionPolicy.STATE_HELD;
   }
 
   /**
    * @description Parks a new start at the gate. It uses the #91 park fields
    * and no timer job: the watchdog sleep sweep re-drives it after the brake
    * opens. It writes no step row.
-   * @param instance The instance. The fields are also set in memory.
+   * @param instance The instance. The method also sets the fields in memory.
    */
   public static void parkStart(Workflow_Instance__c instance) {
     instance.Status__c = 'Suspended';
@@ -162,22 +207,33 @@ public inherited sharing class GlobalAdmissionGate {
   }
 
   /**
-   * @description Gives back global slots (floored at 0).
+   * @description Gives back global slots. The count does not go below 0. In
+   * the heartbeat, the reconcile at the end applies the release.
    * @param count The number of slots.
    */
   public static void release(Integer count) {
-    if (count == null || count <= 0) {
+    if (count == null || count <= 0 || deferRelease) {
       return;
     }
     ConcurrencyGate.release(COUNTER_KEY, count);
   }
 
   /**
-   * @description Heartbeat step. Resets the count to the non-terminal holders
-   * and records an emergency stop change. With no row and no emergency stop,
-   * it does nothing more than 1 SOQL.
+   * @description Starts the heartbeat mode: `release` does not lock
+   * `$global`. Call `reconcile` at the end of the heartbeat.
+   */
+  public static void deferReleasesToReconcile() {
+    deferRelease = true;
+  }
+
+  /**
+   * @description Last heartbeat step. Sets the count to the non-terminal
+   * holders, so it also applies the releases of this transaction. Records an
+   * emergency stop change. With no row and no emergency stop, it uses 1 SOQL
+   * and stops.
    */
   public static void reconcile() {
+    deferRelease = false;
     Boolean stop = GlobalAdmissionBrake.emergencyStopConfigured();
     List<Concurrency_State__c> rows = [
       SELECT Id, In_Flight_Count__c, Emergency_Stop_Seen__c
@@ -187,7 +243,13 @@ public inherited sharing class GlobalAdmissionGate {
       LIMIT 1
       FOR UPDATE
     ];
-    if (rows.isEmpty() && !stop) {
+    // A fail-open admit can mark a start Held with no row. With a ceiling, the
+    // reconcile makes the row and counts it.
+    if (
+      rows.isEmpty() &&
+      !stop &&
+      GlobalAdmissionBrake.configuredCeiling() == null
+    ) {
       return;
     }
     Concurrency_State__c row = rows.isEmpty()
@@ -209,13 +271,18 @@ public inherited sharing class GlobalAdmissionGate {
       row.In_Flight_Count__c = truth;
       changed = true;
     }
-    if (row.Emergency_Stop_Seen__c != stop) {
+    Boolean stopChanged = row.Emergency_Stop_Seen__c != stop;
+    if (stopChanged) {
       row.Emergency_Stop_Seen__c = stop;
       changed = true;
-      writeStopAudit(stop);
     }
     if (changed) {
       update as system row;
+    }
+    // After the row update: if the update fails, no audit row is written, and
+    // the next sweep writes it one time.
+    if (stopChanged) {
+      writeStopAudit(stop);
     }
   }
 
@@ -223,7 +290,7 @@ public inherited sharing class GlobalAdmissionGate {
   private static void writeStopAudit(Boolean engaged) {
     String msg = engaged
       ? 'Emergency stop engaged. New starts park. In-flight instances continue.'
-      : 'Emergency stop released. Parked starts are admitted again.';
+      : 'Emergency stop released. The next sweep sends parked starts to the gate.';
     msg +=
       ' The watchdog saw the change at ' +
       DateTime.now().formatGmt('yyyy-MM-dd HH:mm:ss') +

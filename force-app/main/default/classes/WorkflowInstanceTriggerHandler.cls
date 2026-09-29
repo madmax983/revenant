@@ -237,8 +237,9 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     }
   }
 
-  // Issue #136. After the definition counters, so the lock order is the same as
-  // at the gate. A failed release does not stop the save; the heartbeat fixes it.
+  // Issue #136. After the definition counters, so `$global` is the last counter
+  // lock. A failed release does not stop the save. The heartbeat reconcile
+  // corrects the count.
   private void releaseGlobalSlots() {
     if (globalSlotsToRelease <= 0) {
       return;
@@ -246,8 +247,8 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
     try {
       GlobalAdmissionGate.release(globalSlotsToRelease);
     } catch (Exception ignored) {
-      // The watchdog reconcile reclaims a leaked global slot.
-      return;
+      // The watchdog reconcile corrects the count.
+      globalSlotsToRelease = 0;
     }
   }
 }
