@@ -9,6 +9,8 @@ Revenant brings durable execution, sagas, and event-driven orchestration to Apex
 - **Run all Apex tests**: `sf apex run test -w 10`
 - **Run specific Apex test class**: `sf apex run test -n <TestClassName> -w 5`
 - **Check the frozen global API**: `npm run test:global-api` (packaged-view compile needs Java and apex-ls; with Maven, run `scripts/global-api/fetch-apex-ls.sh` one time)
+- **Check the quickstart runner, doc and scripts**: `npm run test:quickstart`
+- **Run the quickstart on the default org**: `npm run quickstart` (see `docs/quickstart.md`)
 - **Format Apex files**: `npx prettier --write --plugin=prettier-plugin-apex "force-app/main/default/classes/<ClassName>.cls"`
 
 ## Architecture Summary

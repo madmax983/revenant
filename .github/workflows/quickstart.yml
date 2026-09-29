@@ -1,0 +1,90 @@
+# Quickstart gate (issue #133).
+# static: Node tests and an apex-ls compile of the Hello classes and scripts. No secret.
+# smoke: a new scratch org. It deploys, runs HelloWorkflow and verifies it. It records
+# the time from deploy start to Completed and fails over QUICKSTART_MAX_SECONDS.
+# The smoke job needs the DEVHUB_SFDX_AUTH_URL secret. Without it, the job skips.
+name: Quickstart
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quickstart-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QUICKSTART_MAX_SECONDS: "600"
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Fetch apex-ls
+        run: bash scripts/global-api/fetch-apex-ls.sh
+      - name: Quickstart tests
+        run: npm run test:quickstart
+        env:
+          REQUIRE_APEX_LS: "1"
+
+  gate:
+    name: Dev Hub secret
+    runs-on: ubuntu-latest
+    outputs:
+      devhub: ${{ steps.check.outputs.devhub }}
+    steps:
+      - id: check
+        env:
+          DEVHUB_SFDX_AUTH_URL: ${{ secrets.DEVHUB_SFDX_AUTH_URL }}
+        run: |
+          if [ -n "$DEVHUB_SFDX_AUTH_URL" ]; then
+            echo "devhub=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "devhub=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DEVHUB_SFDX_AUTH_URL is not set. The scratch org smoke skips. See docs/quickstart.md#ci."
+          fi
+
+  smoke:
+    name: Scratch org smoke
+    needs: [static, gate]
+    if: needs.gate.outputs.devhub == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the Salesforce CLI
+        run: npm install --global @salesforce/cli
+      - name: Log in to the Dev Hub
+        env:
+          DEVHUB_SFDX_AUTH_URL: ${{ secrets.DEVHUB_SFDX_AUTH_URL }}
+        run: |
+          printf '%s' "$DEVHUB_SFDX_AUTH_URL" > "$RUNNER_TEMP/devhub.txt"
+          sf org login sfdx-url --sfdx-url-file "$RUNNER_TEMP/devhub.txt" --alias devhub --set-default-dev-hub
+          rm -f "$RUNNER_TEMP/devhub.txt"
+      - name: Create a scratch org
+        run: sf org create scratch --definition-file config/quickstart-scratch-def.json --alias hello --duration-days 1 --wait 20
+      - name: Smoke (deploy to Completed)
+        run: node scripts/quickstart/smoke.mjs --target-org hello --max-seconds "${{ env.QUICKSTART_MAX_SECONDS }}"
+      - name: Hello Apex tests
+        run: sf apex run test --class-names HelloWorkflowTest --class-names HelloWorkflowCheckTest --target-org hello --result-format human --wait 20
+      - name: Delete the scratch org
+        if: always()
+        run: sf org delete scratch --target-org hello --no-prompt || true
