@@ -10,6 +10,7 @@ Revenant brings durable execution, sagas, and event-driven orchestration to Apex
 - **Run specific Apex test class**: `sf apex run test -n <TestClassName> -w 5`
 - **Check the frozen global API**: `npm run test:global-api` (packaged-view compile needs Java and apex-ls; with Maven, run `scripts/global-api/fetch-apex-ls.sh` one time)
 - **Check the quickstart runner, doc and scripts**: `npm run test:quickstart`
+- **Check the Custom Report Types**: `npm run test:report-types` (see `docs/report-types.md`)
 - **Run the quickstart on the default org**: `npm run quickstart` (see `docs/quickstart.md`)
 - **Check the determinism lint (Rust core and sf plugin)**: `npm run test:determinism-lint` (needs Rust and the `wasm32-unknown-unknown` target)
 - **Lint step code for replay safety**: `sf revenant lint determinism` after `npm ci`, `npm run build` and `sf plugins link .` in `tools/sf-plugin-revenant` (see `docs/determinism-lint.md`)

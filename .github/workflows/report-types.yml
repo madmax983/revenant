@@ -1,0 +1,51 @@
+# Custom Report Types gate (issue #137).
+# Node tests read the report type XML, the object fields and the permission sets. No org.
+name: Report Types
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "force-app/main/default/reportTypes/**"
+      - "force-app/main/default/objects/Workflow_Instance__c/**"
+      - "force-app/main/default/objects/Workflow_Step_Execution__c/**"
+      - "force-app/main/default/permissionsets/**"
+      - "force-app/main/default/classes/**"
+      - "scripts/report-types/**"
+      - "docs/report-types.md"
+      - "README.md"
+      - "package.json"
+      - ".github/workflows/report-types.yml"
+  pull_request:
+    paths:
+      - "force-app/main/default/reportTypes/**"
+      - "force-app/main/default/objects/Workflow_Instance__c/**"
+      - "force-app/main/default/objects/Workflow_Step_Execution__c/**"
+      - "force-app/main/default/permissionsets/**"
+      - "force-app/main/default/classes/**"
+      - "scripts/report-types/**"
+      - "docs/report-types.md"
+      - "README.md"
+      - "package.json"
+      - ".github/workflows/report-types.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: report-types-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Report type tests
+        run: npm run test:report-types
