@@ -51,9 +51,10 @@ public inherited sharing class WorkflowSleepResumeSweep {
     List<Workflow_Instance__c> readyToResume = new List<Workflow_Instance__c>();
     if (!WorkflowPauseGate.wildcardPaused()) {
       Set<String> pausedDefNames = WorkflowPauseGate.pausedNames();
-      // Issue #136: while the global brake is on, a parked start stays parked.
-      // It is not selected, so it costs no async job and fills no batch slot.
-      Set<String> heldGlobalStates = GlobalAdmissionBrake.sweepExclusions();
+      // Issue #136: when a control is set, the main query does not select a
+      // start that the brake parked. redriveParkedStarts sends those starts.
+      Set<String> excludedGlobalStates = GlobalAdmissionBrake.sweepExclusions();
+      redriveParkedStarts(now, pausedDefNames);
       readyToResume = [
         SELECT
           Id,
@@ -79,7 +80,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
           AND Workflow_Name__c NOT IN :pausedDefNames
           AND Held_At__c = NULL
           AND (Global_Admission__c = NULL
-          OR Global_Admission__c NOT IN :heldGlobalStates)
+          OR Global_Admission__c NOT IN :excludedGlobalStates)
         WITH SYSTEM_MODE
         LIMIT :watchdogResumeBatchSize
         FOR UPDATE
@@ -105,6 +106,44 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
 
     flushSleepResumptions(b);
+  }
+
+  // Issue #136: sends due parked starts to the gate, not more than the free
+  // global slots. While braked, the budget is 0 and the sweep sends none, so a
+  // braked backlog uses no async job. The row stays Suspended; the gate owns
+  // the change, as for a concurrency-parked sleeper.
+  private static void redriveParkedStarts(
+    Datetime now,
+    Set<String> pausedDefNames
+  ) {
+    Integer budget = GlobalAdmissionBrake.parkedResumeBudget(
+      watchdogResumeBatchSize
+    );
+    if (budget <= 0) {
+      return;
+    }
+    List<Id> ids = new List<Id>();
+    for (Workflow_Instance__c inst : [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE
+        Global_Admission__c = :GlobalAdmissionPolicy.STATE_PARKED
+        AND Status__c = 'Suspended'
+        AND Sleep_Until__c <= :now
+        AND Workflow_Name__c NOT IN :pausedDefNames
+        AND Held_At__c = NULL
+      WITH SYSTEM_MODE
+      ORDER BY Sleep_Until__c ASC, Id ASC
+      LIMIT :budget
+    ]) {
+      ids.add(inst.Id);
+    }
+    if (
+      !ids.isEmpty() &&
+      !(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)
+    ) {
+      WorkflowOrchestratorEnqueue.enqueueOrchestrators(ids);
+    }
   }
 
   // Persist the resume batch: insert timed-wait fallbacks, flip instances to

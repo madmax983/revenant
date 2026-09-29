@@ -122,20 +122,46 @@ public inherited sharing class GlobalAdmissionBrake {
   }
 
   /**
-   * @description Gives the markers that the watchdog sleep sweep must not
-   * select. While braked, a parked start stays parked and costs no async job.
-   * @return {Parked} while braked, else an empty set.
+   * @description Gives the markers that the main watchdog sleep query must not
+   * select. When a control is set, parked starts go through
+   * `parkedResumeBudget` instead, so they do not fill the main batch.
+   * @return {Parked} when a control is set, else an empty set. 0 SOQL.
    */
   public static Set<String> sweepExclusions() {
+    return isGoverned()
+      ? new Set<String>{ GlobalAdmissionPolicy.STATE_PARKED }
+      : new Set<String>();
+  }
+
+  /**
+   * @description Gives the number of parked starts that one sweep can send to
+   * the gate. The number is not more than the free global slots, so a sweep
+   * does not send starts that only park again.
+   * @param maxRows The sweep batch size.
+   * @return 0 when braked or not governed (the main query then takes them),
+   * the free slots (max maxRows) with a ceiling, else maxRows.
+   */
+  public static Integer parkedResumeBudget(Integer maxRows) {
     try {
-      if (isGoverned() && evaluate().braked) {
-        return new Set<String>{ GlobalAdmissionPolicy.STATE_PARKED };
+      if (!isGoverned()) {
+        return 0;
       }
+      GlobalAdmissionPolicy.Decision d = evaluate();
+      if (d.braked) {
+        return 0;
+      }
+      if (d.inputs.ceiling == null || d.inputs.inFlight == null) {
+        // No ceiling, or the count read failed (fail open): the gate decides.
+        return maxRows;
+      }
+      return Math.max(
+        0,
+        Math.min(maxRows, d.inputs.ceiling - d.inputs.inFlight)
+      );
     } catch (Exception ex) {
-      // Fail open: the sweep selects parked starts, and the gate decides.
-      return new Set<String>();
+      // Fail open: the gate decides.
+      return maxRows;
     }
-    return new Set<String>();
   }
 
   private static GlobalAdmissionPolicy.Decision read(Boolean full) {

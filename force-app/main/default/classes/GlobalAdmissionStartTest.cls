@@ -386,7 +386,12 @@ public class GlobalAdmissionStartTest {
       Assert.areEqual(
         new Set<String>{ GlobalAdmissionPolicy.STATE_PARKED },
         GlobalAdmissionBrake.sweepExclusions(),
-        'Braked: exclude parked starts'
+        'Governed: the main query skips parked starts'
+      );
+      Assert.areEqual(
+        0,
+        GlobalAdmissionBrake.parkedResumeBudget(200),
+        'Braked: send none'
       );
       Test.startTest();
       Integer before = Limits.getQueueableJobs();
@@ -411,7 +416,7 @@ public class GlobalAdmissionStartTest {
       configure(false, false, null);
       Assert.isTrue(
         GlobalAdmissionBrake.sweepExclusions().isEmpty(),
-        'Open: exclude nothing'
+        'Not governed: the main query takes parked starts'
       );
       Test.startTest();
       Integer before = Limits.getQueueableJobs();
@@ -422,6 +427,79 @@ public class GlobalAdmissionStartTest {
         before + 1,
         Limits.getQueueableJobs(),
         'The sweep re-drives the parked start to the gate'
+      );
+      Test.stopTest();
+    }
+  }
+
+  @IsTest
+  static void sweepRedrivesOnlyTheFreeSlots() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert new Concurrency_State__c(
+        Workflow_Definition__c = GlobalAdmissionGate.COUNTER_KEY,
+        In_Flight_Count__c = 3
+      );
+      configure(false, false, 3);
+      for (Integer i = 0; i < 3; i++) {
+        startOne('budget-' + i);
+      }
+      Assert.areEqual(
+        3,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Global_Admission__c = :GlobalAdmissionPolicy.STATE_PARKED
+        ],
+        'The full ceiling parks all three'
+      );
+      Concurrency_State__c row = [
+        SELECT Id
+        FROM Concurrency_State__c
+        WHERE Workflow_Definition__c = :GlobalAdmissionGate.COUNTER_KEY
+      ];
+      row.In_Flight_Count__c = 2;
+      update row;
+      GlobalAdmissionBrake.resetCache();
+      Assert.areEqual(
+        1,
+        GlobalAdmissionBrake.parkedResumeBudget(200),
+        'One slot is free'
+      );
+      Test.startTest();
+      Integer before = Limits.getQueueableJobs();
+      WorkflowSleepResumeSweep.processSleepResumptions(
+        DateTime.now().addMinutes(1)
+      );
+      Assert.areEqual(
+        before + 1,
+        Limits.getQueueableJobs(),
+        'The sweep sends one start for one free slot'
+      );
+      Test.stopTest();
+    }
+  }
+
+  @IsTest
+  static void sweepRedrivesParkedStartsWhenGovernedAndOpen() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      configure(true, true, null);
+      startOne('budget-open');
+      configure(false, true, null);
+      GlobalAdmissionBrake.capacityStatusOverride = 'HEALTHY';
+      Assert.areEqual(
+        200,
+        GlobalAdmissionBrake.parkedResumeBudget(200),
+        'Open with no ceiling: the batch size'
+      );
+      Test.startTest();
+      Integer before = Limits.getQueueableJobs();
+      WorkflowSleepResumeSweep.processSleepResumptions(
+        DateTime.now().addMinutes(1)
+      );
+      Assert.areEqual(
+        before + 1,
+        Limits.getQueueableJobs(),
+        'The sweep sends the parked start to the gate'
       );
       Test.stopTest();
     }
