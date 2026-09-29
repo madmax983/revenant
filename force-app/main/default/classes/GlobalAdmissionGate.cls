@@ -32,10 +32,18 @@ public inherited sharing class GlobalAdmissionGate {
   // heartbeat does not hold `$global` while it locks instance rows.
   private static Boolean deferRelease = false;
   private static Integer deferredCount = 0;
-  // Budget that reconcile needs: 3 SOQL (row lock, provision re-read, count)
-  // and 3 DML (provision insert, row update, audit insert).
-  private static final Integer RECONCILE_SOQL = 3;
-  private static final Integer RECONCILE_DML = 3;
+  // Budget that reconcile needs: 4 SOQL (row lock, provision re-read, race
+  // re-read, count) and 5 DML (provision insert, savepoint, row update, audit
+  // insert, rollback).
+  private static final Integer RECONCILE_SOQL = 4;
+  private static final Integer RECONCILE_DML = 5;
+  // Query rows that the reconcile and a deferred release leave for the rest of
+  // the transaction (the watchdog step commit).
+  private static final Integer QUERY_ROW_RESERVE = 5000;
+  // Budget that a deferred release needs: 1 SOQL and 1 DML, plus 1 DML left
+  // for the watchdog step commit.
+  private static final Integer RELEASE_SOQL = 1;
+  private static final Integer RELEASE_DML = 2;
 
   private static final Set<String> TERMINAL_STATUSES = new Set<String>{
     'Completed',
@@ -235,7 +243,8 @@ public inherited sharing class GlobalAdmissionGate {
     Integer pending = deferredCount;
     deferRelease = false;
     deferredCount = 0;
-    if (pending <= 0) {
+    if (pending <= 0 || !hasBudget(RELEASE_SOQL, RELEASE_DML)) {
+      // With no budget, the next reconcile corrects the count.
       return;
     }
     try {
@@ -254,10 +263,7 @@ public inherited sharing class GlobalAdmissionGate {
    * SOQL, DML or query-row budget left.
    */
   public static void reconcile() {
-    if (
-      Limits.getQueries() + RECONCILE_SOQL > Limits.getLimitQueries() ||
-      Limits.getDmlStatements() + RECONCILE_DML > Limits.getLimitDmlStatements()
-    ) {
+    if (!hasBudget(RECONCILE_SOQL, RECONCILE_DML)) {
       return;
     }
     Boolean stop = GlobalAdmissionBrake.emergencyStopConfigured();
@@ -282,7 +288,10 @@ public inherited sharing class GlobalAdmissionGate {
     Concurrency_State__c row = rows.isEmpty()
       ? ConcurrencyGate.lockOrProvision(COUNTER_KEY)
       : rows[0];
-    Integer rowsLeft = Limits.getLimitQueryRows() - Limits.getQueryRows();
+    Integer rowsLeft =
+      Limits.getLimitQueryRows() -
+      Limits.getQueryRows() -
+      QUERY_ROW_RESERVE;
     Integer truth = [
       SELECT COUNT()
       FROM Workflow_Instance__c
@@ -302,16 +311,24 @@ public inherited sharing class GlobalAdmissionGate {
       row.In_Flight_Count__c = truth;
       changed = true;
     }
-    if (countKnown) {
-      // The true count includes the releases of this heartbeat.
-      deferredCount = 0;
-    }
     Boolean stopChanged = row.Emergency_Stop_Seen__c != stop;
     if (stopChanged) {
       row.Emergency_Stop_Seen__c = stop;
       changed = true;
     }
     saveReconcile(row, changed, stopChanged, stop);
+    if (countKnown) {
+      // The true count includes the releases of this heartbeat.
+      deferredCount = 0;
+    }
+  }
+
+  // True when the transaction has this SOQL and DML budget left, and the
+  // query-row reserve.
+  private static Boolean hasBudget(Integer soql, Integer dml) {
+    return Limits.getQueries() + soql <= Limits.getLimitQueries() &&
+      Limits.getDmlStatements() + dml <= Limits.getLimitDmlStatements() &&
+      Limits.getQueryRows() + QUERY_ROW_RESERVE < Limits.getLimitQueryRows();
   }
 
   // The row update and the audit row go together. If one fails, both roll

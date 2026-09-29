@@ -202,6 +202,8 @@ public class GlobalAdmissionGateTest {
       WorkflowEngine.disableQueueableInTest = true;
       configure(false, 1);
       Id a = WorkflowEngine.start(WF, 'race-a', null);
+      // Two start transactions that both see a free slot.
+      GlobalAdmissionBrake.resetCache();
       Id b = WorkflowEngine.start(WF, 'race-b', null);
       WorkflowEngine.runStep(a, null);
       WorkflowEngine.runStep(b, null);
@@ -356,6 +358,8 @@ public class GlobalAdmissionGateTest {
       );
       configure(false, 1);
       Id a = WorkflowEngine.start(WF, 'def-full-a', null);
+      // Two start transactions that both see a free slot.
+      GlobalAdmissionBrake.resetCache();
       Id b = WorkflowEngine.start(WF, 'def-full-b', null);
       WorkflowEngine.runStep(a, null);
       WorkflowEngine.runStep(b, null);

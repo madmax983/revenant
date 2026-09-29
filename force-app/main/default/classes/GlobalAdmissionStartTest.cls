@@ -692,6 +692,56 @@ public class GlobalAdmissionStartTest {
   }
 
   @IsTest
+  static void bulkStartTakesOnlyTheFreeSlots() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(false, false, 2);
+      List<WorkflowEngine.StartRequest> reqs = new List<WorkflowEngine.StartRequest>();
+      for (Integer i = 0; i < 5; i++) {
+        reqs.add(new WorkflowEngine.StartRequest(WF, 'slots-' + i, null));
+      }
+      List<Id> ids = WorkflowEngine.start(reqs);
+      Integer awaiting = [
+        SELECT COUNT()
+        FROM Workflow_Instance__c
+        WHERE
+          Id IN :ids
+          AND Global_Admission__c = :GlobalAdmissionPolicy.STATE_AWAITING
+      ];
+      Assert.areEqual(2, awaiting, 'Two free slots: two first hops');
+      Assert.areEqual(
+        3,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE
+            Id IN :ids
+            AND Global_Admission__c = :GlobalAdmissionPolicy.STATE_PARKED
+        ],
+        'The other three park'
+      );
+    }
+  }
+
+  @IsTest
+  static void fullBacklogReadParksTheNewStart() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      configure(true, false, 100);
+      for (Integer i = 0; i < ConcurrencyAdmissionOrder.MAX_WAKES; i++) {
+        startOne('full-' + i);
+      }
+      configure(false, false, 100);
+      Id newer = startOne('full-new');
+      Assert.areEqual(
+        GlobalAdmissionPolicy.STATE_PARKED,
+        reload(newer).Global_Admission__c,
+        'Many free slots, but a full read of older starts: park behind them'
+      );
+    }
+  }
+
+  @IsTest
   static void smallBacklogDoesNotParkTheNewStart() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       insert new Concurrency_State__c(

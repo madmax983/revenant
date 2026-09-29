@@ -33,6 +33,9 @@ public inherited sharing class GlobalAdmissionBrake {
   private static List<Id> cachedBacklog;
   // True after this transaction woke the backlog one time.
   private static Boolean backlogWoken = false;
+  // Starts that this transaction marked Awaiting under a ceiling. They take
+  // free slots too, so the next start in a bulk start parks sooner.
+  private static Integer awaitingMarked = 0;
 
   /**
    * @description Gives the brake decision. Cached for the transaction. With
@@ -87,6 +90,7 @@ public inherited sharing class GlobalAdmissionBrake {
     cached = null;
     cachedBacklog = null;
     backlogWoken = false;
+    awaitingMarked = 0;
   }
 
   /**
@@ -109,11 +113,23 @@ public inherited sharing class GlobalAdmissionBrake {
         paused != true &&
         d.inputs.ceiling != null
       ) {
-        // Park only when the backlog fills the free slots. Else the start
-        // takes a free slot, and the wake admits the backlog.
-        backlog = parkedBacklog(d).size() >= freeSlots(d);
+        // Park when older parked starts and the starts of this transaction
+        // fill the free slots. A full read (MAX_WAKES rows) counts as full.
+        // Else the start takes a free slot, and the wake admits the backlog.
+        Integer queued = parkedBacklog(d).size();
+        backlog =
+          queued >= ConcurrencyAdmissionOrder.MAX_WAKES ||
+          queued + awaitingMarked >= freeSlots(d);
       }
-      return GlobalAdmissionPolicy.startState(d, paused, backlog);
+      String state = GlobalAdmissionPolicy.startState(d, paused, backlog);
+      if (
+        state == GlobalAdmissionPolicy.STATE_AWAITING &&
+        paused != true &&
+        d.inputs.ceiling != null
+      ) {
+        awaitingMarked++;
+      }
+      return state;
     } catch (Exception ex) {
       return null;
     }
@@ -176,8 +192,15 @@ public inherited sharing class GlobalAdmissionBrake {
       return;
     }
     backlogWoken = true;
-    if (!(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)) {
+    if (Test.isRunningTest() && WorkflowEngine.disableQueueableInTest) {
+      return;
+    }
+    try {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(cachedBacklog);
+    } catch (Exception ex) {
+      // Best effort: a failed publish must not fail the start. The watchdog
+      // sweep sends the backlog.
+      return;
     }
   }
 

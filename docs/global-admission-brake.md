@@ -91,9 +91,14 @@ flowchart TD
      slot.
    - Open with a ceiling, and parked starts wait: the new start sends the
      oldest parked starts to the gate (RUN_STEP events, max the free slots
-     and max 10). If they fill the free slots, the new start parks behind
-     them. Thus a new start cannot take the slot of an older start, and a
-     free slot does not wait for the watchdog sweep.
+     and max 10). The new start parks behind them when they fill the free
+     slots, or when the read finds 10 of them. Thus a new start cannot take
+     the slot of an older start, and a free slot does not wait for the
+     watchdog sweep.
+   - In one transaction (for example a bulk start), each `Awaiting` start
+     also counts as a used slot. When the free slots are used, the next
+     starts park. Thus a bulk start does not send more first hops than free
+     slots.
 2. **First hop.** The gate locks the instance row. Then:
    - Braked: the start parks. It takes no definition slot.
    - If the brake is open, the definition gate (#91) runs as before.
@@ -117,8 +122,8 @@ flowchart TD
 7. **Reconcile.** Near the end of each watchdog sweep, after the last instance
    lock, the engine sets the count to the number of non-terminal `Held`
    instances. This corrects the count after a crash. If the transaction has
-   too little SOQL, DML or query-row budget left, the reconcile does not
-   change the count.
+   too little SOQL, DML or query-row budget left (it keeps 5,000 query rows
+   for the rest of the sweep), the reconcile does not change the count.
 
 Lock order: the instance row, then the definition row, then `$global`. In the
 watchdog sweep, a terminal transition does not lock `$global`. The reconcile
@@ -150,9 +155,9 @@ transaction. A bulk start reads the brake one time.
 | Ceiling set       | +1 (`$global` row), +1 (parked rows) | Same as emergency stop                          | 1 less when braked    |
 
 A start that finds a parked backlog publishes one RUN_STEP event for each
-backlog row (max 10), one time for each transaction. It uses no Queueable. A
-parked start also calls the watchdog bootstrap, as a normal start does in its
-enqueue.
+backlog row (max 10), one time for each transaction (+1 DML, the publish). It
+uses no Queueable. A failed publish does not fail the start. A parked start
+also calls the watchdog bootstrap, as a normal start does in its enqueue.
 
 - Max +3 SOQL. The config is custom metadata (no SOQL).
 - The parked-row read runs only below the ceiling. It is indexed and reads
@@ -223,6 +228,12 @@ more than 200 starts takes more than one sweep.
 
 ## Limits
 
+- An operator retry is `Held` before the reconcile counts it. If it
+  completes first, its release makes the count too low until the next
+  reconcile. Then the gate can admit more starts than the ceiling for one
+  watchdog interval.
+- Different start transactions can send RUN_STEP events for the same parked
+  starts. The gate admits each start one time.
 - The ceiling counts the instances that took a slot at the gate or at an
   operator retry. Instances from before the ceiling, children and engine
   workflows do not count. When you set a ceiling on a busy org, the count is
