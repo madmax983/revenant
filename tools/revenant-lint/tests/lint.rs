@@ -576,3 +576,14 @@ fn only_produce_is_safe_in_a_producer() {
     );
     assert!(report.defects.iter().all(|d| d.class_name == "S"));
 }
+
+#[test]
+fn a_suppression_after_a_multi_line_query_or_call_covers_it() {
+    let src = step(
+        "List<Account> a = [\n  SELECT Id\n  FROM Account\n]; // revenant-lint-disable-line: config rows\n\
+         Id j = System.enqueueJob(\n  new Q()\n); // revenant-lint-disable-line: guarded by step state",
+    );
+    let report = run(&[("S.cls", &src)]);
+    assert!(report.defects.is_empty(), "{:?}", report.defects);
+    assert_eq!(report.suppressed, 2);
+}

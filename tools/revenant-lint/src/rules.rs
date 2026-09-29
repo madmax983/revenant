@@ -12,7 +12,7 @@ pub struct Hazard {
     pub api: String,
     /// Position of the first token.
     pub pos: Position,
-    /// Line of the last token. A call can span lines.
+    /// Line of the closing `)` or `]`. A call or a query can span lines.
     pub end_line: u32,
 }
 
@@ -107,7 +107,7 @@ fn inline_query(code: &[Token<'_>], i: usize) -> Option<Hazard> {
         rule: Rule::SoqlRead,
         api: format!("[{} ...]", keyword.text),
         pos: code[i].pos,
-        end_line: keyword.pos.line,
+        end_line: closing_line(code, i, '[', ']'),
     })
 }
 
@@ -141,7 +141,7 @@ fn call(code: &[Token<'_>], i: usize) -> Option<Hazard> {
         rule: *rule,
         api: format!("{prefix}{}.{}()", qualifier.text, method.text),
         pos: code[start].pos,
-        end_line: paren.pos.line,
+        end_line: closing_line(code, i + 3, '(', ')'),
     })
 }
 
@@ -153,4 +153,21 @@ fn rooted_start(code: &[Token<'_>], i: usize) -> Option<usize> {
     }
     (i >= 2 && code[i - 2].is_ident("system") && (i < 3 || !code[i - 3].is_punct('.')))
         .then(|| i - 2)
+}
+
+/// Line of the bracket that closes the `open` at `code[start]`. The last
+/// token when no bracket closes it.
+fn closing_line(code: &[Token<'_>], start: usize, open: char, close: char) -> u32 {
+    let mut depth = 0usize;
+    for tok in &code[start..] {
+        if tok.is_punct(open) {
+            depth += 1;
+        } else if tok.is_punct(close) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return tok.pos.line;
+            }
+        }
+    }
+    code.last().map_or(code[start].pos.line, |t| t.pos.line)
 }

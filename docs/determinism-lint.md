@@ -124,7 +124,7 @@ System.debug(Datetime.now()); // revenant-lint-disable-line: debug output only
 String trace = String.valueOf(Crypto.getRandomInteger());
 ```
 
-`revenant-lint-disable-line` removes all findings on each line of its comment. `revenant-lint-disable-next-line` removes all findings on the line after its comment. A call that continues on more lines is removed when a marker covers one of its lines. The marker must end at a word boundary: `revenant-lint-disable-lines` is not a marker. The lint does not check the reason. The report counts the removed findings.
+`revenant-lint-disable-line` removes all findings on each line of its comment. `revenant-lint-disable-next-line` removes all findings on the line after its comment. A call or a query that continues on more lines, up to its closing `)` or `]`, is removed when a marker covers one of its lines. The marker must end at a word boundary: `revenant-lint-disable-lines` is not a marker. The lint does not check the reason. The report counts the removed findings.
 
 ## CI gate
 
