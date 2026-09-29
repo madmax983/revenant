@@ -4,7 +4,7 @@
 // The time is from the deploy start to the first `Completed` poll.
 // Run: npm run quickstart -- [--target-org <alias>] [--max-seconds 600]
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,18 +21,25 @@ const DEFAULTS = {
   maxSeconds: 600,
   timeoutSeconds: 900,
   pollSeconds: 5,
+  resultFile: undefined,
 };
 const FLAGS = {
   "--target-org": "targetOrg",
   "--max-seconds": "maxSeconds",
   "--timeout-seconds": "timeoutSeconds",
   "--poll-seconds": "pollSeconds",
+  "--result-file": "resultFile",
 };
+const TEXT_FLAGS = new Set(["targetOrg", "resultFile"]);
+// An alias or a username. No shell characters: on Windows, `sf` runs in cmd.exe.
+const ORG_PATTERN = /^[\w.@+-]+$/;
+const QUERY_ATTEMPTS = 3;
 const USAGE = `Usage: node scripts/quickstart/smoke.mjs [options]
   --target-org <alias>     Org to use (default: the sf default org)
   --max-seconds <n>        Budget from deploy start to Completed (default ${DEFAULTS.maxSeconds})
   --timeout-seconds <n>    Stop the poll after this time (default ${DEFAULTS.timeoutSeconds})
-  --poll-seconds <n>       Time between polls (default ${DEFAULTS.pollSeconds})`;
+  --poll-seconds <n>       Time between polls (default ${DEFAULTS.pollSeconds})
+  --result-file <path>     Also write the result as JSON to this file`;
 
 /** A smoke step failed. The message tells the user what to do. */
 export class SmokeError extends Error {}
@@ -48,8 +55,11 @@ export function parseArgs(argv) {
     if (value === undefined || value.startsWith("--")) {
       throw new SmokeError(`${flag} needs a value`);
     }
-    if (key === "targetOrg") {
-      options.targetOrg = value;
+    if (key === "targetOrg" && !ORG_PATTERN.test(value)) {
+      throw new SmokeError(`${flag} has a character that is not permitted`);
+    }
+    if (TEXT_FLAGS.has(key)) {
+      options[key] = value;
       continue;
     }
     const n = Number(value);
@@ -59,10 +69,23 @@ export function parseArgs(argv) {
   return options;
 }
 
+/**
+ * Gives the text after `marker` on the last USER_DEBUG line. Null if not found.
+ * The log also echoes the source lines ("Execute Anonymous: ..."). They are ignored.
+ */
+export function debugValue(logs, marker) {
+  const lines = (logs ?? "")
+    .split(/\r?\n/)
+    .filter((l) => l.includes("|USER_DEBUG|") && l.includes(marker));
+  if (!lines.length) return null;
+  const last = lines[lines.length - 1];
+  return last.slice(last.indexOf(marker) + marker.length).trim();
+}
+
 /** Finds the instance Id that run-hello.apex prints. Null if not found. */
 export function instanceIdFrom(logs) {
-  const match = /HELLO_INSTANCE_ID=([a-zA-Z0-9]{15,18})\b/.exec(logs ?? "");
-  return match ? match[1] : null;
+  const value = debugValue(logs, "HELLO_INSTANCE_ID=");
+  return /^[a-zA-Z0-9]{15,18}$/.test(value ?? "") ? value : null;
 }
 
 /** Compares the elapsed time with the budget. */
@@ -128,13 +151,28 @@ export async function runSmoke({ sf, now, sleep, log, options }) {
 
   log("4/5 Wait for a terminal status");
   const pollStart = now();
+  let failedQueries = 0;
   for (;;) {
-    const run = readInstance(call, instanceId);
+    const res = queryInstance(call, instanceId);
+    if (res.code !== 0) {
+      // A short network or org error must not stop a long run.
+      failedQueries++;
+      if (failedQueries >= QUERY_ATTEMPTS) {
+        throw new SmokeError(
+          `The status query failed ${QUERY_ATTEMPTS} times: ${errorText(res)}`,
+        );
+      }
+      log(`    The status query failed. Try again: ${errorText(res)}`);
+      await sleep(options.pollSeconds * 1000);
+      continue;
+    }
+    failedQueries = 0;
+    const run = res.json?.result?.records?.[0];
+    if (!run) throw new SmokeError(`No Workflow_Instance__c ${instanceId}`);
     if (run.Terminal_At__c) {
       if (run.Status__c !== "Completed") {
-        throw new SmokeError(
-          `Run ${instanceId} ended ${run.Status__c}: ${run.Error_Message__c}`,
-        );
+        const why = run.Error_Message__c ? `: ${run.Error_Message__c}` : ".";
+        throw new SmokeError(`Run ${instanceId} ended ${run.Status__c}${why}`);
       }
       break;
     }
@@ -149,9 +187,13 @@ export async function runSmoke({ sf, now, sleep, log, options }) {
   const elapsedMs = now() - start;
 
   log(`5/5 Verify (${VERIFY_SCRIPT})`);
-  const verify = /HELLO_VERIFY: (.*)/.exec(apexLogs(call, VERIFY_SCRIPT));
-  if (!verify) throw new SmokeError(`${VERIFY_SCRIPT} printed no HELLO_VERIFY`);
-  const verifySummary = verify[1].trim();
+  const verifySummary = debugValue(
+    apexLogs(call, VERIFY_SCRIPT),
+    "HELLO_VERIFY: ",
+  );
+  if (!verifySummary) {
+    throw new SmokeError(`${VERIFY_SCRIPT} printed no HELLO_VERIFY`);
+  }
   if (!verifySummary.includes(instanceId)) {
     throw new SmokeError(
       `The verify read another instance: ${verifySummary}. Expected ${instanceId}.`,
@@ -187,8 +229,7 @@ function callSf(sf, args, targetOrg) {
 
 function errorText(res) {
   return (
-    res.json?.result?.exceptionMessage ||
-    res.json?.result?.compileProblem ||
+    res.json?.result?.errorMessage ||
     res.json?.message ||
     res.stderr.trim() ||
     `sf exit code ${res.code}`
@@ -218,20 +259,15 @@ function apexLogs(call, script) {
   return res.json.result.logs ?? "";
 }
 
-function readInstance(call, instanceId) {
-  const res = call([
+/** The instanceId is safe in the SOQL: instanceIdFrom accepts only letters and digits. */
+function queryInstance(call, instanceId) {
+  return call([
     "data",
     "query",
     "--query",
     "SELECT Status__c, Error_Message__c, Terminal_At__c " +
       `FROM Workflow_Instance__c WHERE Id = '${instanceId}'`,
   ]);
-  if (res.code !== 0) {
-    throw new SmokeError(`The status query failed: ${errorText(res)}`);
-  }
-  const record = res.json?.result?.records?.[0];
-  if (!record) throw new SmokeError(`No Workflow_Instance__c ${instanceId}`);
-  return record;
 }
 
 function seconds(ms) {
@@ -264,8 +300,9 @@ function realSf(args) {
   return run;
 }
 
+/** No argument has a double quote or a %: parseArgs and instanceIdFrom prevent it. */
 function quoteForCmd(arg) {
-  return /^[\w./:=-]+$/.test(arg) ? arg : `"${arg.replace(/"/g, '\\"')}"`;
+  return /^[\w./:=@+-]+$/.test(arg) ? arg : `"${arg}"`;
 }
 
 function writeSummary(text) {
@@ -288,6 +325,12 @@ async function main(argv) {
     options,
   });
   writeSummary(summaryMarkdown(result, options.maxSeconds));
+  if (options.resultFile) {
+    const file = resolve(options.resultFile);
+    mkdirSync(dirname(file), { recursive: true });
+    const record = { ...result, maxSeconds: options.maxSeconds };
+    writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`);
+  }
   console.log(`Deploy to Completed: ${result.budgetMessage}`);
   return result.withinBudget ? 0 : 1;
 }

@@ -3,6 +3,12 @@
  * and throws if that run is not Completed. It only reads. See docs/quickstart.md.
  */
 public inherited sharing class HelloWorkflowCheck {
+  // The engine moves these statuses on without help.
+  private static final Set<String> ACTIVE = new Set<String>{
+    'Pending',
+    'Running'
+  };
+
   /**
    * @description The latest run is missing, still active, or not Completed.
    */
@@ -47,8 +53,8 @@ public inherited sharing class HelloWorkflowCheck {
   /**
    * @description Reads the latest HelloWorkflow run. Makes no change.
    * @return The Completed run.
-   * @throws CheckException No run, a run that is still active, or a run that
-   * ended with a different status.
+   * @throws CheckException No run, a run that is still Pending or Running, or a
+   * run with a different status.
    */
   public static Result verifyLatest() {
     List<Workflow_Instance__c> runs = [
@@ -65,24 +71,26 @@ public inherited sharing class HelloWorkflowCheck {
       );
     }
     Workflow_Instance__c run = runs[0];
-    if (run.Terminal_At__c == null) {
+    String prefix = 'HelloWorkflow ' + run.Id + ' ';
+    if (ACTIVE.contains(run.Status__c)) {
       throw new CheckException(
-        'HelloWorkflow ' +
-          run.Id +
-          ' is still ' +
+        prefix +
+          'is still ' +
           run.Status__c +
           '. Wait a few seconds, then run this script again.'
       );
     }
-    if (run.Status__c != 'Completed') {
+    if (run.Terminal_At__c == null) {
+      // For example Held or Paused: waiting does not help.
       throw new CheckException(
-        'HelloWorkflow ' +
-          run.Id +
-          ' ended ' +
-          run.Status__c +
-          ': ' +
-          run.Error_Message__c
+        prefix + 'is ' + run.Status__c + '. It is not Completed.'
       );
+    }
+    if (run.Status__c != 'Completed') {
+      String error = String.isBlank(run.Error_Message__c)
+        ? '.'
+        : ': ' + run.Error_Message__c;
+      throw new CheckException(prefix + 'ended ' + run.Status__c + error);
     }
     return new Result(run);
   }

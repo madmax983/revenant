@@ -1,7 +1,6 @@
 // Static checks of the quickstart path (issue #133). Run: npm run test:quickstart
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -15,6 +14,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEPLOY_SOURCES } from "./smoke.mjs";
+import {
+  META,
+  apexLsClasspath,
+  apexLsErrors,
+  apexLsMissing,
+} from "../global-api/apex-ls.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
@@ -111,17 +116,6 @@ test("CI runs the smoke job with a budget of 10 minutes or less", () => {
 
 // ─── Compile: the Hello classes and both scripts ──────────────────────────
 
-function apexLsClasspath() {
-  if (process.env.APEX_LS_CLASSPATH) return process.env.APEX_LS_CLASSPATH;
-  const local = join(ROOT, "scripts", "global-api", ".apex-ls", "lib");
-  return existsSync(local) ? join(local, "*") : null;
-}
-
-const META =
-  '<?xml version="1.0" encoding="UTF-8"?>\n' +
-  '<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">' +
-  "<apiVersion>67.0</apiVersion><status>Active</status></ApexClass>\n";
-
 /** Puts each script body in a method, so apex-ls can compile it. */
 function scriptProbe() {
   const method = (name, path) =>
@@ -135,11 +129,8 @@ function scriptProbe() {
 }
 
 test("apex-ls compiles the Hello classes and both scripts", (t) => {
-  const classpath = apexLsClasspath();
-  const java = spawnSync("java", ["-version"]);
-  if (!classpath || java.status !== 0) {
-    const why =
-      "needs Java and apex-ls (run scripts/global-api/fetch-apex-ls.sh)";
+  const why = apexLsMissing();
+  if (why) {
     if (process.env.REQUIRE_APEX_LS) assert.fail(why);
     t.skip(why);
     return;
@@ -152,15 +143,10 @@ test("apex-ls compiles the Hello classes and both scripts", (t) => {
     cpSync(join(ROOT, "examples/quickstart"), join(work, "quickstart"), {
       recursive: true,
     });
-    mkdirSync(join(work, "quickstart", "probe"), { recursive: true });
-    writeFileSync(
-      join(work, "quickstart", "probe", "QuickstartScriptProbe.cls"),
-      scriptProbe(),
-    );
-    writeFileSync(
-      join(work, "quickstart", "probe", "QuickstartScriptProbe.cls-meta.xml"),
-      META,
-    );
+    const probe = join(work, "quickstart", "probe");
+    mkdirSync(probe, { recursive: true });
+    writeFileSync(join(probe, "QuickstartScriptProbe.cls"), scriptProbe());
+    writeFileSync(join(probe, "QuickstartScriptProbe.cls-meta.xml"), META);
     writeFileSync(
       join(work, "sfdx-project.json"),
       JSON.stringify({
@@ -172,36 +158,10 @@ test("apex-ls compiles the Hello classes and both scripts", (t) => {
         sourceApiVersion: "67.0",
       }),
     );
-    const run = spawnSync(
-      "java",
-      [
-        "-cp",
-        classpath,
-        "io.github.apexdevtools.apexls.CheckForIssues",
-        "-n",
-        "-f",
-        "json",
-        "-w",
-        work,
-      ],
-      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
-    if (run.error) throw run.error;
-    // apex-ls exits 0 with no issue and 4 with issues.
-    assert.ok(
-      [0, 4].includes(run.status) && run.stdout.includes("{"),
-      `apex-ls failed (exit ${run.status}): ${run.stderr}`,
-    );
-    const json = JSON.parse(run.stdout.slice(run.stdout.indexOf("{")));
     // Only the quickstart files. apex-ls reports false positives in the engine.
-    const errors = json.files
-      .filter((f) => f.path.split(/[\\/]/).includes("quickstart"))
-      .flatMap((f) =>
-        f.messages.map(
-          (m) =>
-            `${f.path.split(/[\\/]/).pop()}:${m.start.line} ${m.category}: ${m.message}`,
-        ),
-      );
+    const errors = apexLsErrors(apexLsClasspath(), work, (path) =>
+      path.split(/[\\/]/).includes("quickstart"),
+    );
     assert.deepEqual(errors, []);
   } finally {
     rmSync(work, { recursive: true, force: true });

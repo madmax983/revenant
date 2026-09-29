@@ -12,7 +12,8 @@ This path changes no engine code. It uses only the public start API.
 - The Salesforce CLI (`sf`). To install it: `npm install --global @salesforce/cli`.
 - A Dev Hub org. If you do not have one, sign up for a free Developer Edition org. Then go to Setup > Dev Hub > Enable.
 - Log in to the Dev Hub: `sf org login web --set-default-dev-hub --alias devhub`.
-- A clone of this repository. Run all commands from the repository root.
+- A clone of this repository with its submodule: `git clone --recursive https://github.com/madmax983/revenant.git`. If you cloned without `--recursive`, run `git submodule update --init`. The deploy needs every folder in `sfdx-project.json`.
+- Run all commands from the repository root.
 
 ## Steps
 
@@ -44,7 +45,7 @@ A deploy gives no field access. The check in step 5 reads the engine objects, so
 sf apex run --file scripts/apex/run-hello.apex
 ```
 
-The output is a debug log. Look for `HELLO_INSTANCE_ID=`. The value is the `Workflow_Instance__c` Id. To see only this line, add `| grep HELLO_` (macOS, Linux) or `| findstr HELLO_` (Windows). You do not need to copy the Id: the verify reads the latest run.
+The output is a debug log. Look for `HELLO_INSTANCE_ID=`. The value is the `Workflow_Instance__c` Id. To see only the debug lines, add `| grep USER_DEBUG` (macOS, Linux) or `| findstr USER_DEBUG` (Windows). You do not need to copy the Id: the verify reads the latest run.
 
 ### 5. Verify
 
@@ -52,7 +53,7 @@ The output is a debug log. Look for `HELLO_INSTANCE_ID=`. The value is the `Work
 sf apex run --file scripts/apex/verify-hello.apex
 ```
 
-The output has one line like this: `HELLO_VERIFY: a01... Completed in 2.3 s`. The time is from the start to the terminal status.
+Look for the `USER_DEBUG` line with `HELLO_VERIFY:`, for example `HELLO_VERIFY: a01... Completed in 2.3 s`. (The log also shows the source line of the script. Ignore it.) The time is from the start to the terminal status.
 
 If the output shows an error with `is still Pending` or `is still Running`, the run is not done. Wait 10 seconds. Then run the script again.
 
@@ -72,7 +73,7 @@ It prints the time from the deploy start to `Completed`. It fails if the time is
 sf apex run test --class-names HelloWorkflowTest --class-names HelloWorkflowCheckTest --wait 10
 ```
 
-Do step 3 first. The tests read the engine objects in user mode.
+The tests make their own user with `Revenant_Admin`.
 
 ## What Happened
 
@@ -118,6 +119,7 @@ sequenceDiagram
 | The verify says `No HelloWorkflow run`.         | Step 4 is not done, or it used a different org. | Do step 4 on the same org.                               |
 | The verify says `is still Pending` for minutes. | The async Apex queue is busy.                   | Setup > Apex Jobs. Wait, then run the verify again.      |
 | The verify says `ended Failed: <message>`.      | A step threw an error.                          | Read the message. To see each step, run the query below. |
+| The verify says `is Held` or `is Paused`.       | An operator stopped the run.                    | Resume it, or run step 4 again.                          |
 
 To see each step of a run, use the Id from step 4:
 
@@ -127,7 +129,7 @@ sf data query --query "SELECT Step_Name__c, Status__c, Error_Details__c FROM Wor
 
 ## CI
 
-The workflow `.github/workflows/quickstart.yml` runs this path on each push to `main` and on each pull request:
+The workflow `.github/workflows/quickstart.yml` runs this path on each push to `main` and on each pull request that changes the engine or the quickstart files. You can also start it by hand (Actions > Quickstart > Run workflow).
 
 - **Static checks**: Node tests of the runner and of this page. apex-ls compiles the Hello classes and the two scripts.
 - **Scratch org smoke**: a new scratch org, then `scripts/quickstart/smoke.mjs`. The job summary shows the time from deploy start to `Completed`. The job fails if that time is more than `QUICKSTART_MAX_SECONDS` (600). Then it runs the Hello Apex tests.

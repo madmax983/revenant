@@ -1,10 +1,12 @@
 // Tests for the quickstart smoke runner (issue #133). Run: npm run test:quickstart
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   DEPLOY_SOURCES,
   SmokeError,
   checkBudget,
+  debugValue,
   instanceIdFrom,
   parseArgs,
   runSmoke,
@@ -12,6 +14,28 @@ import {
 } from "./smoke.mjs";
 
 const ID = "a015g00000ABCDEAA2";
+const script = (name) =>
+  readFileSync(new URL(`../apex/${name}`, import.meta.url), "utf8");
+
+/**
+ * A debug log like `sf apex run` gives. The log echoes each source line
+ * ("Execute Anonymous: ...") before the USER_DEBUG line.
+ */
+function anonLog(source, debugText) {
+  return [
+    "67.0 APEX_CODE,DEBUG;APEX_PROFILING,INFO",
+    ...source.split("\n").map((line) => `Execute Anonymous: ${line}`),
+    `12:00:00.12 (1234)|USER_DEBUG|[4]|DEBUG|${debugText}`,
+    "12:00:00.13 (1300)|CODE_UNIT_FINISHED|execute_anonymous_apex",
+  ].join("\n");
+}
+const runLog = (id = ID) =>
+  anonLog(script("run-hello.apex"), `HELLO_INSTANCE_ID=${id}`);
+const verifyLog = (id = ID) =>
+  anonLog(
+    script("verify-hello.apex"),
+    `HELLO_VERIFY: ${id} Completed in 4.0 s`,
+  );
 
 /** A fake `sf`. It records each call and answers from `script`. */
 function fakeSf(script = {}) {
@@ -29,10 +53,8 @@ function fakeSf(script = {}) {
         return ok({ successes: [{ name: "Revenant_Admin" }], failures: [] });
       case "apex run":
         return args.some((a) => a.endsWith("run-hello.apex"))
-          ? apexOk(`12:00|USER_DEBUG|[6]|DEBUG|HELLO_INSTANCE_ID=${ID}`)
-          : apexOk(
-              `12:01|USER_DEBUG|[1]|DEBUG|HELLO_VERIFY: ${ID} Completed in 4.0 s`,
-            );
+          ? apexOk(runLog())
+          : apexOk(verifyLog());
       case "data query": {
         const status = statuses.length > 1 ? statuses.shift() : statuses[0];
         const active = ["Pending", "Running"].includes(status);
@@ -61,8 +83,8 @@ function apexOk(logs) {
   return ok({ success: true, compiled: true, logs });
 }
 
-/** A fake clock. `sleep` moves the time forward. `deployMs` is the deploy cost. */
-function fakeClock(deployMs = 0) {
+/** A fake clock. `sleep` and `tick` move the time forward. */
+function fakeClock() {
   let t = 1_000_000;
   return {
     now: () => t,
@@ -72,7 +94,6 @@ function fakeClock(deployMs = 0) {
     tick: (ms) => {
       t += ms;
     },
-    deployMs,
   };
 }
 
@@ -82,6 +103,7 @@ function options(extra = {}) {
     maxSeconds: 600,
     timeoutSeconds: 900,
     pollSeconds: 5,
+    resultFile: undefined,
     ...extra,
   };
 }
@@ -111,14 +133,31 @@ test("parseArgs: reads each flag", () => {
       "120",
       "--poll-seconds",
       "2",
+      "--result-file",
+      "out/smoke.json",
     ]),
     options({
       targetOrg: "hello",
       maxSeconds: 300,
       timeoutSeconds: 120,
       pollSeconds: 2,
+      resultFile: "out/smoke.json",
     }),
   );
+});
+
+test("parseArgs: accepts an alias or a username, and rejects shell characters", () => {
+  assert.equal(
+    parseArgs(["--target-org", "dev+1@example.com"]).targetOrg,
+    "dev+1@example.com",
+  );
+  for (const bad of ["a&b", "a%PATH%", 'a"b', "a b", "a^b", "a|b"]) {
+    assert.throws(
+      () => parseArgs(["--target-org", bad]),
+      /--target-org has a character that is not permitted/,
+      bad,
+    );
+  }
 });
 
 test("parseArgs: rejects an unknown flag and a bad number", () => {
@@ -138,12 +177,21 @@ test("parseArgs: rejects an unknown flag and a bad number", () => {
 });
 
 test("instanceIdFrom: finds the Id in the debug log", () => {
-  assert.equal(
-    instanceIdFrom(`x|USER_DEBUG|[6]|DEBUG|HELLO_INSTANCE_ID=${ID}\ny`),
-    ID,
-  );
+  assert.equal(instanceIdFrom(runLog()), ID);
   assert.equal(instanceIdFrom("no marker here"), null);
   assert.equal(instanceIdFrom(undefined), null);
+});
+
+test("debugValue: reads the USER_DEBUG line, not the source echo", () => {
+  assert.equal(
+    debugValue(verifyLog(), "HELLO_VERIFY: "),
+    `${ID} Completed in 4.0 s`,
+  );
+  // The echo of the source line alone gives nothing.
+  assert.equal(
+    debugValue(anonLog(script("verify-hello.apex"), "other"), "HELLO_VERIFY: "),
+    null,
+  );
 });
 
 test("checkBudget: passes at the limit and fails over it", () => {
@@ -170,7 +218,7 @@ test("runSmoke: deploys, assigns, runs, polls and verifies in order", async () =
   );
   assert.equal(result.instanceId, ID);
   assert.equal(result.withinBudget, true);
-  assert.match(result.verifySummary, /Completed in 4\.0 s/);
+  assert.equal(result.verifySummary, `${ID} Completed in 4.0 s`);
 });
 
 test("runSmoke: deploys only the engine and the quickstart example", async () => {
@@ -243,22 +291,45 @@ test("runSmoke: accepts an assignment that already exists", async () => {
   assert.equal(result.instanceId, ID);
 });
 
-test("runSmoke: stops when the deploy fails", async () => {
-  const { sf, calls } = fakeSf({
-    "project deploy": {
+function failedDeploy(result) {
+  return {
+    status: 1,
+    stdout: JSON.stringify({
       status: 1,
-      stdout: JSON.stringify({
-        status: 1,
-        message: "Deploy failed: bad class",
+      result: { status: "Failed", ...result },
+    }),
+  };
+}
+
+test("runSmoke: stops with each component failure of a deploy", async () => {
+  const one = { fullName: "HelloWorkflow", problem: "Invalid type: Foo" };
+  const two = { fullName: "HelloWorkflowCheck", problem: "Bad field" };
+  for (const [failures, expected] of [
+    [one, /Deploy failed: HelloWorkflow: Invalid type: Foo$/],
+    [
+      [one, two],
+      /HelloWorkflow: Invalid type: Foo; HelloWorkflowCheck: Bad field/,
+    ],
+  ]) {
+    const { sf, calls } = fakeSf({
+      "project deploy": failedDeploy({
+        details: { componentFailures: failures },
       }),
-    },
+    });
+    await assert.rejects(smoke(sf), (e) => {
+      assert.ok(e instanceof SmokeError);
+      assert.match(e.message, expected);
+      return true;
+    });
+    assert.equal(calls.length, 1);
+  }
+});
+
+test("runSmoke: stops with the deploy error when no component failed", async () => {
+  const { sf } = fakeSf({
+    "project deploy": failedDeploy({ errorMessage: "The org is locked" }),
   });
-  await assert.rejects(smoke(sf), (e) => {
-    assert.ok(e instanceof SmokeError);
-    assert.match(e.message, /Deploy failed: bad class/);
-    return true;
-  });
-  assert.equal(calls.length, 1);
+  await assert.rejects(smoke(sf), /Deploy failed: The org is locked/);
 });
 
 test("runSmoke: stops when the permission set is not assigned", async () => {
@@ -288,11 +359,12 @@ test("runSmoke: stops with the Apex error when a script throws", async () => {
       status: 1,
       stdout: JSON.stringify({
         status: 1,
-        result: { success: false, compiled: true, exceptionMessage: "Nope" },
+        name: "executeRuntimeFailure",
+        message: "Execution failed at this code:\n\nNope",
       }),
     },
   });
-  await assert.rejects(smoke(sf), /Nope/);
+  await assert.rejects(smoke(sf), /run-hello\.apex failed: [\s\S]*Nope/);
 });
 
 test("runSmoke: stops with the status and error of a failed run", async () => {
@@ -306,16 +378,41 @@ test("runSmoke: stops when the run is not terminal before the timeout", async ()
     smoke(sf, fakeClock(), { timeoutSeconds: 20, pollSeconds: 5 }),
     /not terminal after 20 s.*Running/,
   );
-  const polls = calls.filter((c) => c[0] === "data").length;
-  assert.ok(polls >= 4 && polls <= 5, `polls: ${polls}`);
+  // Polls at 0, 5, 10, 15 and 20 s.
+  assert.equal(calls.filter((c) => c[0] === "data").length, 5);
+});
+
+/** A `data query` that fails `failures` times, then gives Completed. */
+function flakyQuery(failures) {
+  let n = 0;
+  return () =>
+    n++ < failures
+      ? { status: 1, stdout: JSON.stringify({ status: 1, message: "503" }) }
+      : ok({
+          records: [
+            { Status__c: "Completed", Terminal_At__c: "2026-09-29T12:00:00Z" },
+          ],
+        });
+}
+
+test("runSmoke: tries a failed status query again", async () => {
+  const { sf } = fakeSf({ "data query": flakyQuery(2) });
+  const result = await smoke(sf);
+  assert.equal(result.instanceId, ID);
+});
+
+test("runSmoke: stops after 3 failed status queries in a row", async () => {
+  const { sf, calls } = fakeSf({ "data query": flakyQuery(3) });
+  await assert.rejects(smoke(sf), /status query failed 3 times: 503/);
+  assert.equal(calls.filter((c) => c[0] === "data").length, 3);
 });
 
 test("runSmoke: stops when verify reads another instance", async () => {
   const { sf } = fakeSf({
     "apex run": (args) =>
       args.some((a) => a.endsWith("run-hello.apex"))
-        ? apexOk(`HELLO_INSTANCE_ID=${ID}`)
-        : apexOk("HELLO_VERIFY: a015g00000ZZZZZAA2 Completed in 1.0 s"),
+        ? apexOk(runLog())
+        : apexOk(verifyLog("a015g00000ZZZZZAA2")),
   });
   await assert.rejects(smoke(sf), /verify read another instance/);
 });
@@ -335,4 +432,15 @@ test("summaryMarkdown: gives a table with the times and the budget", () => {
   assert.match(md, /Deploy \| 90\.0 s/);
   assert.match(md, /Budget \| 600 s \(pass\)/);
   assert.match(md, new RegExp(ID));
+});
+
+test("runSmoke: gives no 'null' when an ended run has no error", async () => {
+  const { sf } = fakeSf({
+    "data query": ok({
+      records: [
+        { Status__c: "Cancelled", Terminal_At__c: "2026-09-29T12:00:00Z" },
+      ],
+    }),
+  });
+  await assert.rejects(smoke(sf), /ended Cancelled\.$/);
 });

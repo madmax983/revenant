@@ -8,7 +8,7 @@ private class HelloWorkflowTest {
 
   @IsTest
   static void runsBothStepsToCompleted() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
+    System.runAs(QuickstartTestUser.revenantAdmin()) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
         HelloWorkflow.NAME,
@@ -38,7 +38,7 @@ private class HelloWorkflowTest {
 
   @IsTest
   static void greetsWorldWhenInputIsEmpty() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
+    System.runAs(QuickstartTestUser.revenantAdmin()) {
       Test.startTest();
       Id instanceId = WorkflowEngine.start(
         HelloWorkflow.NAME,
