@@ -27,6 +27,8 @@ pub struct TypeDecl {
     pub qualified: String,
     /// `extends` and `implements` names, as written.
     pub supertypes: Vec<String>,
+    /// Annotation names before the declaration, without `@` (`IsTest`).
+    pub annotations: Vec<String>,
     /// Position of the name.
     pub pos: Position,
     /// Code-token indices between the braces of the body.
@@ -44,31 +46,44 @@ pub fn declarations(code: &[Token<'_>]) -> Vec<TypeDecl> {
     // (declaration index, brace depth inside its body)
     let mut open: Vec<(usize, usize)> = Vec::new();
     let mut depth = 0usize;
+    // Annotations since the last `;`, `{` or `}`. A declaration takes them.
+    let mut pending: Vec<String> = Vec::new();
     let mut i = 0;
     while i < code.len() {
         let tok = &code[i];
-        if let Some(kind) = declaration_kind(code, i) {
-            if let Some((header, brace)) = parse_header(code, i + 1) {
-                let name = code[i + 1].text.to_string();
-                let parent = open.last().map(|&(idx, _)| idx);
-                let qualified = parent.map_or_else(
-                    || name.clone(),
-                    |p| format!("{}.{name}", decls[p].qualified),
-                );
-                decls.push(TypeDecl {
-                    kind,
-                    name,
-                    qualified,
-                    supertypes: header,
-                    pos: code[i + 1].pos,
-                    body: brace + 1..code.len(),
-                    parent,
-                });
-                depth += 1;
-                open.push((decls.len() - 1, depth));
-                i = brace + 1;
-                continue;
-            }
+        if tok.is_punct('@')
+            && let Some(name) = code.get(i + 1).filter(|t| t.kind == TokenKind::Ident)
+        {
+            pending.push(name.text.to_string());
+            i = skip_parens(code, i + 2);
+            continue;
+        }
+        if let Some(kind) = declaration_kind(code, i)
+            && let Some((header, brace)) = parse_header(code, i + 1)
+        {
+            let name = code[i + 1].text.to_string();
+            let parent = open.last().map(|&(idx, _)| idx);
+            let qualified = parent.map_or_else(
+                || name.clone(),
+                |p| format!("{}.{name}", decls[p].qualified),
+            );
+            decls.push(TypeDecl {
+                kind,
+                name,
+                qualified,
+                supertypes: header,
+                annotations: std::mem::take(&mut pending),
+                pos: code[i + 1].pos,
+                body: brace + 1..code.len(),
+                parent,
+            });
+            depth += 1;
+            open.push((decls.len() - 1, depth));
+            i = brace + 1;
+            continue;
+        }
+        if tok.is_punct('{') || tok.is_punct('}') || tok.is_punct(';') {
+            pending.clear();
         }
         if tok.is_punct('{') {
             depth += 1;
@@ -84,6 +99,25 @@ pub fn declarations(code: &[Token<'_>]) -> Vec<TypeDecl> {
         i += 1;
     }
     decls
+}
+
+/// The index after a `( ... )` group at `code[i]`, or `i` when no group starts there.
+fn skip_parens(code: &[Token<'_>], i: usize) -> usize {
+    if !code.get(i).is_some_and(|t| t.is_punct('(')) {
+        return i;
+    }
+    let mut depth = 0usize;
+    for (j, t) in code.iter().enumerate().skip(i) {
+        if t.is_punct('(') {
+            depth += 1;
+        } else if t.is_punct(')') {
+            depth -= 1;
+            if depth == 0 {
+                return j + 1;
+            }
+        }
+    }
+    code.len()
 }
 
 /// The kind when `code[i]` starts a declaration: a keyword that no `.`

@@ -18,7 +18,6 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@oclif/core": "^4.14.0",
     "@salesforce/sf-plugins-core": "^13.0.4"
   },
   "oclif": {
@@ -33,5 +32,8 @@
         "description": "Static checks for Revenant workflow code."
       }
     }
+  },
+  "devDependencies": {
+    "@oclif/core": "^5.1.2"
   }
 }

@@ -12,7 +12,7 @@ Revenant brings durable execution, sagas, and event-driven orchestration to Apex
 - **Check the quickstart runner, doc and scripts**: `npm run test:quickstart`
 - **Run the quickstart on the default org**: `npm run quickstart` (see `docs/quickstart.md`)
 - **Check the determinism lint (Rust core and sf plugin)**: `npm run test:determinism-lint` (needs Rust and the `wasm32-unknown-unknown` target)
-- **Lint step code for replay safety**: `sf revenant lint determinism` after `sf plugins link tools/sf-plugin-revenant` (see `docs/determinism-lint.md`)
+- **Lint step code for replay safety**: `sf revenant lint determinism` after `npm ci`, `npm run build` and `sf plugins link .` in `tools/sf-plugin-revenant` (see `docs/determinism-lint.md`)
 - **Format Apex files**: `npx prettier --write --plugin=prettier-plugin-apex "force-app/main/default/classes/<ClassName>.cls"`
 
 ## Architecture Summary

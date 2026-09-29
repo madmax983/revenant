@@ -1,6 +1,6 @@
 # Determinism lint gate (issue #135).
 # rust: fmt, clippy (pedantic, nursery), tests. Then the lint runs on this repo.
-# That step reports only, until the example hazards are corrected.
+# That step only reports. Correct the example hazards (#283), then make it fail the job.
 # plugin: builds the wasm core and runs the sf plugin tests.
 name: Determinism Lint
 
@@ -11,12 +11,14 @@ on:
       - "tools/**"
       - "force-app/**"
       - "examples/**"
+      - "package.json"
       - ".github/workflows/determinism-lint.yml"
   pull_request:
     paths:
       - "tools/**"
       - "force-app/**"
       - "examples/**"
+      - "package.json"
       - ".github/workflows/determinism-lint.yml"
   workflow_dispatch:
 

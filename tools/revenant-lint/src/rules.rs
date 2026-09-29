@@ -12,13 +12,42 @@ pub struct Hazard {
     pub api: String,
     /// Position of the first token.
     pub pos: Position,
+    /// Line of the last token. A call can span lines.
+    pub end_line: u32,
 }
 
 enum Method {
     Exact(&'static str),
     Prefix(&'static str),
-    Any,
+    OneOf(&'static [&'static str]),
 }
+
+/// `UserInfo` methods (lower case). A list, so `userInfo.get('k')` on a local
+/// map does not match.
+const USER_INFO: &[&str] = &[
+    "getdefaultcurrency",
+    "getfirstname",
+    "getlanguage",
+    "getlastname",
+    "getlocale",
+    "getname",
+    "getorganizationid",
+    "getorganizationname",
+    "getprofileid",
+    "getsessionid",
+    "gettimezone",
+    "getuitheme",
+    "getuithemedisplayed",
+    "getuseremail",
+    "getuserid",
+    "getusername",
+    "getuserroleid",
+    "getusertype",
+    "haspackagelicense",
+    "iscurrentuserlicensed",
+    "iscurrentuserlicensedforpermissionset",
+    "ismulticurrencyorganization",
+];
 
 /// `Qualifier.method(` calls. Names are lower case.
 const CALLS: &[(&str, Method, Rule)] = &[
@@ -35,7 +64,7 @@ const CALLS: &[(&str, Method, Rule)] = &[
     ("crypto", Method::Prefix("getrandom"), Rule::RandomValue),
     ("crypto", Method::Exact("generateaeskey"), Rule::RandomValue),
     ("uuid", Method::Exact("randomuuid"), Rule::RandomValue),
-    ("userinfo", Method::Any, Rule::UserContext),
+    ("userinfo", Method::OneOf(USER_INFO), Rule::UserContext),
     ("system", Method::Exact("enqueuejob"), Rule::AsyncEnqueue),
     ("system", Method::Exact("schedule"), Rule::AsyncEnqueue),
     ("system", Method::Exact("schedulebatch"), Rule::AsyncEnqueue),
@@ -51,7 +80,10 @@ const CALLS: &[(&str, Method, Rule)] = &[
         Method::Prefix("getquerylocator"),
         Rule::SoqlRead,
     ),
+    ("database", Method::Prefix("getcursor"), Rule::SoqlRead),
     ("search", Method::Exact("query"), Rule::SoqlRead),
+    ("search", Method::Exact("find"), Rule::SoqlRead),
+    ("eventbus", Method::Exact("publish"), Rule::EventPublish),
 ];
 
 /// The hazard that starts at `code[i]`, if any.
@@ -60,21 +92,28 @@ pub fn hazard_at(code: &[Token<'_>], i: usize) -> Option<Hazard> {
     inline_query(code, i).or_else(|| call(code, i))
 }
 
-/// `[SELECT` or `[FIND`.
+/// `[SELECT` or `[FIND 'text'` / `[FIND :term`. A `FIND` with no search text
+/// after it is an index variable (`vals[find]`).
 fn inline_query(code: &[Token<'_>], i: usize) -> Option<Hazard> {
     if !code[i].is_punct('[') {
         return None;
     }
     let keyword = code.get(i + 1)?;
-    (keyword.is_ident("select") || keyword.is_ident("find")).then(|| Hazard {
+    let search_text = || {
+        code.get(i + 2)
+            .is_some_and(|t| t.kind == TokenKind::Str || t.is_punct(':'))
+    };
+    (keyword.is_ident("select") || (keyword.is_ident("find") && search_text())).then(|| Hazard {
         rule: Rule::SoqlRead,
         api: format!("[{} ...]", keyword.text),
         pos: code[i].pos,
+        end_line: keyword.pos.line,
     })
 }
 
 /// `Qualifier.method(`. A `.` before the qualifier is allowed only in
-/// `System.Qualifier`, so `this.userInfo.getName()` does not match.
+/// `System.Qualifier`, so `this.userInfo.getName()` does not match. The
+/// `System.` prefix is part of the api text and the position.
 fn call(code: &[Token<'_>], i: usize) -> Option<Hazard> {
     let [qualifier, dot, method, paren] = code.get(i..i + 4)? else {
         return None;
@@ -83,33 +122,35 @@ fn call(code: &[Token<'_>], i: usize) -> Option<Hazard> {
         || !dot.is_punct('.')
         || method.kind != TokenKind::Ident
         || !paren.is_punct('(')
-        || !qualifier_is_rooted(code, i)
     {
         return None;
     }
+    let start = rooted_start(code, i)?;
     let q = qualifier.text.to_ascii_lowercase();
     let m = method.text.to_ascii_lowercase();
-    CALLS
-        .iter()
-        .find(|(cq, cm, _)| {
-            *cq == q
-                && match cm {
-                    Method::Exact(name) => m == *name,
-                    Method::Prefix(prefix) => m.starts_with(prefix),
-                    Method::Any => true,
-                }
-        })
-        .map(|&(_, _, rule)| Hazard {
-            rule,
-            api: format!("{}.{}()", qualifier.text, method.text),
-            pos: qualifier.pos,
-        })
+    let (_, _, rule) = CALLS.iter().find(|(cq, cm, _)| {
+        *cq == q
+            && match cm {
+                Method::Exact(name) => m == *name,
+                Method::Prefix(prefix) => m.starts_with(prefix),
+                Method::OneOf(names) => names.contains(&m.as_str()),
+            }
+    })?;
+    let prefix = if start < i { "System." } else { "" };
+    Some(Hazard {
+        rule: *rule,
+        api: format!("{prefix}{}.{}()", qualifier.text, method.text),
+        pos: code[start].pos,
+        end_line: paren.pos.line,
+    })
 }
 
-/// True when no `.` comes before `code[i]`, or the prefix is a lone `System.`.
-fn qualifier_is_rooted(code: &[Token<'_>], i: usize) -> bool {
+/// The index where the qualified name starts: `i`, or `i - 2` for a lone
+/// `System.` prefix. None when another `.` comes before the qualifier.
+fn rooted_start(code: &[Token<'_>], i: usize) -> Option<usize> {
     if i == 0 || !code[i - 1].is_punct('.') {
-        return true;
+        return Some(i);
     }
-    i >= 2 && code[i - 2].is_ident("system") && (i < 3 || !code[i - 3].is_punct('.'))
+    (i >= 2 && code[i - 2].is_ident("system") && (i < 3 || !code[i - 3].is_punct('.')))
+        .then(|| i - 2)
 }

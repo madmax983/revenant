@@ -102,3 +102,17 @@ fn spans_slice_the_source() {
         assert_eq!(&src[t.span.clone()], t.text);
     }
 }
+
+#[test]
+fn a_lone_carriage_return_ends_a_line() {
+    let toks = lex("a\rb\r\nc").expect("lexes");
+    let lines: Vec<_> = toks.iter().map(|t| t.pos.line).collect();
+    assert_eq!(lines, vec![1, 2, 3]);
+}
+
+#[test]
+fn a_byte_order_mark_does_not_move_columns() {
+    let toks = lex("\u{feff}class A").expect("lexes");
+    assert_eq!(toks[0].text, "class");
+    assert_eq!(toks[0].pos, Position { line: 1, column: 1 });
+}

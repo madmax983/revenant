@@ -30,30 +30,43 @@ export async function loadEngine(wasmUrl = DEFAULT_WASM) {
     }
     throw e;
   }
-  const { instance } = await WebAssembly.instantiate(bytes, {});
-  const { memory, rl_alloc, rl_lint, rl_free } = instance.exports;
+  const module = await WebAssembly.compile(bytes);
+  let exports = (await WebAssembly.instantiate(module, {})).exports;
 
   /** Sends request JSON to the core. Returns the parsed response. */
   function lintRaw(json) {
-    const input = encoder.encode(json);
-    const ptr = rl_alloc(input.length) >>> 0;
-    new Uint8Array(memory.buffer, ptr, input.length).set(input);
-    // rl_lint frees the request. It returns (ptr << 32) | len as an i64.
-    const packed = rl_lint(ptr, input.length);
-    const outPtr = Number(packed >> 32n);
-    const outLen = Number(packed & 0xffffffffn);
-    const text = decoder.decode(new Uint8Array(memory.buffer, outPtr, outLen));
-    rl_free(outPtr, outLen);
-    const value = JSON.parse(text);
-    if (typeof value.error === "string") {
-      throw new Error(`revenant-lint core: ${value.error}`);
+    try {
+      return call(exports, json);
+    } catch (e) {
+      // A trap (a Rust panic) can leave the heap broken. Use a new instance next time.
+      if (e instanceof WebAssembly.RuntimeError) {
+        exports = new WebAssembly.Instance(module, {}).exports;
+      }
+      throw e;
     }
-    return value;
   }
 
   return {
     lint: (files) => lintRaw(JSON.stringify({ files })),
     lintRaw,
-    memoryBytes: () => memory.buffer.byteLength,
+    memoryBytes: () => exports.memory.buffer.byteLength,
   };
+}
+
+function call({ memory, rl_alloc, rl_lint, rl_free }, json) {
+  const input = encoder.encode(json);
+  const ptr = rl_alloc(input.length) >>> 0;
+  new Uint8Array(memory.buffer, ptr, input.length).set(input);
+  // rl_lint frees the request. It returns (ptr << 32) | len as an i64. JS gets
+  // a signed BigInt, so read it as unsigned.
+  const packed = BigInt.asUintN(64, rl_lint(ptr, input.length));
+  const outPtr = Number(packed >> 32n);
+  const outLen = Number(packed & 0xffffffffn);
+  const text = decoder.decode(new Uint8Array(memory.buffer, outPtr, outLen));
+  rl_free(outPtr, outLen);
+  const value = JSON.parse(text);
+  if (typeof value.error === "string") {
+    throw new Error(`revenant-lint core: ${value.error}`);
+  }
+  return value;
 }

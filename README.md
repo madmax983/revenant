@@ -583,13 +583,13 @@ static void onboardingWorkflowIsWellFormed() {
 
 #### Lint step code for replay safety (`sf` plugin)
 
-`WorkflowValidator` checks the DAG. It does not read step code. A step that calls `Datetime.now()`, `Math.random()`, `UserInfo`, or `System.enqueueJob()` gets a new result each time the engine runs it again. The determinism lint finds these calls in the source, before deploy:
+`WorkflowValidator` checks the DAG. It does not read step code. A step that calls `Datetime.now()`, `Math.random()`, `UserInfo`, `System.enqueueJob()`, or `EventBus.publish()` gets a new result each time the engine runs it again. The determinism lint finds these calls in the source, before deploy:
 
 ```bash
 sf revenant lint determinism        # exit 1 on a HIGH defect
 ```
 
-A call in a `CaptureProducer` (read through `once()`) is safe. See **[docs/determinism-lint.md](docs/determinism-lint.md)**.
+A call in `produce()` of a `CaptureProducer` is safe when the step reads the value with `once()`. See **[docs/determinism-lint.md](docs/determinism-lint.md)**.
 
 Where `WorkflowValidator` checks the _definition's shape_, the next section validates _each invocation's payload_.
 

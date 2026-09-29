@@ -1,6 +1,10 @@
 // Wasm bridge: the Rust core through rl_alloc / rl_lint / rl_free.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { EngineMissingError, loadEngine } from "../src/engine.js";
 
 const step = (body) =>
@@ -26,9 +30,15 @@ test("lint returns the Rust report", async () => {
 
 test("comments, strings and producers give no defect", async () => {
   const engine = await loadEngine();
+  const producer =
+    "Object v = ctx.captures().once('k', new P());\n}\n" +
+    "class P implements CaptureProducer { public Object produce() { return Datetime.now(); } }\n" +
+    "void unused() {";
   const report = engine.lint([
     { path: "S.cls", source: step("// Datetime.now()\nString s = 'Math.random()';") },
+    { path: "T.cls", source: step(producer).replace("class S ", "class T ") },
   ]);
+  assert.equal(report.stepClassesScanned, 2);
   assert.deepEqual(report.defects, []);
 });
 
@@ -69,4 +79,15 @@ test("a missing wasm file gives a build hint", async () => {
     loadEngine(new URL("file:///no/such/revenant_lint.wasm")),
     (e) => e instanceof EngineMissingError && /npm run build/.test(e.message),
   );
+});
+
+test("after a trap the engine uses a new instance", async () => {
+  // A hand-made module. rl_lint traps on its first call and sets a flag. With
+  // the flag set, it returns {"ok":1}. A new instance has no flag, so it traps again.
+  const dir = mkdtempSync(join(tmpdir(), "rl-trap-"));
+  const file = join(dir, "trap.wasm");
+  writeFileSync(file, Buffer.from("0061736d0100000001110360017f017f60027f7f017e60027f7f0003040300010205030100010606017f0141000b072904066d656d6f7279020008726c5f616c6c6f63000007726c5f6c696e74000107726c5f6672656500020a200305004180080b15002300044042888080808080020f0b41012400000b02000b0b0f01004180100b087b226f6b223a317d", "hex"));
+  const engine = await loadEngine(pathToFileURL(file));
+  assert.throws(() => engine.lintRaw("{}"), WebAssembly.RuntimeError);
+  assert.throws(() => engine.lintRaw("{}"), WebAssembly.RuntimeError);
 });

@@ -419,3 +419,160 @@ fn json_request_error_is_an_error_object() {
     let out: serde_json::Value = serde_json::from_str(&lint_json("{")).expect("valid JSON");
     assert!(out["error"].as_str().is_some_and(|e| !e.is_empty()));
 }
+
+// Review round 1 regressions.
+
+#[test]
+fn a_step_that_is_also_a_producer_exempts_only_produce() {
+    let src = "public class SelfStep implements WorkflowStep, CaptureProducer {\n\
+               public StepResult execute(StepContext ctx) { Datetime t = Datetime.now(); return null; }\n\
+               public Object produce() { return Math.random(); }\n\
+               }";
+    assert_eq!(
+        hazards(&run(&[("SelfStep.cls", src)])),
+        vec![(2, Rule::ClockRead)]
+    );
+}
+
+#[test]
+fn a_nested_supertype_resolves_in_its_own_outer_class_first() {
+    // Only OrderFlow.Base is a step. InvoiceFlow.Impl extends InvoiceFlow.Base.
+    let order = "public class OrderFlow { public abstract class Base implements WorkflowStep {} }";
+    let invoice = "public class InvoiceFlow {\n\
+                   abstract class Base {}\n\
+                   class Impl extends Base { void x() { Datetime.now(); } }\n\
+                   }";
+    assert!(
+        run(&[("OrderFlow.cls", order), ("InvoiceFlow.cls", invoice)])
+            .defects
+            .is_empty()
+    );
+
+    // Flow.Impl extends Flow.Base (a step), not the top-level Base.
+    let top = "public virtual class Base {}";
+    let flow = "public class Flow {\n\
+                abstract class Base implements WorkflowStep {}\n\
+                class Impl extends Base { void x() { Datetime.now(); } }\n\
+                }";
+    assert_eq!(
+        hazards(&run(&[("Base.cls", top), ("Flow.cls", flow)])),
+        vec![(3, Rule::ClockRead)]
+    );
+}
+
+#[test]
+fn test_files_are_found_by_annotation_or_a_test_suffix_only() {
+    let step = |name: &str, annotation: &str| {
+        format!(
+            "{annotation} public class {name} implements WorkflowStep {{ void x() {{ Datetime.now(); }} }}"
+        )
+    };
+    let latest = step("FetchLatest", "");
+    let contest = step("Contest", "");
+    let harness = step("StepHarness", "@IsTest(SeeAllData=false)");
+    let lower = step("order_test", "");
+    let report = run(&[
+        ("FetchLatest.cls", &latest),
+        ("Contest.cls", &contest),
+        ("StepHarness.cls", &harness),
+        ("order_test.cls", &lower),
+    ]);
+    let classes: Vec<_> = report
+        .defects
+        .iter()
+        .map(|d| d.class_name.as_str())
+        .collect();
+    assert_eq!(classes, vec!["Contest", "FetchLatest"]);
+}
+
+#[test]
+fn flags_cursors_dynamic_sosl_and_event_publish() {
+    let src = step(
+        "Database.Cursor c = Database.getCursor(q);\n\
+         Object f = Search.find(q);\n\
+         EventBus.publish(new Order_Event__e());",
+    );
+    let report = run(&[("S.cls", &src)]);
+    assert_eq!(
+        hazards(&report),
+        vec![
+            (3, Rule::SoqlRead),
+            (4, Rule::SoqlRead),
+            (5, Rule::EventPublish)
+        ]
+    );
+    assert_eq!(report.defects[2].severity, Severity::High);
+    assert!(report.defects[2].remedy.contains("ctx.events().emit("));
+}
+
+#[test]
+fn a_variable_named_like_a_keyword_or_class_is_not_flagged() {
+    let src = step(
+        "Integer find = 0;\nObject v = vals[find];\n\
+         Map<String, Object> userInfo = new Map<String, Object>();\n\
+         Object n = userInfo.get('name');\n\
+         Boolean e = userInfo.isEmpty();",
+    );
+    assert!(hazards(&run(&[("S.cls", &src)])).is_empty());
+}
+
+#[test]
+fn a_system_prefix_is_part_of_the_api_and_the_position() {
+    let src = step("Double a = System.Math.random();");
+    let d = &run(&[("S.cls", &src)]).defects[0];
+    assert_eq!(d.api, "System.Math.random()");
+    assert_eq!(
+        d.position,
+        Position {
+            line: 3,
+            column: 12
+        }
+    );
+}
+
+#[test]
+fn disable_line_in_a_block_comment_covers_each_of_its_lines() {
+    let src = step("/* reviewed:\n revenant-lint-disable-line */ Object d = Datetime.now();");
+    let report = run(&[("S.cls", &src)]);
+    assert!(report.defects.is_empty(), "{:?}", report.defects);
+    assert_eq!(report.suppressed, 1);
+}
+
+#[test]
+fn a_suppression_on_any_line_of_a_multi_line_call_covers_it() {
+    let src = step("Datetime t = Datetime\n  .now(); // revenant-lint-disable-line: log only");
+    let report = run(&[("S.cls", &src)]);
+    assert!(report.defects.is_empty(), "{:?}", report.defects);
+    assert_eq!(report.suppressed, 1);
+}
+
+#[test]
+fn a_suppression_marker_must_end_at_a_word_boundary() {
+    let src = step(
+        "Datetime a = Datetime.now(); // revenant-lint-disable-line-please-no\n\
+         Datetime b = Datetime.now(); // revenant-lint-disable-lines",
+    );
+    assert_eq!(
+        hazards(&run(&[("S.cls", &src)])),
+        vec![(3, Rule::ClockRead), (4, Rule::ClockRead)]
+    );
+}
+
+#[test]
+fn only_produce_is_safe_in_a_producer() {
+    // `new P()` runs on each replay. Only produce() runs behind once().
+    let src = "public class S implements WorkflowStep {\n\
+               public StepResult execute(StepContext ctx) { return null; }\n\
+               class P implements CaptureProducer {\n\
+               Id jobId = System.enqueueJob(new Q());\n\
+               P() { Datetime.now(); }\n\
+               public Object produce() { return Math.random(); }\n\
+               }\n\
+               }";
+    let report = run(&[("S.cls", src)]);
+    assert_eq!(
+        hazards(&report),
+        vec![(4, Rule::AsyncEnqueue), (5, Rule::ClockRead)]
+    );
+    assert!(report.defects.iter().all(|d| d.class_name == "S"));
+}

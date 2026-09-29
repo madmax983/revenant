@@ -1,7 +1,7 @@
 //! Deploy-time determinism lint for Revenant workflow steps (issue #135).
 //!
 //! Finds replay-unsafe API calls in the Apex source of step classes. A call in
-//! the body of a `CaptureProducer` class is safe: `once()` replays its value.
+//! `produce()` of a `CaptureProducer` is safe: `once()` replays its value.
 //!
 //! Scope (v1): the bodies of step classes only. The lint does not follow
 //! calls into helper classes. It is a token heuristic, not a type checker.
@@ -59,8 +59,9 @@ pub fn lint(files: &[SourceFile]) -> Report {
     }
 }
 
-/// A finding and the index of its file in [`Project::files`].
-type Finding = (usize, Defect);
+/// A finding: the index of its file in [`Project::files`], the defect, and
+/// the last line of its source text.
+type Finding = (usize, Defect, u32);
 
 /// Lexes each file. Drops test files. An unreadable file is a defect.
 fn parse_files(files: &[SourceFile]) -> (Vec<ParsedFile<'_>>, Vec<Defect>) {
@@ -97,7 +98,11 @@ fn find_steps(project: &Project<'_>) -> (BTreeSet<DeclId>, Vec<Finding>) {
             }
             let found = project.resolve_step_name(&name);
             if found.is_empty() {
-                findings.push((def.file, not_found(project, def, &name, lit.pos)));
+                findings.push((
+                    def.file,
+                    not_found(project, def, &name, lit.pos),
+                    lit.end.line,
+                ));
             }
             steps.extend(found);
         }
@@ -105,16 +110,27 @@ fn find_steps(project: &Project<'_>) -> (BTreeSet<DeclId>, Vec<Finding>) {
     (steps, findings)
 }
 
-/// Runs the rules on each code token that a step class owns.
+/// Runs the rules on each code token that a step class owns. Only the body of
+/// `produce()` in a `CaptureProducer` is safe: `once()` runs it one time. The
+/// constructor and the field initializers of a producer run on each replay.
 fn scan_steps(project: &Project<'_>, steps: &BTreeSet<DeclId>) -> Vec<Finding> {
+    let exempt: Vec<_> = project
+        .ids()
+        .filter(|&id| project.is_producer(id))
+        .filter_map(|id| project.method_body(id, "produce").map(|r| (id.file, r)))
+        .collect();
     let mut findings = Vec::new();
     for (file, parsed) in project.files.iter().enumerate() {
         for (k, owner) in parsed.owner.iter().enumerate() {
+            if exempt.iter().any(|(f, r)| *f == file && r.contains(&k)) {
+                continue;
+            }
             let step = owner.and_then(|d| attributed_step(project, steps, file, d));
             if let Some(step) = step
                 && let Some(h) = hazard_at(&parsed.code, k)
             {
-                findings.push((file, hazard(project, step, h)));
+                let end_line = h.end_line;
+                findings.push((file, hazard(project, step, h), end_line));
             }
         }
     }
@@ -134,8 +150,8 @@ fn apply_suppressions(
         .map(|f| suppressed_lines(&f.tokens))
         .collect();
     let mut suppressed = 0;
-    for (file, defect) in findings {
-        if lines[file].contains(&defect.position.line) {
+    for (file, defect, end_line) in findings {
+        if (defect.position.line..=end_line).any(|l| lines[file].contains(&l)) {
             suppressed += 1;
         } else {
             defects.push(defect);
@@ -159,7 +175,7 @@ pub fn lint_json(request: &str) -> String {
 }
 
 /// The step that owns a token in declaration `decl`: the innermost enclosing
-/// step. None when a producer comes first, or no step encloses it.
+/// step. None when no step encloses it.
 fn attributed_step(
     project: &Project<'_>,
     steps: &BTreeSet<DeclId>,
@@ -169,9 +185,6 @@ fn attributed_step(
     let mut cur = Some(decl);
     while let Some(d) = cur {
         let id = DeclId { file, decl: d };
-        if project.is_producer(id) {
-            return None;
-        }
         if steps.contains(&id) {
             return Some(id);
         }
@@ -187,6 +200,7 @@ fn hazard(project: &Project<'_>, step: DeclId, h: Hazard) -> Defect {
         Rule::RandomValue => "gives a new value",
         Rule::UserContext => "can give a different user",
         Rule::AsyncEnqueue => "starts the job again",
+        Rule::EventPublish => "publishes the event again",
         Rule::SoqlRead => "can read changed rows",
     };
     Defect {
@@ -239,18 +253,29 @@ fn unreadable(path: &str, e: LexError) -> Defect {
     }
 }
 
-/// Lines that a suppression comment covers.
+/// Lines that a suppression comment covers. `disable-line` covers each line
+/// of the comment. `disable-next-line` covers the line after its end.
 fn suppressed_lines(tokens: &[Token<'_>]) -> HashSet<u32> {
     let mut lines = HashSet::new();
     for t in tokens.iter().filter(|t| t.is_comment()) {
-        if t.text.contains(DISABLE_NEXT_LINE) {
-            let newlines = u32::try_from(t.text.matches('\n').count()).unwrap_or(u32::MAX);
-            lines.insert(t.pos.line.saturating_add(newlines).saturating_add(1));
-        } else if t.text.contains(DISABLE_LINE) {
-            lines.insert(t.pos.line);
+        if has_marker(t.text, DISABLE_NEXT_LINE) {
+            lines.insert(t.end.line.saturating_add(1));
+        } else if has_marker(t.text, DISABLE_LINE) {
+            lines.extend(t.pos.line..=t.end.line);
         }
     }
     lines
+}
+
+/// True when `text` holds `marker` as a whole word: no letter, digit, `-` or
+/// `_` follows it.
+fn has_marker(text: &str, marker: &str) -> bool {
+    text.match_indices(marker).any(|(i, _)| {
+        !text[i + marker.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    })
 }
 
 /// The value of a string literal token.

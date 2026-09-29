@@ -94,6 +94,10 @@ test("with no flag, the package directories of the project are scanned", async (
   assert.match(text, /missing-submodule/);
 });
 
-test("with no flag and no project, the command fails", async () => {
-  await assert.rejects(run([], "/"), /sfdx-project\.json/);
+test("errors that are not defects exit 2", async () => {
+  const exit2 = (pattern) => (e) => e.exitCode === 2 && pattern.test(e.message);
+  await assert.rejects(run([], "/"), exit2(/sfdx-project\.json/));
+  await assert.rejects(run(["-d", "no-such-dir"]), exit2(/not found/));
+  await assert.rejects(run(["-d", join(fixtures, "empty")]), exit2(/No \.cls files/));
+  await assert.rejects(run([], join(fixtures, "missing-project")), exit2(/No \.cls files/));
 });

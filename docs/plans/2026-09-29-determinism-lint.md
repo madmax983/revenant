@@ -54,17 +54,17 @@ Find replay-unsafe calls in step classes before deploy. Point the author to `onc
 | Non-ASCII text breaks the lexer or the columns. | Lex by `char`. Property test: the lexer is total on any string. |
 | The output order changes between runs. CI diffs are noisy. | Sort by file, line, column, rule. Property test: file order does not change the report. |
 | The `.wasm` file is missing. The plugin crashes. | Clear error with the build command. |
-| The wasm memory API leaks or reads the wrong bytes. | One `alloc`/`dealloc` pair. Round-trip test from Node. |
+| The wasm memory API leaks or reads the wrong bytes. | One `rl_alloc`/`rl_free` pair. Round-trip test from Node. |
 | The gate misses a HIGH defect because of `--fail-on`. | Default is `high`. Test exit codes for each level. |
 
 ## Six Thinking Hats
 
-- **White (facts):** 41 non-test files in `force-app` and `examples` hold step classes. `@apexdevtools/apex-parser` and Rust 1.97 with `wasm32-unknown-unknown` are available. Verus is not reachable from this container.
+- **White (facts):** `force-app` and `examples` hold about 100 step classes. `@apexdevtools/apex-parser` and Rust 1.97 with `wasm32-unknown-unknown` are available. Verus is not reachable from this container.
 - **Red (feelings):** Authors fear a noisy gate. Keep HIGH rules few and exact. SOQL is MEDIUM.
 - **Black (risks):** A heuristic has false negatives: aliases, helper classes, dynamic Apex. The lint does not replace strict mode (#102). The docs say this.
 - **Yellow (benefits):** A production divergence becomes a CI error. No schema change. No `global` change. No org needed. Sub-second on a full repo.
-- **Green (ideas):** Later: SARIF for code scanning, helper-class analysis, an org mode that reads `ApexClass.Body` through the Tooling API.
-- **Blue (process):** Plan and ADR. Red: failing Rust and Node tests. Green: least code. Refactor with tests on. Review with agents. Fix findings.
+- **Green (ideas):** Later: SARIF output for GitHub code scan alerts, helper-class analysis, an org mode that reads `ApexClass.Body` through the Tooling API.
+- **Blue (process):** Plan and ADR. Red: Rust and Node tests that fail. Green: least code. Refactor with tests on. Review with agents. Fix findings.
 
 ## Design
 
@@ -107,3 +107,20 @@ flowchart LR
 5. Refactor. `cargo fmt`, `cargo clippy -- -W clippy::pedantic -W clippy::nursery`.
 6. Docs: `docs/determinism-lint.md`, ADR 0009, README, CLAUDE.md, CI workflow.
 7. Review with agents. Fix findings.
+
+## Review Round 1 (four agents)
+
+| Finding | Change |
+|---------|--------|
+| A class that is a step and a producer was not scanned. | The step wins. Only `produce()` is safe. |
+| A producer constructor ran on each replay but was not scanned (Codex). | Only `produce()` is safe in each producer. |
+| A nested supertype resolved by simple name in any file. | Resolve as Apex does: enclosing classes, then top level. |
+| `FetchLatest` was a test file. `@IsTest` classes were scanned. | `@IsTest`, or a `Test` or `_test` suffix. |
+| `Database.getCursor*()`, `Search.find()`, `EventBus.publish()` were not found. | New rule entries. New rule `EVENT_PUBLISH`. |
+| `vals[find]` and a map named `userInfo` were findings. | `FIND` needs search text. `UserInfo` methods are a list. |
+| A lone `\r` and a BOM moved lines and columns. | The lexer ends a line at `\r`. It skips a BOM. |
+| Suppression missed multi-line calls and matched `-disable-line-x`. | Cover the lines of the call. Match a whole marker. |
+| An empty scan passed the gate. Errors used exit code 1. | No `.cls` file: exit code 2. Each error that is not a defect: exit code 2. |
+| Overlapping paths gave two reports for one file. | Read each real path one time. |
+| The JS bridge read the i64 as signed. A trap left a broken instance. | `BigInt.asUintN`. A new instance after a trap. |
+| Weak property tests. | Apex-like input, position checks, CRLF, and shuffles with cross-file types. |

@@ -2,6 +2,7 @@
 //! and definition sets.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use crate::lexer::{Token, TokenKind};
 use crate::scope::{TypeDecl, TypeKind, declarations};
@@ -61,13 +62,20 @@ impl<'a> ParsedFile<'a> {
         }
     }
 
-    /// True when a top-level class name ends with `test` (any case).
+    /// True for a test file: a top-level class with `@IsTest`, or a name that
+    /// ends with `Test`, `_test` (any case), or is `test`. Thus `FetchLatest`
+    /// and `Contest` are not test classes.
     #[must_use]
     pub fn is_test_file(&self) -> bool {
-        self.decls
-            .iter()
-            .filter(|d| d.parent.is_none())
-            .any(|d| d.name.to_ascii_lowercase().ends_with("test"))
+        self.decls.iter().filter(|d| d.parent.is_none()).any(|d| {
+            let lower = d.name.to_ascii_lowercase();
+            d.annotations
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case("istest"))
+                || d.name.ends_with("Test")
+                || lower.ends_with("_test")
+                || lower == "test"
+        })
     }
 }
 
@@ -76,7 +84,6 @@ pub struct Project<'a> {
     /// Files that are not test files.
     pub files: Vec<ParsedFile<'a>>,
     by_qualified: HashMap<String, Vec<DeclId>>,
-    by_simple: HashMap<String, Vec<DeclId>>,
     /// Classes and interfaces that are steps, through any supertype path.
     steps: HashSet<DeclId>,
     /// Types that are capture producers.
@@ -90,7 +97,6 @@ impl<'a> Project<'a> {
     #[must_use]
     pub fn new(files: Vec<ParsedFile<'a>>) -> Self {
         let mut by_qualified: HashMap<String, Vec<DeclId>> = HashMap::new();
-        let mut by_simple: HashMap<String, Vec<DeclId>> = HashMap::new();
         for (file, parsed) in files.iter().enumerate() {
             for (decl, d) in parsed.decls.iter().enumerate() {
                 let id = DeclId { file, decl };
@@ -98,16 +104,11 @@ impl<'a> Project<'a> {
                     .entry(d.qualified.to_ascii_lowercase())
                     .or_default()
                     .push(id);
-                by_simple
-                    .entry(d.name.to_ascii_lowercase())
-                    .or_default()
-                    .push(id);
             }
         }
         let mut project = Self {
             files,
             by_qualified,
-            by_simple,
             steps: HashSet::new(),
             producers: HashSet::new(),
             definitions: HashSet::new(),
@@ -175,33 +176,42 @@ impl<'a> Project<'a> {
     /// String literals in the `getSteps()` method of a definition class.
     #[must_use]
     pub fn get_steps_literals(&self, id: DeclId) -> Vec<&Token<'a>> {
+        let code = &self.files[id.file].code;
+        self.method_body(id, "getsteps")
+            .map_or_else(Vec::new, |body| {
+                code[body]
+                    .iter()
+                    .filter(|t| t.kind == TokenKind::Str)
+                    .collect()
+            })
+    }
+
+    /// Code-token indices in the body of the no-argument method `name` that
+    /// declaration `id` itself declares. Names match without case.
+    #[must_use]
+    pub fn method_body(&self, id: DeclId, name: &str) -> Option<Range<usize>> {
         let file = &self.files[id.file];
         let code = &file.code;
         let body = self.decl(id).body.clone();
-        let Some(start) = body.clone().find(|&k| {
+        let open = body.clone().find(|&k| {
             file.owner[k] == Some(id.decl)
-                && code[k].is_ident("getsteps")
+                && code[k].is_ident(name)
                 && code.get(k + 1).is_some_and(|t| t.is_punct('('))
                 && code.get(k + 2).is_some_and(|t| t.is_punct(')'))
                 && code.get(k + 3).is_some_and(|t| t.is_punct('{'))
-        }) else {
-            return Vec::new();
-        };
+        })? + 3;
         let mut depth = 0usize;
-        let mut literals = Vec::new();
-        for tok in &code[start + 3..body.end] {
+        for (k, tok) in code.iter().enumerate().take(body.end).skip(open) {
             if tok.is_punct('{') {
                 depth += 1;
             } else if tok.is_punct('}') {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    break;
+                    return Some(open + 1..k);
                 }
-            } else if tok.kind == TokenKind::Str {
-                literals.push(tok);
             }
         }
-        literals
+        Some(open + 1..body.end)
     }
 
     /// Types that reach a root name through `extends` or `implements`, in the
@@ -216,7 +226,7 @@ impl<'a> Project<'a> {
                 }
                 let reaches = self.decl(id).supertypes.iter().any(|s| {
                     roots.contains(&last_segment(s).as_str())
-                        || self.resolve_type(s).iter().any(|t| set.contains(t))
+                        || self.resolve_type(id, s).iter().any(|t| set.contains(t))
                 });
                 if reaches {
                     set.insert(id);
@@ -229,17 +239,33 @@ impl<'a> Project<'a> {
         }
     }
 
-    /// Resolves a supertype name: the qualified name, then the name without
-    /// its namespace, then (for a simple name) any type with that name.
-    fn resolve_type(&self, name: &str) -> Vec<DeclId> {
+    /// Resolves a supertype name of `from` as Apex does: a nested type of each
+    /// enclosing class (innermost first), then a top-level type, then the name
+    /// without its namespace.
+    fn resolve_type(&self, from: DeclId, name: &str) -> Vec<DeclId> {
         let lower = name.to_ascii_lowercase();
+        let mut scope = self.decl(from).parent;
+        while let Some(outer) = scope {
+            let outer_id = DeclId {
+                file: from.file,
+                decl: outer,
+            };
+            let nested = format!(
+                "{}.{lower}",
+                self.decl(outer_id).qualified.to_ascii_lowercase()
+            );
+            if let Some(ids) = self.by_qualified.get(&nested) {
+                return ids.clone();
+            }
+            scope = self.decl(outer_id).parent;
+        }
         if let Some(ids) = self.by_qualified.get(&lower) {
             return ids.clone();
         }
-        match lower.split_once('.') {
-            Some((_, rest)) => self.by_qualified.get(rest).cloned().unwrap_or_default(),
-            None => self.by_simple.get(&lower).cloned().unwrap_or_default(),
-        }
+        lower
+            .split_once('.')
+            .and_then(|(_, rest)| self.by_qualified.get(rest).cloned())
+            .unwrap_or_default()
     }
 }
 

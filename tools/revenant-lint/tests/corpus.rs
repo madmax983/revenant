@@ -2,7 +2,6 @@
 //! comment marks one finding on its line. The lint must report each marked
 //! finding and no other finding: zero false negatives, zero false positives.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -36,17 +35,19 @@ fn corpus_findings_match_the_expect_markers() {
     let files = load_corpus();
     assert!(files.len() >= 10, "corpus is too small");
 
-    let mut expected = BTreeSet::new();
+    // Sorted lists, not sets: a duplicate finding must show as a difference.
+    let mut expected = Vec::new();
     for f in &files {
         for (i, line) in f.source.lines().enumerate() {
             if let Some((_, tag)) = line.split_once("// expect: ") {
-                expected.insert((f.path.clone(), i + 1, tag.trim().to_string()));
+                expected.push((f.path.clone(), i + 1, tag.trim().to_string()));
             }
         }
     }
+    expected.sort();
 
     let report = lint(&files);
-    let actual: BTreeSet<_> = report
+    let mut actual: Vec<_> = report
         .defects
         .iter()
         .map(|d| {
@@ -54,21 +55,39 @@ fn corpus_findings_match_the_expect_markers() {
             (d.file.clone(), d.position.line as usize, tag)
         })
         .collect();
-
-    let missed: Vec<_> = expected.difference(&actual).collect();
-    let extra: Vec<_> = actual.difference(&expected).collect();
-    assert!(missed.is_empty(), "false negatives: {missed:#?}");
-    assert!(extra.is_empty(), "false positives: {extra:#?}");
+    actual.sort();
+    assert_eq!(
+        actual, expected,
+        "left: actual findings, right: expect markers"
+    );
     assert_eq!(report.suppressed, 2);
 }
 
 #[test]
-fn corpus_lints_fast() {
-    // Issue #135: under 2 s for a 50-step definition. Lint the corpus 10 times.
-    let files = load_corpus();
-    let start = std::time::Instant::now();
-    for _ in 0..10 {
-        let _ = lint(&files);
+fn a_50_step_definition_lints_in_under_2_seconds() {
+    // Issue #135 success metric. Each step has 200 lines and one hazard.
+    let steps: Vec<String> = (0..50).map(|i| format!("'Step{i}'")).collect();
+    let mut files = vec![SourceFile {
+        path: "Wf.cls".into(),
+        source: format!(
+            "public class Wf implements WorkflowDefinition {{\n\
+             public List<String> getSteps() {{ return new List<String>{{ {} }}; }}\n}}",
+            steps.join(", ")
+        ),
+    }];
+    for i in 0..50 {
+        files.push(SourceFile {
+            path: format!("Step{i}.cls"),
+            source: format!(
+                "public class Step{i} extends PackagedBase {{\n\
+                 public StepResult execute(StepContext ctx) {{\n{}Datetime.now();\nreturn null;\n}}\n}}",
+                "Integer x = 1; // filler\n".repeat(200)
+            ),
+        });
     }
+    let start = std::time::Instant::now();
+    let report = lint(&files);
     assert!(start.elapsed().as_secs_f64() < 2.0);
+    assert_eq!(report.step_classes_scanned, 50);
+    assert_eq!(report.defects.len(), 50);
 }

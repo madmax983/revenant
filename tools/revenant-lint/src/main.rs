@@ -1,8 +1,11 @@
 //! `revenant-lint`: native CLI for the determinism lint.
 //!
-//! Exit codes: 0 pass, 1 a defect at or above `--fail-on`, 2 usage or I/O error.
+//! Exit codes: 0 pass, 1 a defect at or above `--fail-on`, 2 usage error,
+//! I/O error, or no `.cls` files.
 
+use std::collections::HashSet;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -20,7 +23,7 @@ Options:
   -h, --help         Print this help
   -V, --version      Print the version
 
-Exit codes: 0 pass, 1 gate failed, 2 usage or I/O error.";
+Exit codes: 0 pass, 1 gate failed, 2 usage error, I/O error, or no .cls files.";
 
 struct Args {
     fail_on: Option<Severity>,
@@ -56,15 +59,25 @@ fn run() -> Result<ExitCode> {
         }
         Command::Run(args) => args,
     };
-    let mut files = Vec::new();
+    let mut walk = Walk::default();
     for path in &args.paths {
-        collect(path, &mut files)?;
+        walk.collect(path)?;
     }
-    let report = lint(&files);
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+    if walk.files.is_empty() {
+        // A gate that scans nothing must not pass.
+        bail!("No .cls files found in the given paths.");
+    }
+    let report = lint(&walk.files);
+    let text = if args.json {
+        serde_json::to_string_pretty(&report)? + "\n"
     } else {
-        print!("{}", human(&report));
+        human(&report)
+    };
+    // A closed pipe (`| head`) is not an error. The exit code still applies.
+    if let Err(e) = std::io::stdout().lock().write_all(text.as_bytes())
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(e.into());
     }
     let failed = args.fail_on.is_some_and(|level| report.has_at_least(level));
     Ok(if failed {
@@ -89,6 +102,9 @@ fn parse_args(mut input: impl Iterator<Item = String>) -> Result<Command> {
                 let level = input.next().context("--fail-on needs a value")?;
                 args.fail_on = parse_level(&level)?;
             }
+            s if s.starts_with("--fail-on=") => {
+                args.fail_on = parse_level(&s["--fail-on=".len()..])?;
+            }
             s if s.starts_with('-') => bail!("unknown option {s}\n\n{USAGE}"),
             _ => args.paths.push(PathBuf::from(arg)),
         }
@@ -109,43 +125,57 @@ fn parse_level(level: &str) -> Result<Option<Severity>> {
     })
 }
 
-/// Adds `path` (a `.cls` file) or the `.cls` files below `path` (a directory).
-/// Skips hidden directories, `node_modules`, and symbolic links.
-fn collect(path: &Path, out: &mut Vec<SourceFile>) -> Result<()> {
-    let meta = fs::metadata(path).with_context(|| format!("cannot read {}", path.display()))?;
-    if meta.is_file() {
-        let source =
-            fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
-        out.push(SourceFile {
-            path: path.display().to_string(),
-            source,
-        });
-        return Ok(());
-    }
-    let mut entries: Vec<(PathBuf, fs::FileType)> = fs::read_dir(path)
-        .with_context(|| format!("cannot read {}", path.display()))?
-        .map(|e| e.and_then(|e| Ok((e.path(), e.file_type()?))))
-        .collect::<Result<_, _>>()?;
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    // file_type() does not follow links, so a link loop cannot recurse.
-    for (entry, kind) in entries {
-        let name = entry
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if kind.is_dir() {
-            if !name.starts_with('.') && name != "node_modules" {
-                collect(&entry, out)?;
+/// The files to lint. Each file is read one time, also when two paths reach it.
+#[derive(Default)]
+struct Walk {
+    files: Vec<SourceFile>,
+    seen: HashSet<PathBuf>,
+}
+
+impl Walk {
+    /// Adds `path` (a file) or the `.cls` files below `path` (a directory).
+    /// Skips hidden directories, `node_modules`, and symbolic links. Bytes
+    /// that are not UTF-8 become U+FFFD, as in the `sf` plugin.
+    fn collect(&mut self, path: &Path) -> Result<()> {
+        let meta = fs::metadata(path).with_context(|| format!("cannot read {}", path.display()))?;
+        if meta.is_file() {
+            let real = fs::canonicalize(path)
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            if self.seen.insert(real) {
+                let bytes =
+                    fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+                self.files.push(SourceFile {
+                    path: path.display().to_string(),
+                    source: String::from_utf8_lossy(&bytes).into_owned(),
+                });
             }
-        } else if kind.is_file()
-            && Path::new(&name)
-                .extension()
-                .is_some_and(|x| x.eq_ignore_ascii_case("cls"))
-        {
-            collect(&entry, out)?;
+            return Ok(());
         }
+        let mut entries: Vec<(PathBuf, fs::FileType)> = fs::read_dir(path)
+            .with_context(|| format!("cannot read {}", path.display()))?
+            .map(|e| e.and_then(|e| Ok((e.path(), e.file_type()?))))
+            .collect::<Result<_, _>>()?;
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        // file_type() does not follow links, so a link loop cannot recurse.
+        for (entry, kind) in entries {
+            let name = entry
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if kind.is_dir() {
+                if !name.starts_with('.') && name != "node_modules" {
+                    self.collect(&entry)?;
+                }
+            } else if kind.is_file()
+                && Path::new(&name)
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("cls"))
+            {
+                self.collect(&entry)?;
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 fn label(value: &impl serde::Serialize) -> String {

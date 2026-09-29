@@ -6,21 +6,16 @@ import { loadEngine } from "../../../engine.js";
 import { formatReport, hasAtLeast } from "../../../format.js";
 import { collectSources, projectSourceDirs } from "../../../sources.js";
 
-/** A usage error. Exit code 2, as in the native CLI. */
-function usageError(message) {
-  return Object.assign(new Error(message), { exitCode: 2 });
-}
-
 export default class LintDeterminism extends SfCommand {
   static summary = "Find replay-unsafe calls in Revenant step classes before deploy.";
 
   static description =
     "Scans the Apex source of each WorkflowStep and CompensatableStep class. " +
     "Reports calls that give a different result when the engine runs the step again: " +
-    "clock reads, random values, UserInfo, async job starts (HIGH), and SOQL or SOSL (MEDIUM). " +
-    "A call in a CaptureProducer class is safe, because ctx.captures().once() replays its value. " +
-    "Comments and string literals are not scanned. Files of classes whose name ends with Test are excluded. " +
-    "The command sets exit code 1 when a defect is at or above --fail-on.";
+    "clock reads, random values, UserInfo, async job starts, EventBus.publish (HIGH), and SOQL or SOSL (MEDIUM). " +
+    "A call in produce() of a CaptureProducer is safe, because ctx.captures().once() replays its value. " +
+    "The command does not scan comments, string literals, or test classes (@IsTest, or a name that ends with Test). " +
+    "Exit code 1: a defect at or above --fail-on. Exit code 2: no .cls files, or another error.";
 
   static examples = [
     "<%= config.bin %> <%= command.id %>",
@@ -43,30 +38,45 @@ export default class LintDeterminism extends SfCommand {
 
   async run() {
     const { flags } = await this.parse(LintDeterminism);
-    const cwd = process.cwd();
-    let paths = flags["source-dir"];
-    if (paths) {
-      for (const p of paths) {
-        if (!existsSync(resolve(cwd, p))) throw usageError(`Source path not found: ${p}`);
-      }
-    } else {
-      const project = projectSourceDirs(cwd);
-      if (!project) {
-        throw usageError("No sfdx-project.json found. Run in a Salesforce DX project or use --source-dir.");
-      }
-      for (const m of project.missing) {
-        this.warn(`Package directory not found, not scanned: ${relative(cwd, m)}`);
-      }
-      paths = project.dirs;
+    let report;
+    try {
+      report = await this.scan(flags["source-dir"]);
+    } catch (e) {
+      // Exit code 1 is only for defects. Each other error is exit code 2.
+      throw Object.assign(e instanceof Error ? e : new Error(String(e)), { exitCode: 2 });
     }
-
-    const engine = await loadEngine();
-    const report = engine.lint(collectSources(paths, cwd));
     this.log(formatReport(report));
     const level = flags["fail-on"].toUpperCase();
     if (level !== "NEVER" && hasAtLeast(report, level)) {
       process.exitCode = 1;
     }
     return report;
+  }
+
+  /** Finds the sources and lints them. Throws when there is nothing to scan. */
+  async scan(sourceDirs) {
+    const cwd = process.cwd();
+    let paths = sourceDirs;
+    if (paths) {
+      for (const p of paths) {
+        if (!existsSync(resolve(cwd, p))) throw new Error(`Source path not found: ${p}`);
+      }
+    } else {
+      const project = projectSourceDirs(cwd);
+      if (!project) {
+        throw new Error("No sfdx-project.json found. Run in a Salesforce DX project or use --source-dir.");
+      }
+      for (const m of project.missing) {
+        this.warn(`Package directory not found, not scanned: ${relative(cwd, m)}`);
+      }
+      paths = project.dirs;
+    }
+    const files = collectSources(paths, cwd);
+    if (files.length === 0) {
+      // A gate that scans nothing must not pass.
+      throw new Error("No .cls files found. Check --source-dir or the packageDirectories in sfdx-project.json.");
+    }
+    const engine = await loadEngine();
+    return engine.lint(files);
   }
 }

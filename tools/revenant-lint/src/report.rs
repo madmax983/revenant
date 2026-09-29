@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Report format version. Increase it only for a breaking JSON change.
+/// Report format version. Increase it only when a JSON change is not compatible.
 pub const REPORT_VERSION: u32 = 1;
 
 /// How serious a defect is. The order is `Low < Medium < High`.
@@ -39,13 +39,16 @@ pub enum Rule {
     /// `Math.random()`, `Crypto.getRandom*()`, `Crypto.generateAesKey()`,
     /// `UUID.randomUUID()`.
     RandomValue,
-    /// `UserInfo.*()`.
+    /// Each `UserInfo` method, for example `UserInfo.getUserId()`.
     UserContext,
     /// `System.enqueueJob()`, `Database.executeBatch()`, `System.schedule()`,
     /// `System.scheduleBatch()`.
     AsyncEnqueue,
-    /// Inline SOQL or SOSL, `Database.query*()`, `Database.countQuery()`,
-    /// `Database.getQueryLocator()`, `Search.query()`.
+    /// `EventBus.publish()`.
+    EventPublish,
+    /// Inline SOQL or SOSL, `Database.query*()`, `Database.countQuery*()`,
+    /// `Database.getQueryLocator*()`, `Database.getCursor*()`, `Search.query()`,
+    /// `Search.find()`.
     SoqlRead,
 }
 
@@ -55,9 +58,11 @@ impl Rule {
     pub const fn severity(self) -> Severity {
         match self {
             Self::SoqlRead => Severity::Medium,
-            Self::ClockRead | Self::RandomValue | Self::UserContext | Self::AsyncEnqueue => {
-                Severity::High
-            }
+            Self::ClockRead
+            | Self::RandomValue
+            | Self::UserContext
+            | Self::AsyncEnqueue
+            | Self::EventPublish => Severity::High,
         }
     }
 
@@ -70,6 +75,9 @@ impl Rule {
             }
             Self::AsyncEnqueue => {
                 "Put the call in a CaptureProducer and use ctx.captures().once(key, producer), so a replay does not start the job again."
+            }
+            Self::EventPublish => {
+                "Use ctx.events().emit(event). The engine publishes it effectively-once when the step completes."
             }
             Self::SoqlRead => {
                 "If other processes change the rows, keep the result with ctx.captures().once(key, producer), or send the value as a signal."

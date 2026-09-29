@@ -18,6 +18,8 @@ npm run build            # writes lib/revenant_lint.wasm
 sf plugins link .
 ```
 
+A linked plugin makes `sf` show a "linked ESM module" warning. To stop it, set `OCLIF_DISABLE_LINKED_ESM_WARNING=1`.
+
 Or build the native CLI:
 
 ```bash
@@ -38,27 +40,33 @@ revenant-lint --json --fail-on never force-app
 
 | Flag | Value |
 |------|-------|
-| `-d`, `--source-dir` | File or directory. Use more than one. Default: the package directories. (Native CLI: positional paths.) |
-| `--fail-on` | `high` (default), `medium`, `low`, `never`. |
+| `-d`, `--source-dir` | File or directory. You can use this flag more than one time. Default: the package directories. (Native CLI: positional paths.) |
+| `--fail-on` | `high` (default), `medium`, `low`, `never`. The native CLI also accepts `--fail-on=<level>`. |
 | `--json` | Print the report as JSON. The `sf` envelope `status` is the exit code. |
 
 | Exit code | Meaning |
 |-----------|---------|
 | 0 | No defect at or above `--fail-on`. |
 | 1 | A defect at or above `--fail-on`. |
-| 2 | Usage error or a path that does not exist. |
+| 2 | Usage error, a path that does not exist, a file that the tool cannot read, no `.cls` files to scan, an invalid `sfdx-project.json`, or a lint core that is not built. |
+
+A gate that scans no file fails with exit code 2. Thus a typing error in a path cannot make the gate pass. A file with bytes that are not UTF-8 is scanned. Each bad byte becomes U+FFFD.
 
 ## What the lint scans
 
-- The body of each step class: a class that implements `WorkflowStep` or `CompensatableStep`. A base class or a sub-interface in the scanned source also counts. Namespaced names (`rvn.WorkflowStep`) also count.
-- A class that a `getSteps()` string literal names. Thus a step with a base class in a package is also scanned.
+- The body of each step class: a class that implements `WorkflowStep` or `CompensatableStep`. The lint also finds a step through a base class or a sub-interface in the scanned source, and through a namespaced name (`rvn.WorkflowStep`).
+- A class that a `getSteps()` string literal names. Thus the lint also scans a step whose base class is in a package.
 - Nested classes in a step class, except capture producers.
+
+A supertype name resolves as in Apex: first a nested type of each enclosing class, then a top-level type.
+
+The lint scans all step classes in the given paths as one project. It does not group defects by definition.
 
 The lint does not scan:
 
-- The body of a class that implements `CaptureProducer`. `once()` runs `produce()` only one time.
+- The body of `produce()` in a class that implements `CaptureProducer`. `once()` runs `produce()` only one time. The lint scans the constructor and the field initializers of a producer, because `new Producer()` runs on each replay.
 - Comments and string literals.
-- Files whose top-level class name ends with `Test` (any case).
+- Test files: the top-level class has `@IsTest`, or its name ends with `Test`, or it ends with `_test` (any case). A name such as `FetchLatest` or `Contest` is not a test name.
 - Classes that are not steps, and helper classes that a step calls.
 
 ## Rules
@@ -67,11 +75,12 @@ The lint does not scan:
 |------|----------|-------|
 | `CLOCK_READ` | HIGH | `Datetime.now()`, `System.now()`, `System.today()`, `Date.today()`, `System.currentTimeMillis()` |
 | `RANDOM_VALUE` | HIGH | `Math.random()`, `Crypto.getRandom*()`, `Crypto.generateAesKey()`, `UUID.randomUUID()` |
-| `USER_CONTEXT` | HIGH | `UserInfo.*()` |
+| `USER_CONTEXT` | HIGH | Each `UserInfo` method, for example `UserInfo.getUserId()` |
 | `ASYNC_ENQUEUE` | HIGH | `System.enqueueJob()`, `System.schedule()`, `System.scheduleBatch()`, `Database.executeBatch()` |
-| `SOQL_READ` | MEDIUM | `[SELECT ...]`, `[FIND ...]`, `Database.query*()`, `Database.countQuery*()`, `Database.getQueryLocator*()`, `Search.query()` |
+| `EVENT_PUBLISH` | HIGH | `EventBus.publish()`. Use `ctx.events().emit(event)`. |
+| `SOQL_READ` | MEDIUM | `[SELECT ...]`, `[FIND ...]`, `Database.query*()`, `Database.countQuery*()`, `Database.getQueryLocator*()`, `Database.getCursor*()`, `Search.query()`, `Search.find()` |
 
-Names match without case. A `System.` prefix also matches (`System.Math.random()`). A member path does not match (`this.userInfo.getName()`).
+The lint ignores the case of names. A `System.` prefix also matches (`System.Math.random()`). A member path does not match (`this.userInfo.getName()`). A local map named `userInfo` does not match, because `get()` is not a `UserInfo` method.
 
 ## Defect codes
 
@@ -81,7 +90,7 @@ Names match without case. A `System.` prefix also matches (`System.Math.random()
 | `STEP_SOURCE_NOT_FOUND` | LOW | `getSteps()` names a class that is not in the scan. The lint did not scan it. |
 | `SOURCE_UNREADABLE` | HIGH | A string literal or a block comment has no end. The lint did not scan the file. |
 
-Codes and rule names are stable. Each defect has `code`, `rule` (for `NON_DETERMINISTIC_SOURCE`), `severity`, `className`, `file`, `line`, `column`, `api`, `message` and `remedy`. The report has `version`, `filesScanned`, `stepClassesScanned`, `suppressed` and `defects`, sorted by file and position.
+Codes and rule names are stable. Each defect has `code`, `rule` (for `NON_DETERMINISTIC_SOURCE`), `severity`, `className`, `file`, `line`, `column`, `api`, `message` and `remedy`. The report has `version`, `filesScanned`, `stepClassesScanned`, `suppressed` and `defects`. The lint sorts the defects by file and position.
 
 ## Correct a defect
 
@@ -115,11 +124,11 @@ System.debug(Datetime.now()); // revenant-lint-disable-line: debug output only
 String trace = String.valueOf(Crypto.getRandomInteger());
 ```
 
-The comment removes each finding on its line. The report counts suppressed findings.
+`revenant-lint-disable-line` removes all findings on each line of its comment. `revenant-lint-disable-next-line` removes all findings on the line after its comment. A call that continues on more lines is removed when a marker covers one of its lines. The marker must end at a word boundary: `revenant-lint-disable-lines` is not a marker. The lint does not check the reason. The report counts the removed findings.
 
 ## CI gate
 
-`.github/workflows/determinism-lint.yml` runs the Rust and plugin tests. To gate your project, add a step before the deploy:
+`.github/workflows/determinism-lint.yml` runs the Rust and plugin tests. To stop a deploy that has a HIGH defect, add this step before the deploy step:
 
 ```bash
 sf revenant lint determinism --fail-on high
@@ -127,7 +136,9 @@ sf revenant lint determinism --fail-on high
 
 ## Limits
 
-- The lint reads tokens and class scopes. It is not a type checker. A call through a variable, a helper class or dynamic Apex is not found.
-- A supertype name resolves only in the scanned source. A step with a packaged base class is found only through `getSteps()`.
-- `getSteps()` names are read from string literals only. A name in a constant is not read.
+- The lint reads tokens and class scopes. It is not a type checker. The lint does not find a call through a variable, a helper class or dynamic Apex.
+- A supertype name resolves only in the scanned source. The lint finds a step with a packaged base class only through `getSteps()`.
+- The lint reads `getSteps()` names only from string literals. It does not read a name in a constant.
+- In a producer, the lint scans each method other than `produce()`. A helper method that only `produce()` calls can give a finding. Examine it, then suppress it with a reason.
+- For a `getSteps()` name `a.B`, the lint first looks for the class `a.B`. If it is not in the scan, the lint reads `a` as a namespace and looks for the class `B`. Thus, when the outer class `a` is not in the scan, the lint can scan an unrelated top-level class `B`.
 - Strict determinism mode (#102) is still necessary. It finds divergence that the lint cannot see.

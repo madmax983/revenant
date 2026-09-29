@@ -31,6 +31,8 @@ pub struct Token<'a> {
     pub text: &'a str,
     /// Start position.
     pub pos: Position,
+    /// Position after the last `char`.
+    pub end: Position,
     /// Byte span in the source.
     pub span: Range<usize>,
 }
@@ -72,6 +74,10 @@ pub enum LexError {
 /// Returns [`LexError`] for an open string literal or block comment.
 pub fn lex(src: &str) -> Result<Vec<Token<'_>>, LexError> {
     let mut cur = Cursor::new(src);
+    // A byte order mark is not text. It does not move the column.
+    if src.starts_with('\u{feff}') {
+        cur.offset = '\u{feff}'.len_utf8();
+    }
     let mut tokens = Vec::new();
     while let Some(c) = cur.peek() {
         if c.is_whitespace() {
@@ -82,7 +88,7 @@ pub fn lex(src: &str) -> Result<Vec<Token<'_>>, LexError> {
         let pos = cur.pos();
         let kind = match c {
             '/' if cur.peek_second() == Some('/') => {
-                cur.bump_while(|c| c != '\n');
+                cur.bump_while(|c| c != '\n' && c != '\r');
                 TokenKind::LineComment
             }
             '/' if cur.peek_second() == Some('*') => {
@@ -117,6 +123,7 @@ pub fn lex(src: &str) -> Result<Vec<Token<'_>>, LexError> {
             kind,
             text: &src[start..cur.offset],
             pos,
+            end: cur.pos(),
             span: start..cur.offset,
         });
     }
@@ -167,7 +174,8 @@ impl<'a> Cursor<'a> {
     fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
         self.offset += c.len_utf8();
-        if c == '\n' {
+        // `\n`, `\r\n` and a lone `\r` each end a line.
+        if c == '\n' || (c == '\r' && self.peek() != Some('\n')) {
             self.line = self.line.saturating_add(1);
             self.column = 1;
         } else {
