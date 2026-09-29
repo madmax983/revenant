@@ -29,6 +29,11 @@ public inherited sharing class WorkflowOutcomePrepare {
     restoreBlankCurrentStep(outcome, freshInstance);
     assertInstanceRunnable(freshInstance);
     outcome.instance = freshInstance;
+    // Issue #138: a batch wait sets the job Id. Each other outcome clears it,
+    // so the watchdog never wakes a later wait for an old job.
+    freshInstance.Awaited_Batch_Job_Id__c = outcome.result
+      ?.directive()
+      .awaitedBatchJobId;
     resetTransientRetryCounter(outcome.stepExec);
     outcome.isParallel =
       String.isNotBlank(freshInstance.Current_Step__c) &&

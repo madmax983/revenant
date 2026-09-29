@@ -17,7 +17,12 @@ private class WorkflowBatchJobsTest {
      */
     public Database.QueryLocator start(Database.BatchableContext bc) {
       return Database.getQueryLocator(
-        [SELECT Id FROM Account WHERE Name LIKE 'BatchJobsTest%' WITH SYSTEM_MODE]
+        [
+          SELECT Id
+          FROM Account
+          WHERE Name LIKE 'BatchJobsTest%'
+          WITH SYSTEM_MODE
+        ]
       );
     }
 
@@ -83,7 +88,14 @@ private class WorkflowBatchJobsTest {
     Map<Id, AsyncApexJob> rows = new Map<Id, AsyncApexJob>();
     rows.put(RUNNING_ID, job(RUNNING_ID, 'Holding', 0));
     WorkflowBatchJobs.stubJobs = rows;
-    for (String status : new List<String>{ 'Holding', 'Queued', 'Preparing', 'Processing' }) {
+    for (
+      String status : new List<String>{
+        'Holding',
+        'Queued',
+        'Preparing',
+        'Processing'
+      }
+    ) {
       rows.put(RUNNING_ID, job(RUNNING_ID, status, 0));
       Assert.isNull(WorkflowBatchJobs.terminalOutcome(RUNNING_ID), status);
     }

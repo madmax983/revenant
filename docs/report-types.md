@@ -23,7 +23,7 @@ The second type uses an outer join on the master-detail relationship `Workflow_S
 
 You can add these columns to a report:
 
-- Instance: the defaults of the first type, `Root_Correlation_Key__c`, `Causation_Id__c`, `Previous_Instance__c`, `Previous_Run_At__c`, `Compensated_By__c`, `Deadline_At__c`, `Sleep_Until__c`, `Held__c`, `Held_At__c`, `Hold_Reason__c`, `Admission_Queue__c`, `Admission_Priority__c`, `Concurrency_Slot_Held__c`, `Global_Admission__c`.
+- Instance: the defaults of the first type, `Root_Correlation_Key__c`, `Causation_Id__c`, `Previous_Instance__c`, `Previous_Run_At__c`, `Compensated_By__c`, `Deadline_At__c`, `Sleep_Until__c`, `Held__c`, `Held_At__c`, `Hold_Reason__c`, `Admission_Queue__c`, `Admission_Priority__c`, `Concurrency_Slot_Held__c`, `Global_Admission__c`, `Awaited_Batch_Job_Id__c`.
 - Step: `Timeout_At__c`, `CPU_Time_Ms__c`, `Heap_Size_Bytes__c`, `SOQL_Query_Count__c`.
 
 ## Fields not in the types

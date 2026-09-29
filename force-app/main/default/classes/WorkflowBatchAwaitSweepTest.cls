@@ -91,7 +91,11 @@ private class WorkflowBatchAwaitSweepTest {
     insert new List<Workflow_Instance__c>{ sleeping, runningInst, cancelled };
 
     Assert.areEqual(0, WorkflowBatchAwaitSweep.reconcile(Datetime.now()));
-    Assert.areEqual(later, load(sleeping.Id).Sleep_Until__c, 'A sleep keeps its time');
+    Assert.areEqual(
+      later,
+      load(sleeping.Id).Sleep_Until__c,
+      'A sleep keeps its time'
+    );
     Assert.areEqual('Running', load(runningInst.Id).Status__c);
     Assert.areEqual('Cancelled', load(cancelled.Id).Status__c);
   }

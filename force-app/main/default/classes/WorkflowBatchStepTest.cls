@@ -331,7 +331,9 @@ private class WorkflowBatchStepTest {
   static void testFailOnErrorFailsTheStep() {
     stubJob(job('Failed', 0, 0, 0, 'start() threw'));
     StepResult r = new WorkflowBatchStep()
-      .execute(resumed(input(new Map<String, Object>{ 'failOnError' => true })));
+      .execute(
+        resumed(input(new Map<String, Object>{ 'failOnError' => true }))
+      );
     Assert.areEqual(StepResult.ActionType.FAIL, r.directive().action);
     Assert.isTrue(r.directive().failureReason.contains('Failed'));
     Assert.isTrue(r.directive().failureReason.contains('start() threw'));
@@ -344,7 +346,9 @@ private class WorkflowBatchStepTest {
   static void testFailOnErrorCompletesOnSuccess() {
     stubJob(job('Completed', 1, 1, 0, null));
     StepResult r = new WorkflowBatchStep()
-      .execute(resumed(input(new Map<String, Object>{ 'failOnError' => true })));
+      .execute(
+        resumed(input(new Map<String, Object>{ 'failOnError' => true }))
+      );
     Assert.areEqual(StepResult.ActionType.COMPLETE, r.directive().action);
   }
 
@@ -402,7 +406,10 @@ private class WorkflowBatchStepTest {
 
   @IsTest
   static void testBindingRejectsBadValues() {
-    Assert.areEqual(200, new WorkflowBatchStep.Binding(STUB_BATCH, null, null).scopeSize);
+    Assert.areEqual(
+      200,
+      new WorkflowBatchStep.Binding(STUB_BATCH, null, null).scopeSize
+    );
     Boolean thrown = false;
     try {
       new WorkflowBatchStep.Binding(' ', 10, null);
@@ -498,7 +505,9 @@ private class WorkflowBatchStepTest {
         [
           SELECT Output__c
           FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :BOUND_STEP
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Step_Name__c = :BOUND_STEP
           ORDER BY CreatedDate DESC, Id DESC
           LIMIT 1
         ]
@@ -510,7 +519,9 @@ private class WorkflowBatchStepTest {
         [
           SELECT COUNT()
           FROM Workflow_Step_Execution__c
-          WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :BOUND_STEP
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Step_Name__c = :BOUND_STEP
         ],
         'The wait uses one step row'
       );

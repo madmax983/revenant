@@ -13,7 +13,10 @@ private class BatchStepWorkflowExampleTest {
 
   private static String workflowInput() {
     return JSON.serialize(
-      new Map<String, Object>{ 'namePrefix' => 'BatchStepEx', 'tag' => 'Q3-Review' }
+      new Map<String, Object>{
+        'namePrefix' => 'BatchStepEx',
+        'tag' => 'Q3-Review'
+      }
     );
   }
 
@@ -26,7 +29,11 @@ private class BatchStepWorkflowExampleTest {
         new Account(Name = 'Other 3')
       };
       Test.startTest();
-      Id instanceId = WorkflowEngine.start(WORKFLOW, 'batch-ex-ok', workflowInput());
+      Id instanceId = WorkflowEngine.start(
+        WORKFLOW,
+        'batch-ex-ok',
+        workflowInput()
+      );
       WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
       WorkflowTestHarness.Result r = harness.drive();
       Assert.isTrue(r.isSuspended, 'The workflow waits for the batch');
@@ -51,7 +58,9 @@ private class BatchStepWorkflowExampleTest {
         [
           SELECT COUNT()
           FROM AsyncApexJob
-          WHERE JobType = 'BatchApex' AND ApexClass.Name = 'ExampleAccountTagBatch'
+          WHERE
+            JobType = 'BatchApex'
+            AND ApexClass.Name = 'ExampleAccountTagBatch'
         ],
         'Zero double-launch'
       );
@@ -64,7 +73,11 @@ private class BatchStepWorkflowExampleTest {
       Id jobId = '707000000000009';
       WorkflowBatchJobs.stubLaunchId = jobId;
       Test.startTest();
-      Id instanceId = WorkflowEngine.start(WORKFLOW, 'batch-ex-fail', workflowInput());
+      Id instanceId = WorkflowEngine.start(
+        WORKFLOW,
+        'batch-ex-fail',
+        workflowInput()
+      );
       WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
       Assert.isTrue(harness.drive().isSuspended);
 
@@ -72,7 +85,9 @@ private class BatchStepWorkflowExampleTest {
         jobId => (AsyncApexJob) JSON.deserialize(
           JSON.serialize(
             new Map<String, Object>{
-              'attributes' => new Map<String, Object>{ 'type' => 'AsyncApexJob' },
+              'attributes' => new Map<String, Object>{
+                'type' => 'AsyncApexJob'
+              },
               'Id' => jobId,
               'Status' => 'Failed',
               'TotalJobItems' => 0,
@@ -89,7 +104,10 @@ private class BatchStepWorkflowExampleTest {
       Test.stopTest();
 
       Assert.areEqual('Compensated', r.status, 'A failed batch is not a stall');
-      Assert.isTrue(r.executedSteps.contains(ROLLBACK_STEP), 'getNextStep routes it');
+      Assert.isTrue(
+        r.executedSteps.contains(ROLLBACK_STEP),
+        'getNextStep routes it'
+      );
       Assert.areEqual(
         new List<String>{ RESERVE + '_Compensate' },
         r.compensatedSteps,
