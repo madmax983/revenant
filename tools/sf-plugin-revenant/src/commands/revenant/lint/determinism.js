@@ -27,7 +27,7 @@ export default class LintDeterminism extends SfCommand {
     "source-dir": Flags.string({
       char: "d",
       multiple: true,
-      summary: "File or directory to scan. Default: the package directories in sfdx-project.json.",
+      summary: ".cls file or directory to scan. Default: the package directories in sfdx-project.json.",
     }),
     "fail-on": Flags.string({
       options: ["high", "medium", "low", "never"],

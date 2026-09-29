@@ -66,3 +66,9 @@ test("an invalid sfdx-project.json is an error", () => {
   writeFileSync(join(root, "sfdx-project.json"), '{"packageDirectories":[{"default":true}]}');
   assert.throws(() => projectSourceDirs(root), /"path" string/);
 });
+
+test("a file path that is not a .cls file is an error", () => {
+  const root = mkdtempSync(join(tmpdir(), "rl-notcls-"));
+  writeFileSync(join(root, "A.txt"), "");
+  assert.throws(() => collectSources([join(root, "A.txt")], root), /not a \.cls file/);
+});

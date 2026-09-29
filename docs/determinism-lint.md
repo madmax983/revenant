@@ -40,7 +40,7 @@ revenant-lint --json --fail-on never force-app
 
 | Flag | Value |
 |------|-------|
-| `-d`, `--source-dir` | File or directory. You can use this flag more than one time. Default: the package directories. (Native CLI: positional paths.) |
+| `-d`, `--source-dir` | `.cls` file or directory. You can use this flag more than one time. Default: the package directories. (Native CLI: positional paths.) |
 | `--fail-on` | `high` (default), `medium`, `low`, `never`. The native CLI also accepts `--fail-on=<level>`. |
 | `--json` | Print the report as JSON. The `sf` envelope `status` is the exit code. |
 
@@ -48,7 +48,7 @@ revenant-lint --json --fail-on never force-app
 |-----------|---------|
 | 0 | No defect at or above `--fail-on`. |
 | 1 | A defect at or above `--fail-on`. |
-| 2 | Usage error, a path that does not exist, a file that the tool cannot read, no `.cls` files to scan, an invalid `sfdx-project.json`, or a lint core that is not built. |
+| 2 | Usage error, a path that does not exist, a file path that is not a `.cls` file, a file that the tool cannot read, no `.cls` files to scan, an invalid `sfdx-project.json`, or a lint core that is not built. |
 
 A gate that scans no file fails with exit code 2. Thus a typing error in a path cannot make the gate pass. A file with bytes that are not UTF-8 is scanned. Each bad byte becomes U+FFFD.
 

@@ -133,12 +133,19 @@ struct Walk {
 }
 
 impl Walk {
-    /// Adds `path` (a file) or the `.cls` files below `path` (a directory).
+    /// Adds `path` (a `.cls` file) or the `.cls` files below `path` (a directory).
     /// Skips hidden directories, `node_modules`, and symbolic links. Bytes
     /// that are not UTF-8 become U+FFFD, as in the `sf` plugin.
     fn collect(&mut self, path: &Path) -> Result<()> {
         let meta = fs::metadata(path).with_context(|| format!("cannot read {}", path.display()))?;
         if meta.is_file() {
+            // A file that is not Apex must not count as a scanned file.
+            if !path
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("cls"))
+            {
+                bail!("{} is not a .cls file", path.display());
+            }
             let real = fs::canonicalize(path)
                 .with_context(|| format!("cannot read {}", path.display()))?;
             if self.seen.insert(real) {

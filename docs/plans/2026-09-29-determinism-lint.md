@@ -115,6 +115,7 @@ flowchart LR
 | A class that is a step and a producer was not scanned. | The step wins. Only `produce()` is safe. |
 | A producer constructor ran on each replay but was not scanned (Codex). | Only `produce()` is safe in each producer. |
 | Suppression missed a marker after the `]` or `)` of a multi-line query or call (Codex). | The finding spans to its closing bracket. |
+| A file path that is not `.cls` counted as scanned, so the empty-scan check passed (Codex). | Such a path is a usage error (exit code 2). |
 | A nested supertype resolved by simple name in any file. | Resolve as Apex does: enclosing classes, then top level. |
 | `FetchLatest` was a test file. `@IsTest` classes were scanned. | `@IsTest`, or a `Test` or `_test` suffix. |
 | `Database.getCursor*()`, `Search.find()`, `EventBus.publish()` were not found. | New rule entries. New rule `EVENT_PUBLISH`. |

@@ -196,3 +196,12 @@ fn a_closed_stdout_is_not_a_crash() {
     assert!(!err.contains("panicked"), "{err}");
     assert_ne!(status.code(), Some(101));
 }
+
+#[test]
+fn a_file_argument_that_is_not_cls_exits_2() {
+    let root = project("notcls", &[("A.txt", ""), ("B.cls", HIGH)]);
+    let txt = root.join("A.txt");
+    let out = run(&[txt.to_str().expect("utf8")]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a .cls file"));
+}

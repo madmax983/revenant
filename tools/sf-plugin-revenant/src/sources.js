@@ -36,7 +36,7 @@ export function projectSourceDirs(start) {
 }
 
 /**
- * Reads each path: a file as is, or the .cls files below a directory. The walk
+ * Reads each path: a .cls file, or the .cls files below a directory. The walk
  * skips hidden directories, node_modules and symbolic links.
  * @param {string[]} paths Files or directories.
  * A file that two paths reach is read one time.
@@ -47,6 +47,8 @@ export function collectSources(paths, base) {
   const out = [];
   const seen = new Set();
   const add = (file) => {
+    // A file that is not Apex must not count as a scanned file.
+    if (!file.toLowerCase().endsWith(".cls")) throw new Error(`${file} is not a .cls file`);
     const real = realpathSync(file);
     if (seen.has(real)) return;
     seen.add(real);
