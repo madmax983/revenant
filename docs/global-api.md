@@ -217,7 +217,9 @@ global class WorkflowEngine.WorkflowException extends Exception
 global class WorkflowEngine.StartRequest
 new WorkflowEngine.StartRequest(String, String, Object)
 WorkflowEngine.StartRequest.causationId: String
+WorkflowEngine.StartRequest.priority: Integer
 WorkflowEngine.StartRequest.withAttributes(Map<String, String>): WorkflowEngine.StartRequest
+WorkflowEngine.StartRequest.withPriority(Integer): WorkflowEngine.StartRequest
 global class WorkflowEngine.StartResult
 WorkflowEngine.StartResult.instanceId: Id { get }
 WorkflowEngine.StartResult.isNew: Boolean { get }
@@ -250,6 +252,7 @@ new WorkflowStartInvocableAction.StartRequest()
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.inputJson: String
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.attributesJson: String
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.causationId: String
+@InvocableVariable WorkflowStartInvocableAction.StartRequest.priority: Integer
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.debounceSeconds: Integer
 @InvocableVariable WorkflowStartInvocableAction.StartRequest.maxWaitSeconds: Integer
 global class WorkflowStartInvocableAction.StartResult

@@ -42,7 +42,8 @@ public inherited sharing class WorkflowStepOutcome {
         Concurrency_Slot_Held__c,
         CreatedDate,
         Progress__c,
-        Causation_Id__c
+        Causation_Id__c,
+        Admission_Priority__c
       FROM Workflow_Instance__c
       WHERE Id = :outcome.instance.Id
       WITH SYSTEM_MODE

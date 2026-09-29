@@ -788,6 +788,25 @@
                                                         <div class="slds-text-body_small slds-text-color_weak">in-flight / ceiling</div>
                                                     </div>
                                                 </div>
+                                                <!-- Wait queue in admission order (#132) -->
+                                                <template if:true={cc.hasWaitingSummary}>
+                                                    <div key={cc.queueKey} class="slds-p-bottom_x-small border-bottom">
+                                                        <div class="slds-text-body_small slds-text-color_weak" data-id="concurrency-priority-summary">
+                                                            {cc.waitingSummary}
+                                                        </div>
+                                                        <template if:true={cc.hasWaitingRows}>
+                                                            <ul class="slds-text-body_small">
+                                                                <template for:each={cc.waitingRows} for:item="w">
+                                                                    <li key={w.key} data-id="concurrency-waiting-row">
+                                                                        <span class="font-bold">{w.positionLabel}</span>
+                                                                        {w.label}
+                                                                        <span class="slds-badge slds-m-left_x-small" title={w.priorityTitle}><span class="slds-assistive-text">Admission priority </span>{w.priorityLabel}</span>
+                                                                    </li>
+                                                                </template>
+                                                            </ul>
+                                                        </template>
+                                                    </div>
+                                                </template>
                                             </template>
                                         </div>
                                     </template>

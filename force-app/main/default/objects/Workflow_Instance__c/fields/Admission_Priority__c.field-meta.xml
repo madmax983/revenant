@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Admission_Priority__c</fullName>
+    <description>Admission priority (0 to 9), set at insert from the start override or Concurrency_Config__mdt. The gate admits a higher value sooner under a concurrency ceiling. It sets admission order only. A change after insert does not change the order.</description>
+    <externalId>false</externalId>
+    <label>Admission Priority</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+</CustomField>

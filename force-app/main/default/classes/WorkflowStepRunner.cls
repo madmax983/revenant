@@ -109,6 +109,32 @@ public inherited sharing class WorkflowStepRunner {
     WorkflowStepHistoryGuard.recordWarning(ctx);
   }
 
+  /**
+   * @description Admit-only delivery (issue #132). For a row that still waits
+   * for a concurrency slot, runs the same gates as `runStepNamed` up to and
+   * including admission: definition change, hold, pause, then concurrency. The row
+   * gets a slot (and a normal re-drive) or parks again. It never runs a step.
+   * A row that does not wait is a no-op. A deleted row throws.
+   * @param instanceId Id of the instance to admit
+   */
+  public static void admitIfWaiting(Id instanceId) {
+    Workflow_Instance__c instance = loadInstanceForRun(instanceId);
+    if (!ConcurrencyAdmissionOrder.isWaiting(instance)) {
+      return;
+    }
+    if (WorkflowDefinitionChangeGate.parkIfChanged(instance)) {
+      return;
+    }
+    // Issue #119: a held instance parks here, not in a concurrency slot.
+    if (WorkflowInstanceHoldGate.parkIfHeld(instance)) {
+      return;
+    }
+    if (WorkflowStepAdmission.parkIfPaused(instance)) {
+      return;
+    }
+    WorkflowStepAdmission.admitOrParkForConcurrency(instance);
+  }
+
   // §1. Fetch instance state (NO FOR UPDATE lock to allow parallel execution and
   // direct callouts). Held__c is a formula field (issue #119). DML ignores it, so
   // no outcome update can write back a stale hold. Do not load Held_At__c here.

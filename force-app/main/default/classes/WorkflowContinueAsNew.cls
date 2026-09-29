@@ -192,7 +192,15 @@ public inherited sharing class WorkflowContinueAsNew {
       Previous_Run_At__c = instance.CreatedDate,
       // The successor continues the held run, so it parks at its first gate.
       Held_At__c = seed.Held_At__c,
-      Hold_Reason__c = seed.Hold_Reason__c
+      Hold_Reason__c = seed.Hold_Reason__c,
+      // Issue #132: the successor keeps the admission priority of the run. It
+      // gets a new rank key from its own start time.
+      Admission_Priority__c = ConcurrencyAdmissionOrder.resolvePriority(
+        instance.Workflow_Name__c,
+        instance.Admission_Priority__c == null
+          ? null
+          : instance.Admission_Priority__c.intValue()
+      )
     );
     // The successor starts from the initial step, so it takes the live shape.
     WorkflowDefinitionFingerprint.stamp(nextInstance, successorDef);

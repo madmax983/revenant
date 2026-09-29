@@ -38,6 +38,11 @@ public inherited sharing class ConcurrencyGate {
     // and admitted is true, the workflow is unbounded and no counter was touched.
     /** @description True only when a real bounded slot was consumed. */
     public Boolean slotConsumed { get; private set; }
+    /**
+     * @description Waiting instances that rank ahead of the candidate (issue
+     * #132). The caller wakes them. Empty when no order check ran.
+     */
+    public List<Id> aheadIds { get; private set; }
 
     // Constructed only through the intent-named factories on the enclosing class so
     // the two outcome flags can never be passed in a confusing/mismatched order.
@@ -46,6 +51,7 @@ public inherited sharing class ConcurrencyGate {
     private AdmissionResult() {
       this.admitted = false;
       this.slotConsumed = false;
+      this.aheadIds = new List<Id>();
     }
   }
 
@@ -76,6 +82,15 @@ public inherited sharing class ConcurrencyGate {
     return r;
   }
 
+  // Sets the waiting rows that rank ahead of the candidate.
+  private static AdmissionResult withAhead(
+    AdmissionResult r,
+    List<Id> aheadIds
+  ) {
+    r.aheadIds = aheadIds;
+    return r;
+  }
+
   /**
    * @description Resolves the configured ceiling for a workflow definition, or null when
    * the workflow is unbounded (no specific record and no Default). Cached per transaction.
@@ -84,6 +99,16 @@ public inherited sharing class ConcurrencyGate {
    */
   public static Integer getCeiling(String workflowName) {
     return ConcurrencyConfigResolver.getCeiling(workflowName, mockConfigs);
+  }
+
+  /**
+   * @description Returns the config record for a workflow (name, truncated name,
+   * then `Default`), or null. Not cached per transaction.
+   * @param workflowName The workflow definition name.
+   * @return The config record, or null.
+   */
+  public static Concurrency_Config__mdt getConfig(String workflowName) {
+    return ConcurrencyConfigResolver.getConfig(workflowName, mockConfigs);
   }
 
   /**
@@ -101,10 +126,29 @@ public inherited sharing class ConcurrencyGate {
    * locks the durable counter row and admits (incrementing) only while the live count is
    * below the ceiling.
    * @param workflowName The workflow definition name to admit an instance of.
+   * No order check (the engine uses the overload with a candidate).
    * @return An AdmissionResult indicating whether the instance was admitted and whether a
    * slot was consumed.
    */
   public static AdmissionResult tryAcquire(String workflowName) {
+    return tryAcquire(workflowName, null);
+  }
+
+  /**
+   * @description Tries to get a slot in admission order (issue #132). The gate
+   * counts the waiting instances that rank ahead of the candidate. If this count
+   * is less than the number of free slots, the candidate gets a slot. If not,
+   * the candidate yields. The order query runs under the counter lock, and only
+   * when a slot is free.
+   * @param workflowName The workflow definition name to admit an instance of.
+   * @param candidate The instance that asks for a slot (Id, Workflow_Name__c,
+   * Admission_Key__c). Null skips the order check.
+   * @return An AdmissionResult. `aheadIds` names the waiting rows ahead.
+   */
+  public static AdmissionResult tryAcquire(
+    String workflowName,
+    Workflow_Instance__c candidate
+  ) {
     Integer ceiling = getCeiling(workflowName);
     if (ceiling == null) {
       return unbounded();
@@ -114,13 +158,24 @@ public inherited sharing class ConcurrencyGate {
     Integer inFlight = (state.In_Flight_Count__c == null)
       ? 0
       : (Integer) state.In_Flight_Count__c;
-
-    if (inFlight < ceiling) {
-      state.In_Flight_Count__c = inFlight + 1;
-      update as system state;
-      return acquired();
+    Integer free = ceiling - inFlight;
+    if (free <= 0) {
+      return rejected();
     }
-    return rejected();
+
+    // Read at most maxAheadScan rows. When more slots are free than that and
+    // the scan is full, the candidate yields: the order stays correct, and the
+    // woken rows ahead take the slots.
+    Integer scanRows = Math.min(free, ConcurrencyAdmissionOrder.maxAheadScan);
+    List<Id> aheadIds = (candidate == null)
+      ? new List<Id>()
+      : ConcurrencyAdmissionOrder.findAhead(candidate, scanRows);
+    if (aheadIds.size() >= scanRows) {
+      return withAhead(rejected(), aheadIds);
+    }
+    state.In_Flight_Count__c = inFlight + 1;
+    update as system state;
+    return withAhead(acquired(), aheadIds);
   }
 
   /**

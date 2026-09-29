@@ -36,6 +36,12 @@ global inherited sharing class WorkflowStartInvocableAction {
     )
     global String causationId;
 
+    @InvocableVariable(
+      label='Priority'
+      description='Optional admission priority, 0 to 9. The gate admits a higher value sooner under a concurrency ceiling. Blank uses the configured priority. Debounced starts ignore this value.'
+    )
+    global Integer priority;
+
     @InvocableVariable(label='Debounce Seconds')
     global Integer debounceSeconds;
 

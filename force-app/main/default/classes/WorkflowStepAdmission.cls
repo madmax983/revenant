@@ -4,7 +4,8 @@
  * a live compensation drive to the resident saga logic, parks an operator-paused
  * instance, and enforces the concurrency ceiling by re-reading the instance
  * `FOR UPDATE` and either acquiring a slot (then re-driving) or parking for a
- * later admission re-attempt. This instance `FOR UPDATE` re-read is the FIRST of
+ * later admission re-attempt. The gate gives slots in rank-key order: priority
+ * with aging, then start time (issue #132). This instance `FOR UPDATE` re-read is the FIRST of
  * the two ordered locks (admission before execution). All DML and SOQL run in
  * system mode.
  */
@@ -171,7 +172,12 @@ public inherited sharing class WorkflowStepAdmission {
     Workflow_Instance__c instance
   ) {
     Workflow_Instance__c locked = [
-      SELECT Concurrency_Slot_Held__c, Status__c
+      SELECT
+        Workflow_Name__c,
+        Concurrency_Slot_Held__c,
+        Status__c,
+        Admission_Key__c,
+        Async_Job_Id__c
       FROM Workflow_Instance__c
       WHERE Id = :instance.Id
       WITH SYSTEM_MODE
@@ -199,16 +205,39 @@ public inherited sharing class WorkflowStepAdmission {
     String resolvedStep = resolveStepForAdmission(instance);
 
     ConcurrencyGate.AdmissionResult admission = ConcurrencyGate.tryAcquire(
-      instance.Workflow_Name__c
+      instance.Workflow_Name__c,
+      locked
     );
+    // Issue #132: wake the rows that rank ahead, so that they go to the gate
+    // now. Do it before the re-drive below, which can spend the only Queueable
+    // of an async transaction. A rollback also discards this wake.
+    ConcurrencyAdmissionOrder.wake(admission.aheadIds);
+    // Issue #132: the admit or the park below replaces the retry timer. Abort
+    // the old timer first, so that it cannot re-drive the instance later and
+    // its scheduled-job slot is free for the new timer.
+    abortStaleJob(locked.Async_Job_Id__c);
     if (admission.admitted) {
       commitSlotAcquisitionAndRedrive(instance, resolvedStep);
-      return true;
+    } else {
+      // Ceiling full, or higher-ranked rows wait: park and re-attempt admission
+      // through the existing sleep/watchdog resume plumbing.
+      parkForConcurrency(instance, resolvedStep);
     }
-    // Ceiling full: park and re-attempt admission automatically through the
-    // existing sleep/watchdog resume plumbing.
-    parkForConcurrency(instance, resolvedStep);
     return true;
+  }
+
+  // Aborts a scheduled or queued retry job. A job that already ran or is gone
+  // is not an error.
+  private static void abortStaleJob(String jobId) {
+    if (String.isBlank(jobId)) {
+      return;
+    }
+    try {
+      System.abortJob(jobId);
+    } catch (Exception ignored) {
+      // The job already ran, or the Id is not a job. Nothing to abort.
+      return;
+    }
   }
 
   // Resolve the initial step for a fresh start BEFORE consuming a slot, so an

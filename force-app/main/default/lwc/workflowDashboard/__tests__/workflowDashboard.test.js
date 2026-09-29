@@ -30,6 +30,7 @@ jest.mock(
 import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardCommandController.enqueueWatchdog";
 import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
+import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -5940,5 +5941,142 @@ describe("c-workflow-dashboard async capacity panel (#129)", () => {
     await flushPromises();
     await flushPromises();
     expect(getAsyncCapacity).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("c-workflow-dashboard concurrency queue (#132)", () => {
+  beforeEach(() => {
+    getDefinitionTrends.mockResolvedValue({
+      windowKey: "24h",
+      windowHours: 24,
+      rows: [],
+    });
+  });
+
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  async function openDoctor() {
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    findButton(element, (btn) => btn.label === "System Doctor").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  const QUEUE_ROW = {
+    workflowName: "IncidentWorkflow",
+    ceiling: 2,
+    inFlight: 2,
+    parked: 1,
+    waitingTotal: 3,
+    waitingByPriority: { 9: 1, 0: 2 },
+    waiting: [
+      {
+        instanceId: "a01000000000001AAA",
+        name: "WI-0001",
+        priority: 9,
+        position: 1,
+      },
+      {
+        instanceId: "a01000000000002AAA",
+        name: "WI-0002",
+        priority: 0,
+        position: 2,
+      },
+    ],
+  };
+
+  it("lists waiting instances in admission order with their priority", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([QUEUE_ROW]);
+    const element = await openDoctor();
+
+    const items = element.shadowRoot.querySelectorAll(
+      '[data-id="concurrency-waiting-row"]',
+    );
+    expect(items.length).toBe(2);
+    expect(items[0].textContent).toContain("#1");
+    expect(items[0].textContent).toContain("WI-0001");
+    expect(items[0].textContent).toContain("P9");
+    expect(items[1].textContent).toContain("#2");
+    expect(items[1].textContent).toContain("P0");
+  });
+
+  it("summarizes the wait queue per priority class, highest first", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([QUEUE_ROW]);
+    const element = await openDoctor();
+
+    const summary = element.shadowRoot.querySelector(
+      '[data-id="concurrency-priority-summary"]',
+    );
+    expect(summary.textContent).toContain("3 waiting");
+    expect(summary.textContent).toContain("P9: 1");
+    expect(summary.textContent).toContain("P0: 2");
+    expect(summary.textContent.indexOf("P9")).toBeLessThan(
+      summary.textContent.indexOf("P0"),
+    );
+  });
+
+  it("shows no queue list when nothing waits", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([
+      { ...QUEUE_ROW, waitingTotal: 0, waitingByPriority: {}, waiting: [] },
+    ]);
+    const element = await openDoctor();
+
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="concurrency-waiting-row"]')
+        .length,
+    ).toBe(0);
+    expect(
+      element.shadowRoot.querySelector(
+        '[data-id="concurrency-priority-summary"]',
+      ),
+    ).toBeNull();
+  });
+
+  it("renders the queue of each governed workflow", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([
+      QUEUE_ROW,
+      {
+        ...QUEUE_ROW,
+        workflowName: "BatchWorkflow",
+        waiting: [
+          { ...QUEUE_ROW.waiting[1], instanceId: "a01000000000003AAA" },
+        ],
+      },
+    ]);
+    const element = await openDoctor();
+
+    const summaries = element.shadowRoot.querySelectorAll(
+      '[data-id="concurrency-priority-summary"]',
+    );
+    expect(summaries.length).toBe(2);
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="concurrency-waiting-row"]')
+        .length,
+    ).toBe(3);
+  });
+
+  it("tolerates rows from an older server with no queue fields", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([
+      { workflowName: "LegacyWf", ceiling: 1, inFlight: 1, parked: 0 },
+    ]);
+    const element = await openDoctor();
+
+    expect(element.shadowRoot.textContent).toContain("LegacyWf");
+    expect(
+      element.shadowRoot.querySelectorAll('[data-id="concurrency-waiting-row"]')
+        .length,
+    ).toBe(0);
   });
 });

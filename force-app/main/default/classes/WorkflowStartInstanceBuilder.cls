@@ -46,6 +46,12 @@ public inherited sharing class WorkflowStartInstanceBuilder {
     instance.Status__c = 'Pending';
     instance.Correlation_Key__c = req.correlationKey;
     instance.Parent_Instance__c = req.parentInstanceId;
+    // Issue #132: write the resolved priority here. The start paths update this
+    // record after insert, so a raw value would overwrite the trigger stamp.
+    instance.Admission_Priority__c = ConcurrencyAdmissionOrder.resolvePriority(
+      instance.Workflow_Name__c,
+      req.priority
+    );
     instance.Causation_Id__c = resolveCausationId(req);
 
     validateWorkflowAuthorization(req);
