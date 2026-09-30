@@ -429,6 +429,17 @@ section for the full contract shape, type-coercion rules, and bulk/Flow behavior
 
 ---
 
+## Changed: stall alerts include waits
+
+**Issue #139.** No signature changes. Read this if a `Workflow_Alert_Config__mdt` record has `Stall_Threshold_Minutes__c`.
+
+- Signal, child and approval waits now send a stall alert after the threshold. Before, the detector skipped them. A future sleep still sends no alert.
+- A matched record with `Enable_Alerts__c = false` or a blank threshold now blocks `Default`. This is the failure-alert rule.
+- To keep long approvals quiet, add a record for that workflow with a larger threshold, or a blank threshold.
+- The email shows the current step. One sweep sends at most 100 alerts.
+
+See [docs/stall-alerts.md](docs/stall-alerts.md).
+
 ## New (additive, non-breaking): `DefinitionChanged` status
 
 **Issue #89.** No signature changes. Read this if your code switches on `Status__c`.

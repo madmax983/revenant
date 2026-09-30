@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Fire_Key__c</fullName>
     <caseSensitive>false</caseSensitive>
-    <description>Idempotent upsert anchor. Schedule rows: correlationKey:outcome, one row per (fire window, outcome). Notification rows (issue #123): Notify:stepExecId, one row per logical suspend.</description>
+    <description>Idempotent upsert anchor. Schedule rows: correlationKey:outcome, one row per (fire window, outcome). Notification rows (issue #123): Notify:stepExecId, one row per logical suspend. Stall rows (issue #139): Stall:instanceId:clockMillis, one row per stall.</description>
     <externalId>true</externalId>
     <label>Fire Key</label>
     <length>255</length>

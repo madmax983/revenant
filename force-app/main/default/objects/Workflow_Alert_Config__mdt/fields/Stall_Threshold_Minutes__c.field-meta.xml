@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Stall_Threshold_Minutes__c</fullName>
-    <description>Threshold in minutes of inactivity/idleness before a workflow is considered stalled.</description>
+    <description>Minutes with no new step before an active instance sends one stall alert. Blank disables stall alerts for this record.</description>
     <externalId>false</externalId>
     <fieldManageability>DeveloperControlled</fieldManageability>
     <label>Stall Threshold Minutes</label>

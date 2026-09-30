@@ -147,6 +147,9 @@ public inherited sharing class WorkflowAlertEmailBuilder {
         '<tr><td style="padding: 6px 0; font-weight: bold;">Current Status:</td><td>' +
         esc.status +
         '</td></tr>' +
+        '<tr><td style="padding: 6px 0; font-weight: bold;">Current Step:</td><td>' +
+        escapedStep(instance) +
+        '</td></tr>' +
         '<tr><td style="padding: 6px 0; font-weight: bold;">Idle Duration:</td><td>' +
         idleMinutes +
         ' minutes (threshold: ' +
@@ -208,6 +211,54 @@ public inherited sharing class WorkflowAlertEmailBuilder {
     } catch (Exception ex) {
       return false;
     }
+  }
+
+  /**
+   * @description Sends the emails in one call (issue #139). Keeps one email
+   * invocation free for the caller. Does not throw.
+   * @param mails The emails to send.
+   * @return One result for each email, in the same order: true when the
+   * platform accepted it.
+   */
+  public static List<Boolean> sendEmails(
+    List<Messaging.SingleEmailMessage> mails
+  ) {
+    List<Boolean> results = new List<Boolean>();
+    for (Integer i = 0; i < mails.size(); i++) {
+      results.add(false);
+    }
+    if (
+      mails.isEmpty() ||
+      Limits.getEmailInvocations() + 1 >= Limits.getLimitEmailInvocations()
+    ) {
+      return results;
+    }
+    try {
+      if (Test.isRunningTest()) {
+        if (WorkflowAlertManager.throwTestException) {
+          throw new IllegalArgumentException('Simulated email exception');
+        }
+        for (Integer i = 0; i < mails.size(); i++) {
+          results[i] = true;
+        }
+      } else {
+        List<Messaging.SendEmailResult> sent = Messaging.sendEmail(
+          mails,
+          false
+        );
+        for (Integer i = 0; i < sent.size(); i++) {
+          results[i] = sent[i].isSuccess();
+        }
+      }
+    } catch (Exception ex) {
+      // A failed call leaves each result false.
+    }
+    for (Boolean ok : results) {
+      if (ok) {
+        WorkflowAlertManager.sentEmailsCount += 1;
+      }
+    }
+    return results;
   }
 
   /**
@@ -294,6 +345,15 @@ public inherited sharing class WorkflowAlertEmailBuilder {
       ? ''
       : instance.Status__c.escapeHtml4();
     return esc;
+  }
+
+  // The failure path can give an instance with no Current_Step__c in the
+  // query. A read of that field throws, so check it first.
+  private static String escapedStep(Workflow_Instance__c instance) {
+    Object step = instance.getPopulatedFieldsAsMap().get('Current_Step__c');
+    return step == null || String.isBlank((String) step)
+      ? 'N/A'
+      : ((String) step).escapeHtml4();
   }
 
   /**

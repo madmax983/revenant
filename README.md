@@ -58,6 +58,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Watchdog Liveness**: Each complete watchdog sweep writes its time. System Doctor shows Healthy, Stale or Unknown. A stall sends one alert. The check runs outside the watchdog. It can find a dead watchdog. See [docs/watchdog-liveness.md](docs/watchdog-liveness.md).
 - **Native Report Types**: Two Custom Report Types, `Revenant Workflow Instances` and `Revenant Workflow Instances with Step Executions`, let an admin make reports, dashboards and scheduled digests. No code. Fields that can contain a pointer or an encoded value are not in the types. See [docs/report-types.md](docs/report-types.md).
 - **Declarative Recurring Schedules (0-slot)**: Create a `Workflow_Schedule__c` record to run any workflow on a cron cadence — no Apex, and **zero additional scheduled-job slots** beyond the existing watchdog. See [docs/recurring-schedules.md](docs/recurring-schedules.md).
+- **Instance Stall Alert**: A non-terminal instance with no new step for `Stall_Threshold_Minutes__c` sends one alert. A new step resets the clock. No new job slot. See [docs/stall-alerts.md](docs/stall-alerts.md).
 - **Schedule Health**: An enabled 0-slot schedule that does not fire within one sweep interval of its window shows as **Overdue**. A schedule whose last fire failed shows as **Last fire failed**. System Doctor and the Schedule Manager show both. Each problem sends one alert. No new job slot. See [docs/schedule-health.md](docs/schedule-health.md).
 
 ---
@@ -796,7 +797,7 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 4.  **Threshold Customization** (Optional - if left blank, alerts fire immediately on any failure):
     - `Consecutive_Failures_Limit__c`: Trigger alerts only after `N` consecutive executions fail.
     - `Failure_Count_Limit__c` and `Time_Window_Minutes__c`: Trigger alerts if `N` failures occur within a sliding window of `M` minutes.
-    - `Stall_Threshold_Minutes__c`: Trigger stall alerts if an active workflow has been inactive for `K` minutes.
+    - `Stall_Threshold_Minutes__c`: Send one stall alert when an active instance makes no progress for `K` minutes. Blank disables it. See [docs/stall-alerts.md](docs/stall-alerts.md).
 
 ### Platform Event Routing (Workflow_Alert__e)
 
@@ -808,6 +809,10 @@ For modern ops routing (e.g., paging Slack, PagerDuty, Microsoft Teams, or mobil
 -   **Error Message** (`Error_Message__c`): The failure error message, stall details, or stack trace (truncated to 20k characters for safe heap handling).
 -   **Alert Reason** (`Alert_Reason__c`): The trigger reason: `'Consecutive Failures'`, `'Sliding Window'`, `'Immediate'`, `'Stall'`, `'Watchdog Stall'`, `'Schedule Overdue'`, or `'Schedule Fire Failed'`.
 -   **Threshold Values**: Carries the triggering policy limits: `Consecutive_Failures_Limit__c`, `Failure_Count_Limit__c`, `Time_Window_Minutes__c`, and `Stall_Threshold_Minutes__c`.
+
+#### Instance Stall Alert
+
+When a non-terminal instance makes no progress for `Stall_Threshold_Minutes__c`, the engine sends one `'Stall'` alert. Progress is the newest step row. Signal, child and approval waits count. A future sleep does not. The alert shows the current step and the idle time. A new step resets the clock. The check runs in the watchdog heartbeat. See [docs/stall-alerts.md](docs/stall-alerts.md).
 
 #### Watchdog Stall Alert
 
