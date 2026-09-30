@@ -47,7 +47,8 @@ public inherited sharing class CaseDebounceTriggerHandler {
         };
 
         // Wait for 5 quiet seconds. Start after 300 seconds at most.
-        // Use only the fluent setters: a subscriber org sees only them.
+        // Use only the fluent setters. A subscriber org cannot see the fields.
+        // In a subscriber org, put the namespace first: rvn.WorkflowDebouncer.
         WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest(
             'CaseDebounceWorkflowExample',
             'Case_Debounce_' + c.Id,

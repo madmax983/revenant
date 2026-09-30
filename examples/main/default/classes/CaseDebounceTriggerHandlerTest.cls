@@ -26,7 +26,9 @@ public class CaseDebounceTriggerHandlerTest {
 
       // Update case multiple times to simulate bursty edits
       Test.startTest();
+      // Each edit is 2 seconds after the last. Each edit moves the timer.
       for (Integer i = 1; i < 10; i++) {
+        WorkflowEngine.mockNow = WorkflowEngine.mockNow.addSeconds(2);
         c.Subject = 'Edit ' + i;
         update c;
       }
@@ -61,6 +63,37 @@ public class CaseDebounceTriggerHandlerTest {
         instances[0].Input__c
       );
       System.assertEquals('Final Edit', (String) instPayload.get('subject'));
+      System.assertEquals(
+        0,
+        [
+          SELECT COUNT()
+          FROM Debounce_State__c
+          WHERE Correlation_Key__c = :correlationKey
+        ],
+        'The sweep deletes the row'
+      );
     }
+  }
+
+  @IsTest
+  static void testStepReadsTheLastInput() {
+    StepContext ctx = new StepContextTestBuilder()
+      .workflowInput(new Map<String, Object>{ 'subject' => 'Final Edit' })
+      .build();
+
+    StepResult result = new CaseDebounceWorkflowExample.ProcessCaseUpdate()
+      .execute(ctx);
+
+    System.assertEquals('"Final Edit"', result.directive().outputJson);
+  }
+
+  @IsTest
+  static void testStepFailsWithoutInput() {
+    StepContext ctx = new StepContextTestBuilder().build();
+
+    StepResult result = new CaseDebounceWorkflowExample.ProcessCaseUpdate()
+      .execute(ctx);
+
+    System.assertEquals(StepResult.ActionType.FAIL, result.directive().action);
   }
 }

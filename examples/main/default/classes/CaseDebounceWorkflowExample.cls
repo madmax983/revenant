@@ -41,8 +41,11 @@ public class CaseDebounceWorkflowExample implements WorkflowDefinition {
      * @return A completed StepResult. Its output is the last subject.
      */
     public StepResult execute(StepContext ctx) {
+      if (String.isBlank(ctx.workflowInputJson)) {
+        return StepResult.fail('The Case update input is missing.');
+      }
       Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
-        ctx.inputJson
+        ctx.workflowInputJson
       );
       // Put the expensive work here: one run for each burst.
       return StepResult.complete(null, input.get('subject'));

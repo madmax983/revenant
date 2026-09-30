@@ -433,10 +433,14 @@ section for the full contract shape, type-coercion rules, and bulk/Flow behavior
 
 **Issue #140.** No signature changes.
 
-- `WorkflowDebouncer`, `DebounceRequest(String, String, String)`, `withDebounce`, `withMaxWait` and both `startDebounced` overloads are `global`. `withAttributesJson`, `withCausationId` and the request fields stay namespace-private. Use the setters.
+- `WorkflowDebouncer`, `DebounceRequest(String, String, String)`, `withDebounce`, `withMaxWait` and both `startDebounced` overloads are `global`. Set the windows with `withDebounce` and `withMaxWait`. A subscriber org cannot set attributes or a causation id.
 - `Fire_At__c` rounds up to the next whole second. A test that compares it with a time that has milliseconds must round up too.
+- The sweep matches only an active instance. Before, a burst within `Dedup_Window_Minutes__c` of a finished run went to that run. Now it starts a new run.
+- `WorkflowStartService.startDebounced` is removed. Use `WorkflowDebouncer.startDebounced`.
 
 See [docs/debounce.md](docs/debounce.md).
+
+---
 
 ## Changed: stall alerts include waits
 

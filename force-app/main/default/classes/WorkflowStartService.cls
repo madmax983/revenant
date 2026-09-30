@@ -1,7 +1,7 @@
 /**
  * @description Public start / get-or-start facade for {@link WorkflowEngine}.
  * Exposes the start entry points the engine and its callers invoke (scalar
- * get-or-start, bulk get-or-start, debounced and singleton starts) and the
+ * get-or-start, bulk get-or-start and singleton starts) and the
  * shared DUPLICATE_VALUE predicate, delegating the exactly-once work to the
  * cohesive start classes: the scalar admission sequence (INV-1) to
  * {@link WorkflowScalarStartService}, the bulk pipeline (INV-3) to
@@ -103,19 +103,6 @@ public inherited sharing class WorkflowStartService {
   }
 
   /**
-   * Arms a durable trailing-edge debounce timer for starting a workflow. Build
-   * the request with workflowName, correlationKey, inputJson and debounceSeconds
-   * (and optionally maxWaitSeconds, attributesJson and causationId). Replaces the
-   * former positional startDebounced overloads.
-   * @param request the debounce request describing the coalesced start
-   */
-  public static void startDebounced(WorkflowDebouncer.DebounceRequest request) {
-    WorkflowDebouncer.startDebounced(
-      new List<WorkflowDebouncer.DebounceRequest>{ request }
-    );
-  }
-
-  /**
    * @description Bulk get-or-start pipeline (facade target for {@link
    * WorkflowEngine}). Returns a result per request (index-aligned) reporting the
    * resolved instance Id and whether it was newly created or deduped. Delegates
@@ -127,6 +114,18 @@ public inherited sharing class WorkflowStartService {
     List<WorkflowEngine.StartRequest> requests
   ) {
     return WorkflowBulkStartService.startOrGetBulk(requests);
+  }
+
+  /**
+   * @description Bulk get-or-start that matches only active instances. See
+   * {@link WorkflowBulkStartService#startOrGetActiveBulk}.
+   * @param requests the start requests to process
+   * @return StartResults index-aligned with requests (null per null request)
+   */
+  public static List<WorkflowEngine.StartResult> startOrGetActiveBulk(
+    List<WorkflowEngine.StartRequest> requests
+  ) {
+    return WorkflowBulkStartService.startOrGetActiveBulk(requests);
   }
 
   /**

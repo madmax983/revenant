@@ -85,8 +85,8 @@ public inherited sharing class WorkflowDebounceSweeper {
   /**
    * @description Locks the found rows and reads them again. A trigger that
    * re-arms a row now waits for this sweep. A row that a trigger re-armed
-   * before the lock is not due, so the sweep skips it. The sweep thus
-   * starts the newest input and never deletes a newer one.
+   * before the lock is not due, so the sweep skips it. Thus the sweep starts
+   * the newest input. It does not delete a newer input.
    * @param ids The Ids from findDueIds.
    * @param now The cutoff timestamp.
    * @return The rows that are still due, in the order of ids.
@@ -179,7 +179,7 @@ public inherited sharing class WorkflowDebounceSweeper {
     Savepoint sp = Database.setSavepoint();
     try {
       if (!ctx.startRequests.isEmpty()) {
-        WorkflowEngine.startOrGet(ctx.startRequests);
+        WorkflowStartService.startOrGetActiveBulk(ctx.startRequests);
       }
       ctx.toDelete.addAll(ctx.dueStates);
     } catch (Exception ex) {
@@ -231,7 +231,9 @@ public inherited sharing class WorkflowDebounceSweeper {
   ) {
     Savepoint individualSp = Database.setSavepoint();
     try {
-      WorkflowEngine.startOrGet(new List<WorkflowEngine.StartRequest>{ req });
+      WorkflowStartService.startOrGetActiveBulk(
+        new List<WorkflowEngine.StartRequest>{ req }
+      );
       return true;
     } catch (Exception innerEx) {
       Database.rollback(individualSp);
@@ -271,7 +273,7 @@ public inherited sharing class WorkflowDebounceSweeper {
     if (currentRetries >= 3) {
       state.Fire_At__c = now.addYears(100); // Quarantine
     } else {
-      // Exponential backoff retry in 1 or 2 minutes
+      // Retry after 1 minute, then after 2 minutes.
       state.Fire_At__c = now.addSeconds(currentRetries * 60);
     }
   }

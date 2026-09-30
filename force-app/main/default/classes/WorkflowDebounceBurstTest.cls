@@ -215,20 +215,53 @@ private class WorkflowDebounceBurstTest {
   }
 
   @IsTest
-  static void armAndSweepAddNoScheduledJob() {
+  static void laterBurstAfterFinishedRunStartsAgain() {
     WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.dedupWindowMinutes = 1440;
     WorkflowEngine.mockNow = BASE;
-    Integer cronBefore = [SELECT COUNT() FROM CronTrigger];
+    arm('repeat', '{"seq":1}', 10);
 
     Test.startTest();
+    WorkflowDebounceSweeper.sweep(BASE.addSeconds(10));
+    Workflow_Instance__c first = instances('repeat')[0];
+    first.Status__c = 'Completed';
+    first.Terminal_At__c = BASE.addSeconds(11);
+    update first;
+
+    // A new burst in the dedup window. It must not go to the finished run.
+    WorkflowEngine.mockNow = BASE.addSeconds(20);
+    arm('repeat', '{"seq":2}', 10);
+    WorkflowDebounceSweeper.sweep(BASE.addSeconds(30));
+    Test.stopTest();
+
+    List<Workflow_Instance__c> runs = [
+      SELECT Id, Input__c
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = 'repeat' AND Id != :first.Id
+    ];
+    System.assertEquals(1, runs.size(), 'The second burst starts a new run');
+    System.assertEquals('{"seq":2}', runs[0].Input__c, 'It gets its input');
+  }
+
+  @IsTest
+  static void armAndSweepAddNoScheduledJob() {
+    WorkflowEngine.mockNow = BASE;
+    Integer cronBefore = [SELECT COUNT() FROM CronTrigger];
+    Integer asyncBefore = [SELECT COUNT() FROM AsyncApexJob];
+
+    Test.startTest();
+    // The queueable switch is off here. An arm that enqueued a job shows.
     for (Integer i = 0; i < 10; i++) {
       arm('slots-' + i, '{}', 10);
     }
     Integer queueablesAfterArm = Limits.getQueueableJobs();
+    Integer asyncAfterArm = [SELECT COUNT() FROM AsyncApexJob];
+    WorkflowEngine.disableQueueableInTest = true;
     WorkflowDebounceSweeper.sweep(BASE.addSeconds(10));
     Test.stopTest();
 
     System.assertEquals(0, queueablesAfterArm, 'Arm enqueues no job');
+    System.assertEquals(asyncBefore, asyncAfterArm, 'Arm adds no async job');
     System.assertEquals(
       cronBefore,
       [SELECT COUNT() FROM CronTrigger],
@@ -246,6 +279,39 @@ private class WorkflowDebounceBurstTest {
   }
 
   @IsTest
+  static void capFiresSustainedBurstOnceWithLastInputBeforeCap() {
+    WorkflowEngine.disableQueueableInTest = true;
+    Test.startTest();
+    // 10 triggers, 3 s apart. Window 10 s, cap 15 s. The cap fires at 15 s.
+    for (Integer i = 1; i <= 10; i++) {
+      Datetime now = BASE.addSeconds((i - 1) * 3);
+      WorkflowEngine.mockNow = now;
+      WorkflowDebounceSweeper.sweep(now);
+      System.assertEquals(
+        now >= BASE.addSeconds(15) ? 1 : 0,
+        instances('capped').size(),
+        'The cap fires at first + 15 s, not before'
+      );
+      WorkflowDebouncer.startDebounced(
+        new WorkflowDebouncer.DebounceRequest(
+            WORKFLOW,
+            'capped',
+            '{"seq":' + i + '}'
+          )
+          .withDebounce(10)
+          .withMaxWait(15)
+      );
+    }
+    Test.stopTest();
+
+    List<Workflow_Instance__c> started = instances('capped');
+    System.assertEquals(1, started.size(), 'One start for the capped burst');
+    // The trigger at 12 s (seq 5) is the last one before the cap.
+    System.assertEquals('{"seq":5}', started[0].Input__c, 'Last input wins');
+    System.assertEquals(1, states('capped').size(), 'Later triggers re-arm');
+  }
+
+  @IsTest
   static void flowBurstStartsOnceWithLastInput() {
     WorkflowEngine.disableQueueableInTest = true;
     for (Integer i = 1; i <= 10; i++) {
@@ -255,9 +321,11 @@ private class WorkflowDebounceBurstTest {
       req.correlationKey = 'flow-burst';
       req.inputJson = '{"seq":' + i + '}';
       req.debounceSeconds = 10;
-      WorkflowStartInvocableAction.startWorkflow(
+      WorkflowStartInvocableAction.StartResult result = WorkflowStartInvocableAction.startWorkflow(
         new List<WorkflowStartInvocableAction.StartRequest>{ req }
-      );
+      )[0];
+      System.assert(result.isValid, 'The Flow row is armed');
+      System.assertEquals(null, result.workflowInstanceId, 'No instance yet');
     }
 
     Test.startTest();
@@ -267,6 +335,20 @@ private class WorkflowDebounceBurstTest {
     List<Workflow_Instance__c> started = instances('flow-burst');
     System.assertEquals(1, started.size(), 'One instance');
     System.assertEquals('{"seq":10}', started[0].Input__c, 'Last input wins');
+  }
+
+  @IsTest
+  static void overlongWorkflowNameIsRejectedBeforeAnyWrite() {
+    try {
+      WorkflowDebouncer.startDebounced(
+        new WorkflowDebouncer.DebounceRequest('n'.repeat(256), 'long', '{}')
+          .withDebounce(10)
+      );
+      System.assert(false, 'An overlong name must fail');
+    } catch (WorkflowEngine.WorkflowException ex) {
+      System.assert(ex.getMessage().contains('255'), ex.getMessage());
+    }
+    System.assertEquals(0, [SELECT COUNT() FROM Debounce_State__c], 'No row');
   }
 
   @IsTest

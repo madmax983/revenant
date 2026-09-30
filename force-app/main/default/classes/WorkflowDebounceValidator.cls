@@ -40,8 +40,8 @@ public inherited sharing class WorkflowDebounceValidator {
   }
 
   /**
-   * @description Enforces workflow-name and correlation-key presence and the
-   * correlation-key length ceiling.
+   * @description Enforces workflow-name and correlation-key presence and
+   * their length ceilings.
    * @param req The request whose identity fields are validated.
    */
   private static void validateRequestIdentity(
@@ -49,6 +49,11 @@ public inherited sharing class WorkflowDebounceValidator {
   ) {
     if (String.isBlank(req.workflowName)) {
       throw new WorkflowEngine.WorkflowException('Workflow name is required.');
+    }
+    if (req.workflowName.length() > 255) {
+      throw new WorkflowEngine.WorkflowException(
+        'Workflow name length cannot exceed 255 characters.'
+      );
     }
     if (String.isBlank(req.correlationKey)) {
       throw new WorkflowEngine.WorkflowException(

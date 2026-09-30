@@ -8,8 +8,7 @@ the last trigger. Add no scheduled job.
 ## Facts About The Engine
 
 - `WorkflowDebouncer.startDebounced(List<DebounceRequest>)` exists. It
-  writes one `Debounce_State__c` row for each `(workflowName,
-correlationKey)`. Each call moves `Fire_At__c` to `now + debounceSeconds`
+  writes one `Debounce_State__c` row for each key. Each call moves `Fire_At__c` to `now + debounceSeconds`
   and writes the new input. `maxWaitSeconds` caps `Fire_At__c` at
   `First_Triggered_At__c + maxWaitSeconds`.
 - `WorkflowDebounceSweeper` runs in the watchdog heartbeat (step 3b). It
@@ -27,6 +26,9 @@ correlationKey)`. Each call moves `Fire_At__c` to `now + debounceSeconds`
   goes to the caller, so the record save fails.
 - `Fire_At__c` keeps milliseconds from `now`. A DateTime field can drop
   them. Then the row can fire up to 999 ms before the quiet window ends.
+- Bulk `startOrGet` also matches a terminal instance inside
+  `Dedup_Window_Minutes__c` (default 1440). A second burst on the same day
+  then goes to the finished run. Its input is lost. (Found in review.)
 - SOQL does not allow `ORDER BY` with `FOR UPDATE`. The engine uses two
   queries: find the Ids in order, then lock them (`WorkflowSignalSources`).
 
@@ -43,7 +45,7 @@ correlationKey)`. Each call moves `Fire_At__c` to `now + debounceSeconds`
 | B7  | Insert new rows with `allOrNone = false`. Update on `DUPLICATE_VALUE`. | Yes. A parallel first trigger does not fail the save.              |
 | B8  | Round `Fire_At__c` up to the next whole second.                        | Yes. A row never fires before the quiet window ends.               |
 | B9  | Enqueue a delayed Queueable for each arm.                              | No. A burst of 50 makes 50 jobs. The heartbeat sweep costs 0 jobs. |
-| B10 | Store `maxWaitSeconds` on the row.                                     | No. New field = forever schema. The last request's value applies.  |
+| B10 | Store `maxWaitSeconds` on the row.                                     | No. A new field is permanent. The last request's value applies.    |
 | B11 | Signal a running instance with the new input.                          | No. Out of scope.                                                  |
 | B12 | Show `maxWaitSeconds` and the input in the example step.               | Yes. The example is copyable. Use fluent setters.                  |
 
@@ -58,7 +60,7 @@ correlationKey)`. Each call moves `Fire_At__c` to `now + debounceSeconds`
 | Never fire a key that gets triggers all the time.        | `maxWaitSeconds` cap. Test it.                                     |
 | Use a scheduled-job slot.                                | Sweep in the heartbeat. A test counts `CronTrigger` rows.          |
 | Let a subscriber org call internals.                     | Only the manifest members are `global`. `test:global-api`.         |
-| Spend the caller's SOQL or DML.                          | 1 SOQL and at most 3 DML for each arm call, for any batch size.    |
+| Spend the caller's SOQL or DML.                          | 1 SOQL and at most 2 DML for each arm call, for any batch size.    |
 
 ## Six Thinking Hats
 
@@ -90,7 +92,7 @@ Rules:
 3. `Fire_At__c = ceil(min(now + window, First_Triggered_At__c + cap))` to
    the whole second.
 4. Sweep: lock each due row. Read it again. Skip it if it is not due.
-   Start it with `startOrGet`. Delete it.
+   Start it with an active-only `startOrGet`. Delete it.
 5. A new-key insert that fails with `DUPLICATE_VALUE` locks the other row
    and applies rules 2 and 3.
 
@@ -116,3 +118,23 @@ Invariants:
 8. Arm and sweep add 0 `CronTrigger` rows.
 9. A Flow burst of 10 rows starts one instance with the last input.
 10. `GlobalApiSubscriberTest` arms a debounce with only the global API.
+
+Tests added after the agent review:
+
+11. A burst after a finished run in the dedup window starts a new run.
+12. A sustained burst with a 15 s cap fires once at `first + 15 s`.
+13. An overlong workflow name fails before any write.
+14. The Flow action result for a debounced row.
+15. The example step reads the last input and fails without input.
+
+Changes after the agent review:
+
+- The sweep starts with an active-only bulk `startOrGet`.
+- The sweep runs late in the heartbeat, before the global reconcile. Its
+  errors go to `Workflow_Log__c`.
+- The arm path inserts before it updates. On an insert error that is not
+  `DUPLICATE_VALUE`, it deletes its inserted rows, then throws.
+- The validator checks the name length. The arm path checks the encoded
+  input length.
+- `WorkflowStartService.startDebounced` is removed. It duplicated the
+  global scalar overload.
