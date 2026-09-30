@@ -394,6 +394,19 @@ private class WorkflowInstancePurgeTest {
       Status__c = 'Received'
     );
     insert childSignal;
+    Workflow_Step_Execution__c childStep = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = child.Id,
+      Step_Name__c = 'WorkflowEngineTest.HappyStep1',
+      Status__c = 'Failed',
+      Retry_Count__c = 0
+    );
+    insert childStep;
+    Workflow_Log__c childLog = new Workflow_Log__c(
+      Workflow_Instance__c = child.Id,
+      Level__c = 'Error'
+    );
+    insert childLog;
+    Id grandchildDoc = insertFile('Input_Grand', new List<Id>{ grandchild.Id });
 
     WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
       new Set<Id>{ parent.Id },
@@ -401,6 +414,26 @@ private class WorkflowInstancePurgeTest {
     );
 
     Assert.areEqual(3, result.purgedCount, 'family purged');
+    // Residual scan of the related instances: zero orphans.
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Step_Execution__c WHERE Id = :childStep.Id],
+      'related step row cascades'
+    );
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Log__c WHERE Id = :childLog.Id],
+      'related log deleted'
+    );
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Signal__c WHERE Id = :childSignal.Id],
+      'related signal deleted'
+    );
+    Assert.isTrue(
+      remainingDocs(new Set<Id>{ grandchildDoc }).isEmpty(),
+      'related engine file deleted'
+    );
     WorkflowInstancePurge.InstanceResult childRow = result.get(child.Id);
     Assert.isNotNull(childRow, 'related Id reported');
     Assert.isFalse(childRow.requested, 'added by includeRelated');
@@ -1127,5 +1160,93 @@ private class WorkflowInstancePurgeTest {
       WorkflowInstanceTeardown.isPurgeable('Running'),
       'a change to the copy does not change the gate'
     );
+  }
+
+  // Success metric: 50 instances and 100 files in one call, zero orphans.
+  @IsTest
+  static void fiftyInstancesAndHundredFilesInOneCall() {
+    List<Workflow_Instance__c> rows = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < WorkflowInstancePurge.MAX_INSTANCES_PER_CALL; i++) {
+      rows.add(newInstance('Completed', 'bulk-' + i));
+    }
+    insert rows;
+    List<Workflow_Signal__c> signals = new List<Workflow_Signal__c>();
+    List<Workflow_Log__c> logs = new List<Workflow_Log__c>();
+    List<ContentVersion> versions = new List<ContentVersion>();
+    for (Workflow_Instance__c inst : rows) {
+      signals.add(
+        new Workflow_Signal__c(
+          Workflow_Instance__c = inst.Id,
+          Signal_Name__c = 'Go',
+          Status__c = 'Consumed'
+        )
+      );
+      logs.add(
+        new Workflow_Log__c(Workflow_Instance__c = inst.Id, Level__c = 'Info')
+      );
+      for (String prefix : new List<String>{ 'Input_', 'Output_' }) {
+        versions.add(
+          new ContentVersion(
+            Title = prefix + inst.Correlation_Key__c,
+            PathOnClient = prefix + inst.Correlation_Key__c + '.json',
+            VersionData = Blob.valueOf('{}'),
+            Description = inst.Id
+          )
+        );
+      }
+    }
+    insert signals;
+    insert logs;
+    insert versions;
+    List<ContentDocumentLink> links = new List<ContentDocumentLink>();
+    Set<Id> docIds = new Set<Id>();
+    for (ContentVersion cv : [
+      SELECT ContentDocumentId, Description
+      FROM ContentVersion
+      WHERE Id IN :versions
+    ]) {
+      docIds.add(cv.ContentDocumentId);
+      links.add(
+        new ContentDocumentLink(
+          ContentDocumentId = cv.ContentDocumentId,
+          LinkedEntityId = cv.Description,
+          ShareType = 'V',
+          Visibility = 'AllUsers'
+        )
+      );
+    }
+    insert links;
+    Set<Id> ids = new Map<Id, Workflow_Instance__c>(rows).keySet();
+
+    Test.startTest();
+    Integer queriesBefore = Limits.getQueries();
+    Integer dmlBefore = Limits.getDmlStatements();
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(ids);
+    Integer queries = Limits.getQueries() - queriesBefore;
+    Integer dml = Limits.getDmlStatements() - dmlBefore;
+    Test.stopTest();
+
+    Assert.areEqual(50, result.purgedCount, 'all 50 purged');
+    Assert.areEqual(50, result.deletedSignalCount, 'all signals');
+    Assert.areEqual(50, result.deletedLogCount, 'all logs');
+    Assert.areEqual(100, result.deletedFileCount, 'all 100 files');
+    Assert.isTrue(queries <= 9, 'SOQL bound: ' + queries);
+    Assert.isTrue(dml <= 5, 'DML bound: ' + dml);
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Instance__c WHERE Id IN :ids],
+      'no instance remains'
+    );
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Signal__c WHERE Id IN :signals],
+      'no signal remains'
+    );
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Log__c WHERE Id IN :logs],
+      'no log remains'
+    );
+    Assert.isTrue(remainingDocs(docIds).isEmpty(), 'no engine file remains');
   }
 }
