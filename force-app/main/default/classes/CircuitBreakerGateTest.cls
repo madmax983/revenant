@@ -619,7 +619,7 @@ private class CircuitBreakerGateTest {
    * @description A CircuitBreakerGuarded fixture step (not started as a workflow —
    * only `new`ed for the instanceof hot-path check).
    */
-  private class GuardedFixtureStep implements WorkflowStep, CircuitBreakerGuarded {
+  public class GuardedFixtureStep implements WorkflowStep, CircuitBreakerGuarded {
     /**
      * @description Names the fixture dependency this step guards.
      * @return The fixture dependency key.
@@ -889,7 +889,7 @@ private class CircuitBreakerGateTest {
       );
       System.assertEquals(1, p1.probeEpoch, 'First half-open phase is epoch 1');
       System.assertEquals(1, p2.probeEpoch, 'Probes share the phase epoch');
-      System.assertEquals(1, stateFor('DepEp').Half_Open_Epoch__c);
+      System.assertEquals(1, stateFor('DepEp').Half_Open_Epoch__c.intValue());
     }
   }
 
@@ -942,7 +942,7 @@ private class CircuitBreakerGateTest {
       Test.startTest();
       CircuitBreakerGate.sweepHalfOpen();
       Test.stopTest();
-      System.assertEquals(7, stateFor('DepSw').Half_Open_Epoch__c);
+      System.assertEquals(7, stateFor('DepSw').Half_Open_Epoch__c.intValue());
     }
   }
 
@@ -952,6 +952,14 @@ private class CircuitBreakerGateTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       insertHalfOpen('MixDep', 3);
       String step = 'CircuitBreakerGateTest.GuardedFixtureStep';
+      System.assertEquals(
+        'MixDep',
+        CircuitBreakerGate.dependencyKeyIfGuarded(
+          'CircuitBreakerGateTest.Fixture',
+          step
+        ),
+        'The fixture step must resolve as guarded'
+      );
       CircuitBreakerGate.recordSuccessForStep(
         'CircuitBreakerGateTest.Fixture',
         step,
@@ -964,6 +972,41 @@ private class CircuitBreakerGateTest {
         3
       );
       System.assertEquals('Closed', stateFor('MixDep').Status__c);
+    }
+  }
+
+  @IsTest
+  static void testStaleEpochSuccessIsZeroDml() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insertHalfOpen('DepSz', 2);
+      Test.startTest();
+      Integer d0 = Limits.getDmlStatements();
+      CircuitBreakerGate.recordSuccess('DepSz', 1);
+      System.assertEquals(0, Limits.getDmlStatements() - d0, 'No write');
+      Test.stopTest();
+    }
+  }
+
+  // A row from before the epoch field has a null epoch, which counts as 0.
+  @IsTest
+  static void testLegacyNullEpochRowClosesOnlyForEpochZero() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insertHalfOpen('DepLg', null);
+      CircuitBreakerGate.recordSuccess('DepLg', null);
+      System.assertEquals('HalfOpen', stateFor('DepLg').Status__c);
+      CircuitBreakerGate.recordSuccess('DepLg', 0);
+      System.assertEquals('Closed', stateFor('DepLg').Status__c);
+    }
+  }
+
+  // Failure handling is unchanged: any failure in HalfOpen re-opens.
+  @IsTest
+  static void testFailureInHalfOpenStillReopens() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insertHalfOpen('DepFo', 2);
+      CircuitBreakerGate.recordFailure('DepFo');
+      System.assertEquals('Open', stateFor('DepFo').Status__c);
+      System.assertEquals(2, stateFor('DepFo').Half_Open_Epoch__c.intValue());
     }
   }
 }

@@ -88,6 +88,8 @@ public inherited sharing class WorkflowStepInvoke {
     if (!(stepInstance instanceof CircuitBreakerGuarded)) {
       return false;
     }
+    // Drop any marker from an earlier attempt. Admission may set a new one.
+    ctx.stepExec.Breaker_Probe_Epoch__c = null;
     String depKey = ((CircuitBreakerGuarded) stepInstance).dependencyKey();
     if (String.isBlank(depKey) || !CircuitBreakerGate.isConfigured(depKey)) {
       return false;
@@ -96,7 +98,6 @@ public inherited sharing class WorkflowStepInvoke {
       depKey
     );
     if (decision.admitted) {
-      // Replace any marker from an earlier attempt of this row.
       ctx.stepExec.Breaker_Probe_Epoch__c = decision.probeEpoch;
       return false;
     }

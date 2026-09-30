@@ -108,9 +108,9 @@ public inherited sharing class CircuitBreakerReleaseProcessor {
   /**
    * @description Records a success against a dependency's breaker. A success from a
    * probe of the current half-open phase closes the breaker (resetting the failure
-   * count and window) — 1 DML on that closing transition. A success with no probe or
-   * a stale probe epoch, a closed breaker, or a dependency with no state row is a
-   * no-op (0 DML). An unconfigured dependency is a no-op (0 SOQL/0 DML).
+   * count and window) — 1 DML on that closing transition. These are no-ops (0 DML):
+   * a success with no probe, a success with a stale probe epoch, a closed breaker,
+   * and a dependency with no state row. An unconfigured dependency costs 0 SOQL/0 DML.
    * @param dependencyKey The dependency key whose success to record.
    * @param probeEpoch The half-open phase the attempt probed, or null if none.
    */
