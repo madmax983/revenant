@@ -305,6 +305,7 @@ Not global in v1. Add one only when a subscriber needs it. You cannot remove a g
 - `WorkflowHistoryRead.getHistory`, `WorkflowHistoryRead.getStepError`, `WorkflowInstanceQuery.findInstances`.
 - `RateLimiter.acquire`, `WorkflowDebouncer.startDebounced`, `WorkflowResumeService.resumeInstance`, `WorkflowCancellation.cancelWithCompensations`.
 - `WorkflowEngine.StartRequest.inputJson`. `StepContext.Signal.createdDate`.
+- `WorkflowBatchStep` as `global virtual`, with `bind()` and `Binding`, so a subscriber can extend it (issue #138). Today a subscriber uses the input JSON.
 - Opt-in interfaces: `ExecutionTimeoutConfigurable`, `CircuitBreakerGuarded`, `ValidatedWorkflow`, `WorkflowCatalogDescribable`, `PayloadCodec`, `WorkflowArchiveSink`.
 - Subscriber test support (do before the first release). `StepContextTestBuilder` and `WorkflowTestHarness` are `@IsTest`, so subscribers cannot see them. A subscriber test can run only one async hop. A subscriber needs a non-test context builder, a harness that drives more hops, and a way to read the result kind.
 

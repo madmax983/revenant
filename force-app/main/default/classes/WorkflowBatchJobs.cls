@@ -2,7 +2,7 @@
  * @description Batch job access for WorkflowBatchStep and the watchdog
  * (issue #138). Launches a Batchable, reads the outcome of ended jobs, and
  * finds a parallel branch. The step and the sweep use the same outcome, so
- * they agree on "ended". All SOQL runs in system mode.
+ * they use the same rule for an ended job. All SOQL runs in system mode.
  */
 public inherited sharing class WorkflowBatchJobs {
   /** @description Status of a job that has no AsyncApexJob row. */
@@ -31,19 +31,25 @@ public inherited sharing class WorkflowBatchJobs {
    * @description Launches a batch job. The platform queues it at commit. A
    * rollback removes it.
    * @param batchable The Batchable instance.
-   * @param scopeSize The records for each execute() call.
+   * @param scopeSize The number of records for each execute() call.
    * @return The AsyncApexJob Id.
    */
   public static Id launch(Object batchable, Integer scopeSize) {
+    // Refuse a class that is not a Batchable before the launch.
+    Boolean ofSObject = batchable instanceof Database.Batchable<SObject>;
+    if (!ofSObject && !(batchable instanceof Database.Batchable<Object>)) {
+      throw new IllegalArgumentException(
+        'The class is not a Database.Batchable'
+      );
+    }
     launchCount++;
     lastLaunched = batchable;
     lastScopeSize = scopeSize;
     if (Test.isRunningTest() && stubLaunchId != null) {
       return stubLaunchId;
     }
-    // The compiler needs a Batchable type. A class that is not a Batchable
-    // throws a TypeException here.
-    if (batchable instanceof Database.Batchable<SObject>) {
+    // The compiler needs a Batchable type, not Object.
+    if (ofSObject) {
       return Database.executeBatch(
         (Database.Batchable<SObject>) batchable,
         scopeSize

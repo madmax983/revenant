@@ -44,7 +44,8 @@ public inherited sharing class WorkflowBatchAwaitSweep {
       try {
         storedByJob.put(Id.valueOf(value), value);
       } catch (StringException ex) {
-        // Not an Id: no job can end. Wake it. The step reads its own capture.
+        // The value is not an Id, so no job can end. Wake the instance. The
+        // step reads the job Id from its capture.
         wake.add(value);
       }
     }

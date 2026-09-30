@@ -83,7 +83,7 @@ Run an existing `Database.Batchable` as one durable step. The step launches the 
 | `WorkflowBatchStepTest`                | Launch once, suspend, re-entrant hop, outcomes, input errors, `failOnError`, binding, parallel refusal. |
 | `WorkflowBatchJobsTest`                | Terminal filter, `NotFound`, outcome keys, real launch in a test.                                       |
 | `WorkflowBatchAwaitSweepTest`          | Wake on terminal job, no wake on running job, other waits, exactly once, heartbeat resume.              |
-| `StepResultTest`                       | `withAwaitedBatchJob` rules.                                                                            |
+| `WorkflowBatchStepTest` (directive)    | `withAwaitedBatchJob` rules.                                                                            |
 | `WorkflowOutcomePrepare` (through E2E) | Field set on suspend, cleared on complete.                                                              |
 | `BatchStepWorkflowExampleTest`         | Success path with a real batch, failure path with compensation, one launch.                             |
 | `report-types.test.mjs` (existing)     | The new field is shown or excluded on purpose.                                                          |

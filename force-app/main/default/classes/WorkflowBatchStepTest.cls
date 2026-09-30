@@ -244,6 +244,19 @@ private class WorkflowBatchStepTest {
   }
 
   @IsTest
+  static void testNonBatchableIsRefusedBeforeLaunch() {
+    WorkflowBatchJobs.stubLaunchId = JOB_ID;
+    String message = errorFor(
+      new Map<String, Object>{
+        'batchClass' => 'WorkflowBatchStepTest.NotABatch'
+      }
+    );
+    Assert.isNotNull(message, 'A class that is not a Batchable must throw');
+    Assert.isTrue(message.contains('not a Database.Batchable'), message);
+    Assert.areEqual(0, WorkflowBatchJobs.launchCount, 'No launch');
+  }
+
+  @IsTest
   static void testLaunchErrorIsWrapped() {
     String message = errorFor(
       new Map<String, Object>{

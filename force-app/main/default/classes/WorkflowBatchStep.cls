@@ -14,6 +14,9 @@
  *
  * Output keys: jobId, status, succeeded, totalJobItems, jobItemsProcessed,
  * numberOfErrors, firstError. The counts are batches, not records.
+ *
+ * Security: the input names the class to launch. Do not put untrusted user
+ * input in batchClass. For user input, override bind() with a fixed class.
  */
 public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep {
   /** @description Capture key of the launched job Id. */
@@ -32,12 +35,12 @@ public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep
   public class Binding {
     /** @description The Batchable class name. */
     public final String batchClass;
-    /** @description The records for each execute() call. */
+    /** @description The number of records for each execute() call. */
     public final Integer scopeSize;
     /** @description The Batchable fields, or null for the no-arg constructor. */
     public final Object input;
     /** @description True fails the step when the job does not succeed. */
-    public Boolean failOnError = false;
+    public Boolean failOnError { get; private set; }
 
     /**
      * @description Makes a binding.
@@ -47,9 +50,7 @@ public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep
      */
     public Binding(String batchClass, Integer scopeSize, Object input) {
       if (String.isBlank(batchClass)) {
-        throw new WorkflowEngine.WorkflowException(
-          'batchClass is required in input'
-        );
+        throw new WorkflowEngine.WorkflowException('batchClass is required');
       }
       Integer size = scopeSize == null ? DEFAULT_SCOPE_SIZE : scopeSize;
       if (size < 1 || size > MAX_SCOPE_SIZE) {
@@ -60,6 +61,17 @@ public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep
       this.batchClass = batchClass;
       this.scopeSize = size;
       this.input = input;
+      this.failOnError = false;
+    }
+
+    /**
+     * @description Sets the failure rule.
+     * @param failOnError True fails the step when the job does not succeed.
+     * @return This binding, for fluent chaining.
+     */
+    public Binding withFailOnError(Boolean failOnError) {
+      this.failOnError = failOnError == true;
+      return this;
     }
   }
 
@@ -83,8 +95,8 @@ public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep
       WorkflowTypeResolver.extractNamespace(ctx.workflowName)
     );
     Id jobId = Id.valueOf((String) ctx.captures().once(KEY_JOB_ID, launcher));
-    // Nothing after the launch can throw: a rollback to the auto-retry
-    // savepoint must not lose the captured job Id.
+    // Do not add code that can throw after the launch. An auto-retry
+    // rollback must not lose the captured job Id.
     if (launcher.launched) {
       return StepResult.suspend().withAwaitedBatchJob(jobId);
     }
@@ -130,13 +142,12 @@ public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep
         'failOnError must be a Boolean'
       );
     }
-    Binding binding = new Binding(
-      (String) batchClass,
-      readScopeSize(inputMap.get('scopeSize')),
-      input
-    );
-    binding.failOnError = failOnError == true;
-    return binding;
+    return new Binding(
+        (String) batchClass,
+        readScopeSize(inputMap.get('scopeSize')),
+        input
+      )
+      .withFailOnError((Boolean) failOnError);
   }
 
   private static Map<String, Object> parseInput(StepContext ctx) {

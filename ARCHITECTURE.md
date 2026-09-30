@@ -127,7 +127,7 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WorkflowOrphanReclaimSweep`, `WorkflowReclaim`, `WorkflowReclaimPlanner`,
   `WorkflowDeadlineSweep`
 - `WorkflowBatchAwaitSweep` (section 1c: wakes an instance whose awaited
-  batch job ended), `WorkflowBatchJobs`, `WorkflowBatchStep` (issue #138)
+  batch job ended), `WorkflowBatchJobs` (issue #138)
 - `WorkflowStallDetectionService`, `WorkflowStallDetector`,
   `WorkflowStallConfigResolver`
 - `WorkflowAlertManager`, `WorkflowAlertEmailBuilder`,
@@ -276,6 +276,8 @@ sub-objects and helper classes.
   `ContinueDirective`, `ChildRequest`) + `StepResultJson`, `StepResultValidator`,
   `BusinessSleepCalculator`, `BusinessHoursCalendar`
 - `WorkflowDefinition`, `WorkflowStep`, `RetryPolicy`, `AutoRetryConfigurable`
+- Built-in steps: `WorkflowFlowStep` (runs a Flow), `WorkflowBatchStep` (runs
+  a Batchable and waits for the job, issue #138)
 - Global subset: only the members in [docs/global-api.md](docs/global-api.md) are
   `global`. Subscriber code sees nothing else (issue #122).
 

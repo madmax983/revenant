@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Awaited_Batch_Job_Id__c</fullName>
-    <description>The engine sets this value (issue #138). The AsyncApexJob Id of the batch job that a WorkflowBatchStep waits for. The watchdog resumes the instance when the job ends. Blank: no batch wait. Do not edit.</description>
+    <description>The engine sets this value (issue #138). It holds the AsyncApexJob Id of the batch job that a WorkflowBatchStep waits for. When it is blank, the instance does not wait for a batch job. Do not edit.</description>
     <externalId>true</externalId>
     <label>Awaited Batch Job ID</label>
     <length>18</length>

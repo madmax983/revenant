@@ -241,7 +241,7 @@ public inherited sharing class WorkflowDeterminismGuard {
 
   // RETRY, SLEEP, YIELD and a batch wait (issue #138) ask the engine to run
   // the step again later. They are not routing decisions. The job status is
-  // not a step input, so a batch wait must not be compared.
+  // not a step input, so the guard does not compare a batch wait.
   private static Boolean isTransient(StepResult result) {
     StepResult.ActionType action = result?.directive().action;
     return action == StepResult.ActionType.RETRY ||

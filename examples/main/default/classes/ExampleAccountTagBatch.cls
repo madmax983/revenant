@@ -15,7 +15,14 @@ public inherited sharing class ExampleAccountTagBatch implements Database.Batcha
    * @return The query locator.
    */
   public Database.QueryLocator start(Database.BatchableContext bc) {
-    String pattern = namePrefix + '%';
+    // A blank prefix matches all Accounts. Refuse it. The job then fails.
+    if (String.isBlank(namePrefix)) {
+      throw new IllegalArgumentException('namePrefix is required');
+    }
+    // Escape the LIKE wildcards in the prefix.
+    String pattern =
+      namePrefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') +
+      '%';
     return Database.getQueryLocator(
       [SELECT Id FROM Account WHERE Name LIKE :pattern WITH USER_MODE]
     );
