@@ -38,6 +38,19 @@ import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardCommandController
 import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
+import getInstanceTopology from "@salesforce/apex/WorkflowDashboardController.getInstanceTopology";
+import getWorkflowTopology from "@salesforce/apex/WorkflowDashboardController.getWorkflowTopology";
+
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getInstanceTopology",
+  () => ({ default: jest.fn(() => Promise.resolve(null)) }),
+  { virtual: true },
+);
+jest.mock(
+  "@salesforce/apex/WorkflowDashboardController.getWorkflowTopology",
+  () => ({ default: jest.fn(() => Promise.resolve(null)) }),
+  { virtual: true },
+);
 
 jest.mock(
   "@salesforce/apex/WorkflowDashboardController.getWorkflowFailureBreakdown",
@@ -6110,5 +6123,104 @@ describe("c-workflow-dashboard concurrency queue (#132)", () => {
       element.shadowRoot.querySelectorAll('[data-id="concurrency-waiting-row"]')
         .length,
     ).toBe(0);
+  });
+});
+
+describe("c-workflow-dashboard topology graph (#141)", () => {
+  afterEach(() => {
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild);
+    }
+    jest.clearAllMocks();
+  });
+
+  const WAIT = {
+    type: "approval",
+    signalName: "Approve:Review",
+    label: "Approve:Review",
+    stepName: "ReviewStep",
+  };
+
+  it("shows the graph of the selected instance with the awaited signal", async () => {
+    mockSuspendedInstance();
+    getInstanceDetails.mockResolvedValue({
+      instance: {
+        Id: "a0G000000000001",
+        Name: "WI-0001",
+        Workflow_Name__c: "TestWorkflow",
+        Status__c: "Suspended",
+      },
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      waitDescriptor: WAIT,
+    });
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+
+    const graph = element.shadowRoot.querySelector("c-workflow-topology-graph");
+    expect(graph).not.toBeNull();
+    expect(graph.instanceId).toBe("a0G000000000001");
+    expect(graph.waitDescriptor).toEqual(WAIT);
+    expect(getInstanceTopology).toHaveBeenCalledWith({
+      instanceId: "a0G000000000001",
+    });
+  });
+
+  it("opens and closes the graph of a definition from the Catalog", async () => {
+    getWorkflowCatalog.mockResolvedValue([
+      {
+        className: "PurchaseApprovalWorkflow",
+        label: "Purchase Approval Workflow",
+        documented: true,
+        versioned: false,
+        active: 0,
+        failed: 0,
+        suspended: 0,
+        total: 0,
+      },
+    ]);
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
+    });
+    document.body.appendChild(element);
+    await flushPromises();
+    findButton(element, (b) => b.label === "Catalog").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    expect(
+      element.shadowRoot.querySelector("c-workflow-topology-graph"),
+    ).toBeNull();
+
+    element.shadowRoot
+      .querySelector(
+        'lightning-button[data-id="catalog-graph-btn"][data-definition="PurchaseApprovalWorkflow"]',
+      )
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+
+    const graph = element.shadowRoot.querySelector("c-workflow-topology-graph");
+    expect(graph).not.toBeNull();
+    expect(graph.workflowName).toBe("PurchaseApprovalWorkflow");
+    expect(getWorkflowTopology).toHaveBeenCalledWith({
+      workflowName: "PurchaseApprovalWorkflow",
+    });
+
+    element.shadowRoot
+      .querySelector('lightning-button[data-id="topology-close-btn"]')
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    expect(
+      element.shadowRoot.querySelector("c-workflow-topology-graph"),
+    ).toBeNull();
   });
 });
