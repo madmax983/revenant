@@ -6,8 +6,9 @@
  * 1. Select the chunk (SOQL only).
  * 2. When a sink is given, copy the chunk and call `sink.write`. There is no
  *    DML before this call, so a sink in a `CalloutStep` can call out.
- * 3. Delete engine files, signals and instances. Step rows go with the
- *    instance (master-detail).
+ * 3. Delete engine files, signals, instance logs and instances through
+ *    {@link WorkflowInstanceTeardown}. Step rows go with the instance
+ *    (master-detail).
  *
  * If `write` throws, step 3 does not run. A retry writes the same records
  * again. The sink contract makes that safe.
@@ -32,13 +33,7 @@ public inherited sharing class WorkflowArchiveSweep {
   /** @description Maximum skipped Ids that a run reports. */
   public static final Integer MAX_SKIPPED_IDS = 2000;
 
-  private static final List<String> TERMINAL_STATUSES = new List<String>{
-    'Completed',
-    'Failed',
-    'Compensated',
-    'Cancelled',
-    'ContinuedAsNew'
-  };
+  private static final Set<String> TERMINAL_STATUSES = WorkflowInstanceTeardown.PURGEABLE_STATUSES;
 
   @TestVisible
   private static Integer maxStepRows = MAX_ARCHIVE_STEP_ROWS;
@@ -179,9 +174,7 @@ public inherited sharing class WorkflowArchiveSweep {
     CleanupDocumentPurger.PurgeChunk chunk,
     BatchResult result
   ) {
-    CleanupDocumentPurger.deleteDocuments(chunk);
-    deleteInstances(chunk);
-    result.purgedCount = chunk.instancesToPurge.size();
+    result.purgedCount = WorkflowInstanceTeardown.run(chunk).instances;
   }
 
   // Moves the cursor past the leading candidates that are handled (purged,
@@ -348,23 +341,5 @@ public inherited sharing class WorkflowArchiveSweep {
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT :limitSize
     ];
-  }
-
-  private static void deleteInstances(CleanupDocumentPurger.PurgeChunk chunk) {
-    if (chunk.instancesToPurge.isEmpty()) {
-      return;
-    }
-    // Workflow_Signal__c.Workflow_Instance__c is a Lookup with SetNull (not a
-    // cascade-delete MasterDetail), so signals must be deleted explicitly first.
-    List<Workflow_Signal__c> signalsToDelete = [
-      SELECT Id
-      FROM Workflow_Signal__c
-      WHERE Workflow_Instance__c IN :chunk.instanceIdsToPurge
-      WITH SYSTEM_MODE
-    ];
-    if (!signalsToDelete.isEmpty()) {
-      delete as system signalsToDelete;
-    }
-    delete as system chunk.instancesToPurge;
   }
 }

@@ -13,7 +13,7 @@ did before archival existed.
 flowchart LR
   A[Select old terminal instances<br/>SOQL only] --> B[Copy rows to<br/>WorkflowArchiveRecord]
   B --> C[sink.write]
-  C -->|OK| D[Delete files, signals,<br/>instances and step rows]
+  C -->|OK| D[Delete files, signals, logs,<br/>instances and step rows]
   C -->|throws| E[Stop. Delete nothing.]
   D --> F{More?}
   F -->|yes| A
@@ -106,8 +106,11 @@ archived.
 | Offloaded `failureData` in `Error_Details__c` | The archive keeps the reason and replaces the data part with the marker. It adds 1 to `droppedPayloadCount`. |
 | Step `Input__c`, `Output__c`, `Captured_Values__c`, signals | The archive does not copy them. `getHistory` does not show them either. |
 
-Then the purge deletes the engine files, as `CleanupWorkflow` does without
-archival.
+Then the purge deletes the engine files, signals and instance logs, as
+`CleanupWorkflow` does without archival. The delete uses
+`WorkflowInstanceTeardown`, the same routine as `WorkflowInstancePurge`. See
+[instance-purge.md](instance-purge.md). A log row with `Schedule__c` stays.
+The archive does not copy logs.
 
 ## Shipped sinks
 

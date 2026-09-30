@@ -199,6 +199,19 @@ public compensating-cancel entry point is `WorkflowCancellation.cancelWithCompen
   `WorkflowCompensationInvoke`, `WorkflowCompensationOutcome`
 - `BulkCancelWorkflow`, `CompensatableStep`
 
+## Retention & purge
+
+Deletes terminal instances. No path touches `WorkflowOrchestrator`.
+
+- `WorkflowInstanceTeardown` — the one delete routine: engine files, signals,
+  instance logs, instances. Step rows and search attributes cascade (issue #142).
+- `CleanupDocumentPurger` — plans a bounded chunk. Title-prefix allowlist and
+  shared-link check for files. `planGroups` keeps linked instances together.
+- `WorkflowArchiveSweep` — one batch for `CleanupWorkflow` (age) and
+  `ArchiveWorkflow` (archive, then purge). See [docs/archive.md](docs/archive.md).
+- `WorkflowInstancePurge` — operator-selected purge with terminal, chain and
+  child rules (issue #142). See [docs/instance-purge.md](docs/instance-purge.md).
+
 ## Scheduling
 
 Cron-driven workflow starts: the `WorkflowScheduleController` UI surface, the
