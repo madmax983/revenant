@@ -126,6 +126,16 @@ public inherited sharing class WorkflowTopology {
       }
     }
 
+    Set<String> declaredNames() {
+      Set<String> names = new Set<String>();
+      for (Node n : graph.nodes) {
+        if (n.declared) {
+          names.add(n.name);
+        }
+      }
+      return names;
+    }
+
     Boolean hasEdge(String source, String target) {
       return successorsOf(source).contains(target);
     }
@@ -221,9 +231,12 @@ public inherited sharing class WorkflowTopology {
     @AuraEnabled
     public Boolean compensation;
 
-    private PathEntry(Workflow_Step_Execution__c row) {
+    // A declared step can have a name that ends in _Compensate. Its row is a
+    // forward row, not a compensation row.
+    private PathEntry(Workflow_Step_Execution__c row, Set<String> declared) {
       String name = row.Step_Name__c == null ? '' : row.Step_Name__c;
-      this.compensation = name.endsWith(COMPENSATION_SUFFIX);
+      this.compensation =
+        name.endsWith(COMPENSATION_SUFFIX) && !declared.contains(name);
       this.stepName = compensation ? name.removeEnd(COMPENSATION_SUFFIX) : name;
       this.status = row.Status__c;
     }
@@ -411,8 +424,9 @@ public inherited sharing class WorkflowTopology {
     ];
     overlay.pathTruncated = newestFirst.size() > pathLimit;
     Integer kept = Math.min(newestFirst.size(), pathLimit);
+    Set<String> declared = b.declaredNames();
     for (Integer i = kept - 1; i >= 0; i--) {
-      overlay.path.add(new PathEntry(newestFirst[i]));
+      overlay.path.add(new PathEntry(newestFirst[i], declared));
     }
 
     String lastForward = addTraversedEdges(overlay, b);

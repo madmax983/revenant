@@ -13,6 +13,7 @@ public class WorkflowTopologyTest {
   private static final String REJECT = PREFIX + 'RejectStep';
   private static final String MISSING = PREFIX + 'MissingStep';
   private static final String V2_ONLY = PREFIX + 'VersionTwoStep';
+  private static final String STAGE = PREFIX + 'Stage_Compensate';
 
   // ==========================================
   // FIXTURE STEPS
@@ -64,6 +65,9 @@ public class WorkflowTopologyTest {
   }
   /** @description Plain fixture step. */
   public class VersionTwoStep extends MiddleStep {
+  }
+  /** @description A forward step whose name ends in _Compensate. */
+  public class Stage_Compensate extends MiddleStep {
   }
 
   // ==========================================
@@ -383,6 +387,33 @@ public class WorkflowTopologyTest {
      */
     public String getNextStep(String current, StepResult result) {
       return current == START ? MIDDLE : null;
+    }
+  }
+
+  /** @description Start -> Stage_Compensate, a forward step. */
+  public class SuffixWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, STAGE };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes Start to Stage_Compensate.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return current == START ? STAGE : null;
     }
   }
 
@@ -937,6 +968,35 @@ public class WorkflowTopologyTest {
       );
       System.assert(overlay.nextSteps.isEmpty(), 'No forward step');
       System.assert(hasEdge(overlay.traversedEdges, START, MIDDLE));
+    }
+  }
+
+  @IsTest
+  static void declaredStepWithCompensateSuffixIsAForwardStep() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'SuffixWorkflow',
+        'Compensating',
+        STAGE
+      );
+      seedSteps(
+        inst.Id,
+        new List<String>{
+          START + '|Completed',
+          STAGE + '|Failed',
+          START + '_Compensate|Running'
+        }
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+      WorkflowTopology.Overlay overlay = graph.overlay;
+
+      System.assertEquals(STAGE, overlay.path[1].stepName);
+      System.assertEquals(false, overlay.path[1].compensation);
+      System.assertEquals(START, overlay.path[2].stepName);
+      System.assertEquals(true, overlay.path[2].compensation);
+      System.assertEquals(2, graph.nodes.size(), 'No invented node');
+      System.assert(hasEdge(overlay.traversedEdges, START, STAGE));
     }
   }
 

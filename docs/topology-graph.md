@@ -48,7 +48,7 @@ flowchart LR
    these edges on its result.
 4. **Overlay.** For an instance, one query reads the newest 200 step rows.
    The path shows them oldest first. A `<step>_Compensate` row shows as a
-   rollback of its step.
+   rollback of its step, unless `getSteps()` declares that name.
 
 ## What The Graph Shows
 
