@@ -47,8 +47,11 @@ flowchart LR
    versions. Each successor that it gets is an edge. The validator keeps
    these edges on its result.
 4. **Overlay.** For an instance, one query reads the newest 200 step rows.
-   The path shows them oldest first. A `<step>_Compensate` row shows as a
-   rollback of its step, unless `getSteps()` declares that name.
+   It skips the definition-change marker row. The path shows the rows
+   oldest first. A `<step>_Compensate` row shows as a rollback of its step.
+   When `getSteps()` also declares that name, the engine rule applies: only
+   the newest such row is a rollback, and only when `<step>` is on
+   `Compensation_Stack__c` and the status permits a live rollback.
 
 ## What The Graph Shows
 
@@ -83,8 +86,8 @@ the graph can miss routes. The graph does not show a missing route as
   - `UNREACHED_STEPS`: a declared step has no known route to it.
   - `UNDECLARED_STEPS`: a route or the run goes to an undeclared step.
   - `VERSIONS_UNRESOLVED`: `getLatestVersion()` threw.
-  - `VERSIONS_CAPPED`: the probe did not read the versions older than the
-    newest 50.
+  - `VERSIONS_CAPPED`: the graph did not probe the versions older than the
+    newest 50. `WorkflowValidator.validate` probes all versions.
   - `DEFINITION_UNRESOLVED`: the name is not a deployed definition, or
     `getSteps()` gave no step.
 - `gapsFound = false` does not prove that the graph is complete. Each graph

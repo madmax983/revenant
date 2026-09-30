@@ -44,6 +44,14 @@ public inherited sharing class WorkflowTopology {
   public static final String STATE_ENDED = 'ENDED';
 
   private static final String COMPENSATION_SUFFIX = '_Compensate';
+  // Statuses where a rollback can be live or parked (see RowClassifier).
+  private static final Set<String> LIVE_ROLLBACK_STATUSES = new Set<String>{
+    'Compensating',
+    'Cancelling',
+    'Suspended',
+    'Running',
+    'CompensationFailed'
+  };
   // Current_Step__c holds the branches of a SPLIT, joined with commas.
   private static final String BRANCH_SEPARATOR = ',';
 
@@ -228,12 +236,9 @@ public inherited sharing class WorkflowTopology {
     @AuraEnabled
     public Boolean compensation;
 
-    // A declared step can have a name that ends in _Compensate. Its row is a
-    // forward row, not a compensation row.
-    private PathEntry(Workflow_Step_Execution__c row, Set<String> declared) {
+    private PathEntry(Workflow_Step_Execution__c row, Boolean compensation) {
       String name = row.Step_Name__c == null ? '' : row.Step_Name__c;
-      this.compensation =
-        name.endsWith(COMPENSATION_SUFFIX) && !declared.contains(name);
+      this.compensation = compensation;
       this.stepName = compensation ? name.removeEnd(COMPENSATION_SUFFIX) : name;
       this.status = row.Status__c;
     }
@@ -262,7 +267,8 @@ public inherited sharing class WorkflowTopology {
     }
 
     WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
-      workflowName
+      workflowName,
+      WorkflowTransitionProbe.MAX_PROBED_VERSIONS
     );
     for (WorkflowValidator.Defect d : result.defects) {
       b.graph.defects.add(d.message);
@@ -295,7 +301,8 @@ public inherited sharing class WorkflowTopology {
         Current_Step__c,
         Async_Job_Id__c,
         Sleep_Until__c,
-        Awaited_Batch_Job_Id__c
+        Awaited_Batch_Job_Id__c,
+        Compensation_Stack__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -414,16 +421,24 @@ public inherited sharing class WorkflowTopology {
     List<Workflow_Step_Execution__c> newestFirst = [
       SELECT Step_Name__c, Status__c
       FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c = :instance.Id
+      WHERE
+        Workflow_Instance__c = :instance.Id
+        AND Step_Name__c != :WorkflowDefinitionChangeGate.MARKER_STEP_NAME
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT :rowLimit
     ];
     overlay.pathTruncated = newestFirst.size() > pathLimit;
     Integer kept = Math.min(newestFirst.size(), pathLimit);
-    Set<String> declared = b.declaredNames();
-    for (Integer i = kept - 1; i >= 0; i--) {
-      overlay.path.add(new PathEntry(newestFirst[i], declared));
+    RowClassifier rows = new RowClassifier(b.declaredNames(), instance);
+    List<PathEntry> entries = new List<PathEntry>();
+    for (Integer i = 0; i < kept; i++) {
+      entries.add(
+        new PathEntry(newestFirst[i], rows.isCompensation(newestFirst[i]))
+      );
+    }
+    for (Integer i = entries.size() - 1; i >= 0; i--) {
+      overlay.path.add(entries[i]);
     }
 
     String lastForward = addPathNodes(overlay, b);
@@ -504,6 +519,55 @@ public inherited sharing class WorkflowTopology {
       }
     }
     return previous;
+  }
+
+  // Tells a compensation row from a forward row. Reads the rows newest first.
+  // A row named <step>_Compensate is a compensation row when getSteps() does
+  // not declare that name. When getSteps() declares it too, the engine rule
+  // applies (WorkflowStepAdmission.isLiveCompensation): in a status where a
+  // rollback can be live, the newest such row is a compensation row when
+  // <step> is on Compensation_Stack__c. Other rows are forward rows.
+  private class RowClassifier {
+    final Set<String> declared;
+    final Set<String> stack;
+    final Set<String> seen = new Set<String>();
+
+    RowClassifier(Set<String> declared, Workflow_Instance__c instance) {
+      this.declared = declared;
+      this.stack = LIVE_ROLLBACK_STATUSES.contains(instance.Status__c)
+        ? compensationStackOf(instance)
+        : new Set<String>();
+    }
+
+    Boolean isCompensation(Workflow_Step_Execution__c row) {
+      String name = row.Step_Name__c == null ? '' : row.Step_Name__c;
+      if (!name.endsWith(COMPENSATION_SUFFIX)) {
+        return false;
+      }
+      if (!declared.contains(name)) {
+        return true;
+      }
+      Boolean newest = seen.add(name);
+      return newest && stack.contains(name.removeEnd(COMPENSATION_SUFFIX));
+    }
+  }
+
+  private static Set<String> compensationStackOf(
+    Workflow_Instance__c instance
+  ) {
+    if (String.isBlank(instance.Compensation_Stack__c)) {
+      return new Set<String>();
+    }
+    try {
+      return new Set<String>(
+        (List<String>) JSON.deserialize(
+          instance.Compensation_Stack__c,
+          List<String>.class
+        )
+      );
+    } catch (Exception e) {
+      return new Set<String>();
+    }
   }
 
   private static AuraHandledException handled(String message) {

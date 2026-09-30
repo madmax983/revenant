@@ -27,12 +27,13 @@
  * former in-validator probe did.
  *
  * Issue #141: the probe also records each transition it finds in a Transitions
- * value. WorkflowTopology uses it to draw the graph. The version probe reads
- * only the newest MAX_PROBED_VERSIONS versions. This keeps the CPU time finite
- * for a large version number (for example a date).
+ * value. WorkflowTopology uses it to draw the graph. The validator probes every
+ * version. The graph probes only the newest MAX_PROBED_VERSIONS versions, so a
+ * large version number (for example a date) cannot use all the CPU time of a
+ * dashboard request.
  */
 public inherited sharing class WorkflowTransitionProbe {
-  /** The maximum number of versions that the version probe reads. */
+  /** The maximum number of versions that the graph probes. */
   public static final Integer MAX_PROBED_VERSIONS = 50;
 
   /**
@@ -99,7 +100,26 @@ public inherited sharing class WorkflowTransitionProbe {
     List<String> declaredSteps,
     WorkflowValidator.ValidationResult result
   ) {
+    return probe(def, declaredSteps, result, null);
+  }
+
+  /**
+   * @description Runs the probes as probe(def, declaredSteps, result) does, but
+   * reads only the newest maxVersions versions of a VersionedWorkflow.
+   * @param def The workflow definition whose routing is being probed.
+   * @param declaredSteps The step names declared by the definition's getSteps().
+   * @param result The validation result to which discovered defects are appended.
+   * @param maxVersions The maximum number of versions to probe, or null for all.
+   * @return The transitions that the probe found.
+   */
+  public static Transitions probe(
+    WorkflowDefinition def,
+    List<String> declaredSteps,
+    WorkflowValidator.ValidationResult result,
+    Integer maxVersions
+  ) {
     ProbeContext ctx = new ProbeContext(declaredSteps, result);
+    ctx.maxVersions = maxVersions;
 
     // Two-argument (default) routing for every declared step.
     probeDefaultRouting(def, ctx);
@@ -140,7 +160,8 @@ public inherited sharing class WorkflowTransitionProbe {
 
   /**
    * @description Drives the three-argument getNextStep(current, result, version)
-   * for the newest MAX_PROBED_VERSIONS versions up to getLatestVersion(). A throw from getLatestVersion()
+   * for each version up to getLatestVersion(), or for the newest
+   * ctx.maxVersions versions when the caller sets a limit. A throw from getLatestVersion()
    * means the workflow cannot start, so it is reported (the engine calls it before
    * starting an instance) rather than silently skipping the versioned probe.
    * @param vdef The versioned workflow definition whose per-version routing is
@@ -171,7 +192,9 @@ public inherited sharing class WorkflowTransitionProbe {
     if (latest == null || latest < 1) {
       return;
     }
-    Integer oldest = Math.max(1, latest - MAX_PROBED_VERSIONS + 1);
+    Integer oldest = ctx.maxVersions == null
+      ? 1
+      : Math.max(1, latest - ctx.maxVersions + 1);
     ctx.transitions.versionsCapped = oldest > 1;
     for (Integer version = oldest; version <= latest; version++) {
       for (String stepName : ctx.declaredSteps) {
@@ -249,6 +272,7 @@ public inherited sharing class WorkflowTransitionProbe {
     final Set<String> flagged = new Set<String>();
     final WorkflowValidator.ValidationResult result;
     final Transitions transitions = new Transitions();
+    Integer maxVersions;
     final List<StepResult> probes = new List<StepResult>{
       StepResult.complete(null, null),
       StepResult.complete(null, new Map<String, Object>())

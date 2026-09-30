@@ -14,6 +14,7 @@ public class WorkflowTopologyTest {
   private static final String MISSING = PREFIX + 'MissingStep';
   private static final String V2_ONLY = PREFIX + 'VersionTwoStep';
   private static final String STAGE = PREFIX + 'Stage_Compensate';
+  private static final String START_COMP = PREFIX + 'StartStep_Compensate';
 
   // ==========================================
   // FIXTURE STEPS
@@ -68,6 +69,9 @@ public class WorkflowTopologyTest {
   }
   /** @description A forward step whose name ends in _Compensate. */
   public class Stage_Compensate extends MiddleStep {
+  }
+  /** @description A forward step with the rollback-row name of StartStep. */
+  public class StartStep_Compensate extends MiddleStep {
   }
 
   // ==========================================
@@ -418,6 +422,87 @@ public class WorkflowTopologyTest {
   }
 
   /**
+   * @description Start (rollback) -> StartStep_Compensate, a forward step
+   * with the name of the rollback row of Start.
+   */
+  public class CollisionWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, START_COMP };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes Start to StartStep_Compensate.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return current == START ? START_COMP : null;
+    }
+  }
+
+  /** @description Only version 1 of 60 routes Middle to an undeclared step. */
+  public class SixtyVersionsWorkflow implements VersionedWorkflow {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, MIDDLE };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Gives the latest version.
+     * @return 60.
+     */
+    public Integer getLatestVersion() {
+      return 60;
+    }
+    /**
+     * @description Routes Start to Middle.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return current == START ? MIDDLE : null;
+    }
+    /**
+     * @description Routes for a version.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @param version The version.
+     * @return The next step, or null.
+     */
+    public String getNextStep(
+      String current,
+      StepResult result,
+      Integer version
+    ) {
+      if (current == START) {
+        return MIDDLE;
+      }
+      return current == MIDDLE && version == 1 ? MISSING : null;
+    }
+  }
+
+  /**
    * @description Not a workflow. The graph must not make an instance of it.
    */
   public class NotAWorkflow {
@@ -648,6 +733,29 @@ public class WorkflowTopologyTest {
         ),
         graph.incompleteReasons
       );
+    }
+  }
+
+  @IsTest
+  static void validatorStillProbesEveryVersion() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String name = PREFIX + 'SixtyVersionsWorkflow';
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        name
+      );
+      System.assert(
+        result.hasDefect(WorkflowValidator.DANGLING_SUCCESSOR),
+        'The validator checks version 1: ' + result.getMessages()
+      );
+      System.assertEquals(false, result.transitions.versionsCapped);
+
+      WorkflowTopology.Graph graph = WorkflowTopology.build(name);
+      System.assert(
+        graph.incompleteReasons.contains(
+          WorkflowTopology.REASON_VERSIONS_CAPPED
+        )
+      );
+      System.assertEquals(null, node(graph, MISSING), 'Graph is capped');
     }
   }
 
@@ -1001,6 +1109,81 @@ public class WorkflowTopologyTest {
           status + ': a rollback has no forward step'
         );
       }
+    }
+  }
+
+  @IsTest
+  static void rollbackRowThatMatchesADeclaredStepUsesTheStack() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // seedInstance puts Start on Compensation_Stack__c.
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'CollisionWorkflow',
+        'Suspended',
+        START_COMP
+      );
+      seedSteps(
+        inst.Id,
+        new List<String>{
+          START + '|Completed',
+          START_COMP + '|Failed',
+          START_COMP + '|Pending'
+        }
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(START_COMP, overlay.path[1].stepName);
+      System.assertEquals(false, overlay.path[1].compensation, 'Forward row');
+      System.assertEquals(START, overlay.path[2].stepName);
+      System.assertEquals(true, overlay.path[2].compensation, 'Rollback row');
+      System.assertEquals(new List<String>{ START }, overlay.currentSteps);
+      System.assert(overlay.nextSteps.isEmpty());
+    }
+  }
+
+  @IsTest
+  static void completedRunKeepsACollidingForwardRow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'CollisionWorkflow',
+        'Completed',
+        START_COMP
+      );
+      seedSteps(
+        inst.Id,
+        new List<String>{ START + '|Completed', START_COMP + '|Completed' }
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(START_COMP, overlay.path[1].stepName);
+      System.assertEquals(false, overlay.path[1].compensation);
+    }
+  }
+
+  @IsTest
+  static void definitionChangeMarkerRowIsNotAStep() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'LinearWorkflow',
+        'DefinitionChanged',
+        MIDDLE
+      );
+      seedSteps(
+        inst.Id,
+        new List<String>{
+          START + '|Completed',
+          WorkflowDefinitionChangeGate.MARKER_STEP_NAME + '|DefinitionChanged'
+        }
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assertEquals(1, graph.overlay.path.size());
+      System.assertEquals(3, graph.nodes.size(), 'No marker node');
+      System.assertEquals(false, graph.gapsFound);
     }
   }
 

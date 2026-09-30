@@ -32,8 +32,9 @@ static graph cannot be complete.
    the definition as the engine does at start.
 6. Both endpoints are cacheable. The platform then stops DML from author
    code in the probe. The LWC sends a new cache key on each instance read.
-7. The version probe reads only the newest 50 versions. A large version
-   number (for example a date) does not use all the CPU time.
+7. The graph probes only the newest 50 versions. A large version number
+   (for example a date) does not use all the CPU time of a dashboard
+   request. `WorkflowValidator.validate(name)` still probes every version.
 8. The awaited-signal descriptor comes from the instance detail (#84). The
    overlay does not read `Output__c`.
 9. A new `WorkflowTopologyController` holds the endpoints.
@@ -43,8 +44,8 @@ static graph cannot be complete.
 
 - No new schema, event, job or metadata type.
 - The overlay uses 2 SOQL. The step query has `LIMIT 201`.
-- The validator does not probe versions older than the newest 50. It
-  cannot find a dangling successor that only such a version uses.
+- The graph does not show routes that only versions older than the newest
+  50 use. It shows the reason `VERSIONS_CAPPED`.
 - An author can mark a data-dependent step: `getNextStep` throws for an
   unknown value. The graph then shows **?** for the step.
 - The validator constructs each step class, as before.

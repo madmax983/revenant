@@ -136,6 +136,21 @@ public with sharing class WorkflowValidator {
    * @return The validation result listing every structural defect found.
    */
   public static ValidationResult validate(String workflowName) {
+    return validate(workflowName, null);
+  }
+
+  /**
+   * @description Validates as validate(workflowName) does, but probes only the
+   * newest maxVersions versions of a VersionedWorkflow. The topology graph
+   * (issue #141) uses it to keep a dashboard request bounded.
+   * @param workflowName The name of the workflow definition to validate.
+   * @param maxVersions The maximum number of versions to probe, or null for all.
+   * @return The validation result.
+   */
+  public static ValidationResult validate(
+    String workflowName,
+    Integer maxVersions
+  ) {
     ValidationResult result = new ValidationResult(workflowName);
 
     // (a) The definition class must resolve and implement WorkflowDefinition.
@@ -202,7 +217,8 @@ public with sharing class WorkflowValidator {
     result.transitions = WorkflowTransitionProbe.probe(
       def,
       declaredSteps,
-      result
+      result,
+      maxVersions
     );
 
     return result;
