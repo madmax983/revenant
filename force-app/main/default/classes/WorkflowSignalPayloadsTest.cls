@@ -126,6 +126,7 @@ private class WorkflowSignalPayloadsTest {
   @IsTest
   static void offloadedSignalFilesAreFlagged() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(new AesCodec());
       Workflow_Instance__c inst = insertInstance();
       Workflow_Signal__c row = new Workflow_Signal__c(
         Workflow_Instance__c = inst.Id,
