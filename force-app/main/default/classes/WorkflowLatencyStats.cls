@@ -67,19 +67,26 @@ public inherited sharing class WorkflowLatencyStats {
    * broken by name). A step is timed from its CreatedDate to the next step's CreatedDate.
    * The last step is timed to its instance's Terminal_At__c. Fan-out siblings (rows with
    * the same CreatedDate in one instance) cannot be timed one by one, so they get no sample.
-   * Wall-clock deltas include durable waits. Negative deltas are ignored.
+   * Wall-clock deltas include durable waits. Negative deltas are ignored. If the scan was
+   * capped, the last instance may be cut short, so its last row gets no terminal delta.
    * @param stepExecs Step-execution rows for the sampled instances, ordered by instance then
    *        CreatedDate ascending.
    * @param instances The sampled terminal instances (source of Terminal_At__c).
+   * @param scanCapped True if the step scan hit its row cap.
    * @return One serializable row per ranked step: stepName, medianMs, sampleCount.
    */
   public static List<Map<String, Object>> rankStepsByMedianWallClock(
     List<Workflow_Step_Execution__c> stepExecs,
-    List<Workflow_Instance__c> instances
+    List<Workflow_Instance__c> instances,
+    Boolean scanCapped
   ) {
     Map<Id, Datetime> terminalById = new Map<Id, Datetime>();
     for (Workflow_Instance__c inst : instances) {
-      terminalById.put(inst.Id, inst.Terminal_At__c);
+      terminalById.put(inst.Id, floorToSecond(inst.Terminal_At__c));
+    }
+    // A capped scan can cut the last instance short. Its last row is then not a final step.
+    if (scanCapped == true && !stepExecs.isEmpty()) {
+      terminalById.remove(stepExecs[stepExecs.size() - 1].Workflow_Instance__c);
     }
     Map<String, List<Long>> deltasByStep = collectStepDeltas(
       groupStepsByInstance(stepExecs),
@@ -193,6 +200,13 @@ public inherited sharing class WorkflowLatencyStats {
   ) {
     return (i > 0 && sameBatch(ordered[i - 1], ordered[i])) ||
       (i + 1 < ordered.size() && sameBatch(ordered[i], ordered[i + 1]));
+  }
+
+  // CreatedDate has one-second precision. Terminal_At__c is cut to match it.
+  private static Datetime floorToSecond(Datetime value) {
+    return value == null
+      ? null
+      : Datetime.newInstance(value.getTime() - Math.mod(value.getTime(), 1000));
   }
 
   // Milliseconds from start to end, or null if either is unset or the span is negative.

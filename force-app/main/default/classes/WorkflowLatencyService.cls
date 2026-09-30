@@ -106,14 +106,15 @@ public inherited sharing class WorkflowLatencyService {
    * for one workflow definition over the given window. Percentiles are computed by the
    * nearest-rank method over the sorted list of terminal-instance durations
    * (Terminal_At__c − CreatedDate, in milliseconds); per-step wall-clock is the delta to the next
-   * step's CreatedDate (the last step: to Terminal_At__c), attributed to the earlier step, and
-   * each step is ranked by its median across the sample (slowest first). Fan-out siblings get
+   * step's CreatedDate. The last step is timed to Terminal_At__c. Each delta belongs to the
+   * earlier step. Steps rank by median across the sample (slowest first). Fan-out siblings get
    * no sample and set stepsApproximate.
    * Wall-clock durations deliberately include durable waits (sleeps, retries, wait-for-signal).
    * @param workflowName The workflow definition name to analyze; blank returns an empty result.
    * @param windowKey One of '1h' | '24h' | '7d'; blank/unknown means all time.
    * @return A map with the window, cap metadata and isCapped flag, sampleSize, the p50/p95/p99/
-   *         max duration milliseconds, the stepsApproximate flag, and the per-step median ranking rows.
+   *         max duration milliseconds, the stepsApproximate flag, and the per-step
+   *         median ranking rows.
    */
   public static Map<String, Object> definitionLatency(
     String workflowName,
@@ -153,7 +154,8 @@ public inherited sharing class WorkflowLatencyService {
       stepsCapped = (stepExecs.size() >= stepCap);
       stepRows = WorkflowLatencyStats.rankStepsByMedianWallClock(
         stepExecs,
-        instances
+        instances,
+        stepsCapped
       );
       stepsApproximate = WorkflowLatencyStats.hasFanOut(stepExecs);
     }

@@ -723,14 +723,14 @@ describe("c-workflow-dashboard latency panel", () => {
   it("shows an approximate badge on the step ranking when fan-out is detected", async () => {
     const element = await openLatency(true);
     expect(element.shadowRoot.textContent).toContain(
-      "Approximate step ranking",
+      "cannot be timed one by one",
     );
   });
 
   it("hides the approximate badge for a serial run", async () => {
     const element = await openLatency(false);
     expect(element.shadowRoot.textContent).not.toContain(
-      "Approximate step ranking",
+      "cannot be timed one by one",
     );
   });
 
