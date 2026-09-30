@@ -89,6 +89,7 @@ public inherited sharing class WorkflowHistoryRead {
     // budget arithmetic: cap + 1 lets the truncated case be detected cheaply.
     List<Workflow_Step_Execution__c> rows = queryRowsByInstance(
         new Set<Id>{ instanceId },
+        MAX_HISTORY_ROWS + 1,
         MAX_HISTORY_ROWS + 1
       )
       .get(instanceId);
@@ -192,7 +193,7 @@ public inherited sharing class WorkflowHistoryRead {
       Limits.getLimitQueryRows() - Limits.getQueryRows()
     );
     Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = scanLimit > 0
-      ? queryRowsByInstance(lookupIds, scanLimit)
+      ? queryRowsByInstance(lookupIds, scanLimit, MAX_HISTORY_ROWS)
       : new Map<Id, List<Workflow_Step_Execution__c>>();
 
     // Build a history for every step-bearing instance. totalCount is authoritative
@@ -281,15 +282,20 @@ public inherited sharing class WorkflowHistoryRead {
   /**
    * @description Queries the step-execution rows for the requested instances in a
    * single query (bounded by the caller-supplied `scanLimit`) and buckets them per
-   * instance in append order. Ordering by instance then append time makes each
-   * instance's rows contiguous so a per-instance cap can be applied downstream.
+   * instance in append order. Ordering by instance then append time makes the
+   * earliest rows come first. A bucket stops growing at `bucketCap`, so a hot
+   * instance cannot fill the heap. The `COUNT()` query gives the totals. The
+   * buckets do not.
    * @param lookupIds the instances to read
    * @param scanLimit the SOQL LIMIT for the scan (already sized to the row budget)
+   * @param bucketCap the most rows to keep per instance
    * @return map of instance Id to its append-ordered step-execution rows
    */
+  @TestVisible
   private static Map<Id, List<Workflow_Step_Execution__c>> queryRowsByInstance(
     Set<Id> lookupIds,
-    Integer scanLimit
+    Integer scanLimit,
+    Integer bucketCap
   ) {
     Map<Id, List<Workflow_Step_Execution__c>> rowsByInstance = new Map<Id, List<Workflow_Step_Execution__c>>();
     // Deliberately excludes the long-text fields (Error_Details__c / Input__c /
@@ -317,7 +323,9 @@ public inherited sharing class WorkflowHistoryRead {
         bucket = new List<Workflow_Step_Execution__c>();
         rowsByInstance.put(row.Workflow_Instance__c, bucket);
       }
-      bucket.add(row);
+      if (bucket.size() < bucketCap) {
+        bucket.add(row);
+      }
     }
     return rowsByInstance;
   }
