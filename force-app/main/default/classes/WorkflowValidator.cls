@@ -25,6 +25,10 @@
  * resolution, not just during validation.
  *
  * See issue #23.
+ *
+ * Issue #141: the result also keeps topology data: the initial step, the
+ * declared steps, the rollback steps and the probe transitions.
+ * WorkflowTopology draws the graph from it.
  */
 public with sharing class WorkflowValidator {
   // Defect codes. Stable identifiers so callers can branch on a defect class
@@ -68,6 +72,14 @@ public with sharing class WorkflowValidator {
   public class ValidationResult {
     public String workflowName;
     public List<Defect> defects = new List<Defect>();
+    /** The getInitialStep() value, or null when it threw. */
+    public String initialStep;
+    /** The getSteps() value, in declared order. */
+    public List<String> declaredSteps = new List<String>();
+    /** The declared steps that implement CompensatableStep. */
+    public Set<String> compensatableSteps = new Set<String>();
+    /** The probe transitions, or null when the definition did not resolve. */
+    public WorkflowTransitionProbe.Transitions transitions;
 
     /**
      * @description Creates an empty result bound to the workflow being validated.
@@ -124,6 +136,21 @@ public with sharing class WorkflowValidator {
    * @return The validation result listing every structural defect found.
    */
   public static ValidationResult validate(String workflowName) {
+    return validate(workflowName, null);
+  }
+
+  /**
+   * @description Validates as validate(workflowName) does, but probes only the
+   * newest maxVersions versions of a VersionedWorkflow. The topology graph
+   * (issue #141) uses it to keep a dashboard request bounded.
+   * @param workflowName The name of the workflow definition to validate.
+   * @param maxVersions The maximum number of versions to probe, or null for all.
+   * @return The validation result.
+   */
+  public static ValidationResult validate(
+    String workflowName,
+    Integer maxVersions
+  ) {
     ValidationResult result = new ValidationResult(workflowName);
 
     // (a) The definition class must resolve and implement WorkflowDefinition.
@@ -171,6 +198,8 @@ public with sharing class WorkflowValidator {
       );
     }
     Set<String> declaredSet = new Set<String>(declaredSteps);
+    result.initialStep = initialStep;
+    result.declaredSteps = declaredSteps;
 
     if (!initialStepThrew) {
       validateInitialStepDeclared(initialStep, declaredSet, result);
@@ -184,8 +213,13 @@ public with sharing class WorkflowValidator {
       validateStepClass(stepName, result);
     }
 
-    // Best-effort transition probe for dangling successors.
-    WorkflowTransitionProbe.probe(def, declaredSteps, result);
+    // Best-effort transition probe for dangling successors. Keep the edges.
+    result.transitions = WorkflowTransitionProbe.probe(
+      def,
+      declaredSteps,
+      result,
+      maxVersions
+    );
 
     return result;
   }
@@ -265,7 +299,12 @@ public with sharing class WorkflowValidator {
       return null;
     }
 
-    Type defType = WorkflowTypeResolver.resolve(workflowName);
+    // Resolve as the engine does at start, so the class that validation
+    // checks is the class that the engine runs.
+    Type defType = WorkflowTypeResolver.resolve(
+      workflowName,
+      WorkflowTypeResolver.extractNamespace(workflowName)
+    );
     if (defType == null) {
       result.add(
         DEFINITION_UNRESOLVABLE,
@@ -371,6 +410,8 @@ public with sharing class WorkflowValidator {
           stepName +
           '" does not implement WorkflowStep (or CompensatableStep).'
       );
+    } else if (stepInstance instanceof CompensatableStep) {
+      result.compensatableSteps.add(stepName);
     }
   }
 }

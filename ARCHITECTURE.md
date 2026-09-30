@@ -216,9 +216,9 @@ translation/evaluation.
 
 ## Dashboard services
 
-The LWC-facing API has five **read** controllers and one **command**
+The LWC-facing API has seven **read** controllers and one **command**
 controller (endpoint names unchanged; only the host class of the 16 command
-endpoints moved). All six delegate to `inherited sharing` service classes.
+endpoints moved). All of them delegate to `inherited sharing` service classes.
 
 - Read side: `WorkflowDashboardController` (holds `InstanceQuery` / `StalledQuery`
   / `UnroutedQuery` DTOs) → `WorkflowInstanceListService`,
@@ -252,6 +252,11 @@ endpoints moved). All six delegate to `inherited sharing` service classes.
   `WorkflowFleetHealthService`. It is a separate controller for the same PMD reason.
   It uses three queries, each with a cap: a count probe, the counts (an aggregate up
   to 2,000 instances, else a row query) and a duration sample (ADR 0004).
+- Topology graph (#141): `WorkflowTopologyController` → `WorkflowTopology`.
+  It projects the `WorkflowValidator` result (probe edges from
+  `WorkflowTransitionProbe`) into a pinned DTO. The overlay uses 2 queries:
+  the instance and 1 bounded step query. It is a separate controller for the
+  same PMD reason. See [docs/topology-graph.md](docs/topology-graph.md).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,

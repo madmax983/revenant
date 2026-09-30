@@ -10,6 +10,7 @@
          panel. WorkflowFleetHealthController is the endpoint of the Fleet Health view.
          WorkflowAsyncCapacityController is the endpoint of the Async Apex Capacity panel.
          WorkflowGlobalAdmissionController is the endpoint of the Global Admission panel.
+         WorkflowTopologyController is the endpoint of the workflow graph.
          All of them only read data and use the same view gate. -->
     <classAccesses>
         <apexClass>WorkflowAsyncCapacityController</apexClass>
@@ -33,6 +34,10 @@
     </classAccesses>
     <classAccesses>
         <apexClass>WorkflowReadinessController</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+    <classAccesses>
+        <apexClass>WorkflowTopologyController</apexClass>
         <enabled>true</enabled>
     </classAccesses>
     <!-- Workflow_Dashboard_View lets the operator pass WorkflowDashboardSupport.checkAuthorization()

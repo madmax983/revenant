@@ -593,6 +593,36 @@ public class WorkflowValidatorTest {
     }
   }
 
+  // Issue #141: the result keeps the probe topology.
+  @IsTest
+  static void resultKeepsProbeTopology() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowValidator.ValidationResult result = WorkflowValidator.validate(
+        'WorkflowValidatorTest.GoodWorkflow'
+      );
+
+      System.assertEquals(
+        'WorkflowValidatorTest.GoodStepA',
+        result.initialStep
+      );
+      System.assertEquals(3, result.declaredSteps.size());
+      System.assertEquals(
+        new Set<String>{ 'WorkflowValidatorTest.CompensatingStep' },
+        result.compensatableSteps
+      );
+      WorkflowTransitionProbe.Transitions t = result.transitions;
+      System.assertEquals(
+        new List<String>{ 'WorkflowValidatorTest.GoodStepB' },
+        t.successors.get('WorkflowValidatorTest.GoodStepA')
+      );
+      System.assert(
+        t.endingSteps.contains('WorkflowValidatorTest.CompensatingStep')
+      );
+      System.assert(t.unresolvedSteps.isEmpty());
+      System.assertEquals(false, t.versionsUnresolved);
+    }
+  }
+
   @IsTest
   static void unresolvableDefinitionIsFlagged() {
     System.runAs(new User(Id = UserInfo.getUserId())) {

@@ -60,6 +60,7 @@ Revenant is a native, database-backed durable execution engine for Salesforce Ap
 - **Declarative Recurring Schedules (0-slot)**: Create a `Workflow_Schedule__c` record to run any workflow on a cron cadence — no Apex, and **zero additional scheduled-job slots** beyond the existing watchdog. See [docs/recurring-schedules.md](docs/recurring-schedules.md).
 - **Debounced Starts (0-slot)**: `WorkflowDebouncer.startDebounced` or the **Debounce Seconds** field of the Start Workflow action runs a workflow one time after a burst of triggers stops. The run gets the last input. `maxWaitSeconds` caps the wait. A duplicate fire collapses through `startOrGet`. No new scheduled job. See [docs/debounce.md](docs/debounce.md).
 - **Instance Stall Alert**: A non-terminal instance with no new step for `Stall_Threshold_Minutes__c` sends one alert. A new step resets the clock. No new job slot. See [docs/stall-alerts.md](docs/stall-alerts.md).
+- **Workflow Topology Graph**: The instance detail and the Catalog show the step graph of a definition. For an instance, the graph shows the path of the run, the current step, its state, the awaited signal and the possible next steps. The edges come from the `WorkflowValidator` probe, so the graph is best-effort. It marks the routes that it cannot know and never shows them as "no path". Read-only. No new schema. See [docs/topology-graph.md](docs/topology-graph.md).
 - **Schedule Health**: An enabled 0-slot schedule that does not fire within one sweep interval of its window shows as **Overdue**. A schedule whose last fire failed shows as **Last fire failed**. System Doctor and the Schedule Manager show both. Each problem sends one alert. No new job slot. See [docs/schedule-health.md](docs/schedule-health.md).
 
 ---
@@ -588,6 +589,8 @@ static void onboardingWorkflowIsWellFormed() {
 
 `validate` flags: a definition class that doesn't resolve or doesn't implement `WorkflowDefinition`; a `getInitialStep()` that is blank or not contained in `getSteps()`; any `getSteps()` entry that doesn't resolve to an instantiable `WorkflowStep`/`CompensatableStep`; and duplicate `getSteps()` entries. It additionally runs a **best-effort** transition probe that drives `getNextStep(...)` for each declared step and flags any returned successor not in `getSteps()` — best-effort because `getNextStep` is data-dependent and cannot be fully enumerated. Inspect `result.defects` (each has a `code`, `stepName`, and `message`) or `result.getMessages()` for the full list. This is why `getSteps()` is part of the `WorkflowDefinition` contract: it is the authoritative step inventory the validator checks the DAG against.
 
+To see the routes that the validator probe finds, click **Graph** in the dashboard Catalog. See **[docs/topology-graph.md](docs/topology-graph.md)**.
+
 #### Lint step code for replay safety (`sf` plugin)
 
 `WorkflowValidator` checks the DAG. It does not read step code. A step that calls `Datetime.now()`, `Math.random()`, `UserInfo`, `System.enqueueJob()`, or `EventBus.publish()` gets a new result each time the engine runs it again. The determinism lint finds these calls in the source, before deploy:
@@ -780,6 +783,7 @@ How the gates map to permissions:
 - **Rate Limits panel** Apex access: the panel calls `WorkflowRateLimitController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Readiness panel** Apex access: the panel calls `WorkflowReadinessController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Fleet Health view** Apex access: the view calls `WorkflowFleetHealthController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
+- **Workflow graph** Apex access: the graph calls `WorkflowTopologyController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
 
 ### Mapping Workflow Definitions to Alert Configurations
