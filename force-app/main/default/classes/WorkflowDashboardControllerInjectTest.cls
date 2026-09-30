@@ -506,6 +506,42 @@ public class WorkflowDashboardControllerInjectTest {
   }
 
   @IsTest
+  static void testInjectSignalApprovalNameRejection() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Status__c = 'Suspended',
+        Correlation_Key__c = 'SignalKeyApprove',
+        Input__c = '"InputData"'
+      );
+      insert inst;
+
+      for (
+        String name : new List<String>{
+          'Approve:Review',
+          'approve:Review',
+          '  APPROVE:Review',
+          '\u200BApprove:Review'
+        }
+      ) {
+        try {
+          WorkflowDashboardCommandController.injectSignal(
+            inst.Id,
+            name,
+            '{"approved":true}'
+          );
+          System.assert(false, 'Should reject approval name: ' + name);
+        } catch (AuraHandledException e) {
+          System.assert(
+            e.getMessage().contains('Use Approve or Reject'),
+            e.getMessage()
+          );
+        }
+      }
+    }
+  }
+
+  @IsTest
   static void testInjectSignalNoDashboardAccess() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Profile stdProfile = [
