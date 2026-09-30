@@ -424,7 +424,11 @@ public class OnboardingWorkflow implements WorkflowDefinition, ValidatedWorkflow
 The **Start Workflow** invocable gains two additive outputs — `Is Valid` (Boolean)
 and `Validation Error` (String) — so a Flow can branch on invalid input instead of
 catching a fault. Existing invocable outputs (`Workflow Instance ID`, `Is New`) are
-unchanged. See the README's "Validate Start Input Against a Contract (opt-in)"
+unchanged.
+
+**Issue #227.** The engine also checks the contract for child starts (`startChild`, `startChildren`) and continue-as-new successors. A bad input throws `WorkflowInputException` in the step transaction. A step that passed a bad child input before now fails at that step.
+
+See the README's "Validate Start Input Against a Contract (opt-in)"
 section for the full contract shape, type-coercion rules, and bulk/Flow behavior.
 
 ---

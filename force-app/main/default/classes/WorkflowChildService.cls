@@ -42,6 +42,24 @@ public inherited sharing class WorkflowChildService {
     }
     String parentNamespace = resolveParentNamespace(parentId);
     Workflow_Instance__c instance = buildChildInstance(req, parentNamespace);
+    // Reject a bad input contract before the insert (issue #227). A sibling
+    // that won a race owns the key, and this input is never saved. Then the
+    // start resolves idempotently.
+    try {
+      WorkflowInputValidator.validateChildStart(
+        req.workflowName,
+        parentNamespace,
+        inputJson
+      );
+    } catch (WorkflowInputException ex) {
+      if (
+        String.isNotBlank(correlationKey) &&
+        isChildStartIdempotent(correlationKey, parentId)
+      ) {
+        return;
+      }
+      throw ex;
+    }
 
     if (insertChildInstance(instance)) {
       return;

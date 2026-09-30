@@ -69,6 +69,28 @@ public inherited sharing class WorkflowChildBulkService {
       return;
     }
 
+    // Only new children reach this point. If one child breaks its contract,
+    // the engine rejects all children (issue #227).
+    try {
+      WorkflowInputValidator.validateChildStarts(
+        plan.requests,
+        parentNamespace
+      );
+    } catch (WorkflowInputException ex) {
+      // A sibling that won a race owns its key, and this input is never saved.
+      // Drop such children, then check the rest again.
+      if (!removeRacedSiblings(plan, parentId)) {
+        throw ex;
+      }
+      if (plan.instances.isEmpty()) {
+        return;
+      }
+      WorkflowInputValidator.validateChildStarts(
+        plan.requests,
+        parentNamespace
+      );
+    }
+
     if (
       !WorkflowChildBulkPlanner.insertChildInstances(plan.instances, parentId)
     ) {
@@ -81,6 +103,40 @@ public inherited sharing class WorkflowChildBulkService {
     insertChildInitialSteps(instancesToUpdate);
     scheduleOrPauseChildren(instancesToUpdate);
     enqueueChildOrchestrators(instancesToUpdate);
+  }
+
+  // Drops the children whose key now belongs to a sibling of this parent.
+  // Returns true when it dropped at least one child.
+  private static Boolean removeRacedSiblings(ChildStartPlan plan, Id parentId) {
+    Set<String> keys = new Set<String>();
+    for (StepResult.ChildRequest req : plan.requests) {
+      if (String.isNotBlank(req.correlationKey)) {
+        keys.add(req.correlationKey);
+      }
+    }
+    Map<String, Workflow_Instance__c> existing = WorkflowChildBulkPlanner.findExistingChildren(
+      parentId,
+      keys
+    );
+    if (existing.isEmpty()) {
+      return false;
+    }
+    ChildStartPlan kept = new ChildStartPlan();
+    for (Integer i = 0; i < plan.requests.size(); i++) {
+      String key = plan.requests[i].correlationKey;
+      if (
+        String.isNotBlank(key) &&
+        existing.containsKey(WorkflowKeys.normalizeKey(key))
+      ) {
+        continue;
+      }
+      kept.instances.add(plan.instances[i]);
+      kept.requests.add(plan.requests[i]);
+    }
+    Boolean dropped = kept.requests.size() < plan.requests.size();
+    plan.instances = kept.instances;
+    plan.requests = kept.requests;
+    return dropped;
   }
 
   private static List<Workflow_Instance__c> applyChildInputPayloads(
