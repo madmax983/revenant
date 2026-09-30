@@ -36,12 +36,16 @@ public class CaseDebounceWorkflowExample implements WorkflowDefinition {
   public class ProcessCaseUpdate implements WorkflowStep {
     /**
      * @description Processes the coalesced Case update carried in the step input
-     * and completes the workflow.
+     * and completes the workflow. The input is from the last edit of the burst.
      * @param ctx The durable step context supplying the Case update input.
-     * @return A completed StepResult ending the workflow.
+     * @return A completed StepResult. Its output is the last subject.
      */
     public StepResult execute(StepContext ctx) {
-      return StepResult.complete(null, null);
+      Map<String, Object> input = (Map<String, Object>) JSON.deserializeUntyped(
+        ctx.inputJson
+      );
+      // Put the expensive work here: one run for each burst.
+      return StepResult.complete(null, input.get('subject'));
     }
   }
 }

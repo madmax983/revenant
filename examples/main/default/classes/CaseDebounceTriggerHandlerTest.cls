@@ -26,12 +26,10 @@ public class CaseDebounceTriggerHandlerTest {
 
       // Update case multiple times to simulate bursty edits
       Test.startTest();
-      c.Subject = 'Edit 1';
-      update c;
-
-      c.Subject = 'Edit 2';
-      update c;
-
+      for (Integer i = 1; i < 10; i++) {
+        c.Subject = 'Edit ' + i;
+        update c;
+      }
       c.Subject = 'Final Edit';
       update c;
       Test.stopTest();

@@ -1,10 +1,16 @@
 @IsTest
 private class WorkflowDebounceTest {
+  // The arm path rounds Fire_At__c up to a whole second. Start on one, so the
+  // expected times below stay exact.
+  private static Datetime wholeSecondNow() {
+    return Datetime.newInstance((Datetime.now().getTime() / 1000L) * 1000L);
+  }
+
   @IsTest
   static void testSingleDebounceStartsExactlyOnce() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       WorkflowStartService.startDebounced(
@@ -90,7 +96,7 @@ private class WorkflowDebounceTest {
   static void testSubsequentDebounceExtendsTimerLatestWins() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       // First trigger
@@ -173,7 +179,7 @@ private class WorkflowDebounceTest {
   static void testMaxWaitSecondsCapsExtension() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       // First trigger: debounce = 10, maxWait = 15
@@ -251,7 +257,7 @@ private class WorkflowDebounceTest {
   static void testTriggerBurstCoalescing() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       // Burst of 15 calls within 5 seconds
@@ -311,7 +317,7 @@ private class WorkflowDebounceTest {
   static void testAdmissionDedupCollapsing() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       // Start a normal instance for key 'deb_key_dedup' (already active)
@@ -396,7 +402,7 @@ private class WorkflowDebounceTest {
   static void testDebounceMetadataPreservation() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       WorkflowStartService.startDebounced(
@@ -477,7 +483,7 @@ private class WorkflowDebounceTest {
   static void testFailedDebounceRetryAndQuarantine() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       // Enqueue debounce state with a invalid/non-existent workflow name
@@ -709,7 +715,7 @@ private class WorkflowDebounceTest {
   static void testResetRetryStateOnRearm() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       // 1. Enqueue state with invalid workflow to force a failure
@@ -803,7 +809,7 @@ private class WorkflowDebounceTest {
   static void testBulkSweepRollbackOnPartialFailure() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      WorkflowEngine.mockNow = Datetime.now();
+      WorkflowEngine.mockNow = wholeSecondNow();
 
       Test.startTest();
       // 1. Enqueue one valid and one invalid workflow start request

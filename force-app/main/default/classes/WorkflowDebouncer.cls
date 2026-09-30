@@ -3,14 +3,30 @@
  * correlation key into a single deferred start: it maintains durable
  * Debounce_State__c rows with a rolling fire time (bounded by an optional max
  * wait) and a sweeper that fires the due states once, with per-state retry.
+ * The global members are in docs/global-api.md (issue #140).
  */
-public inherited sharing class WorkflowDebouncer {
+global inherited sharing class WorkflowDebouncer {
+  /**
+   * @description Blocks construction. Without an explicit constructor, a
+   * global class gets a default constructor that subscribers can call.
+   */
+  private WorkflowDebouncer() {
+    // No state to set.
+  }
+
+  /**
+   * @description Test seam. When true, the first read finds no row. This
+   * acts as a row that another transaction committed after the read.
+   */
+  @TestVisible
+  private static Boolean skipExistingLoadForTest = false;
+
   /**
    * @description A single debounce start request: the target workflow and
    * correlation key, its input/attributes payloads, and the debounce and
    * max-wait windows that govern when the coalesced start fires.
    */
-  public class DebounceRequest {
+  global class DebounceRequest {
     public String workflowName;
     public String correlationKey;
     public String inputJson;
@@ -26,7 +42,7 @@ public inherited sharing class WorkflowDebouncer {
      * @param correlationKey dedup/correlation key coalescing the debounced starts
      * @param inputJson serialized start input applied when the timer fires
      */
-    public DebounceRequest(
+    global DebounceRequest(
       String workflowName,
       String correlationKey,
       String inputJson
@@ -41,7 +57,7 @@ public inherited sharing class WorkflowDebouncer {
      * @param debounceSecondsArg trailing-edge quiet period before the start fires
      * @return this request, for call chaining
      */
-    public DebounceRequest withDebounce(Integer debounceSecondsArg) {
+    global DebounceRequest withDebounce(Integer debounceSecondsArg) {
       this.debounceSeconds = debounceSecondsArg;
       return this;
     }
@@ -51,7 +67,7 @@ public inherited sharing class WorkflowDebouncer {
      * @param maxWaitSecondsArg ceiling on total wait before the start is forced
      * @return this request, for call chaining
      */
-    public DebounceRequest withMaxWait(Integer maxWaitSecondsArg) {
+    global DebounceRequest withMaxWait(Integer maxWaitSecondsArg) {
       this.maxWaitSeconds = maxWaitSecondsArg;
       return this;
     }
@@ -78,11 +94,19 @@ public inherited sharing class WorkflowDebouncer {
   }
 
   /**
+   * @description Arms one debounced start. See the bulk overload.
+   * @param request The debounce request to register.
+   */
+  global static void startDebounced(DebounceRequest request) {
+    startDebounced(new List<DebounceRequest>{ request });
+  }
+
+  /**
    * @description Bulk-registers debounced start requests, upserting a durable
    * debounce state per key and advancing its rolling fire time (capped by max wait).
    * @param requests The debounce requests to register; null and invalid entries are skipped.
    */
-  public static void startDebounced(List<DebounceRequest> requests) {
+  global static void startDebounced(List<DebounceRequest> requests) {
     if (requests == null || requests.isEmpty()) {
       return;
     }
@@ -99,18 +123,95 @@ public inherited sharing class WorkflowDebouncer {
       return;
     }
 
-    Map<String, Debounce_State__c> existingMap = loadExistingStates(
-      debounceKeys
-    );
-    Map<String, Debounce_State__c> statesToUpsert = buildStatesToUpsert(
+    Map<String, Debounce_State__c> existingMap = skipExistingLoadForTest
+      ? new Map<String, Debounce_State__c>()
+      : loadExistingStates(debounceKeys);
+    Map<String, Debounce_State__c> states = buildStatesToUpsert(
       validRequests,
       existingMap,
       now
     );
 
-    if (!statesToUpsert.isEmpty()) {
-      upsert as system statesToUpsert.values() Debounce_Key__c;
+    List<Debounce_State__c> toUpdate = new List<Debounce_State__c>();
+    List<Debounce_State__c> toInsert = new List<Debounce_State__c>();
+    for (Debounce_State__c state : states.values()) {
+      if (state.Id == null) {
+        toInsert.add(state);
+      } else {
+        toUpdate.add(state);
+      }
     }
+    if (!toUpdate.isEmpty()) {
+      update as system toUpdate;
+    }
+    Set<String> lostKeys = insertNewStates(toInsert);
+    if (!lostKeys.isEmpty()) {
+      reArmLostKeys(validRequests, lostKeys, now);
+    }
+  }
+
+  /**
+   * @description Inserts new rows. A parallel transaction can insert the same
+   * key after our read. Then the insert gets DUPLICATE_VALUE. That is not an
+   * error: the caller re-arms the other row.
+   * @param toInsert The new rows.
+   * @return The keys that another transaction inserted first.
+   */
+  private static Set<String> insertNewStates(List<Debounce_State__c> toInsert) {
+    Set<String> lostKeys = new Set<String>();
+    if (toInsert.isEmpty()) {
+      return lostKeys;
+    }
+    List<Database.SaveResult> results = Database.insert(
+      toInsert,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    for (Integer i = 0; i < results.size(); i++) {
+      if (results[i].isSuccess()) {
+        continue;
+      }
+      Database.Error err = results[i].getErrors()[0];
+      if (err.getStatusCode() != StatusCode.DUPLICATE_VALUE) {
+        throw new WorkflowEngine.WorkflowException(
+          'Could not arm the debounced start: ' + err.getMessage()
+        );
+      }
+      lostKeys.add(toInsert[i].Debounce_Key__c);
+    }
+    return lostKeys;
+  }
+
+  /**
+   * @description Locks the rows that another transaction inserted first and
+   * applies the requests to them. Upsert also covers a row that a sweep
+   * deleted in the meantime.
+   * @param validRequests All valid requests of this call.
+   * @param lostKeys The keys to re-arm.
+   * @param now The arm time.
+   */
+  private static void reArmLostKeys(
+    List<DebounceRequest> validRequests,
+    Set<String> lostKeys,
+    Datetime now
+  ) {
+    List<DebounceRequest> lost = new List<DebounceRequest>();
+    for (DebounceRequest req : validRequests) {
+      if (
+        lostKeys.contains(
+          generateDebounceKey(req.workflowName, req.correlationKey)
+        )
+      ) {
+        lost.add(req);
+      }
+    }
+    List<Debounce_State__c> states = buildStatesToUpsert(
+        lost,
+        loadExistingStates(lostKeys),
+        now
+      )
+      .values();
+    upsert as system states Debounce_Key__c;
   }
 
   private static Map<String, Debounce_State__c> loadExistingStates(
@@ -201,7 +302,21 @@ public inherited sharing class WorkflowDebouncer {
         proposedFireAt = maxFireAt;
       }
     }
-    return proposedFireAt;
+    return ceilToSecond(proposedFireAt);
+  }
+
+  /**
+   * @description Rounds up to the next whole second. A DateTime field can
+   * drop milliseconds. Without this, a row can fire before its window ends.
+   * @param value The time to round.
+   * @return The first whole second at or after the value.
+   */
+  private static Datetime ceilToSecond(Datetime value) {
+    Long millis = value.getTime();
+    Long remainder = Math.mod(millis, 1000L);
+    return remainder == 0
+      ? value
+      : Datetime.newInstance(millis - remainder + 1000L);
   }
 
   /**

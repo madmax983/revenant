@@ -5,13 +5,10 @@
 @IsTest
 private class WorkflowDebounceBurstTest {
   private static final String WORKFLOW = 'WorkflowEngineTest.HappyWorkflow';
-  private static final Datetime BASE = Datetime.newInstanceGmt(
-    2026,
-    1,
-    5,
-    12,
-    0,
-    0
+  // A whole second near the real time, so other heartbeat sweeps see a
+  // normal clock.
+  private static final Datetime BASE = Datetime.newInstance(
+    (Datetime.now().getTime() / 1000L) * 1000L
   );
 
   private static void arm(String key, String inputJson, Integer seconds) {
