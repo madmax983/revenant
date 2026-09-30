@@ -103,6 +103,12 @@ global inherited sharing class StepResult {
      * this SUSPEND or WAIT_FOR_APPROVAL commits (issue #123). Null: none.
      */
     public WorkflowNotification notification { get; set; }
+
+    /**
+     * @description AsyncApexJob Id that this SUSPEND waits for (issue #138).
+     * The engine writes it to Awaited_Batch_Job_Id__c. Null: no batch wait.
+     */
+    public String awaitedBatchJobId { get; set; }
   }
 
   /**
@@ -387,6 +393,29 @@ global inherited sharing class StepResult {
       );
     }
     this.directiveData.notification = notification;
+    return this;
+  }
+
+  /**
+   * @description Marks this SUSPEND as a wait for a batch job (issue #138). The watchdog resumes the instance when the job ends. WorkflowBatchStep uses it.
+   * @param jobId The AsyncApexJob Id. Not null.
+   * @return This StepResult, for fluent chaining.
+   */
+  public StepResult withAwaitedBatchJob(Id jobId) {
+    if (
+      this.directiveData.action != ActionType.SUSPEND ||
+      this.directiveData.timeout.step != null
+    ) {
+      throw new IllegalArgumentException(
+        'StepResult.withAwaitedBatchJob: only a SUSPEND with no timeout can wait for a batch job'
+      );
+    }
+    if (jobId == null) {
+      throw new IllegalArgumentException(
+        'StepResult.withAwaitedBatchJob: jobId is required'
+      );
+    }
+    this.directiveData.awaitedBatchJobId = String.valueOf(jobId);
     return this;
   }
 

@@ -180,6 +180,8 @@ public inherited sharing class WorkflowTimeoutStepFailer {
     (String.isNotBlank(step.Step_Name__c) &&
     step.Step_Name__c.endsWith('_Compensate')));
 
+    // Issue #138: each branch below ends a batch wait.
+    parent.Awaited_Batch_Job_Id__c = null;
     if (isCompensationFailure && hasCompensations) {
       // A compensation step timed out mid-rollback. The remaining stack is
       // intact, so park the saga in the recoverable "rollback incomplete"

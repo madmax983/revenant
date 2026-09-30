@@ -1,7 +1,7 @@
 /**
  * @description Sequences the watchdog heartbeat: the fixed-order body that
  * WorkflowEngine.processWatchdogHeartbeat() delegates to. Runs the timeout,
- * deadline, sleep-resume, unrouted-signal, schedule, debounce, schedule-health
+ * deadline, batch-wait, sleep-resume, unrouted-signal, schedule, debounce, schedule-health
  * alert, concurrency-reconcile, transient-retry-rescue, orphan-reclaim, and
  * stall-detection phases in strict order, then publishes deferred lifecycle
  * events so a best-effort publish can never spend a DML statement a required
@@ -56,6 +56,15 @@ public inherited sharing class WorkflowHeartbeatService {
       now,
       watchdogTerminalInstances
     );
+
+    // 1c. Issue #138: set the wake time of each instance whose awaited batch
+    // job ended. Section 2 below resumes it in this heartbeat.
+    try {
+      WorkflowBatchAwaitSweep.reconcile(now);
+    } catch (Exception ex) {
+      // The next heartbeat tries again. An error must not stop the heartbeat.
+      WorkflowLog.error('BatchAwaitSweep', ex.getMessage());
+    }
 
     // 2. Process sleep resumptions (bounded per heartbeat).
     WorkflowSleepResumeSweep.processSleepResumptions(now);

@@ -141,6 +141,11 @@
             <field>Global_Admission__c</field>
             <table>Workflow_Instance__c</table>
         </columns>
+        <columns>
+            <checkedByDefault>false</checkedByDefault>
+            <field>Awaited_Batch_Job_Id__c</field>
+            <table>Workflow_Instance__c</table>
+        </columns>
         <masterLabel>Workflow Instances</masterLabel>
     </sections>
 </ReportType>

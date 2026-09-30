@@ -200,6 +200,8 @@ public inherited sharing class WorkflowFailureService {
 
     instance.Current_Step__c = errorStepName;
     instance.Status__c = 'Running';
+    // Issue #138: the batch wait ends here.
+    instance.Awaited_Batch_Job_Id__c = null;
     instance.Sleep_Until__c = null;
     instance.Async_Job_Id__c = null;
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
@@ -243,6 +245,8 @@ public inherited sharing class WorkflowFailureService {
   ) {
     Workflow_Instance__c instance = req.instance;
     instance.Status__c = 'Failed';
+    // Issue #138: the batch wait ends here.
+    instance.Awaited_Batch_Job_Id__c = null;
     instance.Failure_Category__c = req.failureCategory;
     instance.Error_Message__c = ('Failed at step ' +
       req.stepName +
@@ -264,6 +268,8 @@ public inherited sharing class WorkflowFailureService {
       (instance.Error_Message__c != null &&
       instance.Error_Message__c.contains('Cancelled by user'));
     instance.Status__c = 'CompensationFailed';
+    // Issue #138: the batch wait ends here.
+    instance.Awaited_Batch_Job_Id__c = null;
     instance.Failure_Category__c = WorkflowEngine.CAT_COMPENSATION_FAILED;
     instance.Error_Message__c = buildRollbackIncompleteMessage(
         wasCancelling,
@@ -286,6 +292,8 @@ public inherited sharing class WorkflowFailureService {
   ) {
     Workflow_Instance__c instance = req.instance;
     instance.Status__c = 'Compensating';
+    // Issue #138: the batch wait ends here.
+    instance.Awaited_Batch_Job_Id__c = null;
     instance.Error_Message__c = ('Failed at step ' +
       req.stepName +
       ': ' +
