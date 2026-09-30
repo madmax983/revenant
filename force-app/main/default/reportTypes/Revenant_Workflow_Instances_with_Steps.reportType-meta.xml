@@ -190,6 +190,11 @@
         </columns>
         <columns>
             <checkedByDefault>false</checkedByDefault>
+            <field>Wait_Type__c</field>
+            <table>Workflow_Instance__c.Workflow_Step_Executions__r</table>
+        </columns>
+        <columns>
+            <checkedByDefault>false</checkedByDefault>
             <field>Timeout_At__c</field>
             <table>Workflow_Instance__c.Workflow_Step_Executions__r</table>
         </columns>

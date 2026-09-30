@@ -6,21 +6,15 @@
  * this service reads that state and classifies the wait into an approval, child-completion,
  * or generic signal descriptor.
  *
- * <p><b>List vs. detail (issue #84):</b> the single-row detail path
- * ({@link #describeSignalWait}) reads the parked step's {@code Output__c} (rehydrating an
- * offloaded body through WorkflowPayloadOffload) and classifies the wait in full. The bulk
- * list path ({@link #describeSignalWaits}) deliberately does NOT select {@code Output__c} at
- * all: it is a LongTextArea (up to ~100,000 chars) and a full page of inline parked states
- * would materialize ~6-10MB into one synchronous transaction and exceed the 6MB Apex heap
- * before any classification runs. The wait TYPE (approval / child / generic) lives ONLY inside
- * that Output JSON — no small step/instance field encodes it — so the list cannot name the type
- * without paying that heap cost. It therefore emits one lightweight indicator per signal wait
- * ("Awaiting signal at step &lt;name&gt;"), while still distinguishing a signal wait from a
- * timer/job wait via two small instance fields that need no Output read: a signal wait has no
- * resume job ({@code Async_Job_Id__c} blank) AND no armed timer ({@code Sleep_Until__c} null);
- * a resume job OR an armed {@code Sleep_Until__c} marks a sleep/retry/timer wait. The exact
- * approval/child classification and awaited signalName are deferred to the detail view (which
- * can safely rehydrate one Output body).
+ * <p><b>List vs. detail (issues #84, #229):</b> the detail path ({@link #describeSignalWait})
+ * reads the parked step's {@code Output__c} and classifies the wait in full. The list path
+ * ({@link #describeSignalWaits}) never selects {@code Output__c}: a page of inline states can
+ * exceed the 6MB Apex heap. It reads the small {@code Wait_Type__c} field that
+ * {@code WorkflowStepSuspension} writes when it parks the step, and labels the wait as approval,
+ * child completion or generic. A blank or unknown value (a row parked before the field existed)
+ * gives the generic label. The list has no awaited signal name. A signal wait has no resume job
+ * ({@code Async_Job_Id__c} blank) and no armed timer ({@code Sleep_Until__c} null); a resume job
+ * or an armed timer marks a sleep, retry or timer wait.
  *
  * <p>The descriptor's signalName for an approval / single-child wait is the exact
  * operator-injectable form ('Approve:<key>' / 'ChildCompleted:<key>') consumed by the dashboard
@@ -80,22 +74,10 @@ public inherited sharing class WorkflowWaitDescriptorService {
    * path) in a single pending-step query. Only Suspended instances on a signal wait get an
    * entry. The caller (the instance-list service) always supplies a non-null instance list.
    *
-   * <p><b>List-vs-detail split (issue #84):</b> unlike the single-row detail path, this bulk
-   * path deliberately does NOT select the parked step's {@code Output__c} (a LongTextArea up to
-   * ~100,000 chars). A page of Suspended rows (limitSize up to ~100) whose inline parked states
-   * are each 60-100KB would materialize ~6-10MB into one synchronous transaction and exceed the
-   * 6MB Apex heap before any classification runs — even without the (already-removed) offloaded
-   * ContentVersion rehydration. The wait TYPE (approval / child / generic) is encoded ONLY inside
-   * that Output JSON; no small step/instance field carries it. So the list cannot label the type
-   * without paying the heap cost and instead emits a single lightweight generic "Awaiting signal"
-   * indicator for every signal wait. A signal wait is still distinguished from a timer/job wait
-   * without reading Output: a parked step whose instance has no resume job ({@code Async_Job_Id__c}
-   * blank) AND no armed timer ({@code Sleep_Until__c} null) is a signal wait; one carrying a resume
-   * job OR an armed {@code Sleep_Until__c} is a timer and yields no descriptor. Accepted Option-A
-   * limitation: a timed approval/suspend (signal marker + {@code Sleep_Until__c}) shows as a timer
-   * on this list but still gets its full descriptor on the detail view. The exact approval/child
-   * classification and awaited signalName are deferred to the single-row {@link #describeSignalWait}
-   * detail view, which can safely rehydrate one body.
+   * <p>This path never selects {@code Output__c} (issue #84). It labels each wait from the
+   * stored {@code Wait_Type__c} (issue #229). A blank or unknown type gives the generic label. A
+   * signal wait has no resume job and no armed timer; a timed approval or suspend shows as a timer
+   * here but has its full descriptor on the detail view.
    * @param instances The page of instances (Status__c is read to select the Suspended rows; the
    * Async_Job_Id__c and Sleep_Until__c used for the signal/timer split are filtered in the parked
    * step's parent (WHERE) clause, so the caller need not select them here).
@@ -126,7 +108,7 @@ public inherited sharing class WorkflowWaitDescriptorService {
     ) {
       byInstance.put(
         pending.Workflow_Instance__c,
-        genericDescriptor(pending.Step_Name__c)
+        listDescriptor(pending.Wait_Type__c, pending.Step_Name__c)
       );
     }
     return byInstance;
@@ -162,7 +144,7 @@ public inherited sharing class WorkflowWaitDescriptorService {
   ) {
     Map<Id, Workflow_Step_Execution__c> pendingByInstance = new Map<Id, Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c se : [
-      SELECT Workflow_Instance__c, Step_Name__c
+      SELECT Workflow_Instance__c, Step_Name__c, Wait_Type__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c IN :suspendedIds
@@ -173,7 +155,18 @@ public inherited sharing class WorkflowWaitDescriptorService {
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT 50000
     ]) {
-      pendingByInstance.put(se.Workflow_Instance__c, se);
+      // A parallel sibling that has not started is Pending with a blank type. It must not
+      // replace a parked sibling that has a recorded wait type (issue #229).
+      Workflow_Step_Execution__c kept = pendingByInstance.get(
+        se.Workflow_Instance__c
+      );
+      if (
+        kept == null ||
+        String.isNotBlank(se.Wait_Type__c) ||
+        String.isBlank(kept.Wait_Type__c)
+      ) {
+        pendingByInstance.put(se.Workflow_Instance__c, se);
+      }
     }
     return pendingByInstance;
   }
@@ -365,6 +358,26 @@ public inherited sharing class WorkflowWaitDescriptorService {
       }
     }
     return names;
+  }
+
+  // Builds the list descriptor from the stored Wait_Type__c (issue #229). A blank or unknown
+  // value (a row parked before the field existed) gives the generic descriptor. The list has
+  // no signalName: only the detail view derives it.
+  private static Map<String, Object> listDescriptor(
+    String waitType,
+    String stepName
+  ) {
+    String noun = 'signal';
+    if (waitType == TYPE_APPROVAL) {
+      noun = 'approval';
+    } else if (waitType == TYPE_CHILD) {
+      noun = 'child completion';
+    } else {
+      waitType = TYPE_GENERIC;
+    }
+    Map<String, Object> d = descriptor(waitType, null, stepName);
+    d.put('label', 'Awaiting ' + noun + ' at step ' + stepName);
+    return d;
   }
 
   // Builds the generic descriptor: the awaited name is unknowable, so it names the step the

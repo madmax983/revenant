@@ -945,6 +945,142 @@ public class WorkflowWaitDescriptorServiceTest {
     }
   }
 
+  // ── Wait type label on the list (issue #229) ────────────────────────────────
+
+  private static Map<String, Object> listDescriptorFor(String waitType) {
+    Workflow_Instance__c inst = suspendedInstance(null);
+    insert as system inst;
+    Workflow_Step_Execution__c step = pendingStepFor(
+      inst.Id,
+      'WaitDescTest.TypedStep',
+      null
+    );
+    step.Wait_Type__c = waitType;
+    insert as system step;
+    return WorkflowWaitDescriptorService.describeSignalWaits(
+        new List<Workflow_Instance__c>{ inst }
+      )
+      .get(inst.Id);
+  }
+
+  @IsTest
+  static void testListLabelsApprovalWait() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> d = listDescriptorFor(
+        WorkflowWaitDescriptorService.TYPE_APPROVAL
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_APPROVAL,
+        d.get('type'),
+        'The stored type drives the list type'
+      );
+      System.assertEquals(
+        'Awaiting approval at step WaitDescTest.TypedStep',
+        d.get('label'),
+        'The list names the approval wait'
+      );
+      System.assertEquals(null, d.get('signalName'), 'The list has no name');
+    }
+  }
+
+  @IsTest
+  static void testListLabelsChildWait() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> d = listDescriptorFor(
+        WorkflowWaitDescriptorService.TYPE_CHILD
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_CHILD,
+        d.get('type'),
+        'The stored type drives the list type'
+      );
+      System.assertEquals(
+        'Awaiting child completion at step WaitDescTest.TypedStep',
+        d.get('label'),
+        'The list names the child wait'
+      );
+    }
+  }
+
+  @IsTest
+  static void testListLabelsGenericWait() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> d = listDescriptorFor(
+        WorkflowWaitDescriptorService.TYPE_GENERIC
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.TypedStep',
+        d.get('label'),
+        'A generic wait keeps the generic label'
+      );
+    }
+  }
+
+  @IsTest
+  static void testListNullTypeKeepsGenericLabel() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> d = listDescriptorFor(null);
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'A row parked before the field existed is generic'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.TypedStep',
+        d.get('label'),
+        'A blank type keeps the generic label'
+      );
+    }
+  }
+
+  @IsTest
+  static void testListUnknownTypeKeepsGenericLabel() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Map<String, Object> d = listDescriptorFor('bogus');
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        d.get('type'),
+        'An unknown type is generic'
+      );
+      System.assertEquals(
+        'Awaiting signal at step WaitDescTest.TypedStep',
+        d.get('label'),
+        'An unknown type keeps the generic label'
+      );
+    }
+  }
+
+  @IsTest
+  static void testListPrefersTypedParkedSibling() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A parked approval branch is older than a sibling that has not started (blank type).
+      Workflow_Instance__c inst = suspendedInstance(null);
+      insert as system inst;
+      Workflow_Step_Execution__c parked = pendingStepFor(
+        inst.Id,
+        'WaitDescTest.ParkedBranch',
+        null
+      );
+      parked.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_APPROVAL;
+      insert as system parked;
+      insert as system pendingStepFor(
+        inst.Id,
+        'WaitDescTest.UntouchedBranch',
+        null
+      );
+
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWaits(
+          new List<Workflow_Instance__c>{ inst }
+        )
+        .get(inst.Id);
+      System.assertEquals(
+        'Awaiting approval at step WaitDescTest.ParkedBranch',
+        d.get('label'),
+        'A typed parked branch wins over a later untouched sibling'
+      );
+    }
+  }
+
   // ── End-to-end exposure on the read paths ───────────────────────────────────
 
   @IsTest
