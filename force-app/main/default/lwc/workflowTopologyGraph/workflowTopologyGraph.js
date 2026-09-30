@@ -6,8 +6,8 @@
  * The component says so. It reads once on connect and when an input changes.
  */
 import { LightningElement, api } from "lwc";
-import getWorkflowTopology from "@salesforce/apex/WorkflowDashboardController.getWorkflowTopology";
-import getInstanceTopology from "@salesforce/apex/WorkflowDashboardController.getInstanceTopology";
+import getWorkflowTopology from "@salesforce/apex/WorkflowTopologyController.getWorkflowTopology";
+import getInstanceTopology from "@salesforce/apex/WorkflowTopologyController.getInstanceTopology";
 import { layoutGraph } from "c/topologyLayout";
 
 const AWAITING = "AWAITING_SIGNAL";

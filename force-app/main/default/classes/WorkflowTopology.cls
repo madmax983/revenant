@@ -80,10 +80,12 @@ public inherited sharing class WorkflowTopology {
     public Overlay overlay;
   }
 
-  // Builds a Graph. Keeps the name index out of the serialized DTO.
+  // Builds a Graph. Keeps the indexes out of the serialized DTO. Names match
+  // exactly (case-sensitive), as the validator's declared-step Set does.
   private class GraphBuilder {
     final Graph graph = new Graph();
     final Map<String, Node> nodeByName = new Map<String, Node>();
+    final Map<String, List<String>> successorsByName = new Map<String, List<String>>();
 
     Node addNode(String name, Boolean declared) {
       Node n = nodeByName.get(name);
@@ -106,19 +108,22 @@ public inherited sharing class WorkflowTopology {
     }
 
     void addEdge(String source, String target) {
-      if (!hasEdge(graph.edges, source, target)) {
+      if (!hasEdge(source, target)) {
         graph.edges.add(new Edge(source, target));
+        if (!successorsByName.containsKey(source)) {
+          successorsByName.put(source, new List<String>());
+        }
+        successorsByName.get(source).add(target);
       }
     }
 
+    Boolean hasEdge(String source, String target) {
+      return successorsOf(source).contains(target);
+    }
+
     List<String> successorsOf(String stepName) {
-      List<String> next = new List<String>();
-      for (Edge e : graph.edges) {
-        if (e.source == stepName) {
-          next.add(e.target);
-        }
-      }
-      return next;
+      List<String> next = successorsByName.get(stepName);
+      return next == null ? new List<String>() : new List<String>(next);
     }
   }
 
@@ -311,7 +316,7 @@ public inherited sharing class WorkflowTopology {
         continue;
       }
       Node n = b.addNode(stepName, true);
-      n.initial = stepName == result.initialStep;
+      n.initial = stepName.equals(result.initialStep);
       n.compensatable = result.compensatableSteps.contains(stepName);
       n.terminal = t.endingSteps.contains(stepName);
       n.routingUnknown = t.unresolvedSteps.contains(stepName);
@@ -399,6 +404,7 @@ public inherited sharing class WorkflowTopology {
   // It never adds an edge that the probe did not find: parallel branches
   // interleave their rows. Gives the last forward step name.
   private static String addTraversedEdges(Overlay overlay, GraphBuilder b) {
+    Set<String> used = new Set<String>();
     String previous = null;
     for (PathEntry entry : overlay.path) {
       if (String.isBlank(entry.stepName)) {
@@ -408,30 +414,19 @@ public inherited sharing class WorkflowTopology {
       if (entry.compensation) {
         continue;
       }
+      String key = previous + '->' + entry.stepName;
       if (
         previous != null &&
-        previous != entry.stepName &&
-        hasEdge(b.graph.edges, previous, entry.stepName) &&
-        !hasEdge(overlay.traversedEdges, previous, entry.stepName)
+        !previous.equals(entry.stepName) &&
+        b.hasEdge(previous, entry.stepName) &&
+        !used.contains(key)
       ) {
         overlay.traversedEdges.add(new Edge(previous, entry.stepName));
+        used.add(key);
       }
       previous = entry.stepName;
     }
     return previous;
-  }
-
-  private static Boolean hasEdge(
-    List<Edge> edges,
-    String source,
-    String target
-  ) {
-    for (Edge e : edges) {
-      if (e.source == source && e.target == target) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private static AuraHandledException handled(String message) {

@@ -78,8 +78,9 @@ go next, without reading `getNextStep`.
 - `WorkflowValidator.ValidationResult` keeps `initialStep`, `declaredSteps`,
   `compensatableSteps` and `transitions`.
 - `WorkflowTopology.build(name)` and `WorkflowTopology.forInstance(id)`.
-- `WorkflowDashboardController.getWorkflowTopology` (cacheable) and
-  `getInstanceTopology` (not cacheable, live position).
+- `WorkflowTopologyController.getWorkflowTopology` (cacheable) and
+  `getInstanceTopology` (not cacheable, live position). A new controller,
+  because `WorkflowDashboardController` is at the PMD public-count limit.
 - LWC `workflowTopologyGraph`, with a pure layout module
   (`topologyLayout.js`).
 - Example `BranchingOrderWorkflowExample`.

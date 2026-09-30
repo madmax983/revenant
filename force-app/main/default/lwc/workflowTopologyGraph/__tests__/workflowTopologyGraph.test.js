@@ -1,15 +1,15 @@
 import { createElement } from "lwc";
 import WorkflowTopologyGraph from "c/workflowTopologyGraph";
-import getWorkflowTopology from "@salesforce/apex/WorkflowDashboardController.getWorkflowTopology";
-import getInstanceTopology from "@salesforce/apex/WorkflowDashboardController.getInstanceTopology";
+import getWorkflowTopology from "@salesforce/apex/WorkflowTopologyController.getWorkflowTopology";
+import getInstanceTopology from "@salesforce/apex/WorkflowTopologyController.getInstanceTopology";
 
 jest.mock(
-  "@salesforce/apex/WorkflowDashboardController.getWorkflowTopology",
+  "@salesforce/apex/WorkflowTopologyController.getWorkflowTopology",
   () => ({ default: jest.fn() }),
   { virtual: true },
 );
 jest.mock(
-  "@salesforce/apex/WorkflowDashboardController.getInstanceTopology",
+  "@salesforce/apex/WorkflowTopologyController.getInstanceTopology",
   () => ({ default: jest.fn() }),
   { virtual: true },
 );
@@ -267,6 +267,49 @@ describe("c-workflow-topology-graph", () => {
       );
 
       expect(nodeEl(element, R).textContent).toContain("Approve:Review");
+    });
+
+    it("treats a timed approval as a signal wait when the #84 descriptor is set", async () => {
+      const element = await render(
+        {
+          instanceId: "a0G000000000001",
+          waitDescriptor: { label: "Approve:Review", stepName: R },
+        },
+        graph({ overlay: overlay({ currentState: "SUSPENDED" }) }),
+      );
+
+      expect(q(element, "summary-state").textContent).toBe(
+        "Suspended, awaiting a signal",
+      );
+      expect(q(element, "summary-awaiting").textContent).toContain(
+        "Approve:Review",
+      );
+    });
+
+    it("shows a timer wait with no descriptor as a timer wait", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({ overlay: overlay({ currentState: "SUSPENDED" }) }),
+      );
+
+      expect(q(element, "summary-state").textContent).toBe(
+        "Suspended, waiting on a timer",
+      );
+      expect(q(element, "summary-awaiting")).toBeNull();
+      expect(classesOf(nodeEl(element, R))).toContain("state-suspended");
+    });
+
+    it("reloads when the instance id changes", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({ overlay: overlay() }),
+      );
+      element.instanceId = "a0G000000000002";
+      await flushPromises();
+
+      expect(getInstanceTopology).toHaveBeenLastCalledWith({
+        instanceId: "a0G000000000002",
+      });
     });
 
     it("hides the awaited signal when the state is not a signal wait", async () => {

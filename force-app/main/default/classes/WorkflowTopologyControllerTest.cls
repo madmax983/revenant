@@ -1,8 +1,8 @@
 /**
- * Tests for the topology endpoints of WorkflowDashboardController (issue #141).
+ * Tests for WorkflowTopologyController (issue #141).
  */
 @IsTest
-private class WorkflowDashboardTopologyTest {
+private class WorkflowTopologyControllerTest {
   private static final String LINEAR = 'WorkflowTopologyTest.LinearWorkflow';
 
   private static User userWithNoGrant() {
@@ -30,7 +30,7 @@ private class WorkflowDashboardTopologyTest {
   @IsTest
   static void definitionEndpointReturnsGraph() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowTopology.Graph graph = WorkflowDashboardController.getWorkflowTopology(
+      WorkflowTopology.Graph graph = WorkflowTopologyController.getWorkflowTopology(
         LINEAR
       );
       System.assertEquals(3, graph.nodes.size());
@@ -49,7 +49,7 @@ private class WorkflowDashboardTopologyTest {
       );
       insert inst;
 
-      WorkflowTopology.Graph graph = WorkflowDashboardController.getInstanceTopology(
+      WorkflowTopology.Graph graph = WorkflowTopologyController.getInstanceTopology(
         inst.Id
       );
       System.assertEquals(3, graph.nodes.size());
@@ -69,13 +69,13 @@ private class WorkflowDashboardTopologyTest {
     }
     System.runAs(noGrant) {
       try {
-        WorkflowDashboardController.getWorkflowTopology(LINEAR);
+        WorkflowTopologyController.getWorkflowTopology(LINEAR);
         System.assert(false, 'Expected AuraHandledException');
       } catch (AuraHandledException e) {
         System.assert(e.getMessage().contains('Unauthorized'), e.getMessage());
       }
       try {
-        WorkflowDashboardController.getInstanceTopology(null);
+        WorkflowTopologyController.getInstanceTopology(null);
         System.assert(false, 'Expected AuraHandledException');
       } catch (AuraHandledException e) {
         System.assert(e.getMessage().contains('Unauthorized'), e.getMessage());

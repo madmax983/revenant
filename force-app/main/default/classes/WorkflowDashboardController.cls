@@ -176,33 +176,6 @@ public inherited sharing class WorkflowDashboardController {
   }
 
   /**
-   * @description Returns the topology graph of a definition (issue #141): the
-   * steps and the edges that the validator probe finds. Read-only.
-   * @param workflowName The workflow definition name.
-   * @return The graph. It has no overlay.
-   */
-  @AuraEnabled(cacheable=true)
-  public static WorkflowTopology.Graph getWorkflowTopology(
-    String workflowName
-  ) {
-    WorkflowDashboardSupport.checkAuthorization();
-    return WorkflowTopology.build(workflowName);
-  }
-
-  /**
-   * @description Returns the topology graph of the definition of an instance,
-   * with the path and the current step of the instance (issue #141).
-   * Read-only. Not cacheable: the position changes as the instance runs.
-   * @param instanceId The workflow instance.
-   * @return The graph with its overlay.
-   */
-  @AuraEnabled
-  public static WorkflowTopology.Graph getInstanceTopology(Id instanceId) {
-    WorkflowDashboardSupport.checkAuthorization();
-    return WorkflowTopology.forInstance(instanceId);
-  }
-
-  /**
    * @description Returns the discoverable WorkflowDefinition class names for the dashboard,
    * after enforcing the Workflow_Admin authorization gate.
    * @return The sorted list of concrete WorkflowDefinition class names.

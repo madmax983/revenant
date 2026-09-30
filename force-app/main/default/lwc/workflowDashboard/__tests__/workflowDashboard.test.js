@@ -38,16 +38,16 @@ import enqueueWatchdog from "@salesforce/apex/WorkflowDashboardCommandController
 import getFleetHealth from "@salesforce/apex/WorkflowFleetHealthController.getFleetHealth";
 import getInstanceChain from "@salesforce/apex/WorkflowDashboardController.getInstanceChain";
 import getConcurrencyStatus from "@salesforce/apex/WorkflowDashboardController.getConcurrencyStatus";
-import getInstanceTopology from "@salesforce/apex/WorkflowDashboardController.getInstanceTopology";
-import getWorkflowTopology from "@salesforce/apex/WorkflowDashboardController.getWorkflowTopology";
+import getInstanceTopology from "@salesforce/apex/WorkflowTopologyController.getInstanceTopology";
+import getWorkflowTopology from "@salesforce/apex/WorkflowTopologyController.getWorkflowTopology";
 
 jest.mock(
-  "@salesforce/apex/WorkflowDashboardController.getInstanceTopology",
+  "@salesforce/apex/WorkflowTopologyController.getInstanceTopology",
   () => ({ default: jest.fn(() => Promise.resolve(null)) }),
   { virtual: true },
 );
 jest.mock(
-  "@salesforce/apex/WorkflowDashboardController.getWorkflowTopology",
+  "@salesforce/apex/WorkflowTopologyController.getWorkflowTopology",
   () => ({ default: jest.fn(() => Promise.resolve(null)) }),
   { virtual: true },
 );
