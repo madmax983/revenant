@@ -256,6 +256,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Step_Execution__c.Breaker_Probe_Epoch__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Step_Execution__c.Wait_Type__c</field>
         <readable>true</readable>
     </fieldPermissions>

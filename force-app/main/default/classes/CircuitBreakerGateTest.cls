@@ -952,9 +952,17 @@ private class CircuitBreakerGateTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       insertHalfOpen('MixDep', 3);
       String step = 'CircuitBreakerGateTest.GuardedFixtureStep';
-      CircuitBreakerGate.recordSuccessForStep('CircuitBreakerGateTest.Fixture', step, null);
+      CircuitBreakerGate.recordSuccessForStep(
+        'CircuitBreakerGateTest.Fixture',
+        step,
+        null
+      );
       System.assertEquals('HalfOpen', stateFor('MixDep').Status__c);
-      CircuitBreakerGate.recordSuccessForStep('CircuitBreakerGateTest.Fixture', step, 3);
+      CircuitBreakerGate.recordSuccessForStep(
+        'CircuitBreakerGateTest.Fixture',
+        step,
+        3
+      );
       System.assertEquals('Closed', stateFor('MixDep').Status__c);
     }
   }

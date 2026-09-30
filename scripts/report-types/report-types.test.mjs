@@ -52,6 +52,7 @@ const INTERNAL_FIELDS = {
     Definition_Shape__c: "engine JSON",
   },
   [STEP]: {
+    Breaker_Probe_Epoch__c: "breaker probe marker",
     Decision_Record__c: "determinism record",
     Workflow_Instance__c: "the instance section shows the parent",
   },

@@ -92,7 +92,12 @@ public inherited sharing class WorkflowStepInvoke {
     if (String.isBlank(depKey) || !CircuitBreakerGate.isConfigured(depKey)) {
       return false;
     }
-    if (CircuitBreakerGate.tryAdmit(depKey).admitted) {
+    CircuitBreakerGate.BreakerDecision decision = CircuitBreakerGate.tryAdmit(
+      depKey
+    );
+    if (decision.admitted) {
+      // Replace any marker from an earlier attempt of this row.
+      ctx.stepExec.Breaker_Probe_Epoch__c = decision.probeEpoch;
       return false;
     }
     CircuitBreakerPark.parkForCircuitBreaker(

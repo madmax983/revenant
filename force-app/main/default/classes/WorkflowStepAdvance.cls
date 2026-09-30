@@ -37,13 +37,14 @@ public inherited sharing class WorkflowStepAdvance {
     WorkflowStepExecStore.saveStepExec(stepExec);
 
     // Circuit-breaker success sink (issue #128): a completed guarded step reports a
-    // healthy call, closing a half-open probe. No-op for an unguarded/unconfigured
-    // step (0 SOQL/0 DML). Best-effort — breaker accounting must never break the
+    // healthy call; only a current probe closes a half-open breaker. No-op for an
+    // unguarded/unconfigured step (0 SOQL/0 DML). Best-effort — breaker accounting must never break the
     // durable advance.
     try {
       CircuitBreakerGate.recordSuccessForStep(
         instance.Workflow_Name__c,
-        stepExec.Step_Name__c
+        stepExec.Step_Name__c,
+        breakerProbeEpoch(stepExec)
       );
     } catch (Exception breakerIgnored) {
       WorkflowLog.error(
@@ -231,5 +232,15 @@ public inherited sharing class WorkflowStepAdvance {
 
     // Fire-and-forget outbound lifecycle event on terminal transition.
     WorkflowLifecyclePublisher.publish(instance);
+  }
+
+  // The probe marker, or null. Most step rows are loaded without this field, so
+  // read it only if populated: an unqueried read throws.
+  private static Integer breakerProbeEpoch(
+    Workflow_Step_Execution__c stepExec
+  ) {
+    Object marker = stepExec.getPopulatedFieldsAsMap()
+      .get('Breaker_Probe_Epoch__c');
+    return marker == null ? null : ((Decimal) marker).intValue();
   }
 }

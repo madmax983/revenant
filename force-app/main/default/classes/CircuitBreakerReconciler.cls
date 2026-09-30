@@ -38,7 +38,8 @@ public inherited sharing class CircuitBreakerReconciler {
         Dependency_Key__c,
         Status__c,
         Opened_At__c,
-        Half_Open_Probes_Admitted__c
+        Half_Open_Probes_Admitted__c,
+        Half_Open_Epoch__c
       FROM Circuit_Breaker_State__c
       WHERE Status__c = 'Open'
       WITH SYSTEM_MODE
@@ -55,6 +56,8 @@ public inherited sharing class CircuitBreakerReconciler {
       if (isEligibleForHalfOpen(row, now, mockConfigs)) {
         row.Status__c = 'HalfOpen';
         row.Half_Open_Probes_Admitted__c = 0;
+        row.Half_Open_Epoch__c =
+          CircuitBreakerStateStore.intOf(row.Half_Open_Epoch__c) + 1;
         toUpdate.add(row);
       }
     }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Breaker_Probe_Epoch__c</fullName>
+    <description>Engine-internal. The half-open phase (Circuit_Breaker_State__c.Half_Open_Epoch__c) whose probe this attempt consumed. Empty if the attempt was not a probe. Set at admission, replaced on each new attempt.</description>
+    <externalId>false</externalId>
+    <label>Breaker Probe Epoch</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

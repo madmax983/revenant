@@ -42,6 +42,8 @@ public inherited sharing class CircuitBreakerGate {
     public Boolean admitted { get; private set; }
     /** @description True only when admission consumed a half-open trial probe. */
     public Boolean isProbe { get; private set; }
+    /** @description The half-open phase the probe belongs to. Null if not a probe. */
+    public Integer probeEpoch { get; private set; }
 
     // Constructed only through the intent-named factories on the enclosing class so
     // the two outcome flags can never be passed in a confusing/mismatched order.
@@ -73,10 +75,11 @@ public inherited sharing class CircuitBreakerGate {
   }
 
   // Admitted as a trial probe against a half-open breaker.
-  private static BreakerDecision admittedProbe() {
+  private static BreakerDecision admittedProbe(Integer epoch) {
     BreakerDecision d = new BreakerDecision();
     d.admitted = true;
     d.isProbe = true;
+    d.probeEpoch = epoch;
     return d;
   }
 
@@ -161,19 +164,21 @@ public inherited sharing class CircuitBreakerGate {
 
   /**
    * @description Records a success against the breaker guarding the given step, if
-   * any (closing a half-open probe). A no-op (0 SOQL/0 DML) when the step is not
+   * any (closing a half-open breaker only for a current-phase probe). A no-op (0 SOQL/0 DML) when the step is not
    * `CircuitBreakerGuarded` or its dependency is unconfigured. Called from the
    * step-complete sink.
    * @param workflowName The instance's workflow definition name (for namespace resolution).
    * @param stepName The completed step's class name.
+   * @param probeEpoch The half-open phase this attempt probed, or null if none.
    */
   public static void recordSuccessForStep(
     String workflowName,
-    String stepName
+    String stepName,
+    Integer probeEpoch
   ) {
     String depKey = dependencyKeyIfGuarded(workflowName, stepName);
     if (depKey != null) {
-      recordSuccess(depKey);
+      recordSuccess(depKey, probeEpoch);
     }
   }
 
@@ -254,8 +259,10 @@ public inherited sharing class CircuitBreakerGate {
     }
     state.Status__c = CircuitBreakerStateStore.STATUS_HALF_OPEN;
     state.Half_Open_Probes_Admitted__c = 1;
+    state.Half_Open_Epoch__c =
+      CircuitBreakerStateStore.intOf(state.Half_Open_Epoch__c) + 1;
     update as system state;
-    return admittedProbe();
+    return admittedProbe(state.Half_Open_Epoch__c.intValue());
   }
 
   // Half-open admission: admit a probe while the probe budget is unspent, else reject.
@@ -271,7 +278,9 @@ public inherited sharing class CircuitBreakerGate {
     }
     state.Half_Open_Probes_Admitted__c = admittedProbes + 1;
     update as system state;
-    return admittedProbe();
+    return admittedProbe(
+      CircuitBreakerStateStore.intOf(state.Half_Open_Epoch__c)
+    );
   }
 
   /**
@@ -334,12 +343,13 @@ public inherited sharing class CircuitBreakerGate {
 
   /**
    * @description Records a success against a dependency's breaker (delegated to
-   * CircuitBreakerReleaseProcessor): a half-open probe success closes the breaker;
-   * a closed/unconfigured dependency is a no-op.
+   * CircuitBreakerReleaseProcessor): a success from a current-phase half-open probe
+   * closes the breaker; any other success is a no-op.
    * @param dependencyKey The dependency key whose success to record.
+   * @param probeEpoch The half-open phase the attempt probed, or null if none.
    */
-  public static void recordSuccess(String dependencyKey) {
-    CircuitBreakerReleaseProcessor.recordSuccess(dependencyKey);
+  public static void recordSuccess(String dependencyKey, Integer probeEpoch) {
+    CircuitBreakerReleaseProcessor.recordSuccess(dependencyKey, probeEpoch);
   }
 
   /**

@@ -7,7 +7,7 @@
  *
  * A failure increments the rolling window under the row's `FOR UPDATE` lock (via
  * `CircuitBreakerStateStore`) and trips the breaker Open at the threshold; a
- * half-open probe failure re-opens it. A success closes a half-open probe. The bulk
+ * half-open probe failure re-opens it. A success from a current-phase probe closes a half-open breaker. The bulk
  * failure path processes each dependency key independently under its own lock so a
  * lock wait or DML fault on one hot dependency-key row cannot drop or fault a valid
  * sibling key in the same batch (the #226 sibling-safety lesson) — each per-key
@@ -106,13 +106,15 @@ public inherited sharing class CircuitBreakerReleaseProcessor {
   }
 
   /**
-   * @description Records a success against a dependency's breaker. A half-open probe
-   * success closes the breaker (resetting the failure count and window) — 1 DML on
-   * that closing transition. A closed breaker (or a dependency with no state row) is
-   * a no-op (0 DML). An unconfigured dependency is a no-op (0 SOQL/0 DML).
+   * @description Records a success against a dependency's breaker. A success from a
+   * probe of the current half-open phase closes the breaker (resetting the failure
+   * count and window) — 1 DML on that closing transition. A success with no probe or
+   * a stale probe epoch, a closed breaker, or a dependency with no state row is a
+   * no-op (0 DML). An unconfigured dependency is a no-op (0 SOQL/0 DML).
    * @param dependencyKey The dependency key whose success to record.
+   * @param probeEpoch The half-open phase the attempt probed, or null if none.
    */
-  public static void recordSuccess(String dependencyKey) {
+  public static void recordSuccess(String dependencyKey, Integer probeEpoch) {
     if (CircuitBreakerGate.getConfig(dependencyKey) == null) {
       return;
     }
@@ -127,7 +129,14 @@ public inherited sharing class CircuitBreakerReleaseProcessor {
       // Closed steady state (or a stray success while Open) changes nothing.
       return;
     }
-    // A trial probe succeeded: the dependency has healed — close the breaker.
+    if (
+      probeEpoch == null ||
+      probeEpoch != CircuitBreakerStateStore.intOf(state.Half_Open_Epoch__c)
+    ) {
+      // Not a probe of this phase (admitted while Closed, or a stale phase).
+      return;
+    }
+    // A current probe succeeded: the dependency has healed — close the breaker.
     state.Status__c = CircuitBreakerStateStore.STATUS_CLOSED;
     state.Failure_Count__c = 0;
     state.Window_Started_At__c = Datetime.now();
