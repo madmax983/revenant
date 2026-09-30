@@ -114,6 +114,8 @@ StepContext.previousRunAt: Datetime { get }
 StepContext.idempotencyKey: String { get }
 StepContext.isFinalAttempt(): Boolean
 StepContext.shouldYield(): Boolean
+StepContext.isCancellationRequested(): Boolean
+StepContext.isCancellationRequested(Integer): Boolean
 StepContext.logger(): StepLog
 StepContext.progress(): StepProgress
 StepContext.events(): StepEmitter

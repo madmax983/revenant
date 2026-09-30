@@ -1,8 +1,8 @@
 /**
  * @description Prepares a freshly re-locked workflow instance for the outcome
  * dispatch. Guards against a stale completion (rolling back its claimed signals
- * and cancelling a still-running execution), persists reported progress and
- * capture-once values, restores a blanked current step, and asserts the instance
+ * and cancelling a still-running execution), ends a step that stopped for a
+ * cancel (issue #143), persists reported progress and capture-once values, restores a blanked current step, and asserts the instance
  * is runnable before the outcome handler acts. Extracted from `WorkflowEngine`;
  * {@link WorkflowOutcomePrepare#prepareStepOutcome} is invoked by the outcome
  * seam after the FOR UPDATE re-lock. All SOQL and DML run in system mode.
@@ -23,6 +23,10 @@ public inherited sharing class WorkflowOutcomePrepare {
     Workflow_Instance__c freshInstance
   ) {
     if (isStaleCompletion(outcome, freshInstance)) {
+      return false;
+    }
+    // Issue #143: a step that saw a cancel and returned ends cleanly here.
+    if (WorkflowCooperativeCancel.stopIfCancelled(outcome, freshInstance)) {
       return false;
     }
     applyProgressUpdate(outcome, freshInstance);
@@ -128,8 +132,13 @@ public inherited sharing class WorkflowOutcomePrepare {
     }
   }
 
-  // True when a status is terminal, compensating, cancelling, or continued-as-new.
-  private static Boolean isTerminalOrTransitioningStatus(String status) {
+  /**
+   * @description True when a status is terminal, compensating, cancelling, or
+   * continued-as-new. The seam does not run a step result for such a status.
+   * @param status the instance status to test
+   * @return true when the instance is not runnable
+   */
+  public static Boolean isTerminalOrTransitioningStatus(String status) {
     return status == 'Failed' ||
       status == 'Compensating' ||
       status == 'Compensated' ||

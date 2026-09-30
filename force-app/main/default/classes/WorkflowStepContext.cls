@@ -83,7 +83,9 @@ public inherited sharing class WorkflowStepContext {
       .previousRunAt(instance.Previous_Run_At__c)
       .capturedValuesMap(cc.capturesMap)
       .attempt(attempt)
-      .maxAttempts(cc.maxAttempts);
+      .maxAttempts(cc.maxAttempts)
+      // Issue #143: lazy, so a step that never checks pays no SOQL.
+      .cancellationSource(new WorkflowCancelProbe(ctx.instanceId));
     if (isTimeoutResume) {
       contextBuilder.markTimeoutResume();
     }

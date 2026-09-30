@@ -198,6 +198,10 @@ public compensating-cancel entry point is `WorkflowCancellation.cancelWithCompen
   `WorkflowCompensationStepLog`, `WorkflowCompensationContext`,
   `WorkflowCompensationInvoke`, `WorkflowCompensationOutcome`
 - `BulkCancelWorkflow`, `CompensatableStep`
+- `WorkflowCancelProbe`, `WorkflowCooperativeCancel` — cooperative cancel
+  (issue #143). The probe backs `ctx.isCancellationRequested()` with one SOQL.
+  The seam rule ends a step that saw a cancel as `Cancelled`, with no
+  dispatch. See [docs/cooperative-cancellation.md](docs/cooperative-cancellation.md).
 
 ## Retention & purge
 
@@ -285,11 +289,11 @@ Author-facing signatures were preserved; only the internal state moved onto
 sub-objects and helper classes.
 
 - `StepContext` (+ nested `Builder`, `Signal`, `Breadcrumb`, `ChildOutcome`,
-  `SignalSource`, `Level`)
+  `SignalSource`, `CancellationSource`, `Level`)
 - Accessors: `StepLog` (`ctx.logger()`), `StepProgress` (`ctx.progress()`),
   `StepEmitter` (`ctx.events()`), `StepSignals` (`ctx.signals()`),
   `StepCaptures` (`ctx.captures()`), `StepRetryInfo` (`ctx.retry()`)
-- Context internal helpers: `StepGovernor`, `StepSignalState`,
+- Context internal helpers: `StepGovernor`, `StepCancellation`, `StepSignalState`,
   `StepSignalLoader`, `StepChildOutcomes`, `StepCaptureSerde`,
   `StepExecutionIndex`, `StepExecutionParse`; `CaptureProducer` interface
 - `StepResult` (+ nested `StepDirective`/`RetryDirective`/`TimeoutDirective`/

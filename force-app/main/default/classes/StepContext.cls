@@ -13,7 +13,8 @@
  * - retry()    -> StepRetryInfo  attempt/retry/error metadata
  *
  * The hottest author reads (identity/input fields, `attempt`, `isFinalAttempt()`,
- * `idempotencyKey`, `shouldYield()`) stay directly on the context.
+ * `idempotencyKey`, `shouldYield()`, `isCancellationRequested()`) stay directly
+ * on the context.
  */
 global inherited sharing class StepContext {
   /** Log_Type__c value stamped on persisted step breadcrumbs. */
@@ -42,6 +43,8 @@ global inherited sharing class StepContext {
   private StepSignals stepSignals;
   /** Capture-once + patch accessor (StepContext.captures()). */
   private StepCaptures stepCaptures;
+  /** Cooperative cancel state (StepContext.isCancellationRequested()). */
+  private StepCancellation stepCancel;
 
   /**
    * Logging severity levels for step breadcrumbs.
@@ -369,6 +372,19 @@ global inherited sharing class StepContext {
     Boolean readWasCapped();
   }
 
+  /**
+   * Reads whether the instance of a step has a cancel request (issue #143).
+   * The engine gives a source for `execute()` only. The context caches the
+   * answer. Implemented by `WorkflowCancelProbe`.
+   */
+  public interface CancellationSource {
+    /**
+     * @description Reads the cancel state now.
+     * @return True when the instance or an ancestor is cancelled.
+     */
+    Boolean isCancellationRequested();
+  }
+
   // Base constructor used by the Builder. Sets only the defaults that must hold
   // when their fluent setter is never called; the Builder writes the remaining
   // fields directly and finishBuild() applies the derived/hydration state.
@@ -405,6 +421,10 @@ global inherited sharing class StepContext {
     }
     this.stepCaptures = new StepCaptures(this, this.stepVisit, this.stepRetry);
     applyCapturedValues(b);
+    this.stepCancel = new StepCancellation(
+      b.cancellationSourceVal,
+      b.cancellationMaxAgeVal
+    );
     return this;
   }
 
@@ -458,6 +478,8 @@ global inherited sharing class StepContext {
     private Boolean timeoutResumeVal = false;
     private Integer attemptVal = 1;
     private Integer maxAttemptsVal = 1;
+    private CancellationSource cancellationSourceVal;
+    private Integer cancellationMaxAgeVal;
 
     /**
      * @description Sets the workflow instance id for the context.
@@ -640,6 +662,28 @@ global inherited sharing class StepContext {
     }
 
     /**
+     * @description Sets the cancel state reader (issue #143). Without it, the
+     * context never reports a cancel.
+     * @param val The CancellationSource implementation.
+     * @return This builder, for chaining.
+     */
+    public Builder cancellationSource(CancellationSource val) {
+      this.cancellationSourceVal = val;
+      return this;
+    }
+
+    /**
+     * @description Sets the age that the no-argument cancel check reuses a
+     * `false` answer. Null means StepCancellation.DEFAULT_MAX_AGE_MILLIS.
+     * @param val The age in milliseconds.
+     * @return This builder, for chaining.
+     */
+    public Builder cancellationMaxAgeMillis(Integer val) {
+      this.cancellationMaxAgeVal = val;
+      return this;
+    }
+
+    /**
      * @description Finalizes construction, applying the derived and hydration
      * state, and returns the built StepContext.
      * @return The fully constructed StepContext.
@@ -658,6 +702,48 @@ global inherited sharing class StepContext {
    */
   global Boolean shouldYield() {
     return StepGovernor.isNearingLimit();
+  }
+
+  /**
+   * Tells if an operator cancelled this instance or one of its five nearest
+   * ancestors (status `Cancelled` or `Cancelling`). Issue #143.
+   *
+   * Apex cannot stop a running `execute()`. A long loop must check this flag
+   * and return. The engine then drops the returned result, sets the step row
+   * to `Cancelled` and does not write `Completed`. The rollback that the cancel
+   * asked for runs as usual. A step that does not check works as before.
+   *
+   * Cost: 0 DML and 1 SOQL at most. A `false` answer is reused for
+   * 1000 ms. A `true` answer is kept. No read occurs when fewer than 20 SOQL
+   * queries remain. Call it every N iterations, not for each record.
+   *
+   * Always `false` in `compensate()`: a rollback must finish.
+   *
+   * @return True when the step must stop and return.
+   */
+  global Boolean isCancellationRequested() {
+    return this.stepCancel.isRequested();
+  }
+
+  /**
+   * Same as `isCancellationRequested()`, with an age that you set. A `false`
+   * answer is reused for `maxAgeMillis`. Use 0 to read each time.
+   *
+   * @param maxAgeMillis Milliseconds that a `false` answer stays valid. Null or
+   * a negative value means 0.
+   * @return True when the step must stop and return.
+   */
+  global Boolean isCancellationRequested(Integer maxAgeMillis) {
+    return this.stepCancel.isRequested(maxAgeMillis);
+  }
+
+  /**
+   * @description Tells if a cancel check in this run gave `true`. The outcome
+   * seam uses it to end the step cleanly.
+   * @return True when the step saw a cancel.
+   */
+  public Boolean wasCancellationObserved() {
+    return this.stepCancel.wasObserved();
   }
 
   /**

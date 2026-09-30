@@ -21,6 +21,7 @@ Each run must make the same decision from the same inputs. A step can read data 
 | Read signals, approvals, child outcomes (`ctx.signals()`) | Yes | - |
 | Read a value from `ctx.captures().once(...)` | Yes | - |
 | `ctx.shouldYield()` | No | Return `YIELD` only. Do not use it to select a wait. |
+| `ctx.isCancellationRequested()` | No | Return early only. The engine drops the result. |
 | `Datetime.now()`, `Date.today()`, `System.now()` | No | Wrap in `once()`. |
 | `Crypto` random values, generated ids or UUIDs | No | Wrap in `once()`. |
 | SOQL on records that other processes change | No | Wrap the value in `once()`. Or make the other process send a signal. |

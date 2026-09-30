@@ -23,6 +23,8 @@ public inherited sharing class StepContextTestBuilder {
     private Boolean timeoutResumeVal = false;
     private Integer attemptVal = 1;
     private Integer maxAttemptsVal = 1;
+    // Checks that give false before the first true; null means never true.
+    private Integer cancelAfterChecksVal;
   }
 
   /**
@@ -224,6 +226,27 @@ public inherited sharing class StepContextTestBuilder {
     return this;
   }
 
+  /**
+   * @description Makes each cancel check of the built context give true
+   * (issue #143). No SOQL.
+   * @return This builder, for chaining.
+   */
+  public StepContextTestBuilder requestCancellation() {
+    return requestCancellationAfter(0);
+  }
+
+  /**
+   * @description Makes the first `checks` cancel checks give false, and each
+   * later check give true (issue #143). Use it to test a loop that stops at
+   * its next check. No SOQL. The built context reads on each check.
+   * @param checks The number of checks that give false.
+   * @return This builder, for chaining.
+   */
+  public StepContextTestBuilder requestCancellationAfter(Integer checks) {
+    this.exec.cancelAfterChecksVal = Math.max(0, checks ?? 0);
+    return this;
+  }
+
   private static Id generateFakeId(SObjectType sObjectType) {
     String keyPrefix = keyPrefixCache.get(sObjectType);
     if (keyPrefix == null) {
@@ -290,6 +313,34 @@ public inherited sharing class StepContextTestBuilder {
     }
   }
 
+  // Gives false for a set number of checks, then true.
+  private class ScriptedCancellationSource implements StepContext.CancellationSource {
+    private Integer falseChecksLeft;
+
+    /**
+     * @description Makes the source.
+     * @param falseChecks The checks that give false; null means never true.
+     */
+    public ScriptedCancellationSource(Integer falseChecks) {
+      this.falseChecksLeft = falseChecks;
+    }
+
+    /**
+     * @description Gives the next scripted answer.
+     * @return False until the false checks are used, then true.
+     */
+    public Boolean isCancellationRequested() {
+      if (this.falseChecksLeft == null) {
+        return false;
+      }
+      if (this.falseChecksLeft > 0) {
+        this.falseChecksLeft--;
+        return false;
+      }
+      return true;
+    }
+  }
+
   private List<StepContext.Signal> finalizeSignals() {
     List<StepContext.Signal> finalSignals = new List<StepContext.Signal>();
     for (StepContext.Signal sig : this.pendingSignals) {
@@ -339,7 +390,11 @@ public inherited sharing class StepContextTestBuilder {
       .previousRunAt(this.exec.previousRunAtVal)
       .capturedValuesMap(new Map<String, Object>(this.capturedValues))
       .attempt(this.exec.attemptVal)
-      .maxAttempts(this.exec.maxAttemptsVal);
+      .maxAttempts(this.exec.maxAttemptsVal)
+      .cancellationSource(
+        new ScriptedCancellationSource(this.exec.cancelAfterChecksVal)
+      )
+      .cancellationMaxAgeMillis(0);
     if (this.exec.timeoutResumeVal) {
       ctxBuilder.markTimeoutResume();
     }

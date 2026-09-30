@@ -370,4 +370,42 @@ public class StepContextTestBuilderTest {
       );
     }
   }
+
+  @IsTest
+  static void testCancellationDefaultsToFalse() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer queriesBefore = Limits.getQueries();
+      StepContext ctx = new StepContextTestBuilder().build();
+
+      Assert.isFalse(ctx.isCancellationRequested());
+      Assert.areEqual(queriesBefore, Limits.getQueries(), 'No SOQL');
+    }
+  }
+
+  @IsTest
+  static void testRequestCancellation() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer queriesBefore = Limits.getQueries();
+      StepContext ctx = new StepContextTestBuilder()
+        .requestCancellation()
+        .build();
+
+      Assert.isTrue(ctx.isCancellationRequested());
+      Assert.areEqual(queriesBefore, Limits.getQueries(), 'No SOQL');
+    }
+  }
+
+  @IsTest
+  static void testRequestCancellationAfterChecks() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      StepContext ctx = new StepContextTestBuilder()
+        .requestCancellationAfter(2)
+        .build();
+
+      Assert.isFalse(ctx.isCancellationRequested(), 'Check 1');
+      Assert.isFalse(ctx.isCancellationRequested(), 'Check 2');
+      Assert.isTrue(ctx.isCancellationRequested(), 'Check 3');
+      Assert.isTrue(ctx.isCancellationRequested(), 'Stays true');
+    }
+  }
 }
