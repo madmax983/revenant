@@ -94,7 +94,14 @@ public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep
       binding,
       WorkflowTypeResolver.extractNamespace(ctx.workflowName)
     );
-    Id jobId = Id.valueOf((String) ctx.captures().once(KEY_JOB_ID, launcher));
+    Id jobId;
+    try {
+      jobId = Id.valueOf((String) ctx.captures().once(KEY_JOB_ID, launcher));
+    } catch (AsyncException ex) {
+      // A platform async limit (for example a full flex queue) is temporary.
+      // once() keeps nothing when the launch throws, so a retry is safe.
+      return StepResult.retry(RetryPolicy.fromConfig());
+    }
     // Do not add code that can throw after the launch. An auto-retry
     // rollback must not lose the captured job Id.
     if (launcher.launched) {
@@ -225,6 +232,8 @@ public virtual inherited sharing class WorkflowBatchStep implements WorkflowStep
           ? batchType.newInstance()
           : JSON.deserialize(JSON.serialize(binding.input), batchType);
         jobId = WorkflowBatchJobs.launch(batchable, binding.scopeSize);
+      } catch (AsyncException ex) {
+        throw ex;
       } catch (Exception ex) {
         WorkflowEngine.WorkflowException wrapper = new WorkflowEngine.WorkflowException(
           'Batch launch failed for ' +

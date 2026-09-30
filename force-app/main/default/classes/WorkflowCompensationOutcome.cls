@@ -43,6 +43,9 @@ public inherited sharing class WorkflowCompensationOutcome {
     Workflow_Instance__c instance = loadFreshCompensationInstance(
       outcome.instance
     );
+    // Issue #138: a compensation step never waits for a batch job. Clear an
+    // old job Id, so the watchdog does not wake a compensation wait.
+    instance.Awaited_Batch_Job_Id__c = null;
     persistCompensationProgressAndCaptures(outcome, instance);
 
     StepResult.ActionType action = outcome.result.directive().action;

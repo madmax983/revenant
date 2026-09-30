@@ -21,6 +21,8 @@ public inherited sharing class WorkflowBatchJobs {
   @TestVisible
   private static Map<Id, AsyncApexJob> stubJobs;
   @TestVisible
+  private static Exception stubLaunchError;
+  @TestVisible
   private static Integer launchCount = 0;
   @TestVisible
   private static Object lastLaunched;
@@ -45,6 +47,9 @@ public inherited sharing class WorkflowBatchJobs {
     launchCount++;
     lastLaunched = batchable;
     lastScopeSize = scopeSize;
+    if (Test.isRunningTest() && stubLaunchError != null) {
+      throw stubLaunchError;
+    }
     if (Test.isRunningTest() && stubLaunchId != null) {
       return stubLaunchId;
     }

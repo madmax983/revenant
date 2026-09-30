@@ -11,13 +11,12 @@ private class BatchStepWorkflowExampleTest {
   private static final String CONFIRM = 'BatchStepWorkflowExample.ConfirmStep';
   private static final String ROLLBACK_STEP = 'BatchStepWorkflowExample.RollbackStep';
 
-  private static String workflowInput() {
-    return JSON.serialize(
-      new Map<String, Object>{
-        'namePrefix' => 'BatchStepEx',
-        'tag' => 'Q3-Review'
-      }
-    );
+  // Pass a Map. The engine serializes the start input one time.
+  private static Map<String, Object> workflowInput() {
+    return new Map<String, Object>{
+      'namePrefix' => 'BatchStepEx',
+      'tag' => 'Q3-Review'
+    };
   }
 
   @IsTest

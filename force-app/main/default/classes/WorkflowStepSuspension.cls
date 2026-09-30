@@ -188,6 +188,9 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
+    // A child wait has no timer. Clear an old wake time (for example one
+    // that the batch-wait sweep set), so the watchdog does not wake it.
+    instance.Sleep_Until__c = null;
     instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(
@@ -244,6 +247,9 @@ public inherited sharing class WorkflowStepSuspension {
     );
     WorkflowStepExecStore.saveStepExec(stepExec);
 
+    // A child wait has no timer. Clear an old wake time (for example one
+    // that the batch-wait sweep set), so the watchdog does not wake it.
+    instance.Sleep_Until__c = null;
     instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     Database.update(instance, true, AccessLevel.SYSTEM_MODE);
     WorkflowSignalRedelivery.redeliverMatchingSignalsForInstance(

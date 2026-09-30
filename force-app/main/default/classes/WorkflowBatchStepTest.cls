@@ -48,6 +48,35 @@ private class WorkflowBatchStepTest {
     public String tag;
   }
 
+  /** @description An Iterable Batchable with no Revenant code. */
+  public class IterBatch implements Database.Batchable<Object> {
+    /**
+     * @description Gives two items.
+     * @param bc The batch context.
+     * @return The items.
+     */
+    public Iterable<Object> start(Database.BatchableContext bc) {
+      return new List<Object>{ 'a', 'b' };
+    }
+
+    /**
+     * @description Does nothing.
+     * @param bc The batch context.
+     * @param scope The items of this chunk.
+     */
+    public void execute(Database.BatchableContext bc, List<Object> scope) {
+      return;
+    }
+
+    /**
+     * @description Does nothing.
+     * @param bc The batch context.
+     */
+    public void finish(Database.BatchableContext bc) {
+      return;
+    }
+  }
+
   /** @description A subclass that gives the binding in Apex. */
   public class BoundStep extends WorkflowBatchStep {
     /**
@@ -179,6 +208,13 @@ private class WorkflowBatchStepTest {
     Assert.isInstanceOfType(WorkflowBatchJobs.lastLaunched, StubBatch.class);
     Assert.areEqual('t1', ((StubBatch) WorkflowBatchJobs.lastLaunched).tag);
     Assert.isTrue(ctx.captures().hasNewCaptures(), 'The job Id is captured');
+    Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
+      ctx.captures().getCapturedValuesJson()
+    );
+    Assert.areEqual(
+      String.valueOf(JOB_ID),
+      captures.get(WorkflowBatchStep.KEY_JOB_ID)
+    );
   }
 
   @IsTest
@@ -257,14 +293,45 @@ private class WorkflowBatchStepTest {
   }
 
   @IsTest
+  static void testAsyncLimitRetriesWithoutCapture() {
+    WorkflowBatchJobs.stubLaunchError = new AsyncException('flex queue full');
+    StepContext ctx = new StepContextTestBuilder().input(input(null)).build();
+    StepResult r = new WorkflowBatchStep().execute(ctx);
+    Assert.areEqual(StepResult.ActionType.RETRY, r.directive().action);
+    Assert.isFalse(ctx.captures().hasNewCaptures(), 'No job Id is kept');
+  }
+
+  @IsTest
   static void testLaunchErrorIsWrapped() {
+    // The input cannot fill the String field, so JSON.deserialize throws.
     String message = errorFor(
       new Map<String, Object>{
-        'batchClass' => 'WorkflowBatchStepTest.NotABatch'
+        'batchClass' => STUB_BATCH,
+        'input' => new Map<String, Object>{
+          'tag' => new Map<String, Object>{ 'x' => 1 }
+        }
       }
     );
-    Assert.isNotNull(message, 'A class that is not a Batchable must throw');
+    Assert.isNotNull(message, 'A bad input must throw');
     Assert.isTrue(message.startsWith('Batch launch failed'), message);
+    Assert.areEqual(0, WorkflowBatchJobs.launchCount, 'No launch');
+  }
+
+  @IsTest
+  static void testIterableBatchableIsAccepted() {
+    WorkflowBatchJobs.stubLaunchId = JOB_ID;
+    StepResult r = new WorkflowBatchStep()
+      .execute(
+        new StepContextTestBuilder()
+          .input(
+            new Map<String, Object>{
+              'batchClass' => 'WorkflowBatchStepTest.IterBatch'
+            }
+          )
+          .build()
+      );
+    Assert.areEqual(StepResult.ActionType.SUSPEND, r.directive().action);
+    Assert.isInstanceOfType(WorkflowBatchJobs.lastLaunched, IterBatch.class);
   }
 
   // ── Outcome ───────────────────────────────────────────────────────────
@@ -538,6 +605,51 @@ private class WorkflowBatchStepTest {
         ],
         'The wait uses one step row'
       );
+      Test.stopTest();
+    }
+  }
+
+  @IsTest
+  static void testOutcomeClearsFieldWithoutHeartbeat() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowBatchJobs.stubLaunchId = JOB_ID;
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(WORKFLOW, 'batch-e2e-resume', '{}');
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      Assert.isTrue(harness.drive().isSuspended);
+
+      // The job ends, and an operator resumes before a heartbeat.
+      stubJob(job('Completed', 1, 1, 0, null));
+      WorkflowResumeService.resumeInstance(instanceId, null);
+      WorkflowTestHarness.Result r = harness.drive();
+
+      Assert.areEqual('Completed', r.status);
+      Assert.isNull(
+        load(instanceId).Awaited_Batch_Job_Id__c,
+        'The COMPLETE outcome clears the field'
+      );
+      Assert.areEqual(1, WorkflowBatchJobs.launchCount);
+      Test.stopTest();
+    }
+  }
+
+  @IsTest
+  static void testCancelClearsTheAwaitedJob() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowBatchJobs.stubLaunchId = JOB_ID;
+      Test.startTest();
+      Id instanceId = WorkflowEngine.start(WORKFLOW, 'batch-e2e-cancel', '{}');
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      Assert.isTrue(harness.drive().isSuspended);
+      WorkflowCancellation.cancelWithCompensations(instanceId);
+      Workflow_Instance__c after = load(instanceId);
+      Assert.isNull(
+        after.Awaited_Batch_Job_Id__c,
+        'A cancelled instance does not wait for its job'
+      );
+      // The job ends later. The sweep must not wake the instance.
+      stubJob(job('Completed', 1, 1, 0, null));
+      Assert.areEqual(0, WorkflowBatchAwaitSweep.reconcile(Datetime.now()));
       Test.stopTest();
     }
   }

@@ -44,6 +44,35 @@ private class WorkflowBatchJobsTest {
     }
   }
 
+  /** @description An Iterable Batchable with no Revenant code. */
+  public class IterBatch implements Database.Batchable<Object> {
+    /**
+     * @description Gives two items.
+     * @param bc The batch context.
+     * @return The items.
+     */
+    public Iterable<Object> start(Database.BatchableContext bc) {
+      return new List<Object>{ 'a', 'b' };
+    }
+
+    /**
+     * @description Does nothing.
+     * @param bc The batch context.
+     * @param scope The items of this chunk.
+     */
+    public void execute(Database.BatchableContext bc, List<Object> scope) {
+      return;
+    }
+
+    /**
+     * @description Does nothing.
+     * @param bc The batch context.
+     */
+    public void finish(Database.BatchableContext bc) {
+      return;
+    }
+  }
+
   private static AsyncApexJob job(Id jobId, String status, Integer errors) {
     return (AsyncApexJob) JSON.deserialize(
       JSON.serialize(
@@ -132,6 +161,28 @@ private class WorkflowBatchJobsTest {
     Assert.areEqual('Completed', outcome.get('status'));
     Assert.areEqual(true, outcome.get('succeeded'));
     Assert.areEqual(1, WorkflowBatchJobs.launchCount);
+  }
+
+  @IsTest
+  static void testRealIterableLaunchReachesCompleted() {
+    Test.startTest();
+    Id jobId = WorkflowBatchJobs.launch(new IterBatch(), 200);
+    Test.stopTest();
+    Map<String, Object> outcome = WorkflowBatchJobs.terminalOutcome(jobId);
+    Assert.isNotNull(outcome, 'The job ends at stopTest');
+    Assert.areEqual('Completed', outcome.get('status'));
+  }
+
+  @IsTest
+  static void testNonBatchableIsRefused() {
+    Boolean thrown = false;
+    try {
+      WorkflowBatchJobs.launch(new Account(), 200);
+    } catch (IllegalArgumentException ex) {
+      thrown = true;
+    }
+    Assert.isTrue(thrown, 'Only a Batchable can launch');
+    Assert.areEqual(0, WorkflowBatchJobs.launchCount);
   }
 
   @IsTest

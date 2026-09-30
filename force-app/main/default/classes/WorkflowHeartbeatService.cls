@@ -61,8 +61,9 @@ public inherited sharing class WorkflowHeartbeatService {
     // job ended. Section 2 below resumes it in this heartbeat.
     try {
       WorkflowBatchAwaitSweep.reconcile(now);
-    } catch (Exception ignored) {
+    } catch (Exception ex) {
       // The next heartbeat tries again. An error must not stop the heartbeat.
+      WorkflowLog.error('BatchAwaitSweep', ex.getMessage());
     }
 
     // 2. Process sleep resumptions (bounded per heartbeat).

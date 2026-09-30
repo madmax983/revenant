@@ -104,6 +104,21 @@ private class WorkflowBatchAwaitSweepTest {
   }
 
   @IsTest
+  static void testCandidateLimitBoundsTheRead() {
+    stubJobs();
+    Id otherDone = '707000000000003';
+    WorkflowBatchJobs.stubJobs.put(otherDone, job(otherDone, 'Completed'));
+    insert new List<Workflow_Instance__c>{
+      waiting('sweep-limit-1', DONE_ID),
+      waiting('sweep-limit-2', otherDone)
+    };
+    WorkflowBatchAwaitSweep.candidateLimit = 1;
+    Assert.areEqual(1, WorkflowBatchAwaitSweep.reconcile(Datetime.now()));
+    Assert.areEqual(1, WorkflowBatchAwaitSweep.reconcile(Datetime.now()));
+    Assert.areEqual(0, WorkflowBatchAwaitSweep.reconcile(Datetime.now()));
+  }
+
+  @IsTest
   static void testMalformedValueWakesTheInstance() {
     stubJobs();
     Workflow_Instance__c bad = waiting('sweep-bad', 'not-an-id');

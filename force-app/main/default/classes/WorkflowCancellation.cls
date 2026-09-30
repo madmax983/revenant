@@ -436,6 +436,8 @@ public inherited sharing class WorkflowCancellation {
       // Disarm any armed timed-wait timeout so the watchdog cannot mis-route a
       // cancelled (or compensating) instance to a fallback step (issue #35).
       instance.Sleep_Until__c = null;
+      // Issue #138: a cancelled instance does not wait for its batch job.
+      instance.Awaited_Batch_Job_Id__c = null;
       List<Workflow_Instance__c> rollback = rollbackGroup(
         plan,
         instance,
