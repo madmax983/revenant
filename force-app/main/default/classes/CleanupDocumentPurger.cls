@@ -5,7 +5,8 @@
  * therefore safe to delete, and returns the bounded chunk of instances (and their
  * ids). {@link #planChunk} does SOQL only, so the archive can copy the chunk
  * before {@link #deleteDocuments} deletes the files. Used by
- * {@link WorkflowArchiveSweep}.
+ * {@link WorkflowArchiveSweep} and {@link WorkflowInstancePurge}.
+ * {@link #planGroups} keeps a group of related instances in one chunk.
  */
 public inherited sharing class CleanupDocumentPurger {
   // Title prefixes that mark a ContentDocument as engine-owned and therefore safe to
@@ -26,6 +27,12 @@ public inherited sharing class CleanupDocumentPurger {
     'VerificationPayload'
   };
 
+  /** @description Soft cap of linked files in one chunk. */
+  public static final Integer MAX_DOCS_PER_CHUNK = 100;
+  // Tests lower the cap to exercise the deferral path with few files.
+  @TestVisible
+  private static Integer maxDocsPerChunk = MAX_DOCS_PER_CHUNK;
+
   /**
    * @description Selects the bounded chunk of instances to purge and their
    * engine-owned unshared documents. SOQL only: it deletes nothing, so the
@@ -36,23 +43,43 @@ public inherited sharing class CleanupDocumentPurger {
   public static PurgeChunk planChunk(
     List<Workflow_Instance__c> candidateInstances
   ) {
+    List<List<Workflow_Instance__c>> groups = new List<List<Workflow_Instance__c>>();
+    for (Workflow_Instance__c inst : candidateInstances) {
+      groups.add(new List<Workflow_Instance__c>{ inst });
+    }
+    return planGroups(groups);
+  }
+
+  /**
+   * @description Selects whole groups in order until the file cap is full.
+   * The first group always goes, so the purge moves forward. A group never
+   * splits. SOQL only.
+   * @param groups The groups of instances, in purge order.
+   * @return The bounded chunk. Its documents are not deleted yet.
+   */
+  public static PurgeChunk planGroups(List<List<Workflow_Instance__c>> groups) {
+    List<Workflow_Instance__c> all = new List<Workflow_Instance__c>();
+    for (List<Workflow_Instance__c> grp : groups) {
+      all.addAll(grp);
+    }
     // 1-3. Map documents to candidate instances, select those documents, and query
     //    all their links so we can verify a file is not shared elsewhere before
     //    deleting it (prevents data loss).
-    DocIndex docIndex = buildDocIndex(candidateInstances);
+    DocIndex docIndex = buildDocIndex(all);
 
     // 4. Build chunk of instances to process in this transaction, bounding file
-    //    deletes to 100 max.
-    return buildPurgeChunk(candidateInstances, docIndex);
+    //    deletes to the cap.
+    return buildPurgeChunk(groups, docIndex);
   }
 
   /**
    * @description Deletes the documents that {@link #planChunk} selected.
    * @param chunk The planned chunk.
+   * @return The number of deleted documents.
    */
-  public static void deleteDocuments(PurgeChunk chunk) {
+  public static Integer deleteDocuments(PurgeChunk chunk) {
     // 5. Delete qualified documents
-    deleteQualifiedDocs(chunk.finalDocIdsToDelete);
+    return deleteQualifiedDocs(chunk.finalDocIdsToDelete);
   }
 
   // ── Document mapping ─────────────────────────────────────────────────────────
@@ -101,7 +128,7 @@ public inherited sharing class CleanupDocumentPurger {
       return;
     }
     for (ContentDocument doc : [
-      SELECT Id, Title
+      SELECT Id, Title, OwnerId
       FROM ContentDocument
       WHERE Id IN :idx.allDocIds
       WITH SYSTEM_MODE
@@ -137,38 +164,45 @@ public inherited sharing class CleanupDocumentPurger {
 
   // ── Purge-chunk selection ────────────────────────────────────────────────────
   /**
-   * @description Selects the bounded chunk of instances to purge this transaction and
-   * collects their deletable documents, capping deletes at 100 documents (the first
-   * instance may exceed the cap to guarantee forward progress).
-   * @param candidateInstances The instances eligible for purge.
+   * @description Selects the bounded chunk of groups to purge this transaction and
+   * collects their deletable documents, capping deletes at the file cap (the first
+   * group may exceed the cap to guarantee forward progress).
+   * @param groups The groups eligible for purge, in order.
    * @param idx The document index for the candidate instances.
    * @return The bounded chunk of instances and the documents selected for deletion.
    */
   private static PurgeChunk buildPurgeChunk(
-    List<Workflow_Instance__c> candidateInstances,
+    List<List<Workflow_Instance__c>> groups,
     DocIndex idx
   ) {
     PurgeChunk chunk = new PurgeChunk();
 
-    for (Workflow_Instance__c inst : candidateInstances) {
-      List<Id> docIds = idx.instanceToDocIds.get(inst.Id);
-      Integer docCount = (docIds != null) ? docIds.size() : 0;
+    for (List<Workflow_Instance__c> grp : groups) {
+      Integer docCount = 0;
+      for (Workflow_Instance__c inst : grp) {
+        List<Id> docIds = idx.instanceToDocIds.get(inst.Id);
+        docCount += (docIds != null) ? docIds.size() : 0;
+      }
 
-      // Bounded processing: if processing this instance would exceed our soft
-      // transaction cap of 100 deleted documents, defer it to the next yield chunk.
-      // The first instance is allowed to exceed this soft cap to guarantee forward
-      // progress.
+      // Bounded processing: if this group would exceed the soft cap of deleted
+      // documents, defer it and the rest to the next chunk. The first group is
+      // allowed to exceed this soft cap to guarantee forward progress.
       if (
         !chunk.instancesToPurge.isEmpty() &&
-        (chunk.finalDocIdsToDelete.size() + docCount) > 100
+        (chunk.finalDocIdsToDelete.size() + docCount) > maxDocsPerChunk
       ) {
         break;
       }
 
-      chunk.instancesToPurge.add(inst);
-      chunk.instanceIdsToPurge.add(inst.Id);
-
-      collectDeletableDocs(docIds, idx, chunk);
+      // Add the whole group first, so a file linked only inside the group
+      // counts as not shared.
+      for (Workflow_Instance__c inst : grp) {
+        chunk.instancesToPurge.add(inst);
+        chunk.instanceIdsToPurge.add(inst.Id);
+      }
+      for (Workflow_Instance__c inst : grp) {
+        collectDeletableDocs(idx.instanceToDocIds.get(inst.Id), idx, chunk);
+      }
     }
 
     return chunk;
@@ -200,7 +234,7 @@ public inherited sharing class CleanupDocumentPurger {
       }
       // B. Shared Link Check — skip files still shared outside this purge batch
       if (
-        !isSharedElsewhere(docId, idx.docToLinksMap, chunk.instanceIdsToPurge)
+        !isSharedElsewhere(doc, idx.docToLinksMap, chunk.instanceIdsToPurge)
       ) {
         chunk.finalDocIdsToDelete.add(docId);
       }
@@ -224,18 +258,19 @@ public inherited sharing class CleanupDocumentPurger {
 
   /**
    * @description Determines whether a document is shared with any record other than a
-   * Workflow_Instance__c being deleted in this batch (the default User link is ignored).
-   * @param docId The id of the document to evaluate.
+   * Workflow_Instance__c being deleted in this batch. Only the owner's User link is
+   * ignored. A link to any other User is a share, so the file stays.
+   * @param doc The document to evaluate.
    * @param docToLinksMap The map of document id to its content document links.
    * @param instanceIdsToPurge The instance ids being deleted in this batch.
    * @return True if the document is shared elsewhere and must not be deleted.
    */
   private static Boolean isSharedElsewhere(
-    Id docId,
+    ContentDocument doc,
     Map<Id, List<ContentDocumentLink>> docToLinksMap,
     Set<Id> instanceIdsToPurge
   ) {
-    List<ContentDocumentLink> cdls = docToLinksMap.get(docId);
+    List<ContentDocumentLink> cdls = docToLinksMap.get(doc.Id);
     if (cdls == null) {
       return false;
     }
@@ -244,8 +279,8 @@ public inherited sharing class CleanupDocumentPurger {
       String sObjType = linkedId.getSObjectType()
         .getDescribe(SObjectDescribeOptions.DEFERRED)
         .getName();
-      // Ignore the default User link created on file upload
-      if (sObjType == 'User') {
+      // Ignore the owner link created on file upload.
+      if (sObjType == 'User' && linkedId == doc.OwnerId) {
         continue;
       }
       // Shared if linked to any record other than a Workflow_Instance__c that is
@@ -264,10 +299,11 @@ public inherited sharing class CleanupDocumentPurger {
   /**
    * @description Deletes the qualified documents selected for purge.
    * @param finalDocIdsToDelete The ids of the documents to delete.
+   * @return The number of deleted documents.
    */
-  private static void deleteQualifiedDocs(Set<Id> finalDocIdsToDelete) {
+  private static Integer deleteQualifiedDocs(Set<Id> finalDocIdsToDelete) {
     if (finalDocIdsToDelete.isEmpty()) {
-      return;
+      return 0;
     }
     List<ContentDocument> docsToDelete = [
       SELECT Id
@@ -275,7 +311,10 @@ public inherited sharing class CleanupDocumentPurger {
       WHERE Id IN :finalDocIdsToDelete
       WITH SYSTEM_MODE
     ];
-    delete as system docsToDelete;
+    if (!docsToDelete.isEmpty()) {
+      delete as system docsToDelete;
+    }
+    return docsToDelete.size();
   }
 
   // The document lookups needed to decide, per candidate instance, which files are

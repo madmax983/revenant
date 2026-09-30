@@ -254,4 +254,130 @@ private class WorkflowArchiveSweepTest {
     System.assertEquals(true, exists(big.Id), 'Kept in primary');
     System.assertEquals(0, sink.writeCalls, 'Nothing written');
   }
+
+  // Issue #142: logs of an instance, and one schedule fire log.
+  private static List<Workflow_Log__c> insertLogs(Id instanceId, Integer n) {
+    List<Workflow_Log__c> logs = new List<Workflow_Log__c>();
+    for (Integer i = 0; i < n; i++) {
+      logs.add(
+        new Workflow_Log__c(
+          Workflow_Instance__c = instanceId,
+          Level__c = 'Info',
+          Log_Type__c = 'StepBreadcrumb',
+          Message__c = 'crumb ' + i
+        )
+      );
+    }
+    insert logs;
+    return logs;
+  }
+
+  @IsTest
+  static void archivePathDeletesLogsAndKeepsScheduleLogs() {
+    WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
+    Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'logs',
+      40
+    );
+    List<Workflow_Log__c> logs = insertLogs(inst.Id, 2);
+    Workflow_Log__c fireLog = new Workflow_Log__c(
+      Workflow_Instance__c = inst.Id,
+      Schedule_Name__c = 'Deleted schedule',
+      Level__c = 'Info',
+      Log_Type__c = 'ScheduleFire',
+      Outcome__c = 'Started'
+    );
+    insert fireLog;
+
+    WorkflowArchiveSweep.BatchResult batch = WorkflowArchiveSweep.runBatch(
+      params(20),
+      sink
+    );
+
+    System.assertEquals(1, batch.purgedCount, 'Archived and purged');
+    System.assertNotEquals(null, sink.store.get(inst.Id), 'Archived first');
+    System.assertEquals(
+      0,
+      [SELECT COUNT() FROM Workflow_Log__c WHERE Id IN :logs],
+      'Instance logs deleted'
+    );
+    System.assertEquals(
+      1,
+      [SELECT COUNT() FROM Workflow_Log__c WHERE Id = :fireLog.Id],
+      'Fire history kept'
+    );
+  }
+
+  @IsTest
+  static void incompleteTeardownKeepsCursorAndContinues() {
+    WorkflowInstanceTeardown.maxSatelliteRows = 1;
+    WorkflowArchiveTestSink sink = new WorkflowArchiveTestSink();
+    Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'many-logs',
+      40
+    );
+    insertLogs(inst.Id, 2);
+
+    WorkflowArchiveSweep.BatchResult first = WorkflowArchiveSweep.runBatch(
+      params(20),
+      sink
+    );
+
+    System.assertEquals(0, first.purgedCount, 'Instance kept');
+    System.assertEquals(true, first.hasMore, 'Sweep continues');
+    System.assertEquals(null, first.cursorId, 'Cursor does not move');
+    System.assertEquals(true, exists(inst.Id), 'Instance still there');
+
+    WorkflowArchiveSweep.BatchResult second = WorkflowArchiveSweep.runBatch(
+      params(20),
+      sink
+    );
+
+    System.assertEquals(1, second.purgedCount, 'Second batch completes');
+    System.assertEquals(false, exists(inst.Id), 'Instance purged');
+  }
+
+  @IsTest
+  static void incompleteTeardownWithoutArchiveContinues() {
+    WorkflowInstanceTeardown.maxSatelliteRows = 1;
+    Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
+      'Failed',
+      'many-logs',
+      40
+    );
+    insertLogs(inst.Id, 2);
+
+    WorkflowArchiveSweep.BatchResult first = WorkflowArchiveSweep.runBatch(
+      params(20),
+      null
+    );
+    System.assertEquals(0, first.purgedCount, 'Instance kept');
+    System.assertEquals(true, first.hasMore, 'Sweep continues');
+
+    WorkflowArchiveSweep.BatchResult second = WorkflowArchiveSweep.runBatch(
+      params(20),
+      null
+    );
+    System.assertEquals(1, second.purgedCount, 'Second batch completes');
+    System.assertEquals(false, exists(inst.Id), 'Instance purged');
+  }
+
+  @IsTest
+  static void reportSkipsDoesNotRepeatAnId() {
+    Workflow_Instance__c inst = WorkflowArchiveTestSink.insertInstance(
+      'Completed',
+      'skip',
+      40
+    );
+    WorkflowArchiveSweep.BatchResult batch = new WorkflowArchiveSweep.BatchResult();
+    batch.skippedInstanceIds.add(inst.Id);
+    List<Id> skipped = new List<Id>();
+
+    WorkflowArchiveSweep.reportSkips(batch, skipped);
+    WorkflowArchiveSweep.reportSkips(batch, skipped);
+
+    System.assertEquals(new List<Id>{ inst.Id }, skipped, 'Named once');
+  }
 }

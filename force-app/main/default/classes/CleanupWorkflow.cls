@@ -2,6 +2,8 @@
  * @description System workflow definition that purges old, terminal workflow
  * instances and their engine-owned ContentDocuments in bounded, resumable batches.
  * With archival on, it archives each batch first (see {@link WorkflowArchiveSweep}).
+ * The delete goes through {@link WorkflowInstanceTeardown}, the same routine as
+ * {@link WorkflowInstancePurge}.
  */
 public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
   /**
@@ -54,7 +56,8 @@ public inherited sharing class CleanupWorkflow implements WorkflowDefinition {
   /**
    * @description The single durable step that selects terminal instances past their
    * retention window, deletes their engine-owned unshared documents, removes the
-   * instances and their signals, and yields to continue when more remain. When
+   * instances, their signals and their instance logs, and yields to continue when
+   * more remain. When
    * archival is on (`Revenant_Config__mdt.Archive_Enabled__c`), it archives each
    * chunk to the configured {@link WorkflowArchiveSink} before it deletes it.
    *

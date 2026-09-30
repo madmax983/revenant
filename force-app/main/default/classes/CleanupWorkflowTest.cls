@@ -593,4 +593,74 @@ public class CleanupWorkflowTest {
       );
     }
   }
+
+  // Issue #142: the age purge deletes instance logs through the shared
+  // teardown. Before, it left them as orphans. A schedule fire log stays.
+  @IsTest
+  static void testPurgeDeletesInstanceLogsAndKeepsScheduleLogs() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c old = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Status__c = 'Completed',
+        Correlation_Key__c = 'KeyLogs'
+      );
+      insert old;
+      Test.setCreatedDate(old.Id, DateTime.now().addDays(-40));
+
+      Workflow_Schedule__c sched = new Workflow_Schedule__c(
+        Name = 'CleanupLogSched',
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Cron_Expression__c = '0 2 * * *',
+        Correlation_Key_Prefix__c = 'CleanupLogSchedKey',
+        Enabled__c = false
+      );
+      insert sched;
+      Workflow_Log__c instanceLog = new Workflow_Log__c(
+        Workflow_Instance__c = old.Id,
+        Level__c = 'Error',
+        Log_Type__c = 'StepError',
+        Message__c = 'boom'
+      );
+      Workflow_Log__c scheduleLog = new Workflow_Log__c(
+        Workflow_Instance__c = old.Id,
+        Schedule__c = sched.Id,
+        Level__c = 'Info',
+        Log_Type__c = 'ScheduleFire',
+        Outcome__c = 'Started'
+      );
+      insert new List<Workflow_Log__c>{ instanceLog, scheduleLog };
+
+      CleanupWorkflow.PurgeOldInstancesStep purgeStep = new CleanupWorkflow.PurgeOldInstancesStep();
+      StepContext purgeCtx = new StepContext.Builder()
+        .instanceId(old.Id)
+        .workflowName('CleanupWorkflow')
+        .stepName('CleanupWorkflow.PurgeOldInstancesStep')
+        .inputJson(null)
+        .previousStepOutput(null)
+        .stepStateJson(null)
+        .workflowInputJson('{"retentionDays":30,"batchSize":10}')
+        .workflowVersion(1)
+        .build();
+
+      Test.startTest();
+      purgeStep.execute(purgeCtx);
+      Test.stopTest();
+
+      Assert.areEqual(
+        0,
+        [SELECT COUNT() FROM Workflow_Instance__c WHERE Id = :old.Id],
+        'instance purged'
+      );
+      Assert.areEqual(
+        0,
+        [SELECT COUNT() FROM Workflow_Log__c WHERE Id = :instanceLog.Id],
+        'instance log purged, not orphaned'
+      );
+      Assert.areEqual(
+        1,
+        [SELECT COUNT() FROM Workflow_Log__c WHERE Id = :scheduleLog.Id],
+        'schedule fire log kept'
+      );
+    }
+  }
 }
