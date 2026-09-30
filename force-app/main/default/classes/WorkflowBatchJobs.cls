@@ -41,7 +41,18 @@ public inherited sharing class WorkflowBatchJobs {
     if (Test.isRunningTest() && stubLaunchId != null) {
       return stubLaunchId;
     }
-    return Database.executeBatch(batchable, scopeSize);
+    // The compiler needs a Batchable type. A class that is not a Batchable
+    // throws a TypeException here.
+    if (batchable instanceof Database.Batchable<SObject>) {
+      return Database.executeBatch(
+        (Database.Batchable<SObject>) batchable,
+        scopeSize
+      );
+    }
+    return Database.executeBatch(
+      (Database.Batchable<Object>) batchable,
+      scopeSize
+    );
   }
 
   /**

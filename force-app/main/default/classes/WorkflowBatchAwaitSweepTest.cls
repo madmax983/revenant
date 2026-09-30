@@ -55,7 +55,8 @@ private class WorkflowBatchAwaitSweepTest {
     Workflow_Instance__c done = waiting('sweep-done', DONE_ID);
     Workflow_Instance__c running = waiting('sweep-running', RUNNING_ID);
     insert new List<Workflow_Instance__c>{ done, running };
-    Datetime now = Datetime.now();
+    // A Datetime field keeps whole seconds.
+    Datetime now = Datetime.newInstance(Datetime.now().getTime() / 1000 * 1000);
 
     Integer woken = WorkflowBatchAwaitSweep.reconcile(now);
 
@@ -82,7 +83,9 @@ private class WorkflowBatchAwaitSweepTest {
   static void testOtherWaitsAndStatusesAreIgnored() {
     stubJobs();
     Workflow_Instance__c sleeping = waiting('sweep-sleep', DONE_ID);
-    Datetime later = Datetime.now().addHours(1);
+    Datetime later = Datetime.newInstance(
+      Datetime.now().addHours(1).getTime() / 1000 * 1000
+    );
     sleeping.Sleep_Until__c = later;
     Workflow_Instance__c runningInst = waiting('sweep-run', DONE_ID);
     runningInst.Status__c = 'Running';
