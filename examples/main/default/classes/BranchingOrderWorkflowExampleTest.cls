@@ -117,7 +117,8 @@ private class BranchingOrderWorkflowExampleTest {
         )
         .overlay;
       Assert.areEqual(WorkflowTopology.STATE_ENDED, overlay.currentState);
-      Assert.isTrue(hasEdge(overlay.traversedEdges, RESERVE, CHARGE));
+      Assert.areEqual(new List<String>{ SHIP }, overlay.currentSteps);
+      Assert.isTrue(overlay.nextSteps.isEmpty(), 'An ended run has no next');
     }
   }
 

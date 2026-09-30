@@ -65,7 +65,6 @@ function overlay(overrides = {}) {
       { stepName: V, status: "Completed", compensation: false },
       { stepName: R, status: "Pending", compensation: false },
     ],
-    traversedEdges: [],
     nextSteps: [],
     pathTruncated: false,
     ...overrides,
@@ -409,7 +408,7 @@ describe("c-workflow-topology-graph", () => {
       expect(q(element, "summary-state").textContent).toBe("Running");
     });
 
-    it("draws the path in order and highlights traversed edges", async () => {
+    it("draws the path in order and marks no edge as used", async () => {
       const element = await render(
         { instanceId: "a0G000000000001" },
         graph({
@@ -423,10 +422,6 @@ describe("c-workflow-topology-graph", () => {
               { stepName: H, status: "Completed", compensation: false },
               { stepName: S, status: "Compensated", compensation: true },
             ],
-            traversedEdges: [
-              { source: V, target: S },
-              { source: S, target: H },
-            ],
           }),
         }),
       );
@@ -437,8 +432,8 @@ describe("c-workflow-topology-graph", () => {
       expect(entries[0].textContent).toContain("Validate");
       expect(entries[3].textContent).toContain("Rollback");
       const edges = qa(element, "topology-edge");
-      expect(edges.every((e) => classesOf(e).includes("edge-traversed"))).toBe(
-        true,
+      expect(edges.some((e) => classesOf(e).includes("edge-traversed"))).toBe(
+        false,
       );
       expect(classesOf(nodeEl(element, S))).toContain("node-compensated");
     });
@@ -511,6 +506,28 @@ describe("c-workflow-topology-graph", () => {
       await flushPromises();
 
       expect(q(element, "summary-current").textContent).toContain("Reserve");
+    });
+
+    it("says that a parked rollback has no next step", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          overlay: overlay({
+            currentSteps: [S],
+            currentState: "SUSPENDED",
+            instanceStatus: "Suspended",
+            path: [
+              { stepName: S, status: "Completed", compensation: false },
+              { stepName: S, status: "Pending", compensation: true },
+            ],
+            nextSteps: [],
+          }),
+        }),
+      );
+      expect(q(element, "summary-next").textContent).toBe(
+        "None. The rollback runs.",
+      );
+      expect(q(element, "summary-next-caveat")).toBeNull();
     });
 
     it("says that a rollback has no next step", async () => {

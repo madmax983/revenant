@@ -111,15 +111,6 @@
     fill: #706e6b;
 }
 
-.topology-edge.edge-traversed {
-    stroke: #0176d3;
-    stroke-width: 3;
-}
-
-.topology-arrow.edge-traversed {
-    fill: #0176d3;
-}
-
 .topology-legend .legend-swatch {
     display: inline-block;
     width: 0.75rem;
@@ -161,14 +152,6 @@
     border-style: dashed !important;
 }
 
-.topology-legend .legend-line {
-    display: inline-block;
-    width: 1rem;
-    height: 0;
-    margin-right: 0.25rem;
-    vertical-align: middle;
-    border-top: 3px solid #0176d3;
-}
 
 .legend-visited {
     background: #eef4ff;

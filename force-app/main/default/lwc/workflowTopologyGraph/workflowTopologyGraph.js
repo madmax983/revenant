@@ -343,11 +343,24 @@ export default class WorkflowTopologyGraph extends LightningElement {
     return labelFor(STATE_LABELS, this.effectiveState);
   }
 
+  // A rollback runs, or it is parked when its newest row is a compensation row.
+  get inRollback() {
+    if (this.effectiveState === COMPENSATING) {
+      return true;
+    }
+    const path = list(this.overlay && this.overlay.path);
+    return (
+      this.effectiveState !== ENDED &&
+      path.length > 0 &&
+      path[path.length - 1].compensation === true
+    );
+  }
+
   get nextLabel() {
     if (this.effectiveState === ENDED) {
       return "None. The run has ended.";
     }
-    if (this.effectiveState === COMPENSATING) {
+    if (this.inRollback) {
       return "None. The rollback runs.";
     }
     const next = list(this.overlay && this.overlay.nextSteps);
@@ -362,7 +375,7 @@ export default class WorkflowTopologyGraph extends LightningElement {
   }
 
   get showNextCaveat() {
-    if (this.effectiveState === ENDED || this.effectiveState === COMPENSATING) {
+    if (this.effectiveState === ENDED || this.inRollback) {
       return false;
     }
     const nodes = this.currentNodes;
@@ -456,30 +469,16 @@ export default class WorkflowTopologyGraph extends LightningElement {
     });
   }
 
+  // Edges do not show which one the run used: the step rows have no branch
+  // data, so two adjacent rows do not prove a transition.
   get edgeViews() {
-    const traversed = new Set(
-      list(this.overlay && this.overlay.traversedEdges).map(
-        (e) => `${e.source}->${e.target}`,
-      ),
-    );
-    return this.layout.edges.map((e) => {
-      const classes = ["topology-edge"];
-      if (e.back) {
-        classes.push("edge-side");
-      }
-      if (traversed.has(e.key)) {
-        classes.push("edge-traversed");
-      }
-      return {
-        key: e.key,
-        d: e.d,
-        arrow: e.arrow,
-        cssClass: classes.join(" "),
-        arrowClass: traversed.has(e.key)
-          ? "topology-arrow edge-traversed"
-          : "topology-arrow",
-      };
-    });
+    return this.layout.edges.map((e) => ({
+      key: e.key,
+      d: e.d,
+      arrow: e.arrow,
+      cssClass: e.back ? "topology-edge edge-side" : "topology-edge",
+      arrowClass: "topology-arrow",
+    }));
   }
 
   // ---- Text views ----

@@ -23,8 +23,10 @@ static graph cannot be complete.
    different successors for the two probes. `gapsFound` is true, with
    reason codes, when the graph finds a gap. The name `gapsFound` does not
    claim that a graph with no gap is complete.
-4. The overlay adds no edge from the order of the step rows. Parallel
-   branches mix their rows, so such an edge can be false.
+4. The overlay adds no edge from the order of the step rows, and it marks
+   no edge as used. The rows have no branch data. Parallel branches mix
+   their rows, so two adjacent rows do not prove a transition. The
+   numbered path and the visited steps show the run.
 5. The graph makes an instance of a class only after `ApexTypeImplementor`
    shows a deployed, concrete workflow definition. The validator resolves
    the definition as the engine does at start.

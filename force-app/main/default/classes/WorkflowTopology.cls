@@ -209,9 +209,6 @@ public inherited sharing class WorkflowTopology {
     /** The step rows, oldest first. */
     @AuraEnabled
     public List<PathEntry> path = new List<PathEntry>();
-    /** Known edges that the run used. */
-    @AuraEnabled
-    public List<Edge> traversedEdges = new List<Edge>();
     /** Known successors of the current steps. Empty for a rollback or an end. */
     @AuraEnabled
     public List<String> nextSteps = new List<String>();
@@ -429,9 +426,13 @@ public inherited sharing class WorkflowTopology {
       overlay.path.add(new PathEntry(newestFirst[i], declared));
     }
 
-    String lastForward = addTraversedEdges(overlay, b);
-    overlay.currentSteps = currentStepsOf(instance, overlay, lastForward);
+    String lastForward = addPathNodes(overlay, b);
+    String rollbackStep = rollbackStepOf(overlay);
+    overlay.currentSteps = rollbackStep != null
+      ? new List<String>{ rollbackStep }
+      : currentStepsOf(instance, lastForward);
     Boolean moves =
+      rollbackStep == null &&
       overlay.currentState != STATE_COMPENSATING &&
       overlay.currentState != STATE_ENDED;
     for (String stepName : overlay.currentSteps) {
@@ -448,23 +449,34 @@ public inherited sharing class WorkflowTopology {
     return overlay;
   }
 
-  // During a rollback, the engine does not write Current_Step__c. The newest
-  // compensation row gives the step in rollback. Else Current_Step__c gives the
-  // current step (one for each SPLIT branch). Else the last forward row.
+  // The engine does not write Current_Step__c during a rollback. A rollback
+  // runs or is parked (Suspended, CompensationFailed) when the state is
+  // COMPENSATING or the newest row is a compensation row. The step of the
+  // newest compensation row is then current. Returns null for no rollback.
+  private static String rollbackStepOf(Overlay overlay) {
+    if (overlay.path.isEmpty() || overlay.currentState == STATE_ENDED) {
+      return null;
+    }
+    Boolean newestIsRollback = overlay.path[overlay.path.size() - 1]
+      .compensation;
+    if (!newestIsRollback && overlay.currentState != STATE_COMPENSATING) {
+      return null;
+    }
+    for (Integer i = overlay.path.size() - 1; i >= 0; i--) {
+      if (overlay.path[i].compensation) {
+        return overlay.path[i].stepName;
+      }
+    }
+    return null;
+  }
+
+  // Current_Step__c gives the current step (one for each SPLIT branch). Else
+  // the last forward row.
   private static List<String> currentStepsOf(
     Workflow_Instance__c instance,
-    Overlay overlay,
     String lastForward
   ) {
     List<String> current = new List<String>();
-    if (overlay.currentState == STATE_COMPENSATING) {
-      for (Integer i = overlay.path.size() - 1; i >= 0; i--) {
-        if (overlay.path[i].compensation) {
-          current.add(overlay.path[i].stepName);
-          return current;
-        }
-      }
-    }
     if (String.isNotBlank(instance.Current_Step__c)) {
       for (String stepName : instance.Current_Step__c.split(BRANCH_SEPARATOR)) {
         if (String.isNotBlank(stepName) && !current.contains(stepName.trim())) {
@@ -477,31 +489,19 @@ public inherited sharing class WorkflowTopology {
     return current;
   }
 
-  // Adds a node for each path step and the known edges between forward rows.
-  // It adds no edge that the probe did not find, because parallel branches mix
-  // their rows. Returns the last forward step name.
-  private static String addTraversedEdges(Overlay overlay, GraphBuilder b) {
-    Set<String> used = new Set<String>();
+  // Adds a node for each path step. Returns the last forward step name. It
+  // marks no edge as used: the rows have no branch data, and parallel
+  // branches mix their rows, so two adjacent rows do not prove a transition.
+  private static String addPathNodes(Overlay overlay, GraphBuilder b) {
     String previous = null;
     for (PathEntry entry : overlay.path) {
       if (String.isBlank(entry.stepName)) {
         continue;
       }
       b.addNode(entry.stepName, false);
-      if (entry.compensation) {
-        continue;
+      if (!entry.compensation) {
+        previous = entry.stepName;
       }
-      String key = previous + '->' + entry.stepName;
-      if (
-        previous != null &&
-        !previous.equals(entry.stepName) &&
-        b.hasEdge(previous, entry.stepName) &&
-        !used.contains(key)
-      ) {
-        overlay.traversedEdges.add(new Edge(previous, entry.stepName));
-        used.add(key);
-      }
-      previous = entry.stepName;
     }
     return previous;
   }

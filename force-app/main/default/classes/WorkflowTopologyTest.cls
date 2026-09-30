@@ -869,7 +869,6 @@ public class WorkflowTopologyTest {
       System.assertEquals('Completed', overlay.path[0].status);
       System.assertEquals(false, overlay.path[0].compensation);
       System.assertEquals(GATE, overlay.path[1].stepName);
-      System.assert(hasEdge(overlay.traversedEdges, START, GATE));
       System.assertEquals(new List<String>{ REJECT }, overlay.nextSteps);
       System.assertEquals(false, overlay.pathTruncated);
     }
@@ -960,14 +959,48 @@ public class WorkflowTopologyTest {
       System.assertEquals(3, overlay.path.size());
       System.assertEquals(START, overlay.path[2].stepName);
       System.assertEquals(true, overlay.path[2].compensation);
-      System.assertEquals(1, overlay.traversedEdges.size(), 'No back edge');
       System.assertEquals(
         new List<String>{ START },
         overlay.currentSteps,
         'The step in rollback is current'
       );
       System.assert(overlay.nextSteps.isEmpty(), 'No forward step');
-      System.assert(hasEdge(overlay.traversedEdges, START, MIDDLE));
+    }
+  }
+
+  @IsTest
+  static void parkedRollbackShowsTheStepInRollback() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      for (
+        String status : new List<String>{ 'Suspended', 'CompensationFailed' }
+      ) {
+        Workflow_Instance__c inst = seedInstance(
+          PREFIX + 'LinearWorkflow',
+          status,
+          MIDDLE
+        );
+        seedSteps(
+          inst.Id,
+          new List<String>{
+            START + '|Completed',
+            MIDDLE + '|Failed',
+            START + '_Compensate|Pending'
+          }
+        );
+
+        WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+          .overlay;
+
+        System.assertEquals(
+          new List<String>{ START },
+          overlay.currentSteps,
+          status + ': the step in rollback is current'
+        );
+        System.assert(
+          overlay.nextSteps.isEmpty(),
+          status + ': a rollback has no forward step'
+        );
+      }
     }
   }
 
@@ -996,7 +1029,6 @@ public class WorkflowTopologyTest {
       System.assertEquals(START, overlay.path[2].stepName);
       System.assertEquals(true, overlay.path[2].compensation);
       System.assertEquals(2, graph.nodes.size(), 'No invented node');
-      System.assert(hasEdge(overlay.traversedEdges, START, STAGE));
     }
   }
 
@@ -1156,7 +1188,6 @@ public class WorkflowTopologyTest {
           'currentSteps',
           'currentState',
           'path',
-          'traversedEdges',
           'nextSteps',
           'pathTruncated'
         },

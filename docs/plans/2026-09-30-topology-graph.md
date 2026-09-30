@@ -31,7 +31,7 @@ go next, without reading `getNextStep`.
 | B4  | Mark a node `routingUnknown` when `getNextStep` throws for it.            | Yes. Never show "no path" for a throw.                                     |
 | B5  | Mark the graph incomplete when a declared step has no known inbound edge. | Yes. Step output routes to such a step, or no route exists.                |
 | B6  | Add "observed" edges from the order of the step rows.                     | No. Parallel branches interleave. That gives false edges.                  |
-| B7  | Show the path as numbered visits and highlight only known edges.          | Yes. No false edge.                                                        |
+| B7  | Show the path as numbered visits and mark the visited steps.              | Yes. No false edge. Adjacent rows do not prove a transition.               |
 | B8  | Put the awaited descriptor in the graph DTO.                              | No. It needs `Output__c` (large). The dashboard passes the #84 value.      |
 | B9  | Draw the graph with an external library.                                  | No. No new static resource. Plain SVG with a layered layout.               |
 | B10 | Put the graph in the instance detail and in the Catalog.                  | Yes. Operators use the detail. Authors use the Catalog.                    |

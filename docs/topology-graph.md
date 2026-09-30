@@ -62,7 +62,6 @@ flowchart LR
 | **Undeclared** (red dash) | A route or the run goes to a step that `getSteps()` omits.    |
 | **▶** line, thick border  | The current step. The line gives the state as text.           |
 | Blue fill                 | The run visited the step.                                     |
-| Blue edge                 | A known edge that the run used.                               |
 
 States: Running, Suspended awaiting a signal, Suspended until a timer or a
 job ends, Failed, Rollback runs, Parked, Ended.
@@ -91,9 +90,10 @@ the graph can miss routes. The graph does not show a missing route as
 - `gapsFound = false` does not prove that the graph is complete. Each graph
   shows: "Edges come from a best-effort probe of getNextStep. A missing edge
   does not prove that no route exists."
-- The overlay adds no edge from the order of the step rows. Parallel
-  branches (`SPLIT`) mix their rows, so such an edge can be false. A known
-  edge that the run used shows in blue.
+- The overlay does not mark an edge as used by the run. The step rows have
+  no branch data. Parallel branches (`SPLIT`) mix their rows, so two
+  adjacent rows do not prove a transition. The numbered path and the visited
+  steps show the run.
 
 To mark a data-dependent step, make `getNextStep` throw for an unknown
 value. Do not return a default route. The graph then shows **?** for that
@@ -103,8 +103,9 @@ step. See
 ## The Current Step
 
 - **SPLIT:** `currentSteps` has one entry for each branch.
-- **Rollback:** the step of the newest compensation row is current. The
-  graph shows no next step.
+- **Rollback:** a rollback runs (`Compensating`, `Cancelling`) or is
+  parked (the newest row is a compensation row). The step of the newest
+  compensation row is current. The graph shows no next step.
 - **End:** the graph shows no next step.
 - **Signal wait:** the summary and the current node show the awaited
   signal, for example `Approve:OrderReview`. The value is the #84
@@ -129,7 +130,7 @@ The DTO shape is pinned by `WorkflowTopologyTest.dtoShapeIsPinned`:
   `compensatable`, `routingUnknown`, `reachable`.
 - `Edge`: `source`, `target`.
 - `Overlay`: `instanceId`, `instanceStatus`, `currentSteps`,
-  `currentState`, `path`, `traversedEdges`, `nextSteps`, `pathTruncated`.
+  `currentState`, `path`, `nextSteps`, `pathTruncated`.
 - `PathEntry`: `stepName`, `status`, `compensation`.
 
 `WorkflowTopology` does no authorization check. The LWC endpoints are on
