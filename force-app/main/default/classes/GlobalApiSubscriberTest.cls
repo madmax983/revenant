@@ -84,11 +84,15 @@ public class GlobalApiSubscriberTest {
     /**
      * @description Suspends until the decision signal is present.
      * @param ctx The step context.
-     * @return YIELD when the step must yield, SUSPEND with no signal, else
+     * @return YIELD when the step must yield or sees a cancel, SUSPEND with no signal, else
      * COMPLETE with the payload.
      */
     public StepResult execute(StepContext ctx) {
-      if (ctx.shouldYield()) {
+      if (
+        ctx.shouldYield() ||
+        ctx.isCancellationRequested() ||
+        ctx.isCancellationRequested(0)
+      ) {
         return StepResult.yield(ctx.stepStateJson);
       }
       StepContext.Signal decision = ctx.signals().getSignal(DECISION);
