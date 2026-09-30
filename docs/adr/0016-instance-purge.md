@@ -20,9 +20,11 @@ set of instances that they select.
    `WorkflowInstancePurge` call it. The log leak closes.
 2. A log row with `Schedule__c` or `Schedule_Name__c` stays. It is schedule
    fire history.
-3. One teardown run deletes at most 5000 signal and log rows. When more
-   remain, it keeps the instances. The sweep yields and keeps its cursor. The
-   purge API gives `DEFERRED`.
+3. One teardown run deletes at most 5000 rows (signals, logs and files).
+   When signal or log rows remain, it keeps the instances and their files, so
+   a retry can still read them. The sweep yields and keeps its cursor. The
+   purge API gives `DEFERRED`. A savepoint turns a locked satellite into
+   `DEFERRED` with no delete.
 4. API: `WorkflowInstancePurge.purge(Id)`, `purge(Set<Id>)` and
    `purge(Set<Id>, Boolean includeRelated)`. Not on `WorkflowEngine`: that
    class is at the PMD `ExcessivePublicCount` limit

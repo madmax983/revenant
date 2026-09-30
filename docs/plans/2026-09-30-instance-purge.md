@@ -134,3 +134,15 @@ and the Codex PR review found issues. We fixed them:
 - New tests: Failed parent, compensation links, link and row bounds,
   satellite pages, instance-count deferral, messages, overlapping families,
   status guard, teardown counts, group planning and the archive path.
+
+A second review round (verification) found more issues. We fixed them:
+
+- A partial teardown deleted the files but kept the instance. A retry or a
+  rollback then had no payload. Now the files go only with the instance.
+- Files did not count in the 5000-row budget. Now they do.
+- A group with a non-terminal member took room in the call. Now it is
+  rejected first and takes no room.
+- A locked satellite threw a `DmlException`. Now a savepoint undoes the
+  deletes, and the call gives `DEFERRED`.
+- A lock failure reported an Id of another object type as `DEFERRED`. Now it
+  gives `NOT_FOUND`.

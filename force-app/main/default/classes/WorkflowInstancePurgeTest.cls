@@ -1002,6 +1002,7 @@ private class WorkflowInstancePurgeTest {
       new Workflow_Log__c(Workflow_Instance__c = inst.Id, Level__c = 'Info'),
       new Workflow_Log__c(Workflow_Instance__c = inst.Id, Level__c = 'Info')
     };
+    Id doc = insertFile('Output_Pages', new List<Id>{ inst.Id });
 
     WorkflowInstancePurge.PurgeResult first = WorkflowInstancePurge.purge(
       inst.Id
@@ -1016,7 +1017,12 @@ private class WorkflowInstancePurgeTest {
     Assert.isTrue(r.message.contains('again'), r.message);
     Assert.areEqual(0, first.purgedCount, 'no instance deleted');
     Assert.areEqual(1, first.deletedLogCount, 'one page of logs');
+    Assert.areEqual(0, first.deletedFileCount, 'no file deleted yet');
     Assert.isTrue(exists(inst.Id), 'instance kept');
+    Assert.isFalse(
+      remainingDocs(new Set<Id>{ doc }).isEmpty(),
+      'a kept instance keeps its payload file'
+    );
 
     WorkflowInstancePurge.PurgeResult second = WorkflowInstancePurge.purge(
       inst.Id
@@ -1026,6 +1032,7 @@ private class WorkflowInstancePurgeTest {
       second.outcomeOf(inst.Id),
       'second call finishes'
     );
+    Assert.areEqual(1, second.deletedFileCount, 'file goes with the instance');
   }
 
   @IsTest

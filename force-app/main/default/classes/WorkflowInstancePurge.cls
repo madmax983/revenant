@@ -236,10 +236,27 @@ public inherited sharing class WorkflowInstancePurge {
         plan();
       } catch (LockException e) {
         // Nothing is deleted. The rest waits for a new call.
+        reportWrongType();
         reportUnreported(Outcome.DEFERRED, lockedMessage());
         return finish();
       }
-      deleteAccepted();
+      if (accepted.isEmpty()) {
+        return finish();
+      }
+      Savepoint sp = Database.setSavepoint();
+      try {
+        deleteAccepted();
+      } catch (DmlException e) {
+        if (e.getDmlType(0) != StatusCode.UNABLE_TO_LOCK_ROW) {
+          throw e;
+        }
+        // Another transaction locks a satellite. Undo all deletes.
+        Database.rollback(sp);
+        resetCounts();
+        for (List<Id> grp : accepted) {
+          reportGroup(grp, Outcome.DEFERRED, lockedMessage());
+        }
+      }
       return finish();
     }
 
@@ -256,11 +273,20 @@ public inherited sharing class WorkflowInstancePurge {
         expandFamilies();
       }
 
-      // Bound first, so the call locks only rows that it can delete.
+      // Bound first, so the call locks only rows that it can delete. A group
+      // with a non-terminal member fails rule 1 now. It takes no budget.
       List<List<Id>> fitting = new List<List<Id>>();
       Integer used = 0;
+      Violations early = new Violations();
+      for (Workflow_Instance__c row : rows.values()) {
+        if (!isTerminal(row)) {
+          early.notTerminal.add(row.Id);
+        }
+      }
       for (List<Id> grp : groupsOf(rows.keySet())) {
-        if (isTooLarge(grp)) {
+        if (rejectIfViolated(grp, early)) {
+          continue;
+        } else if (isTooLarge(grp)) {
           reportGroup(grp, Outcome.REJECTED_TOO_LARGE, tooLargeMessage());
         } else if (used + grp.size() > MAX_INSTANCES_PER_CALL) {
           reportGroup(grp, Outcome.DEFERRED, deferredMessage());
@@ -669,7 +695,31 @@ public inherited sharing class WorkflowInstancePurge {
       }
     }
 
+    private void resetCounts() {
+      result.purgedCount = 0;
+      result.deletedSignalCount = 0;
+      result.deletedLogCount = 0;
+      result.deletedFileCount = 0;
+      List<InstanceResult> kept = new List<InstanceResult>();
+      for (InstanceResult r : result.results) {
+        if (r.outcome != Outcome.PURGED) {
+          kept.add(r);
+        } else {
+          result.byId.remove(r.instanceId);
+        }
+      }
+      result.results = kept;
+    }
+
     // ── Report ───────────────────────────────────────────────────────────
+    private void reportWrongType() {
+      for (Id i : requested) {
+        if (i.getSObjectType() != Workflow_Instance__c.SObjectType) {
+          add(i, Outcome.NOT_FOUND, notFoundMessage());
+        }
+      }
+    }
+
     private void reportGroup(List<Id> grp, Outcome o, String message) {
       for (Id i : grp) {
         if (requestedSet.contains(i) && result.get(i) == null) {
@@ -689,10 +739,7 @@ public inherited sharing class WorkflowInstancePurge {
     // Reports NOT_FOUND for the rest. Orders the rows: requested Ids first,
     // in sorted order, then related Ids.
     private PurgeResult finish() {
-      reportUnreported(
-        Outcome.NOT_FOUND,
-        'No workflow instance has this Id. If you purged it before, do nothing.'
-      );
+      reportUnreported(Outcome.NOT_FOUND, notFoundMessage());
       List<InstanceResult> ordered = new List<InstanceResult>();
       for (Id i : requested) {
         ordered.add(result.get(i));
@@ -822,7 +869,11 @@ public inherited sharing class WorkflowInstancePurge {
 
   private static String satellitesMessage() {
     return 'The call deleted part of the signals and logs. More remain.' +
-      ' Call purge again for this Id.';
+      ' The instance and its files stay. Call purge again for this Id.';
+  }
+
+  private static String notFoundMessage() {
+    return 'No workflow instance has this Id. If you purged it before, do nothing.';
   }
 
   private static String lockedMessage() {

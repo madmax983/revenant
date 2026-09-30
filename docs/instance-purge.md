@@ -29,7 +29,8 @@ for (WorkflowInstancePurge.InstanceResult row : r.results) {
 
 A null set, a null Id, or more than 50 Ids throws
 `WorkflowEngine.WorkflowException`. An empty set does nothing. For all other
-input, the call returns an outcome. It does not throw an exception.
+input, the call returns an outcome. A lock failure gives `DEFERRED`. Other
+platform errors throw.
 
 The API runs SOQL and DML in system mode. The caller must check permissions.
 A message can name related instances that the caller cannot see. Show only
@@ -128,19 +129,20 @@ it purged, with `requested = false`.
 
 ## Bounds
 
-| Bound                            | Value                                                                                                                                              |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ids in one call                  | 50 (`MAX_INSTANCES_PER_CALL`). More throws.                                                                                                        |
-| Instances purged in one call     | 50. Other groups get `DEFERRED`.                                                                                                                   |
-| Linked files in one call         | 100 (`CleanupDocumentPurger.MAX_DOCS_PER_CHUNK`). The first group always goes, also above the cap. Other groups get `DEFERRED`.                    |
-| Signal and log rows in one call  | 5000 (`WorkflowInstanceTeardown.MAX_SATELLITE_ROWS`). When more remain, the call keeps the instances and gives `DEFERRED`.                         |
-| Link levels for `includeRelated` | 20 (`MAX_LINK_ROUNDS`).                                                                                                                            |
-| Rows for each related read       | 2000 (`MAX_RELATED_ROWS`). A cut family read gives `REJECTED_TOO_LARGE`. A cut link check gives `DEFERRED` to each group with no known rule break. |
-| SOQL in one call                 | At most 9 without `includeRelated`, 31 with it.                                                                                                    |
-| DML in one call                  | At most 4.                                                                                                                                         |
+| Bound                                 | Value                                                                                                                                                         |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ids in one call                       | 50 (`MAX_INSTANCES_PER_CALL`). More throws.                                                                                                                   |
+| Instances purged in one call          | 50. Other groups get `DEFERRED`.                                                                                                                              |
+| Linked files in one call              | 100 (`CleanupDocumentPurger.MAX_DOCS_PER_CHUNK`). The first group always goes, also above the cap. Other groups get `DEFERRED`.                               |
+| Signal, log and file rows in one call | 5000 (`WorkflowInstanceTeardown.MAX_SATELLITE_ROWS`). When more signal or log rows remain, the call keeps the instances and their files and gives `DEFERRED`. |
+| Link levels for `includeRelated`      | 20 (`MAX_LINK_ROUNDS`).                                                                                                                                       |
+| Rows for each related read            | 2000 (`MAX_RELATED_ROWS`). A cut family read gives `REJECTED_TOO_LARGE`. A cut link check gives `DEFERRED` to each group with no known rule break.            |
+| SOQL in one call                      | At most 9 without `includeRelated`, 31 with it.                                                                                                               |
+| DML in one call                       | At most 5 (4 deletes and 1 savepoint).                                                                                                                        |
 
-A group larger than a bound gets `REJECTED_TOO_LARGE`. A group that does not
-fit the rest of the call gets `DEFERRED`.
+A group with a non-terminal member is rejected first and takes no room in
+the call. A group larger than a bound gets `REJECTED_TOO_LARGE`. A group
+that does not fit the rest of the call gets `DEFERRED`.
 
 ## Concurrency
 
@@ -148,5 +150,5 @@ The call locks each row that it deletes (`FOR UPDATE`). After the lock, it
 reads the links to rows outside the set. It also locks each outside parent
 and successor that the rules trust, and reads its status again. A retry, a
 redrive or a rollback that starts first wins: the purge sees the new status
-and rejects the row. When a lock wait fails, the call deletes nothing and
-gives `DEFERRED`.
+and rejects the row. When a lock wait or a locked satellite stops the call, it deletes
+nothing and gives `DEFERRED`.

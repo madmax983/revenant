@@ -113,7 +113,7 @@ Then the purge deletes the engine files, signals and instance logs, as
 `Schedule_Name__c` stays. The archive does not copy logs. Export them first
 if you need them. When an instance has more than 5000 signal and log rows,
 the batch deletes them in pages and writes the same records again. The sink
-contract makes that safe.
+contract makes that safe. The files and the instance go in the last page.
 
 ## Shipped sinks
 

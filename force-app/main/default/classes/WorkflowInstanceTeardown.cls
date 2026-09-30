@@ -4,10 +4,13 @@
  * {@link WorkflowInstancePurge} call it, so the purge paths cannot drift.
  *
  * It deletes, in this order:
- * 1. The engine files that {@link CleanupDocumentPurger} selected.
- * 2. Signals (`Workflow_Signal__c`, a SetNull lookup).
- * 3. Instance logs (`Workflow_Log__c`, a SetNull lookup).
+ * 1. Signals (`Workflow_Signal__c`, a SetNull lookup).
+ * 2. Instance logs (`Workflow_Log__c`, a SetNull lookup).
+ * 3. The engine files that {@link CleanupDocumentPurger} selected.
  * 4. The instances. Step rows and search attributes cascade (MasterDetail).
+ *
+ * Steps 3 and 4 run only when no signal or log row remains. So a kept
+ * instance keeps its payload files, and a retry can still read them.
  *
  * A log row with `Schedule__c` or `Schedule_Name__c` belongs to the schedule
  * fire history. It stays. The platform clears its instance lookup.
@@ -46,8 +49,9 @@ public inherited sharing class WorkflowInstanceTeardown {
   }
 
   /**
-   * @description Maximum signal and log rows that one run deletes. When more
-   * remain, the run keeps the instances. The next run continues.
+   * @description Maximum signal, log and file rows that one run deletes.
+   * When more signal or log rows remain, the run keeps the instances and
+   * their files. The next run continues.
    */
   public static final Integer MAX_SATELLITE_ROWS = 5000;
   // Tests lower the cap to exercise the partial path with few rows.
@@ -67,17 +71,17 @@ public inherited sharing class WorkflowInstanceTeardown {
     /** @description Deleted engine files. */
     public Integer files = 0;
     /**
-     * @description False when satellites remain. Then no instance is deleted.
-     * Run the same chunk again.
+     * @description False when signal or log rows remain. Then no file and no
+     * instance is deleted. Run the same chunk again.
      */
     public Boolean complete = true;
   }
 
   /**
    * @description Deletes a planned chunk and each satellite that does not
-   * cascade. It deletes at most {@link #MAX_SATELLITE_ROWS} signal and log
-   * rows. It deletes the instances only when no satellite remains. SOQL and
-   * DML run in system mode.
+   * cascade. It deletes at most {@link #MAX_SATELLITE_ROWS} rows. It deletes
+   * the files and the instances only when no signal or log row remains. SOQL
+   * and DML run in system mode.
    * @param chunk the chunk from {@link CleanupDocumentPurger#planChunk} or
    * {@link CleanupDocumentPurger#planGroups}
    * @return the numbers of deleted records
@@ -88,9 +92,12 @@ public inherited sharing class WorkflowInstanceTeardown {
       return counts;
     }
     Set<Id> ids = chunk.instanceIdsToPurge;
-    counts.files = CleanupDocumentPurger.deleteDocuments(chunk);
-
-    Integer budget = maxSatelliteRows;
+    // Keep room for the files, so the run stays under the DML row limit.
+    // At least 1 row, so each run moves forward.
+    Integer budget = Math.max(
+      1,
+      maxSatelliteRows - chunk.finalDocIdsToDelete.size()
+    );
     // Read one row more than the budget, to know if rows remain.
     Integer probe = budget + 1;
     List<SObject> signals = [
@@ -122,6 +129,7 @@ public inherited sharing class WorkflowInstanceTeardown {
     if (!counts.complete) {
       return counts;
     }
+    counts.files = CleanupDocumentPurger.deleteDocuments(chunk);
     delete as system chunk.instancesToPurge;
     counts.instances = chunk.instancesToPurge.size();
     return counts;
