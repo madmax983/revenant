@@ -155,7 +155,18 @@ public inherited sharing class WorkflowWaitDescriptorService {
       ORDER BY CreatedDate ASC, Id ASC
       LIMIT 50000
     ]) {
-      pendingByInstance.put(se.Workflow_Instance__c, se);
+      // A parallel sibling that has not started is Pending with a blank type. It must not
+      // replace a parked sibling that has a recorded wait type (issue #229).
+      Workflow_Step_Execution__c kept = pendingByInstance.get(
+        se.Workflow_Instance__c
+      );
+      if (
+        kept == null ||
+        String.isNotBlank(se.Wait_Type__c) ||
+        String.isBlank(kept.Wait_Type__c)
+      ) {
+        pendingByInstance.put(se.Workflow_Instance__c, se);
+      }
     }
     return pendingByInstance;
   }

@@ -1050,6 +1050,37 @@ public class WorkflowWaitDescriptorServiceTest {
     }
   }
 
+  @IsTest
+  static void testListPrefersTypedParkedSibling() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A parked approval branch is older than a sibling that has not started (blank type).
+      Workflow_Instance__c inst = suspendedInstance(null);
+      insert as system inst;
+      Workflow_Step_Execution__c parked = pendingStepFor(
+        inst.Id,
+        'WaitDescTest.ParkedBranch',
+        null
+      );
+      parked.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_APPROVAL;
+      insert as system parked;
+      insert as system pendingStepFor(
+        inst.Id,
+        'WaitDescTest.UntouchedBranch',
+        null
+      );
+
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWaits(
+          new List<Workflow_Instance__c>{ inst }
+        )
+        .get(inst.Id);
+      System.assertEquals(
+        'Awaiting approval at step WaitDescTest.ParkedBranch',
+        d.get('label'),
+        'A typed parked branch wins over a later untouched sibling'
+      );
+    }
+  }
+
   // ── End-to-end exposure on the read paths ───────────────────────────────────
 
   @IsTest
