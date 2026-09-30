@@ -63,6 +63,7 @@ public inherited sharing class WorkflowStepSuspension {
       WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
+    stepExec.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_GENERIC;
     String suspendStateJson;
     if (String.isNotBlank(result.directive().timeout.step)) {
       // Timed suspend (issue #35): persist the fallback step in a reserved key
@@ -128,6 +129,8 @@ public inherited sharing class WorkflowStepSuspension {
       WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
+    // A sleep is a timer wait. It must not keep a signal wait type.
+    stepExec.Wait_Type__c = null;
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       WorkflowPayloadCodecs.encode(
@@ -177,6 +180,7 @@ public inherited sharing class WorkflowStepSuspension {
       WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
+    stepExec.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_CHILD;
     Map<String, Object> childInfo = new Map<String, Object>{
       'childWorkflowName' => result.directive().childWorkflowName,
       'childCorrelationKey' => result.directive().childCorrelationKey
@@ -236,6 +240,7 @@ public inherited sharing class WorkflowStepSuspension {
       WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
+    stepExec.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_CHILD;
     List<String> childKeys = new List<String>();
     for (StepResult.ChildRequest req : result.directive().childRequests) {
       childKeys.add(req.correlationKey);
@@ -289,6 +294,7 @@ public inherited sharing class WorkflowStepSuspension {
       WorkflowSignalConsume.rollbackClaimedSignals(context);
     }
     stepExec.Status__c = 'Pending';
+    stepExec.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_APPROVAL;
     Map<String, Object> state = new Map<String, Object>{
       'waitingForApproval' => true,
       'approvalKey' => result.directive().approvalKey,

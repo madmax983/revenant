@@ -391,6 +391,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>false</editable>
+        <field>Workflow_Step_Execution__c.Wait_Type__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>false</editable>
         <field>Workflow_Step_Execution__c.CPU_Time_Ms__c</field>
         <readable>true</readable>
     </fieldPermissions>

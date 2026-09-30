@@ -199,6 +199,8 @@ public inherited sharing class WorkflowStepExecLock {
       return null;
     }
     stepExec.Status__c = 'Running';
+    // The step is no longer parked. Clear the wait type.
+    stepExec.Wait_Type__c = null;
     return stepExec;
   }
 
