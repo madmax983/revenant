@@ -647,7 +647,9 @@ private class WorkflowBatchStepTest {
         after.Awaited_Batch_Job_Id__c,
         'A cancelled instance does not wait for its job'
       );
-      // The job ends later. The sweep must not wake the instance.
+      // Simulate a later compensation wait: the instance is Suspended again.
+      // The job ends. The sweep must not wake the instance.
+      update new Workflow_Instance__c(Id = instanceId, Status__c = 'Suspended');
       stubJob(job('Completed', 1, 1, 0, null));
       Assert.areEqual(0, WorkflowBatchAwaitSweep.reconcile(Datetime.now()));
       Test.stopTest();

@@ -129,6 +129,8 @@ public inherited sharing class WorkflowDeadlineSweep {
   ) {
     inst.Sleep_Until__c = null;
     inst.Async_Job_Id__c = null;
+    // Issue #138: the instance does not wait for its batch job now.
+    inst.Awaited_Batch_Job_Id__c = null;
 
     // Check if there are compensations to run
     Boolean hasCompensations = false;
