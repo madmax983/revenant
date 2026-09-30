@@ -388,15 +388,15 @@ public class WorkflowTopologyTest {
         PREFIX + 'BranchyWorkflow'
       );
 
-      WorkflowTopology.Node gate = node(graph, GATE);
+      WorkflowTopology.Node gateNode = node(graph, GATE);
       System.assertEquals(
         true,
-        gate.routingUnknown,
+        gateNode.routingUnknown,
         'A throw from getNextStep marks the routing as not known'
       );
       System.assertEquals(
         false,
-        gate.terminal,
+        gateNode.terminal,
         'A throw must not show as the end of the run'
       );
       System.assert(hasEdge(graph.edges, GATE, REJECT), 'Probe edge');
@@ -423,9 +423,9 @@ public class WorkflowTopologyTest {
         PREFIX + 'DanglingWorkflow'
       );
 
-      WorkflowTopology.Node missing = node(graph, MISSING);
-      System.assertNotEquals(null, missing, 'The routing bug is visible');
-      System.assertEquals(false, missing.declared);
+      WorkflowTopology.Node missingNode = node(graph, MISSING);
+      System.assertNotEquals(null, missingNode, 'The routing bug is visible');
+      System.assertEquals(false, missingNode.declared);
       System.assert(hasEdge(graph.edges, START, MISSING));
       System.assertEquals(1, graph.defects.size(), graph.defects);
       System.assert(graph.defects[0].contains(MISSING), graph.defects);

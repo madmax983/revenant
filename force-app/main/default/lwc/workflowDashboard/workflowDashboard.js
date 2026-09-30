@@ -467,6 +467,8 @@ export default class WorkflowDashboard extends LightningElement {
   viewingCatalog = false;
   loadingCatalog = false;
   catalogRows = [];
+  // Definition whose topology graph the Catalog shows (#141), or null.
+  catalogGraphDefinition = null;
 
   // Failure Breakdown view state
   viewingFailureBreakdown = false;
@@ -1552,6 +1554,8 @@ export default class WorkflowDashboard extends LightningElement {
           ),
           waitingOn: result.waitingOn,
           hasWaitDescriptor: !!result.waitDescriptor,
+          // The #84 descriptor for the topology graph (#141).
+          waitDescriptor: result.waitDescriptor || null,
           waitDescriptorLabel: result.waitDescriptor
             ? result.waitDescriptor.label
             : null,
@@ -1898,6 +1902,17 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleCloseCatalog() {
     this.viewingCatalog = false;
+    this.catalogGraphDefinition = null;
+  }
+
+  // Shows the topology graph of a Catalog definition (#141). No run is needed.
+  handleOpenCatalogGraph(event) {
+    this.catalogGraphDefinition =
+      event.currentTarget.dataset.definition || null;
+  }
+
+  handleCloseCatalogGraph() {
+    this.catalogGraphDefinition = null;
   }
 
   loadCatalog() {

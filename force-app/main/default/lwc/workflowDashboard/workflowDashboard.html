@@ -1396,6 +1396,23 @@
                                         </lightning-button>
                                     </div>
 
+                                    <!-- Topology graph of one definition (issue #141) -->
+                                    <template if:true={catalogGraphDefinition}>
+                                        <div class="slds-box slds-m-bottom_medium" data-id="catalog-graph-panel">
+                                            <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-m-bottom_small">
+                                                <h3 class="slds-text-heading_small font-outfit">Workflow Graph: <span class="font-mono">{catalogGraphDefinition}</span></h3>
+                                                <lightning-button
+                                                    data-id="topology-close-btn"
+                                                    label="Close Graph"
+                                                    variant="neutral"
+                                                    icon-name="utility:close"
+                                                    onclick={handleCloseCatalogGraph}>
+                                                </lightning-button>
+                                            </div>
+                                            <c-workflow-topology-graph workflow-name={catalogGraphDefinition}></c-workflow-topology-graph>
+                                        </div>
+                                    </template>
+
                                     <template if:true={hasCatalogRows}>
                                         <table class="slds-table slds-table_cell-buffer slds-table_bordered">
                                             <thead>
@@ -1405,6 +1422,7 @@
                                                     <th scope="col"><div class="slds-truncate" title="Active">Active</div></th>
                                                     <th scope="col"><div class="slds-truncate" title="Failed">Failed</div></th>
                                                     <th scope="col"><div class="slds-truncate" title="Suspended">Suspended</div></th>
+                                                    <th scope="col"><div class="slds-truncate" title="Graph">Graph</div></th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -1456,6 +1474,17 @@
                                                                 class="slds-button link-button">
                                                                 <span class="badge badge-orange">{def.suspended}</span>
                                                             </button>
+                                                        </td>
+                                                        <td data-label="Graph">
+                                                            <lightning-button
+                                                                data-id="catalog-graph-btn"
+                                                                data-definition={def.className}
+                                                                label="Graph"
+                                                                icon-name="utility:hierarchy"
+                                                                variant="neutral"
+                                                                title="Show the steps and known routes of this definition"
+                                                                onclick={handleOpenCatalogGraph}>
+                                                            </lightning-button>
                                                         </td>
                                                     </tr>
                                                 </template>
@@ -2020,6 +2049,15 @@
                                         </div>
                                     </div>
                                 </template>
+
+                                <!-- Workflow Graph with this run on it (issue #141) -->
+                                <div class="slds-m-bottom_large" data-id="instance-graph-panel">
+                                    <h3 class="slds-text-heading_small slds-m-bottom_small font-outfit">Workflow Graph</h3>
+                                    <c-workflow-topology-graph
+                                        instance-id={selectedInstanceId}
+                                        wait-descriptor={selectedInst.waitDescriptor}>
+                                    </c-workflow-topology-graph>
+                                </div>
 
                                 <!-- Step Timeline/DAG Execution History -->
                                 <div>

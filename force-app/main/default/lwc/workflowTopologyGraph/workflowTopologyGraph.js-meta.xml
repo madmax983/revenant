@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <isExposed>false</isExposed>
+    <masterLabel>Workflow Topology Graph</masterLabel>
+    <description>Read-only graph of a workflow definition, with the path and the current step of one instance (issue #141).</description>
+</LightningComponentBundle>

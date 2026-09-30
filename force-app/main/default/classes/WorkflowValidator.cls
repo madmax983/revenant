@@ -25,6 +25,10 @@
  * resolution, not just during validation.
  *
  * See issue #23.
+ *
+ * Issue #141: the result also keeps the topology that validation finds (the
+ * initial step, the declared steps, the steps with rollback and the probe
+ * transitions). WorkflowTopology draws the graph from it.
  */
 public with sharing class WorkflowValidator {
   // Defect codes. Stable identifiers so callers can branch on a defect class
@@ -68,6 +72,14 @@ public with sharing class WorkflowValidator {
   public class ValidationResult {
     public String workflowName;
     public List<Defect> defects = new List<Defect>();
+    /** The getInitialStep() value, or null when it threw. */
+    public String initialStep;
+    /** The getSteps() value, in declared order. */
+    public List<String> declaredSteps = new List<String>();
+    /** The declared steps that implement CompensatableStep. */
+    public Set<String> compensatableSteps = new Set<String>();
+    /** The probe transitions, or null when the definition did not resolve. */
+    public WorkflowTransitionProbe.Transitions transitions;
 
     /**
      * @description Creates an empty result bound to the workflow being validated.
@@ -171,6 +183,8 @@ public with sharing class WorkflowValidator {
       );
     }
     Set<String> declaredSet = new Set<String>(declaredSteps);
+    result.initialStep = initialStep;
+    result.declaredSteps = declaredSteps;
 
     if (!initialStepThrew) {
       validateInitialStepDeclared(initialStep, declaredSet, result);
@@ -184,8 +198,12 @@ public with sharing class WorkflowValidator {
       validateStepClass(stepName, result);
     }
 
-    // Best-effort transition probe for dangling successors.
-    WorkflowTransitionProbe.probe(def, declaredSteps, result);
+    // Best-effort transition probe for dangling successors. Keep the edges.
+    result.transitions = WorkflowTransitionProbe.probe(
+      def,
+      declaredSteps,
+      result
+    );
 
     return result;
   }
@@ -371,6 +389,8 @@ public with sharing class WorkflowValidator {
           stepName +
           '" does not implement WorkflowStep (or CompensatableStep).'
       );
+    } else if (stepInstance instanceof CompensatableStep) {
+      result.compensatableSteps.add(stepName);
     }
   }
 }

@@ -25,8 +25,56 @@
  *
  * Defects are appended straight to the caller's ValidationResult, exactly as the
  * former in-validator probe did.
+ *
+ * Issue #141: the probe also records each transition it finds in a Transitions
+ * value. WorkflowTopology uses it to draw the graph.
  */
 public inherited sharing class WorkflowTransitionProbe {
+  /**
+   * The transitions that the probe found (issue #141). It is best-effort:
+   * a missing edge does not prove that no edge exists.
+   */
+  public class Transitions {
+    /** Known successors of each probed step, in the order found. */
+    public Map<String, List<String>> successors = new Map<String, List<String>>();
+    /** Steps where getNextStep returned a blank successor (the run can end). */
+    public Set<String> endingSteps = new Set<String>();
+    /** Steps where getNextStep threw for a probe (routing not known). */
+    public Set<String> unresolvedSteps = new Set<String>();
+    /** True when getLatestVersion() threw, so no version was probed. */
+    public Boolean versionsUnresolved = false;
+
+    /**
+     * @description Records one probe outcome. A blank successor marks an end.
+     * @param stepName The probed step.
+     * @param successor The successor that getNextStep returned.
+     */
+    public void record(String stepName, String successor) {
+      if (String.isBlank(successor)) {
+        endingSteps.add(stepName);
+        return;
+      }
+      List<String> known = successors.get(stepName);
+      if (known == null) {
+        known = new List<String>();
+        successors.put(stepName, known);
+      }
+      if (!known.contains(successor)) {
+        known.add(successor);
+      }
+    }
+
+    /**
+     * @description Gives the known successors of a step.
+     * @param stepName The step.
+     * @return The known successors, or an empty list.
+     */
+    public List<String> successorsOf(String stepName) {
+      List<String> known = successors.get(stepName);
+      return known == null ? new List<String>() : known;
+    }
+  }
+
   /**
    * @description Runs the default and (where applicable) version-aware transition
    * probes, appending any DANGLING_SUCCESSOR / CONTRACT_METHOD_THREW defects to
@@ -35,8 +83,9 @@ public inherited sharing class WorkflowTransitionProbe {
    * @param def The workflow definition whose routing is being probed.
    * @param declaredSteps The step names declared by the definition's getSteps().
    * @param result The validation result to which discovered defects are appended.
+   * @return The transitions that the probe found (issue #141).
    */
-  public static void probe(
+  public static Transitions probe(
     WorkflowDefinition def,
     List<String> declaredSteps,
     WorkflowValidator.ValidationResult result
@@ -50,6 +99,7 @@ public inherited sharing class WorkflowTransitionProbe {
     if (def instanceof VersionedWorkflow) {
       probeVersionedRouting((VersionedWorkflow) def, ctx);
     }
+    return ctx.transitions;
   }
 
   /**
@@ -69,9 +119,11 @@ public inherited sharing class WorkflowTransitionProbe {
         try {
           successor = def.getNextStep(stepName, probe);
         } catch (Exception e) {
-          // Data-dependent author logic; ignore for a best-effort probe.
+          // Data-dependent author logic: no defect, but the routing is not known.
+          ctx.transitions.unresolvedSteps.add(stepName);
           continue;
         }
+        ctx.transitions.record(stepName, successor);
         flagIfDangling(stepName, successor, ctx);
       }
     }
@@ -94,6 +146,7 @@ public inherited sharing class WorkflowTransitionProbe {
     try {
       latest = vdef.getLatestVersion();
     } catch (Exception e) {
+      ctx.transitions.versionsUnresolved = true;
       ctx.addDefect(
         WorkflowValidator.CONTRACT_METHOD_THREW,
         ctx.result.workflowName,
@@ -116,8 +169,10 @@ public inherited sharing class WorkflowTransitionProbe {
           try {
             successor = vdef.getNextStep(stepName, probe, version);
           } catch (Exception e) {
+            ctx.transitions.unresolvedSteps.add(stepName);
             continue;
           }
+          ctx.transitions.record(stepName, successor);
           flagIfDangling(stepName, successor, ctx);
         }
       }
@@ -166,6 +221,7 @@ public inherited sharing class WorkflowTransitionProbe {
     final Set<String> declaredSet;
     final Set<String> flagged = new Set<String>();
     final WorkflowValidator.ValidationResult result;
+    final Transitions transitions = new Transitions();
     final List<StepResult> probes = new List<StepResult>{
       StepResult.complete(null, null),
       StepResult.complete(null, new Map<String, Object>())

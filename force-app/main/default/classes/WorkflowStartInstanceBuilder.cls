@@ -118,11 +118,29 @@ public inherited sharing class WorkflowStartInstanceBuilder {
     if (String.isBlank(req.workflowName)) {
       return;
     }
-    String wflowKey = req.workflowName.toLowerCase();
-    if (validatedWorkflows.containsKey(wflowKey)) {
-      return;
+    if (!isAuthorizedDefinition(req.workflowName)) {
+      throw new WorkflowEngine.WorkflowException(
+        'Unauthorized or invalid workflow definition: ' + req.workflowName
+      );
     }
-    WorkflowNameCandidates c = resolveNameCandidates(req.workflowName);
+  }
+
+  /**
+   * @description Tells if a name is a deployed workflow definition. It reads
+   * ApexTypeImplementor and makes no instance of the class. The result for a
+   * valid name is memoized in validatedWorkflows (issue #141 uses it).
+   * @param workflowName The workflow name to check.
+   * @return True when a concrete implementor of a workflow interface matches.
+   */
+  public static Boolean isAuthorizedDefinition(String workflowName) {
+    if (String.isBlank(workflowName)) {
+      return false;
+    }
+    String wflowKey = workflowName.toLowerCase();
+    if (validatedWorkflows.containsKey(wflowKey)) {
+      return true;
+    }
+    WorkflowNameCandidates c = resolveNameCandidates(workflowName);
     List<ApexTypeImplementor> queryResults = [
       SELECT ClassName, ClassNamespacePrefix
       FROM ApexTypeImplementor
@@ -137,11 +155,10 @@ public inherited sharing class WorkflowStartInstanceBuilder {
       WITH SYSTEM_MODE
     ];
     if (!matchesAuthorizedImpl(queryResults, c)) {
-      throw new WorkflowEngine.WorkflowException(
-        'Unauthorized or invalid workflow definition: ' + req.workflowName
-      );
+      return false;
     }
     validatedWorkflows.put(wflowKey, true);
+    return true;
   }
 
   private static WorkflowNameCandidates resolveNameCandidates(
