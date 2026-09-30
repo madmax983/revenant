@@ -184,10 +184,11 @@ public class WorkflowWaitTypeTest {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newInstance();
       Workflow_Step_Execution__c exec = newStepExec(inst.Id);
-      StepResult.ChildRequest req = new StepResult.ChildRequest();
-      req.workflowName = CHILD_WF;
-      req.correlationKey = 'WaitType-Bulk';
-      req.inputJson = '"in"';
+      StepResult.ChildRequest req = new StepResult.ChildRequest(
+        CHILD_WF,
+        'WaitType-Bulk',
+        'in'
+      );
       Test.startTest();
       WorkflowStepSuspension.handleStartChildrenOutcome(
         outcomeFor(

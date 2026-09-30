@@ -356,17 +356,17 @@ public inherited sharing class WorkflowWaitDescriptorService {
     String waitType,
     String stepName
   ) {
+    String noun = 'signal';
     if (waitType == TYPE_APPROVAL) {
-      Map<String, Object> d = descriptor(TYPE_APPROVAL, null, stepName);
-      d.put('label', 'Awaiting approval at step ' + stepName);
-      return d;
+      noun = 'approval';
+    } else if (waitType == TYPE_CHILD) {
+      noun = 'child completion';
+    } else {
+      waitType = TYPE_GENERIC;
     }
-    if (waitType == TYPE_CHILD) {
-      Map<String, Object> d = descriptor(TYPE_CHILD, null, stepName);
-      d.put('label', 'Awaiting child completion at step ' + stepName);
-      return d;
-    }
-    return genericDescriptor(stepName);
+    Map<String, Object> d = descriptor(waitType, null, stepName);
+    d.put('label', 'Awaiting ' + noun + ' at step ' + stepName);
+    return d;
   }
 
   // Builds the generic descriptor: the awaited name is unknowable, so it names the step the
