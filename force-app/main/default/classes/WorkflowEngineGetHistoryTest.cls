@@ -601,6 +601,88 @@ private class WorkflowEngineGetHistoryTest {
     }
   }
 
+  // ─── bulk scan: per-instance bucket is trimmed at the cap (#220) ───────────
+
+  @IsTest
+  static void testQueryRowsByInstanceTrimsBucketAtCap() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer cap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
+      Workflow_Instance__c hot = newInstance('trim-hot');
+      List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
+      for (Integer i = 0; i < cap + 5; i++) {
+        rows.add(step(hot.Id, 'H' + i, 'Completed'));
+      }
+      Database.insert(rows, AccessLevel.SYSTEM_MODE);
+
+      Test.startTest();
+      Map<Id, List<Workflow_Step_Execution__c>> trimmed = WorkflowHistoryRead.queryRowsByInstance(
+        new Set<Id>{ hot.Id },
+        cap + 5,
+        cap
+      );
+      Map<Id, List<Workflow_Step_Execution__c>> widened = WorkflowHistoryRead.queryRowsByInstance(
+        new Set<Id>{ hot.Id },
+        cap + 5,
+        cap + 1
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        cap,
+        trimmed.get(hot.Id).size(),
+        'Bucket stops at the bucket cap'
+      );
+      System.assertEquals(
+        cap + 1,
+        widened.get(hot.Id).size(),
+        'A cap of MAX_HISTORY_ROWS + 1 keeps the truncation probe row'
+      );
+    }
+  }
+
+  @IsTest
+  static void testQueryRowsByInstanceCapIsPerInstanceAndKeepsEarliest() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer cap = WorkflowHistoryRead.MAX_HISTORY_ROWS;
+      Workflow_Instance__c hot = newInstance('trim-order-hot');
+      List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
+      for (Integer i = 0; i < cap + 5; i++) {
+        rows.add(step(hot.Id, 'H' + i, 'Completed'));
+      }
+      Database.insert(rows, AccessLevel.SYSTEM_MODE);
+      Workflow_Instance__c other = newInstance('trim-order-other');
+      Database.insert(
+        new List<Workflow_Step_Execution__c>{
+          step(other.Id, 'O1', 'Completed'),
+          step(other.Id, 'O2', 'Completed')
+        },
+        AccessLevel.SYSTEM_MODE
+      );
+
+      Test.startTest();
+      Map<Id, List<Workflow_Step_Execution__c>> byId = WorkflowHistoryRead.queryRowsByInstance(
+        new Set<Id>{ hot.Id, other.Id },
+        cap + 7,
+        cap
+      );
+      Test.stopTest();
+
+      List<Workflow_Step_Execution__c> hotRows = byId.get(hot.Id);
+      System.assertEquals(cap, hotRows.size(), 'Hot bucket stops at the cap');
+      System.assertEquals('H0', hotRows[0].Step_Name__c, 'Earliest row first');
+      System.assertEquals(
+        'H' + (cap - 1),
+        hotRows[cap - 1].Step_Name__c,
+        'Last kept row is the cap-th row'
+      );
+      System.assertEquals(
+        2,
+        byId.get(other.Id).size(),
+        'The cap applies per instance: a sibling keeps all its rows'
+      );
+    }
+  }
+
   // ─── bulk input cap: 2000 allowed, 2001 throws the typed exception ─────────
 
   @IsTest
