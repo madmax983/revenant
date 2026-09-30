@@ -1,18 +1,25 @@
 /**
  * Layered layout for the workflow topology graph (#141). The row of a node is
- * its breadth-first distance from the initial step. Nodes with no known route
- * from the initial step go in one last row. In a row, nodes keep the declared
- * order. It gives SVG path data and arrow heads. It uses no SVG markers,
- * because a `url(#id)` reference can break in shadow DOM.
+ * its breadth-first distance from the initial step. Rows are left-aligned and
+ * keep the declared order. Nodes with no known route from the initial step go
+ * in the last rows, at most UNREACHED_PER_ROW in each row.
+ *
+ * A forward edge spans one row, so its curve stays between two rows. Other
+ * edges (back, same row, self loop) use lanes: the gap below the source row,
+ * a gutter at the right side, and the gap above the target row. Thus no edge
+ * crosses a node box. The layout uses no SVG markers, because a `url(#id)`
+ * reference can break in shadow DOM.
  */
 
-export const NODE_WIDTH = 180;
-export const NODE_HEIGHT = 56;
+export const NODE_WIDTH = 200;
+export const NODE_HEIGHT = 58;
+export const UNREACHED_PER_ROW = 6;
 const H_GAP = 32;
-const V_GAP = 56;
+const V_GAP = 64;
 const PAD = 24;
-// Space at the right for the curves of back edges and self loops.
-const SIDE_ROUTE = 64;
+// Room above the first row for the lanes of edges into it.
+const TOP = PAD + V_GAP / 2;
+const LANE = 6;
 const ARROW = 8;
 
 const empty = () => ({
@@ -37,6 +44,10 @@ function depthsFrom(start, adjacency) {
   return depth;
 }
 
+function downArrow(x, y) {
+  return `${x - ARROW / 2},${y - ARROW} ${x + ARROW / 2},${y - ARROW} ${x},${y}`;
+}
+
 // A downward curve from the bottom of the source to the top of the target.
 function forwardRoute(s, t) {
   const x1 = s.x + NODE_WIDTH / 2;
@@ -46,25 +57,51 @@ function forwardRoute(s, t) {
   const mid = (y2 - y1) / 2;
   return {
     d: `M ${x1} ${y1} C ${x1} ${y1 + mid} ${x2} ${y2 - mid} ${x2} ${y2}`,
-    arrow: `${x2 - ARROW / 2},${y2 - ARROW} ${x2 + ARROW / 2},${y2 - ARROW} ${x2},${y2}`,
+    arrow: downArrow(x2, y2),
   };
 }
 
-// A curve at the right side, from the source to the target.
-function sideRoute(s, t) {
-  const x1 = s.x + NODE_WIDTH;
-  const x2 = t.x + NODE_WIDTH;
-  let y1 = s.y + NODE_HEIGHT / 2;
-  let y2 = t.y + NODE_HEIGHT / 2;
-  if (s === t) {
-    y1 = s.y + NODE_HEIGHT / 4;
-    y2 = s.y + (3 * NODE_HEIGHT) / 4;
-  }
-  const bend = Math.max(x1, x2) + SIDE_ROUTE * 0.75;
+// An orthogonal route through the row gaps and the right gutter. Each lane
+// has its own offset, so two routes do not overlap.
+function laneRoute(s, t, lane, gutterX) {
+  const shift = ((lane % 5) - 2) * LANE;
+  const x1 = s.x + NODE_WIDTH / 2 + shift;
+  const y1 = s.y + NODE_HEIGHT;
+  const below = y1 + V_GAP / 2 + (lane % 4) * LANE - 1.5 * LANE;
+  const gx = gutterX + lane * LANE;
+  const x2 = t.x + NODE_WIDTH / 2 + shift;
+  const y2 = t.y;
+  const above = y2 - V_GAP / 2 - (lane % 4) * LANE + 1.5 * LANE;
   return {
-    d: `M ${x1} ${y1} C ${bend} ${y1} ${bend} ${y2} ${x2} ${y2}`,
-    arrow: `${x2 + ARROW},${y2 - ARROW / 2} ${x2 + ARROW},${y2 + ARROW / 2} ${x2},${y2}`,
+    d: `M ${x1} ${y1} V ${below} H ${gx} V ${above} H ${x2} V ${y2}`,
+    arrow: downArrow(x2, y2),
   };
+}
+
+function rowsOf(nodes, depth) {
+  const reached = new Map();
+  const unreached = [];
+  for (const n of nodes) {
+    if (depth.has(n.name)) {
+      const row = depth.get(n.name);
+      if (!reached.has(row)) {
+        reached.set(row, []);
+      }
+      reached.get(row).push(n.name);
+    } else {
+      unreached.push(n.name);
+    }
+  }
+  const rows = [...reached.keys()]
+    .sort((a, b) => a - b)
+    .map((row) => ({ names: reached.get(row), unreached: false }));
+  for (let i = 0; i < unreached.length; i += UNREACHED_PER_ROW) {
+    rows.push({
+      names: unreached.slice(i, i + UNREACHED_PER_ROW),
+      unreached: true,
+    });
+  }
+  return rows;
 }
 
 /**
@@ -91,56 +128,47 @@ export function layoutGraph(graph) {
   const start = names.has(graph.initialStep)
     ? graph.initialStep
     : nodes[0].name;
-  const depth = depthsFrom(start, adjacency);
-  const lastReached = Math.max(...depth.values());
-  const unreachedRow = lastReached + 1;
-
-  const rows = new Map();
-  for (const n of nodes) {
-    const row = depth.has(n.name) ? depth.get(n.name) : unreachedRow;
-    if (!rows.has(row)) {
-      rows.set(row, []);
-    }
-    rows.get(row).push(n.name);
-  }
-  const rowIndexes = [...rows.keys()].sort((a, b) => a - b);
-  const maxColumns = Math.max(...[...rows.values()].map((r) => r.length));
-  const contentWidth = maxColumns * NODE_WIDTH + (maxColumns - 1) * H_GAP;
-  const width = 2 * PAD + contentWidth + SIDE_ROUTE;
-  const height =
-    2 * PAD + rowIndexes.length * NODE_HEIGHT + (rowIndexes.length - 1) * V_GAP;
+  const rows = rowsOf(nodes, depthsFrom(start, adjacency));
 
   const positions = new Map();
-  rowIndexes.forEach((row, level) => {
-    const members = rows.get(row);
-    const rowWidth = members.length * NODE_WIDTH + (members.length - 1) * H_GAP;
-    const offset = PAD + (contentWidth - rowWidth) / 2;
-    members.forEach((name, column) => {
+  rows.forEach((row, level) => {
+    row.names.forEach((name, column) => {
       positions.set(name, {
         name,
-        x: offset + column * (NODE_WIDTH + H_GAP),
-        y: PAD + level * (NODE_HEIGHT + V_GAP),
+        x: PAD + column * (NODE_WIDTH + H_GAP),
+        y: TOP + level * (NODE_HEIGHT + V_GAP),
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
-        unreachedRow: row === unreachedRow,
+        unreachedRow: row.unreached,
         level,
       });
     });
   });
 
+  const maxColumns = Math.max(...rows.map((r) => r.names.length));
+  const contentWidth = maxColumns * NODE_WIDTH + (maxColumns - 1) * H_GAP;
+  const gutterX = PAD + contentWidth + 2 * LANE;
+  let lanes = 0;
   const routed = known.map((e) => {
     const s = positions.get(e.source);
     const t = positions.get(e.target);
-    const back = t.level <= s.level;
+    const back = t.level !== s.level + 1;
     return {
       key: `${e.source}->${e.target}`,
       source: e.source,
       target: e.target,
       back,
-      ...(back ? sideRoute(s, t) : forwardRoute(s, t)),
+      ...(back ? laneRoute(s, t, lanes++, gutterX) : forwardRoute(s, t)),
     };
   });
 
+  const width = gutterX + (lanes + 1) * LANE + PAD;
+  const height =
+    TOP +
+    rows.length * NODE_HEIGHT +
+    (rows.length - 1) * V_GAP +
+    V_GAP / 2 +
+    PAD;
   return {
     nodes: nodes.map((n) => positions.get(n.name)),
     edges: routed,

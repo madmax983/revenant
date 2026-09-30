@@ -26,9 +26,9 @@
  *
  * See issue #23.
  *
- * Issue #141: the result also keeps the topology that validation finds (the
- * initial step, the declared steps, the steps with rollback and the probe
- * transitions). WorkflowTopology draws the graph from it.
+ * Issue #141: the result also keeps topology data: the initial step, the
+ * declared steps, the rollback steps and the probe transitions.
+ * WorkflowTopology draws the graph from it.
  */
 public with sharing class WorkflowValidator {
   // Defect codes. Stable identifiers so callers can branch on a defect class
@@ -283,7 +283,12 @@ public with sharing class WorkflowValidator {
       return null;
     }
 
-    Type defType = WorkflowTypeResolver.resolve(workflowName);
+    // Resolve as the engine does at start, so the class that validation
+    // checks is the class that the engine runs.
+    Type defType = WorkflowTypeResolver.resolve(
+      workflowName,
+      WorkflowTypeResolver.extractNamespace(workflowName)
+    );
     if (defType == null) {
       result.add(
         DEFINITION_UNRESOLVABLE,

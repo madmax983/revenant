@@ -58,7 +58,7 @@ private class BranchingOrderWorkflowExampleTest {
       Assert.isFalse(nodes.get(REVIEW).reachable, 'Only data reaches it');
       Assert.isFalse(nodes.get(BACKORDER).reachable);
       Assert.isFalse(nodes.get(CANCEL).reachable);
-      Assert.isFalse(graph.routingFullyKnown, 'The graph is not complete');
+      Assert.isTrue(graph.gapsFound, 'The graph is not complete');
       Assert.isTrue(graph.defects.isEmpty(), String.valueOf(graph.defects));
     }
   }
@@ -81,7 +81,7 @@ private class BranchingOrderWorkflowExampleTest {
           instanceId
         )
         .overlay;
-      Assert.areEqual(REVIEW, overlay.currentStep);
+      Assert.areEqual(new List<String>{ REVIEW }, overlay.currentSteps);
       Assert.areEqual(
         WorkflowTopology.STATE_AWAITING_SIGNAL,
         overlay.currentState

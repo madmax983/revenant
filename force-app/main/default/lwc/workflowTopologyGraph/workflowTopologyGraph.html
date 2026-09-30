@@ -16,7 +16,7 @@
 
         <template if:true={hasGraph}>
             <template if:true={hasOverlay}>
-                <div data-id="topology-summary" class="slds-box slds-m-bottom_small topology-summary" role="status">
+                <section data-id="topology-summary" class="slds-box slds-m-bottom_small topology-summary" aria-label="Where the run is">
                     <dl class="slds-list_horizontal slds-wrap">
                         <dt class="slds-item_label slds-text-color_weak">Current step</dt>
                         <dd class="slds-item_detail" data-id="summary-current"><strong>{currentLabel}</strong></dd>
@@ -34,14 +34,14 @@
                             Step output can route to other steps. This list shows only the routes that the probe found.
                         </p>
                     </template>
-                </div>
+                </section>
             </template>
 
             <template if:true={showNotice}>
-                <div data-id="topology-notice" role="status" class="slds-notify slds-notify_alert slds-theme_warning slds-m-bottom_small topology-notice">
+                <div data-id="topology-notice" role="note" class="slds-notify slds-notify_alert slds-theme_warning slds-m-bottom_small topology-notice">
                     <lightning-icon icon-name="utility:warning" size="x-small" alternative-text="Warning" class="slds-m-right_x-small"></lightning-icon>
                     <div class="slds-text-align_left">
-                        <p><strong>Routing is not fully known statically.</strong> The graph shows the known steps and edges only. It is not complete.</p>
+                        <p><strong>Routing is not fully known statically.</strong> The graph shows only the known steps and edges. It is not complete.</p>
                         <ul class="slds-list_dotted">
                             <template for:each={reasonRows} for:item="r">
                                 <li key={r.key} data-id="topology-reason">{r.label}</li>
@@ -62,7 +62,7 @@
             </template>
 
             <template if:false={isEmpty}>
-                <div class="topology-canvas">
+                <div data-id="topology-canvas" class="topology-canvas">
                     <svg data-id="topology-svg" class="topology-svg" width={svgWidth} height={svgHeight} viewBox={viewBox} role="img" aria-label={svgLabel}>
                         <template for:each={edgeViews} for:item="e">
                             <g key={e.key}>
@@ -76,8 +76,8 @@
                                 <rect class="node-box" width={n.width} height={n.height} rx="6" ry="6"></rect>
                                 <text class="node-label" x="10" y="20">{n.label}</text>
                                 <text class="node-badges" x="10" y="36">{n.badges}</text>
-                                <template if:true={n.awaiting}>
-                                    <text class="node-awaiting" x="10" y="50">{n.awaiting}</text>
+                                <template if:true={n.mark}>
+                                    <text class="node-mark" x="10" y="51">{n.mark}</text>
                                 </template>
                             </g>
                         </template>
@@ -86,13 +86,15 @@
 
                 <ul data-id="topology-legend" class="slds-list_horizontal slds-wrap slds-text-body_small slds-text-color_weak slds-m-top_x-small topology-legend">
                     <li class="slds-m-right_medium"><span class="legend-swatch legend-initial"></span>Start: initial step</li>
-                    <li class="slds-m-right_medium"><span class="legend-swatch legend-terminal"></span>Can end: no successor</li>
+                    <li class="slds-m-right_medium"><span class="legend-swatch legend-terminal"></span>End: the run can end here</li>
                     <li class="slds-m-right_medium"><span class="legend-swatch legend-rollback"></span>Rollback: CompensatableStep</li>
-                    <li class="slds-m-right_medium"><span class="legend-swatch legend-unknown"></span>?: routing not known</li>
-                    <li class="slds-m-right_medium"><span class="legend-swatch legend-unreached"></span>Dashed: no known route to it</li>
+                    <li class="slds-m-right_medium"><span class="legend-swatch legend-unknown"></span>?: routes not fully known</li>
+                    <li class="slds-m-right_medium"><span class="legend-swatch legend-unreached"></span>Dashed: no known route to the step</li>
+                    <li class="slds-m-right_medium"><span class="legend-swatch legend-undeclared"></span>Undeclared: not in getSteps()</li>
                     <template if:true={hasOverlay}>
-                        <li class="slds-m-right_medium"><span class="legend-swatch legend-current"></span>Current step</li>
+                        <li class="slds-m-right_medium"><span class="legend-swatch legend-current"></span>▶ Current step and its state</li>
                         <li class="slds-m-right_medium"><span class="legend-swatch legend-visited"></span>Visited by this run</li>
+                        <li class="slds-m-right_medium"><span class="legend-line"></span>Edge that this run used</li>
                     </template>
                 </ul>
 
@@ -106,7 +108,7 @@
                     <tbody>
                         <template for:each={rows} for:item="row">
                             <tr key={row.key} data-id="topology-row" data-name={row.name}>
-                                <td><span title={row.name}>{row.label}</span></td>
+                                <th scope="row"><span title={row.name}>{row.label}</span></th>
                                 <td>{row.nextText}</td>
                             </tr>
                         </template>

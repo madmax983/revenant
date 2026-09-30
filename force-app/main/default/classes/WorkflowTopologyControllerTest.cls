@@ -50,13 +50,14 @@ private class WorkflowTopologyControllerTest {
       insert inst;
 
       WorkflowTopology.Graph graph = WorkflowTopologyController.getInstanceTopology(
-        inst.Id
+        inst.Id,
+        'key-1'
       );
       System.assertEquals(3, graph.nodes.size());
       System.assertEquals(inst.Id, graph.overlay.instanceId);
       System.assertEquals(
-        'WorkflowTopologyTest.MiddleStep',
-        graph.overlay.currentStep
+        new List<String>{ 'WorkflowTopologyTest.MiddleStep' },
+        graph.overlay.currentSteps
       );
     }
   }
@@ -75,7 +76,7 @@ private class WorkflowTopologyControllerTest {
         System.assert(e.getMessage().contains('Unauthorized'), e.getMessage());
       }
       try {
-        WorkflowTopologyController.getInstanceTopology(null);
+        WorkflowTopologyController.getInstanceTopology(null, null);
         System.assert(false, 'Expected AuraHandledException');
       } catch (AuraHandledException e) {
         System.assert(e.getMessage().contains('Unauthorized'), e.getMessage());

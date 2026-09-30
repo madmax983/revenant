@@ -459,4 +459,47 @@ public class RevenantOperatorPermSetTest {
       );
     }
   }
+
+  /**
+   * @description A read-only operator passes the view gate of the workflow
+   * graph (#141) and gets the graph of an instance.
+   */
+  @IsTest
+  static void testOperatorCanReadTopology() {
+    User operator = buildOperatorUser();
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowTopologyTest.LinearWorkflow',
+      Status__c = 'Running',
+      Current_Step__c = 'WorkflowTopologyTest.MiddleStep'
+    );
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insert operator;
+      PermissionSet ps = [
+        SELECT Id
+        FROM PermissionSet
+        WHERE Name = 'Revenant_Operator'
+        LIMIT 1
+      ];
+      insert new PermissionSetAssignment(
+        AssigneeId = operator.Id,
+        PermissionSetId = ps.Id
+      );
+      insert inst;
+    }
+
+    System.runAs(operator) {
+      WorkflowTopology.Graph graph = WorkflowTopologyController.getInstanceTopology(
+        inst.Id,
+        'key-1'
+      );
+      System.assertEquals(3, graph.nodes.size(), 'The operator gets the graph');
+      System.assertEquals(
+        3,
+        WorkflowTopologyController.getWorkflowTopology(
+            'WorkflowTopologyTest.LinearWorkflow'
+          )
+          .nodes.size()
+      );
+    }
+  }
 }

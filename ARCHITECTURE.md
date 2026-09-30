@@ -254,9 +254,9 @@ endpoints moved). All of them delegate to `inherited sharing` service classes.
   to 2,000 instances, else a row query) and a duration sample (ADR 0004).
 - Topology graph (#141): `WorkflowTopologyController` → `WorkflowTopology`.
   It projects the `WorkflowValidator` result (probe edges from
-  `WorkflowTransitionProbe`) into a pinned DTO. The instance overlay uses 1
-  bounded step query. Separate controller for the same PMD reason. See
-  [docs/topology-graph.md](docs/topology-graph.md).
+  `WorkflowTransitionProbe`) into a pinned DTO. The overlay uses 2 queries:
+  the instance and 1 bounded step query. It is a separate controller for the
+  same PMD reason. See [docs/topology-graph.md](docs/topology-graph.md).
 - Command side: `WorkflowDashboardCommandController` (holds `CancelRequest` /
   `ApprovalRequest` DTOs) → `WorkflowInstanceCommandService`,
   `WorkflowBulkCommandService`, `WorkflowApprovalCommandService`,

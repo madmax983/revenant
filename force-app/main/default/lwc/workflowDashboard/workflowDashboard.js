@@ -1723,6 +1723,11 @@ export default class WorkflowDashboard extends LightningElement {
           };
         });
 
+        // A quiet refresh keeps the graph mounted. Read its position again (#141).
+        if (!showSpinner) {
+          this.refreshTopologyGraph();
+        }
+
         // Check if we can stop polling early
         const isStillWaitingForApproval = this.steps.some(
           (step) => step.isWaitingForApproval,
@@ -1903,6 +1908,16 @@ export default class WorkflowDashboard extends LightningElement {
   handleCloseCatalog() {
     this.viewingCatalog = false;
     this.catalogGraphDefinition = null;
+  }
+
+  // Reads the path of the selected instance again in the graph (#141).
+  refreshTopologyGraph() {
+    const graph = this.template.querySelector(
+      '[data-id="instance-graph-panel"] c-workflow-topology-graph',
+    );
+    if (graph) {
+      graph.refresh();
+    }
   }
 
   // Shows the topology graph of a Catalog definition (#141). No run is needed.

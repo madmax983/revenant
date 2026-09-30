@@ -126,9 +126,9 @@ public inherited sharing class WorkflowStartInstanceBuilder {
   }
 
   /**
-   * @description Tells if a name is a deployed workflow definition. It reads
-   * ApexTypeImplementor and makes no instance of the class. The result for a
-   * valid name is memoized in validatedWorkflows (issue #141 uses it).
+   * @description Returns true when the name is a deployed, concrete workflow
+   * definition. It reads ApexTypeImplementor and makes no instance of the
+   * class. It keeps a valid name in validatedWorkflows. Issue #141 uses it.
    * @param workflowName The workflow name to check.
    * @return True when a concrete implementor of a workflow interface matches.
    */
@@ -152,6 +152,7 @@ public inherited sharing class WorkflowStartInstanceBuilder {
           'VersionedWorkflow',
           'ErrorRoutingWorkflow'
         )
+        AND IsConcrete = TRUE
       WITH SYSTEM_MODE
     ];
     if (!matchesAuthorizedImpl(queryResults, c)) {

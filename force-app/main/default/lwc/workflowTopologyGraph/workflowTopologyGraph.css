@@ -27,9 +27,9 @@
     fill: #444444;
 }
 
-.topology-node .node-awaiting {
+.topology-node .node-mark {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     fill: #0b5cab;
 }
 
@@ -79,7 +79,7 @@
 
 .node-current.state-awaiting .node-box,
 .node-current.state-suspended .node-box {
-    stroke: #dd7a01;
+    stroke: #a96404;
     fill: #fff5e6;
 }
 
@@ -103,12 +103,12 @@
 
 .topology-edge {
     fill: none;
-    stroke: #939393;
+    stroke: #706e6b;
     stroke-width: 1.5;
 }
 
 .topology-arrow {
-    fill: #939393;
+    fill: #706e6b;
 }
 
 .topology-edge.edge-traversed {
@@ -152,8 +152,22 @@
 }
 
 .legend-current {
-    border-width: 3px !important;
-    border-color: #dd7a01 !important;
+    border-width: 4px !important;
+    border-color: #181818 !important;
+}
+
+.legend-undeclared {
+    border-color: #ba0517 !important;
+    border-style: dashed !important;
+}
+
+.topology-legend .legend-line {
+    display: inline-block;
+    width: 1rem;
+    height: 0;
+    margin-right: 0.25rem;
+    vertical-align: middle;
+    border-top: 3px solid #0176d3;
 }
 
 .legend-visited {

@@ -273,6 +273,120 @@ public class WorkflowTopologyTest {
   }
 
   /**
+   * @description Start goes to Middle on null output and to Finish on empty
+   * output. The probes disagree, so the routing depends on data.
+   */
+  public class VaryingWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, MIDDLE, FINISH };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes on the output.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      if (current == START) {
+        return result.directive().outputJson == null ? MIDDLE : FINISH;
+      }
+      return null;
+    }
+  }
+
+  /**
+   * @description A very large latest version. Only versions 1 to 10 route
+   * Middle to VersionTwo.
+   */
+  public class ManyVersionsWorkflow implements VersionedWorkflow {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, MIDDLE, V2_ONLY };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Gives a date-style version.
+     * @return 20260930.
+     */
+    public Integer getLatestVersion() {
+      return 20260930;
+    }
+    /**
+     * @description Routes Start to Middle.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return current == START ? MIDDLE : null;
+    }
+    /**
+     * @description Routes for a version.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @param version The version.
+     * @return The next step, or null.
+     */
+    public String getNextStep(
+      String current,
+      StepResult result,
+      Integer version
+    ) {
+      if (current == START) {
+        return MIDDLE;
+      }
+      return current == MIDDLE && version <= 10 ? V2_ONLY : null;
+    }
+  }
+
+  /** @description The initial step is not in getSteps(). */
+  public class UndeclaredInitialWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ MIDDLE };
+    }
+    /**
+     * @description Names an undeclared first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes Start to Middle.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return current == START ? MIDDLE : null;
+    }
+  }
+
+  /**
    * @description Not a workflow. The graph must not make an instance of it.
    */
   public class NotAWorkflow {
@@ -374,7 +488,7 @@ public class WorkflowTopologyTest {
       System.assertEquals(true, node(graph, FINISH).declared);
       System.assertEquals(false, node(graph, MIDDLE).routingUnknown);
 
-      System.assertEquals(true, graph.routingFullyKnown);
+      System.assertEquals(false, graph.gapsFound);
       System.assert(graph.incompleteReasons.isEmpty());
       System.assert(graph.defects.isEmpty());
       System.assertEquals(null, graph.overlay);
@@ -404,7 +518,7 @@ public class WorkflowTopologyTest {
       System.assertEquals(false, node(graph, APPROVE).reachable);
       System.assertEquals(true, node(graph, REJECT).reachable);
 
-      System.assertEquals(false, graph.routingFullyKnown);
+      System.assertEquals(true, graph.gapsFound);
       System.assert(
         graph.incompleteReasons.contains(WorkflowTopology.REASON_ROUTING_THREW)
       );
@@ -445,7 +559,7 @@ public class WorkflowTopologyTest {
         'An edge of version 2 is in the graph'
       );
       System.assertEquals(true, node(graph, MIDDLE).terminal, 'v1 ends');
-      System.assertEquals(true, graph.routingFullyKnown);
+      System.assertEquals(false, graph.gapsFound);
     }
   }
 
@@ -456,10 +570,75 @@ public class WorkflowTopologyTest {
         PREFIX + 'BadVersionWorkflow'
       );
 
-      System.assertEquals(false, graph.routingFullyKnown);
+      System.assertEquals(true, graph.gapsFound);
       System.assert(
         graph.incompleteReasons.contains(
           WorkflowTopology.REASON_VERSIONS_UNRESOLVED
+        )
+      );
+    }
+  }
+
+  @IsTest
+  static void differentProbeResultsMarkDataDependentRouting() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowTopology.Graph graph = WorkflowTopology.build(
+        PREFIX + 'VaryingWorkflow'
+      );
+
+      System.assert(hasEdge(graph.edges, START, MIDDLE));
+      System.assert(hasEdge(graph.edges, START, FINISH));
+      System.assertEquals(true, node(graph, START).routingUnknown);
+      System.assertEquals(true, graph.gapsFound);
+      System.assert(
+        graph.incompleteReasons.contains(
+          WorkflowTopology.REASON_ROUTING_VARIES
+        ),
+        graph.incompleteReasons
+      );
+    }
+  }
+
+  @IsTest
+  static void versionProbeIsCapped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowTopology.Graph graph = WorkflowTopology.build(
+        PREFIX + 'ManyVersionsWorkflow'
+      );
+
+      System.assert(hasEdge(graph.edges, START, MIDDLE));
+      System.assert(
+        !hasEdge(graph.edges, MIDDLE, V2_ONLY),
+        'Old versions are not probed'
+      );
+      System.assert(
+        graph.incompleteReasons.contains(
+          WorkflowTopology.REASON_VERSIONS_CAPPED
+        ),
+        graph.incompleteReasons
+      );
+    }
+  }
+
+  @IsTest
+  static void undeclaredInitialStepIsANode() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowTopology.Graph graph = WorkflowTopology.build(
+        PREFIX + 'UndeclaredInitialWorkflow'
+      );
+
+      WorkflowTopology.Node startNode = node(graph, START);
+      System.assertNotEquals(null, startNode);
+      System.assertEquals(false, startNode.declared);
+      System.assertEquals(true, startNode.initial);
+      System.assertEquals(
+        false,
+        node(graph, MIDDLE).reachable,
+        'The probe reads only declared steps'
+      );
+      System.assert(
+        graph.incompleteReasons.contains(
+          WorkflowTopology.REASON_UNDECLARED_STEPS
         )
       );
     }
@@ -474,7 +653,7 @@ public class WorkflowTopologyTest {
 
       System.assert(graph.nodes.isEmpty());
       System.assert(graph.edges.isEmpty());
-      System.assertEquals(false, graph.routingFullyKnown);
+      System.assertEquals(true, graph.gapsFound);
       System.assert(
         graph.incompleteReasons.contains(
           WorkflowTopology.REASON_DEFINITION_UNRESOLVED
@@ -506,7 +685,7 @@ public class WorkflowTopologyTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowTopology.Graph graph = WorkflowTopology.build('  ');
       System.assert(graph.nodes.isEmpty());
-      System.assertEquals(false, graph.routingFullyKnown);
+      System.assertEquals(true, graph.gapsFound);
     }
   }
 
@@ -649,7 +828,7 @@ public class WorkflowTopologyTest {
       System.assertEquals(PREFIX + 'BranchyWorkflow', graph.workflowName);
       System.assertEquals(inst.Id, overlay.instanceId);
       System.assertEquals('Suspended', overlay.instanceStatus);
-      System.assertEquals(GATE, overlay.currentStep);
+      System.assertEquals(new List<String>{ GATE }, overlay.currentSteps);
       System.assertEquals(
         WorkflowTopology.STATE_AWAITING_SIGNAL,
         overlay.currentState
@@ -701,6 +880,16 @@ public class WorkflowTopologyTest {
         'Cancelled' => WorkflowTopology.STATE_ENDED,
         'ContinuedAsNew' => WorkflowTopology.STATE_ENDED
       };
+      System.assertEquals(
+        WorkflowTopology.STATE_SUSPENDED,
+        WorkflowTopology.stateFor(
+          new Workflow_Instance__c(
+            Status__c = 'Suspended',
+            Awaited_Batch_Job_Id__c = '707000000000001AAA'
+          )
+        ),
+        'A batch wait is a job wait'
+      );
       for (String status : expected.keySet()) {
         System.assertEquals(
           expected.get(status),
@@ -741,6 +930,12 @@ public class WorkflowTopologyTest {
       System.assertEquals(START, overlay.path[2].stepName);
       System.assertEquals(true, overlay.path[2].compensation);
       System.assertEquals(1, overlay.traversedEdges.size(), 'No back edge');
+      System.assertEquals(
+        new List<String>{ START },
+        overlay.currentSteps,
+        'The step in rollback is current'
+      );
+      System.assert(overlay.nextSteps.isEmpty(), 'No forward step');
       System.assert(hasEdge(overlay.traversedEdges, START, MIDDLE));
     }
   }
@@ -769,6 +964,27 @@ public class WorkflowTopologyTest {
   }
 
   @IsTest
+  static void parallelBranchesAreEachCurrent() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'LinearWorkflow',
+        'Running',
+        MIDDLE + ',' + FINISH
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assertEquals(
+        new List<String>{ MIDDLE, FINISH },
+        graph.overlay.currentSteps
+      );
+      System.assertEquals(3, graph.nodes.size(), 'No joined node');
+      System.assertEquals(false, graph.gapsFound);
+      System.assertEquals(new List<String>{ FINISH }, graph.overlay.nextSteps);
+    }
+  }
+
+  @IsTest
   static void blankCurrentStepFallsBackToLastForwardRow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = seedInstance(
@@ -788,8 +1004,11 @@ public class WorkflowTopologyTest {
       WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
         .overlay;
 
-      System.assertEquals(FINISH, overlay.currentStep);
-      System.assert(overlay.nextSteps.isEmpty());
+      System.assertEquals(new List<String>{ FINISH }, overlay.currentSteps);
+      System.assert(
+        overlay.nextSteps.isEmpty(),
+        'An ended run has no next step'
+      );
     }
   }
 
@@ -846,7 +1065,7 @@ public class WorkflowTopologyTest {
           'initialStep',
           'nodes',
           'edges',
-          'routingFullyKnown',
+          'gapsFound',
           'incompleteReasons',
           'defects',
           'overlay'
@@ -874,7 +1093,7 @@ public class WorkflowTopologyTest {
         new Set<String>{
           'instanceId',
           'instanceStatus',
-          'currentStep',
+          'currentSteps',
           'currentState',
           'path',
           'traversedEdges',

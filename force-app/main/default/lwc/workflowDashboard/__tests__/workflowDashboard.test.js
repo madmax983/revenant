@@ -6170,9 +6170,40 @@ describe("c-workflow-dashboard topology graph (#141)", () => {
     expect(graph).not.toBeNull();
     expect(graph.instanceId).toBe("a0G000000000001");
     expect(graph.waitDescriptor).toEqual(WAIT);
-    expect(getInstanceTopology).toHaveBeenCalledWith({
-      instanceId: "a0G000000000001",
+    expect(getInstanceTopology).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: "a0G000000000001" }),
+    );
+  });
+
+  it("refreshes the graph when the detail refreshes without a spinner", async () => {
+    mockSuspendedInstance();
+    const element = createElement("c-workflow-dashboard", {
+      is: WorkflowDashboard,
     });
+    document.body.appendChild(element);
+    await flushPromises();
+    element.shadowRoot
+      .querySelector(".list-item")
+      .dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    getInstanceTopology.mockClear();
+
+    const refreshBtn = Array.from(
+      element.shadowRoot.querySelectorAll("lightning-button-icon"),
+    ).find((b) => b.alternativeText === "Refresh");
+    expect(refreshBtn).toBeDefined();
+    refreshBtn.dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+
+    expect(getInstanceTopology).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: "a0G000000000001" }),
+    );
+    expect(
+      element.shadowRoot.querySelector("c-workflow-topology-graph"),
+    ).not.toBeNull();
   });
 
   it("opens and closes the graph of a definition from the Catalog", async () => {

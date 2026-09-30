@@ -4,8 +4,8 @@
  *
  * Nodes are the getSteps() inventory. Edges are the transitions of the
  * best-effort probe that WorkflowValidator runs. A missing edge does not prove
- * that no route exists. The graph tells this: routingFullyKnown,
- * incompleteReasons, and routingUnknown on a node.
+ * that no route exists. The fields gapsFound, incompleteReasons and
+ * Node.routingUnknown show the gaps that the graph finds.
  *
  * Read-only: no DML, no event, no job. The graph makes an instance of a class
  * only after ApexTypeImplementor shows that it is a deployed workflow
@@ -17,18 +17,22 @@ public inherited sharing class WorkflowTopology {
   public static final String REASON_DEFINITION_UNRESOLVED = 'DEFINITION_UNRESOLVED';
   /** getNextStep threw for a probe of a step. */
   public static final String REASON_ROUTING_THREW = 'ROUTING_THREW';
+  /** getNextStep gave different successors for the probes of a step. */
+  public static final String REASON_ROUTING_VARIES = 'ROUTING_VARIES';
   /** A declared step has no known route from the initial step. */
   public static final String REASON_UNREACHED_STEPS = 'UNREACHED_STEPS';
   /** A route or a run goes to a step that getSteps() does not declare. */
   public static final String REASON_UNDECLARED_STEPS = 'UNDECLARED_STEPS';
   /** getLatestVersion() threw, so no version was probed. */
   public static final String REASON_VERSIONS_UNRESOLVED = 'VERSIONS_UNRESOLVED';
+  /** The probe did not read the oldest versions. */
+  public static final String REASON_VERSIONS_CAPPED = 'VERSIONS_CAPPED';
 
   /** The instance is queued or runs. */
   public static final String STATE_RUNNING = 'RUNNING';
   /** The instance waits for a signal, an approval or a child. */
   public static final String STATE_AWAITING_SIGNAL = 'AWAITING_SIGNAL';
-  /** The instance waits for a timer or a job. */
+  /** The instance waits for a timer, a resume job or a batch job. */
   public static final String STATE_SUSPENDED = 'SUSPENDED';
   /** The instance failed, or its rollback failed. */
   public static final String STATE_FAILED = 'FAILED';
@@ -40,6 +44,8 @@ public inherited sharing class WorkflowTopology {
   public static final String STATE_ENDED = 'ENDED';
 
   private static final String COMPENSATION_SUFFIX = '_Compensate';
+  // Current_Step__c holds the branches of a SPLIT, joined with commas.
+  private static final String BRANCH_SEPARATOR = ',';
 
   private static final Map<String, String> STATE_BY_STATUS = new Map<String, String>{
     'Pending' => STATE_RUNNING,
@@ -67,9 +73,12 @@ public inherited sharing class WorkflowTopology {
     public List<Node> nodes = new List<Node>();
     @AuraEnabled
     public List<Edge> edges = new List<Edge>();
-    /** False when the graph is known to miss routes. Always best-effort. */
+    /**
+     * True when the graph finds a gap. False does not prove that the graph is
+     * complete: the probe is best-effort.
+     */
     @AuraEnabled
-    public Boolean routingFullyKnown = true;
+    public Boolean gapsFound = false;
     @AuraEnabled
     public List<String> incompleteReasons = new List<String>();
     /** The validator defect messages. */
@@ -104,7 +113,7 @@ public inherited sharing class WorkflowTopology {
       if (!graph.incompleteReasons.contains(reason)) {
         graph.incompleteReasons.add(reason);
       }
-      graph.routingFullyKnown = false;
+      graph.gapsFound = true;
     }
 
     void addEdge(String source, String target) {
@@ -146,7 +155,7 @@ public inherited sharing class WorkflowTopology {
     /** The step implements CompensatableStep. */
     @AuraEnabled
     public Boolean compensatable = false;
-    /** The probe could not find the routing of this step. */
+    /** getNextStep threw, or gave different successors for the probes. */
     @AuraEnabled
     public Boolean routingUnknown = false;
     /** A known route goes from the initial step to this step. */
@@ -181,8 +190,9 @@ public inherited sharing class WorkflowTopology {
     public Id instanceId;
     @AuraEnabled
     public String instanceStatus;
+    /** The current step. A SPLIT gives one entry for each branch. */
     @AuraEnabled
-    public String currentStep;
+    public List<String> currentSteps = new List<String>();
     /** One of the STATE_ constants. */
     @AuraEnabled
     public String currentState;
@@ -192,7 +202,7 @@ public inherited sharing class WorkflowTopology {
     /** Known edges that the run used. */
     @AuraEnabled
     public List<Edge> traversedEdges = new List<Edge>();
-    /** Known successors of the current step. */
+    /** Known successors of the current steps. Empty for a rollback or an end. */
     @AuraEnabled
     public List<String> nextSteps = new List<String>();
     /** True when the path shows only the newest rows. */
@@ -274,7 +284,8 @@ public inherited sharing class WorkflowTopology {
         Status__c,
         Current_Step__c,
         Async_Job_Id__c,
-        Sleep_Until__c
+        Sleep_Until__c,
+        Awaited_Batch_Job_Id__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -291,15 +302,18 @@ public inherited sharing class WorkflowTopology {
 
   /**
    * @description Maps the instance status to a STATE_ constant. A Suspended
-   * instance with no resume job and no timer waits for a signal (#84 rule).
-   * @param instance The instance (Status__c, Async_Job_Id__c, Sleep_Until__c).
+   * instance with no resume job, no timer and no batch job waits for a signal.
+   * This is the list rule of issue #84.
+   * @param instance The instance (Status__c, Async_Job_Id__c, Sleep_Until__c,
+   * Awaited_Batch_Job_Id__c).
    * @return The state.
    */
   public static String stateFor(Workflow_Instance__c instance) {
     if (instance.Status__c == 'Suspended') {
       Boolean hasTimer =
         String.isNotBlank(instance.Async_Job_Id__c) ||
-        instance.Sleep_Until__c != null;
+        instance.Sleep_Until__c != null ||
+        String.isNotBlank(instance.Awaited_Batch_Job_Id__c);
       return hasTimer ? STATE_SUSPENDED : STATE_AWAITING_SIGNAL;
     }
     String state = STATE_BY_STATUS.get(instance.Status__c);
@@ -319,7 +333,13 @@ public inherited sharing class WorkflowTopology {
       n.initial = stepName.equals(result.initialStep);
       n.compensatable = result.compensatableSteps.contains(stepName);
       n.terminal = t.endingSteps.contains(stepName);
-      n.routingUnknown = t.unresolvedSteps.contains(stepName);
+      n.routingUnknown =
+        t.unresolvedSteps.contains(stepName) ||
+        t.variedSteps.contains(stepName);
+    }
+    if (String.isNotBlank(result.initialStep)) {
+      // An undeclared initial step still gets a node.
+      b.addNode(result.initialStep, false).initial = true;
     }
     for (String stepName : result.declaredSteps) {
       if (String.isBlank(stepName)) {
@@ -333,8 +353,14 @@ public inherited sharing class WorkflowTopology {
     if (!t.unresolvedSteps.isEmpty()) {
       b.addReason(REASON_ROUTING_THREW);
     }
+    if (!t.variedSteps.isEmpty()) {
+      b.addReason(REASON_ROUTING_VARIES);
+    }
     if (t.versionsUnresolved) {
       b.addReason(REASON_VERSIONS_UNRESOLVED);
+    }
+    if (t.versionsCapped) {
+      b.addReason(REASON_VERSIONS_CAPPED);
     }
   }
 
@@ -390,19 +416,56 @@ public inherited sharing class WorkflowTopology {
     }
 
     String lastForward = addTraversedEdges(overlay, b);
-    overlay.currentStep = String.isNotBlank(instance.Current_Step__c)
-      ? instance.Current_Step__c
-      : lastForward;
-    if (String.isNotBlank(overlay.currentStep)) {
-      b.addNode(overlay.currentStep, false);
-      overlay.nextSteps = b.successorsOf(overlay.currentStep);
+    overlay.currentSteps = currentStepsOf(instance, overlay, lastForward);
+    Boolean moves =
+      overlay.currentState != STATE_COMPENSATING &&
+      overlay.currentState != STATE_ENDED;
+    for (String stepName : overlay.currentSteps) {
+      b.addNode(stepName, false);
+      if (!moves) {
+        continue;
+      }
+      for (String successor : b.successorsOf(stepName)) {
+        if (!overlay.nextSteps.contains(successor)) {
+          overlay.nextSteps.add(successor);
+        }
+      }
     }
     return overlay;
   }
 
+  // During a rollback, the engine does not write Current_Step__c. The newest
+  // compensation row gives the step in rollback. Else Current_Step__c gives the
+  // current step (one for each SPLIT branch). Else the last forward row.
+  private static List<String> currentStepsOf(
+    Workflow_Instance__c instance,
+    Overlay overlay,
+    String lastForward
+  ) {
+    List<String> current = new List<String>();
+    if (overlay.currentState == STATE_COMPENSATING) {
+      for (Integer i = overlay.path.size() - 1; i >= 0; i--) {
+        if (overlay.path[i].compensation) {
+          current.add(overlay.path[i].stepName);
+          return current;
+        }
+      }
+    }
+    if (String.isNotBlank(instance.Current_Step__c)) {
+      for (String stepName : instance.Current_Step__c.split(BRANCH_SEPARATOR)) {
+        if (String.isNotBlank(stepName) && !current.contains(stepName.trim())) {
+          current.add(stepName.trim());
+        }
+      }
+    } else if (String.isNotBlank(lastForward)) {
+      current.add(lastForward);
+    }
+    return current;
+  }
+
   // Adds a node for each path step and the known edges between forward rows.
-  // It never adds an edge that the probe did not find: parallel branches
-  // interleave their rows. Gives the last forward step name.
+  // It adds no edge that the probe did not find, because parallel branches mix
+  // their rows. Returns the last forward step name.
   private static String addTraversedEdges(Overlay overlay, GraphBuilder b) {
     Set<String> used = new Set<String>();
     String previous = null;

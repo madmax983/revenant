@@ -3,7 +3,8 @@
  * definition. With an instance id, it also shows the path of the instance,
  * the current step and its state. Apex gives the data. The graph is
  * best-effort: step output can route to steps that the probe did not find.
- * The component says so. It reads once on connect and when an input changes.
+ * A notice shows each gap that Apex finds. The component reads on connect,
+ * when an input changes, and when the parent calls refresh().
  */
 import { LightningElement, api } from "lwc";
 import getWorkflowTopology from "@salesforce/apex/WorkflowTopologyController.getWorkflowTopology";
@@ -13,15 +14,33 @@ import { layoutGraph } from "c/topologyLayout";
 const AWAITING = "AWAITING_SIGNAL";
 const SUSPENDED = "SUSPENDED";
 
+const ENDED = "ENDED";
+const COMPENSATING = "COMPENSATING";
+
 const STATE_LABELS = {
   RUNNING: "Running",
   AWAITING_SIGNAL: "Suspended, awaiting a signal",
-  SUSPENDED: "Suspended, waiting on a timer",
+  SUSPENDED: "Suspended until a timer or a job ends",
   FAILED: "Failed",
-  COMPENSATING: "Rollback in progress",
+  COMPENSATING: "Rollback runs",
   PARKED: "Parked",
   ENDED: "Ended",
 };
+
+// Text on the current node, so the state does not rely on color.
+const STATE_MARKS = {
+  RUNNING: "Now: running",
+  AWAITING_SIGNAL: "Now: awaiting a signal",
+  SUSPENDED: "Now: waiting",
+  FAILED: "Now: failed",
+  COMPENSATING: "Now: rollback",
+  PARKED: "Now: parked",
+  ENDED: "Ended here",
+};
+
+// Maximum characters on one line of a node (the full name is in the tooltip).
+const LABEL_CHARS = 24;
+const LINE_CHARS = 30;
 
 const STATE_CLASSES = {
   RUNNING: "state-running",
@@ -38,12 +57,16 @@ const REASON_LABELS = {
     "The definition did not resolve, or it declares no step.",
   ROUTING_THREW:
     'getNextStep threw for a probe. The routes of the steps marked "?" are not known.',
+  ROUTING_VARIES:
+    'getNextStep gave different successors for the probes. The routes of the steps marked "?" depend on step output.',
   UNREACHED_STEPS:
-    "Some steps have no known route from the initial step. Only step output can route to them.",
+    "Some steps have no known route from the initial step. Step output can route to them, or no route exists.",
   UNDECLARED_STEPS:
     "A route or the run goes to a step that getSteps() does not declare.",
   VERSIONS_UNRESOLVED:
     "getLatestVersion() threw. The routes of the versions are not known.",
+  VERSIONS_CAPPED:
+    "The probe read only the newest versions. The routes of older versions are not in the graph.",
 };
 
 // Own keys only, so a code such as "toString" shows as it is.
@@ -54,6 +77,10 @@ const shortName = (name) =>
   typeof name === "string" && name.includes(".")
     ? name.substring(name.lastIndexOf(".") + 1)
     : name;
+const fit = (text, max) =>
+  typeof text === "string" && text.length > max
+    ? `${text.substring(0, max - 1)}…`
+    : text;
 
 export default class WorkflowTopologyGraph extends LightningElement {
   graph = null;
@@ -66,6 +93,7 @@ export default class WorkflowTopologyGraph extends LightningElement {
   _waitDescriptor;
   _connected = false;
   _request = 0;
+  _scrolledFor = null;
 
   /** The definition to draw. Not used when instanceId is set. */
   @api
@@ -105,25 +133,60 @@ export default class WorkflowTopologyGraph extends LightningElement {
     this._connected = false;
   }
 
-  reload() {
-    if (this._connected) {
-      this.load();
+  // Scrolls a large graph so that the current step is in view, once per read.
+  renderedCallback() {
+    const current = this.currentSteps[0];
+    const canvas = this.template.querySelector('[data-id="topology-canvas"]');
+    if (!current || !canvas || this._scrolledFor === this.graph) {
+      return;
+    }
+    this._scrolledFor = this.graph;
+    const pos = this.layout.nodes.find((n) => n.name === current);
+    if (pos) {
+      canvas.scrollLeft = Math.max(
+        0,
+        pos.x + pos.width / 2 - canvas.clientWidth / 2,
+      );
+      canvas.scrollTop = Math.max(
+        0,
+        pos.y + pos.height / 2 - canvas.clientHeight / 2,
+      );
     }
   }
 
-  load() {
+  /** Reads the graph again. The current graph stays on screen until then. */
+  @api
+  refresh() {
+    if (this._connected) {
+      this.load(true);
+    }
+  }
+
+  reload() {
+    if (this._connected) {
+      this.load(false);
+    }
+  }
+
+  load(quiet) {
+    // Ignore a late answer to an old request.
+    const token = ++this._request;
     let request;
     if (this._instanceId) {
-      request = getInstanceTopology({ instanceId: this._instanceId });
+      // The endpoint is cacheable, so the platform enforces read-only. A new
+      // key reads the live position.
+      request = getInstanceTopology({
+        instanceId: this._instanceId,
+        cacheBuster: String(Date.now()),
+      });
     } else if (this._workflowName) {
       request = getWorkflowTopology({ workflowName: this._workflowName });
     } else {
       this.setGraph(null);
+      this.loading = false;
       return;
     }
-    // Ignore a late answer to an old request.
-    const token = ++this._request;
-    this.loading = true;
+    this.loading = !quiet;
     this.error = null;
     request
       .then((result) => {
@@ -194,16 +257,23 @@ export default class WorkflowTopologyGraph extends LightningElement {
       .map((e) => e.target);
   }
 
-  // A timed approval keeps its #84 descriptor with a timer armed. The
-  // descriptor of the detail view then wins over the timer state.
+  // A timed approval has a #84 descriptor and a timer. When the descriptor
+  // is for the current step, show a signal wait.
   get effectiveState() {
     const state = this.overlay ? this.overlay.currentState : null;
     return state === SUSPENDED && this.awaitedLabel ? AWAITING : state;
   }
 
+  // The descriptor applies only to the current step. The detail view and
+  // the graph can read at different times.
   get awaitedLabel() {
     const d = this._waitDescriptor;
-    return d && d.label ? d.label : null;
+    if (!d || !d.label || !this.overlay) {
+      return null;
+    }
+    return !d.stepName || this.currentSteps.includes(d.stepName)
+      ? d.label
+      : null;
   }
 
   get isAwaiting() {
@@ -225,7 +295,7 @@ export default class WorkflowTopologyGraph extends LightningElement {
   // ---- Notice ----
 
   get showNotice() {
-    return this.hasGraph && this.graph.routingFullyKnown === false;
+    return this.hasGraph && this.graph.gapsFound === true;
   }
 
   get reasonRows() {
@@ -252,13 +322,20 @@ export default class WorkflowTopologyGraph extends LightningElement {
 
   // ---- Summary ----
 
-  get currentNode() {
-    return this.overlay ? this.nodeByName.get(this.overlay.currentStep) : null;
+  // One entry for each SPLIT branch.
+  get currentSteps() {
+    return list(this.overlay && this.overlay.currentSteps);
+  }
+
+  get currentNodes() {
+    const byName = this.nodeByName;
+    return this.currentSteps.map((name) => byName.get(name)).filter(Boolean);
   }
 
   get currentLabel() {
-    return this.overlay && this.overlay.currentStep
-      ? this.labelOf(this.overlay.currentStep)
+    const names = this.currentSteps;
+    return names.length
+      ? names.map((name) => this.labelOf(name)).join(", ")
       : "Not known";
   }
 
@@ -267,21 +344,32 @@ export default class WorkflowTopologyGraph extends LightningElement {
   }
 
   get nextLabel() {
+    if (this.effectiveState === ENDED) {
+      return "None. The run has ended.";
+    }
+    if (this.effectiveState === COMPENSATING) {
+      return "None. The rollback runs.";
+    }
     const next = list(this.overlay && this.overlay.nextSteps);
     if (next.length > 0) {
       return next.map((name) => this.labelOf(name)).join(", ");
     }
-    const n = this.currentNode;
-    if (n && n.terminal && !n.routingUnknown) {
+    const nodes = this.currentNodes;
+    if (nodes.length && nodes.every((n) => n.terminal && !n.routingUnknown)) {
       return "None. The run can end here.";
     }
     return "No next step is known.";
   }
 
   get showNextCaveat() {
-    const n = this.currentNode;
+    if (this.effectiveState === ENDED || this.effectiveState === COMPENSATING) {
+      return false;
+    }
+    const nodes = this.currentNodes;
     return (
-      this.graph.routingFullyKnown === false || !n || n.routingUnknown === true
+      this.graph.gapsFound === true ||
+      nodes.length === 0 ||
+      nodes.some((n) => n.routingUnknown === true)
     );
   }
 
@@ -301,17 +389,18 @@ export default class WorkflowTopologyGraph extends LightningElement {
 
   get svgLabel() {
     const count = list(this.graph && this.graph.nodes).length;
-    return `Graph of ${count} steps of ${this.graph ? this.graph.workflowName : ""}. The table below lists the same routes as text.`;
+    const steps = count === 1 ? "1 step" : `${count} steps`;
+    return `Graph of ${steps} of ${this.graph ? this.graph.workflowName : ""}. The table below lists the same routes as text.`;
   }
 
   get nodeViews() {
     const byName = this.nodeByName;
     const { seen, compensated } = this.visited;
-    const current = this.overlay ? this.overlay.currentStep : null;
+    const current = new Set(this.currentSteps);
     const stateClass = labelFor(STATE_CLASSES, this.effectiveState);
     return this.layout.nodes.map((pos) => {
       const n = byName.get(pos.name);
-      const isCurrent = pos.name === current;
+      const isCurrent = current.has(pos.name);
       const classes = ["topology-node"];
       const badges = [];
       if (n.initial) {
@@ -324,18 +413,18 @@ export default class WorkflowTopologyGraph extends LightningElement {
       }
       if (n.terminal) {
         classes.push("node-terminal");
-        badges.push("Can end");
+        badges.push("End");
       }
       if (n.routingUnknown) {
         classes.push("node-unknown");
-        badges.push("? Routing not known");
+        badges.push("?");
       }
       if (!n.reachable) {
         classes.push("node-unreached");
       }
       if (!n.declared) {
         classes.push("node-undeclared");
-        badges.push("Not declared");
+        badges.push("Undeclared");
       }
       if (seen.has(pos.name)) {
         classes.push("node-visited");
@@ -346,20 +435,23 @@ export default class WorkflowTopologyGraph extends LightningElement {
       if (isCurrent) {
         classes.push("node-current", stateClass);
       }
+      let mark = null;
+      if (isCurrent) {
+        mark = this.isAwaiting
+          ? `▶ Awaiting: ${this.awaitedLabel}`
+          : `▶ ${labelFor(STATE_MARKS, this.effectiveState)}`;
+      }
       return {
         key: pos.name,
         name: pos.name,
-        label: n.label,
+        label: fit(n.label, LABEL_CHARS),
         title: n.name,
         width: pos.width,
         height: pos.height,
         transform: `translate(${pos.x}, ${pos.y})`,
         cssClass: classes.join(" "),
-        badges: badges.join(" · "),
-        awaiting:
-          isCurrent && this.isAwaiting
-            ? `Awaiting: ${this.awaitedLabel}`
-            : null,
+        badges: fit(badges.join(" · "), LINE_CHARS),
+        mark: fit(mark, LINE_CHARS),
       };
     });
   }

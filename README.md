@@ -589,6 +589,8 @@ static void onboardingWorkflowIsWellFormed() {
 
 `validate` flags: a definition class that doesn't resolve or doesn't implement `WorkflowDefinition`; a `getInitialStep()` that is blank or not contained in `getSteps()`; any `getSteps()` entry that doesn't resolve to an instantiable `WorkflowStep`/`CompensatableStep`; and duplicate `getSteps()` entries. It additionally runs a **best-effort** transition probe that drives `getNextStep(...)` for each declared step and flags any returned successor not in `getSteps()` — best-effort because `getNextStep` is data-dependent and cannot be fully enumerated. Inspect `result.defects` (each has a `code`, `stepName`, and `message`) or `result.getMessages()` for the full list. This is why `getSteps()` is part of the `WorkflowDefinition` contract: it is the authoritative step inventory the validator checks the DAG against.
 
+To see the routes that the validator probe finds, click **Graph** in the dashboard Catalog. See **[docs/topology-graph.md](docs/topology-graph.md)**.
+
 #### Lint step code for replay safety (`sf` plugin)
 
 `WorkflowValidator` checks the DAG. It does not read step code. A step that calls `Datetime.now()`, `Math.random()`, `UserInfo`, `System.enqueueJob()`, or `EventBus.publish()` gets a new result each time the engine runs it again. The determinism lint finds these calls in the source, before deploy:
@@ -598,8 +600,6 @@ sf revenant lint determinism        # exit 1 on a HIGH defect
 ```
 
 A call in `produce()` of a `CaptureProducer` is safe when the step reads the value with `once()`. See **[docs/determinism-lint.md](docs/determinism-lint.md)**.
-
-To see the routes that the validator probe finds, use `WorkflowTopology.build(workflowClassName)` or the **Graph** button in the dashboard Catalog. See **[docs/topology-graph.md](docs/topology-graph.md)**.
 
 Where `WorkflowValidator` checks the _definition's shape_, the next section validates _each invocation's payload_.
 
@@ -783,6 +783,7 @@ How the gates map to permissions:
 - **Rate Limits panel** Apex access: the panel calls `WorkflowRateLimitController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Readiness panel** Apex access: the panel calls `WorkflowReadinessController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Fleet Health view** Apex access: the view calls `WorkflowFleetHealthController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
+- **Workflow graph** Apex access: the graph calls `WorkflowTopologyController`. `Revenant_Operator` and `Revenant_Admin` grant it. If you grant dashboard access with a custom permission set or a profile, also grant this class.
 - **Signal injection** (`Workflow_Signal_Injection`) and **step-skip** (`Workflow_Step_Skip`) remain independently gated on their own custom permissions, layered on top of the action gate.
 
 ### Mapping Workflow Definitions to Alert Configurations

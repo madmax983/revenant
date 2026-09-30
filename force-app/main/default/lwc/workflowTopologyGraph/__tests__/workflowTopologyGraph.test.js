@@ -47,7 +47,7 @@ function graph(overrides = {}) {
       { source: V, target: S },
       { source: S, target: H },
     ],
-    routingFullyKnown: false,
+    gapsFound: true,
     incompleteReasons: ["ROUTING_THREW", "UNREACHED_STEPS"],
     defects: [],
     overlay: null,
@@ -59,7 +59,7 @@ function overlay(overrides = {}) {
   return {
     instanceId: "a0G000000000001",
     instanceStatus: "Suspended",
-    currentStep: R,
+    currentSteps: [R],
     currentState: "AWAITING_SIGNAL",
     path: [
       { stepName: V, status: "Completed", compensation: false },
@@ -164,7 +164,7 @@ describe("c-workflow-topology-graph", () => {
   it("shows no notice for a fully known graph but keeps the best-effort caption", async () => {
     const element = await render(
       { workflowName: "OrderFlow" },
-      graph({ routingFullyKnown: true, incompleteReasons: [] }),
+      graph({ gapsFound: false, incompleteReasons: [] }),
     );
 
     expect(q(element, "topology-notice")).toBeNull();
@@ -201,6 +201,64 @@ describe("c-workflow-topology-graph", () => {
     expect(classesOf(nodeEl(element, "Ghost"))).toContain("node-undeclared");
   });
 
+  it("shortens a long label on the node but keeps the full name", async () => {
+    const long = "OrderFlow.ValidateCustomerCreditLimitAndAddressStep";
+    const element = await render(
+      { workflowName: "OrderFlow" },
+      graph({
+        nodes: [
+          node(long, "ValidateCustomerCreditLimitAndAddressStep", {
+            initial: true,
+            compensatable: true,
+            terminal: true,
+            routingUnknown: true,
+          }),
+        ],
+        edges: [],
+      }),
+    );
+    const el = nodeEl(element, long);
+    const label = el.querySelector(".node-label").textContent;
+    expect(label.length).toBeLessThanOrEqual(24);
+    expect(label.endsWith("…")).toBe(true);
+    expect(el.querySelector("title").textContent).toBe(long);
+    expect(el.querySelector(".node-badges").textContent).toContain("?");
+  });
+
+  it("shows an empty state for a graph with no step", async () => {
+    const element = await render(
+      { workflowName: "Missing" },
+      graph({
+        nodes: [],
+        edges: [],
+        incompleteReasons: ["DEFINITION_UNRESOLVED"],
+      }),
+    );
+    expect(q(element, "topology-empty")).not.toBeNull();
+    expect(q(element, "topology-svg")).toBeNull();
+    expect(q(element, "topology-notice")).not.toBeNull();
+  });
+
+  it("clears the graph and ignores a late answer when the inputs are cleared", async () => {
+    let resolveOld;
+    getWorkflowTopology.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    );
+    const element = createElement("c-workflow-topology-graph", {
+      is: WorkflowTopologyGraph,
+    });
+    element.workflowName = "OrderFlow";
+    document.body.appendChild(element);
+    element.workflowName = null;
+    resolveOld(graph());
+    await flushPromises();
+
+    expect(qa(element, "topology-node")).toHaveLength(0);
+    expect(q(element, "topology-loading")).toBeNull();
+  });
+
   it("shows an error when the read fails", async () => {
     const element = await render(
       { workflowName: "OrderFlow" },
@@ -220,9 +278,9 @@ describe("c-workflow-topology-graph", () => {
         graph({ overlay: overlay() }),
       );
 
-      expect(getInstanceTopology).toHaveBeenCalledWith({
-        instanceId: "a0G000000000001",
-      });
+      expect(getInstanceTopology).toHaveBeenCalledWith(
+        expect.objectContaining({ instanceId: "a0G000000000001" }),
+      );
       expect(getWorkflowTopology).not.toHaveBeenCalled();
       expect(classesOf(nodeEl(element, R))).toContain("node-current");
       expect(classesOf(nodeEl(element, R))).toContain("state-awaiting");
@@ -293,7 +351,7 @@ describe("c-workflow-topology-graph", () => {
       );
 
       expect(q(element, "summary-state").textContent).toBe(
-        "Suspended, waiting on a timer",
+        "Suspended until a timer or a job ends",
       );
       expect(q(element, "summary-awaiting")).toBeNull();
       expect(classesOf(nodeEl(element, R))).toContain("state-suspended");
@@ -307,9 +365,9 @@ describe("c-workflow-topology-graph", () => {
       element.instanceId = "a0G000000000002";
       await flushPromises();
 
-      expect(getInstanceTopology).toHaveBeenLastCalledWith({
-        instanceId: "a0G000000000002",
-      });
+      expect(getInstanceTopology).toHaveBeenLastCalledWith(
+        expect.objectContaining({ instanceId: "a0G000000000002" }),
+      );
     });
 
     it("hides the awaited signal when the state is not a signal wait", async () => {
@@ -335,10 +393,10 @@ describe("c-workflow-topology-graph", () => {
       const element = await render(
         { instanceId: "a0G000000000001" },
         graph({
-          routingFullyKnown: true,
+          gapsFound: false,
           incompleteReasons: [],
           overlay: overlay({
-            currentStep: S,
+            currentSteps: [S],
             currentState: "RUNNING",
             instanceStatus: "Running",
             nextSteps: [H],
@@ -356,7 +414,7 @@ describe("c-workflow-topology-graph", () => {
         { instanceId: "a0G000000000001" },
         graph({
           overlay: overlay({
-            currentStep: H,
+            currentSteps: [H],
             currentState: "ENDED",
             instanceStatus: "Completed",
             path: [
@@ -383,6 +441,136 @@ describe("c-workflow-topology-graph", () => {
         true,
       );
       expect(classesOf(nodeEl(element, S))).toContain("node-compensated");
+    });
+
+    it("sends a new cache key on each read of an instance", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({ overlay: overlay() }),
+      );
+      const first = getInstanceTopology.mock.calls[0][0].cacheBuster;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      element.refresh();
+      await flushPromises();
+      const second = getInstanceTopology.mock.calls[1][0].cacheBuster;
+      expect(first).toBeTruthy();
+      expect(second).not.toBe(first);
+    });
+
+    it("refresh() reads the live position and keeps the graph on screen", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({ overlay: overlay() }),
+      );
+      let resolveNext;
+      getInstanceTopology.mockReturnValue(
+        new Promise((resolve) => {
+          resolveNext = resolve;
+        }),
+      );
+      element.refresh();
+      await flushPromises();
+      expect(q(element, "topology-loading")).toBeNull();
+      expect(qa(element, "topology-node")).toHaveLength(4);
+
+      resolveNext(
+        graph({
+          overlay: overlay({
+            currentSteps: [H],
+            currentState: "ENDED",
+            instanceStatus: "Completed",
+          }),
+        }),
+      );
+      await flushPromises();
+      expect(q(element, "summary-current").textContent).toContain("Ship");
+      expect(q(element, "summary-next").textContent).toBe(
+        "None. The run has ended.",
+      );
+      expect(q(element, "summary-next-caveat")).toBeNull();
+    });
+
+    it("ignores an old answer that comes after a new one", async () => {
+      let resolveOld;
+      getInstanceTopology.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+      );
+      const element = createElement("c-workflow-topology-graph", {
+        is: WorkflowTopologyGraph,
+      });
+      element.instanceId = "a0G000000000001";
+      document.body.appendChild(element);
+      getInstanceTopology.mockResolvedValueOnce(
+        graph({ overlay: overlay({ currentSteps: [S] }) }),
+      );
+      element.instanceId = "a0G000000000002";
+      await flushPromises();
+      resolveOld(graph({ overlay: overlay({ currentSteps: [V] }) }));
+      await flushPromises();
+
+      expect(q(element, "summary-current").textContent).toContain("Reserve");
+    });
+
+    it("says that a rollback has no next step", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          overlay: overlay({
+            currentState: "COMPENSATING",
+            instanceStatus: "Compensating",
+            nextSteps: [H],
+          }),
+        }),
+      );
+      expect(q(element, "summary-next").textContent).toBe(
+        "None. The rollback runs.",
+      );
+      expect(q(element, "summary-state").textContent).toBe("Rollback runs");
+    });
+
+    it("ignores a descriptor for a different step", async () => {
+      const element = await render(
+        {
+          instanceId: "a0G000000000001",
+          waitDescriptor: { label: "Approve:Old", stepName: V },
+        },
+        graph({ overlay: overlay() }),
+      );
+      expect(q(element, "summary-awaiting")).toBeNull();
+      expect(nodeEl(element, R).textContent).not.toContain("Approve:Old");
+    });
+
+    it("writes the state as text on the current node", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          overlay: overlay({
+            currentState: "FAILED",
+            instanceStatus: "Failed",
+          }),
+        }),
+      );
+      expect(nodeEl(element, R).textContent).toContain("Now: failed");
+    });
+
+    it("highlights each branch of a SPLIT as current", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          overlay: overlay({
+            currentSteps: [S, H],
+            currentState: "RUNNING",
+            instanceStatus: "Running",
+          }),
+        }),
+      );
+      expect(classesOf(nodeEl(element, S))).toContain("node-current");
+      expect(classesOf(nodeEl(element, H))).toContain("node-current");
+      expect(q(element, "summary-current").textContent).toContain(
+        "Reserve, Ship",
+      );
     });
 
     it("flags a truncated path", async () => {

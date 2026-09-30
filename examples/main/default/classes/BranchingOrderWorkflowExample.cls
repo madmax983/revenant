@@ -13,10 +13,9 @@
  *     out of stock -> BackorderStep -> end
  *
  * The routes depend on step output. The graph probe finds only the default
- * routes. The graph shows the other steps as "not reached" and tells the
- * operator that the routing is not fully known. The review router fails
- * closed: an unknown decision throws. The graph shows it as "routing not
- * known", not as an end.
+ * routes. The graph shows the other steps with "no known route" and a notice
+ * that the routing is not fully known. The review router fails closed: an
+ * unknown decision throws. The graph shows "?" for it, not an end.
  */
 public inherited sharing class BranchingOrderWorkflowExample implements WorkflowDefinition {
   /** Approval key of the manual review. */

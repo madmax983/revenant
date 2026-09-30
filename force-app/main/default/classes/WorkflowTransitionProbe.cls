@@ -5,9 +5,9 @@
  * hinge on step output the validator does not have — so this cannot enumerate
  * every reachable transition. It drives getNextStep with a small set of
  * representative StepResults for each declared step and flags any returned
- * successor name that is not itself declared in getSteps(). Author exceptions
- * thrown from getNextStep are swallowed because the probe feeds it synthetic
- * results it may not expect.
+ * successor name that is not itself declared in getSteps(). An author exception
+ * from getNextStep gives no defect, because the probe feeds it synthetic
+ * results. The probe records the step as unresolved.
  *
  * The probe uses only COMPLETE-action results, because that is the sole
  * transition through which WorkflowEngine asks the definition for a successor.
@@ -27,9 +27,14 @@
  * former in-validator probe did.
  *
  * Issue #141: the probe also records each transition it finds in a Transitions
- * value. WorkflowTopology uses it to draw the graph.
+ * value. WorkflowTopology uses it to draw the graph. The version probe reads
+ * only the newest MAX_PROBED_VERSIONS versions. This keeps the CPU time finite
+ * for a large version number (for example a date).
  */
 public inherited sharing class WorkflowTransitionProbe {
+  /** The maximum number of versions that the version probe reads. */
+  public static final Integer MAX_PROBED_VERSIONS = 50;
+
   /**
    * The transitions that the probe found (issue #141). It is best-effort:
    * a missing edge does not prove that no edge exists.
@@ -41,8 +46,12 @@ public inherited sharing class WorkflowTransitionProbe {
     public Set<String> endingSteps = new Set<String>();
     /** Steps where getNextStep threw for a probe (routing not known). */
     public Set<String> unresolvedSteps = new Set<String>();
+    /** Steps where the probes of one pass gave different successors. */
+    public Set<String> variedSteps = new Set<String>();
     /** True when getLatestVersion() threw, so no version was probed. */
     public Boolean versionsUnresolved = false;
+    /** True when the probe did not read the oldest versions. */
+    public Boolean versionsCapped = false;
 
     /**
      * @description Records one probe outcome. A blank successor marks an end.
@@ -105,7 +114,7 @@ public inherited sharing class WorkflowTransitionProbe {
   /**
    * @description Drives the two-argument getNextStep for every declared step and
    * COMPLETE-action probe result, flagging any returned successor not declared in
-   * getSteps() and swallowing author exceptions from getNextStep.
+   * getSteps(). An author exception marks the step as unresolved.
    * @param def The workflow definition whose default routing is being probed.
    * @param ctx The probe context holding declared steps, probes, and the result.
    */
@@ -114,6 +123,7 @@ public inherited sharing class WorkflowTransitionProbe {
     ProbeContext ctx
   ) {
     for (String stepName : ctx.declaredSteps) {
+      Set<String> outcomes = new Set<String>();
       for (StepResult probe : ctx.probes) {
         String successor;
         try {
@@ -123,15 +133,14 @@ public inherited sharing class WorkflowTransitionProbe {
           ctx.transitions.unresolvedSteps.add(stepName);
           continue;
         }
-        ctx.transitions.record(stepName, successor);
-        flagIfDangling(stepName, successor, ctx);
+        recordOutcome(stepName, successor, outcomes, ctx);
       }
     }
   }
 
   /**
    * @description Drives the three-argument getNextStep(current, result, version)
-   * for every version in 1..getLatestVersion(). A throw from getLatestVersion()
+   * for the newest MAX_PROBED_VERSIONS versions up to getLatestVersion(). A throw from getLatestVersion()
    * means the workflow cannot start, so it is reported (the engine calls it before
    * starting an instance) rather than silently skipping the versioned probe.
    * @param vdef The versioned workflow definition whose per-version routing is
@@ -162,8 +171,11 @@ public inherited sharing class WorkflowTransitionProbe {
     if (latest == null || latest < 1) {
       return;
     }
-    for (Integer version = 1; version <= latest; version++) {
+    Integer oldest = Math.max(1, latest - MAX_PROBED_VERSIONS + 1);
+    ctx.transitions.versionsCapped = oldest > 1;
+    for (Integer version = oldest; version <= latest; version++) {
       for (String stepName : ctx.declaredSteps) {
+        Set<String> outcomes = new Set<String>();
         for (StepResult probe : ctx.probes) {
           String successor;
           try {
@@ -172,11 +184,26 @@ public inherited sharing class WorkflowTransitionProbe {
             ctx.transitions.unresolvedSteps.add(stepName);
             continue;
           }
-          ctx.transitions.record(stepName, successor);
-          flagIfDangling(stepName, successor, ctx);
+          recordOutcome(stepName, successor, outcomes, ctx);
         }
       }
     }
+  }
+
+  // Records one probe outcome. Two different outcomes in one pass show that
+  // the routing of the step depends on step output.
+  private static void recordOutcome(
+    String stepName,
+    String successor,
+    Set<String> outcomes,
+    ProbeContext ctx
+  ) {
+    outcomes.add(String.isBlank(successor) ? '' : successor);
+    if (outcomes.size() > 1) {
+      ctx.transitions.variedSteps.add(stepName);
+    }
+    ctx.transitions.record(stepName, successor);
+    flagIfDangling(stepName, successor, ctx);
   }
 
   /**
