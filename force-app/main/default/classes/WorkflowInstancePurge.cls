@@ -7,36 +7,51 @@
  * WorkflowInstancePurge.PurgeResult f = WorkflowInstancePurge.purge(ids, true);
  * ```
  *
- * Rules for each instance X in the final set S:
+ * Rules for each instance X in the purge set S:
  * 1. X is terminal ({@link WorkflowInstanceTeardown#isPurgeable}).
  * 2. Each child of X is in S.
  * 3. The predecessor of X (`Previous_Instance__c`) is in S.
- * 4. A successor of X that is not in S is terminal.
- * 5. The parent of X, when not in S, is terminal.
+ * 4. A successor of X that is not in S has a final status.
+ * 5. The parent of X, when not in S, has a final status.
  *
- * Rules 2 and 3 stop a dangling child or chain. Removal of the oldest
- * generations of a chain passes. Rules 4 and 5 stop a delete under an
- * active run or rollback that still reads X.
+ * A final status is terminal and not `Failed`. An operator can retry a
+ * `Failed` instance. Rules 2 and 3 stop a dangling child or chain. The purge
+ * accepts removal of the oldest generations of a chain. Rules 4 and 5 stop
+ * the delete of X while a run or rollback can still read X.
  *
  * `includeRelated` adds the full family of each Id first: all generations in
  * both directions, all children and their families. It never adds a parent.
  *
- * Linked instances in S form a group. A group is purged in full or not at
- * all. The call purges the groups that pass and reports each skipped Id.
- * An expected state gives an outcome. Bad input throws
+ * Linked instances in S form a group. The call purges a group as one unit.
+ * It purges the groups that obey the rules and reports each other Id. For an
+ * expected state, the call returns an outcome. Bad input throws
  * `WorkflowEngine.WorkflowException`.
  *
- * All SOQL and DML run in system mode. Call it only from trusted code.
+ * All SOQL and DML run in system mode. The caller must check permissions.
+ * A message can name related instances that the caller cannot see.
  */
 public inherited sharing class WorkflowInstancePurge {
-  /** @description Maximum Ids in and instances purged by one call. */
+  /**
+   * @description The maximum number of Ids for one call. One call also
+   * deletes no more than this number of instances.
+   */
   public static final Integer MAX_INSTANCES_PER_CALL = 50;
-  /** @description Maximum link rounds that `includeRelated` follows. */
+  /** @description The maximum link levels that `includeRelated` follows. */
   public static final Integer MAX_LINK_ROUNDS = 20;
-  /** @description Maximum related rows that one call reads. */
+  /**
+   * @description The maximum rows for each related read. The family read and
+   * the link check each have this limit.
+   */
   public static final Integer MAX_RELATED_ROWS = 2000;
 
   private static final Integer MAX_NAMED_IDS = 5;
+  private static final String STATUS_FAILED = 'Failed';
+
+  // Tests lower the bounds to exercise the limit paths with few rows.
+  @TestVisible
+  private static Integer maxLinkRounds = MAX_LINK_ROUNDS;
+  @TestVisible
+  private static Integer maxRelatedRows = MAX_RELATED_ROWS;
 
   /**
    * @description The result for one Id.
@@ -48,13 +63,13 @@ public inherited sharing class WorkflowInstancePurge {
     NOT_FOUND,
     /** The status is not terminal. */
     REJECTED_NOT_TERMINAL,
-    /** The purge would leave a child or chain without its link. */
+    /** The purge would remove the link of a child or chain generation. */
     REJECTED_RELATED,
-    /** A related instance is not terminal and still reads this one. */
+    /** A related instance can still run and read this one. */
     REJECTED_RELATED_ACTIVE,
-    /** The related group passes the bounds of one call. */
+    /** The related group is larger than the bounds of one call. */
     REJECTED_TOO_LARGE,
-    /** The bounds of this call are full. Call again for this Id. */
+    /** This call cannot purge the Id now. Call again for this Id. */
     DEFERRED
   }
 
@@ -192,7 +207,11 @@ public inherited sharing class WorkflowInstancePurge {
     }
   }
 
-  // One call. Reads and locks, groups, checks the rules, then deletes.
+  // Thrown when a lock wait fails. No DML has run yet.
+  private class LockException extends Exception {
+  }
+
+  // One call: read and lock, group, bound, check the rules, then delete.
   private class Planner {
     private final List<Id> requested = new List<Id>();
     private final Set<Id> requestedSet;
@@ -200,9 +219,11 @@ public inherited sharing class WorkflowInstancePurge {
     private final PurgeResult result = new PurgeResult();
     // Rows of the purge set S.
     private Map<Id, Workflow_Instance__c> rows = new Map<Id, Workflow_Instance__c>();
-    // Rows in S whose links a truncated read did not follow.
+    // Rows in S whose links the family read did not follow in full.
     private final Set<Id> unexpanded = new Set<Id>();
     private Integer relatedRowsRead = 0;
+    // Groups that obey every rule, in order.
+    private final List<List<Id>> accepted = new List<List<Id>>();
 
     Planner(Set<Id> instanceIds, Boolean includeRelated) {
       this.requestedSet = instanceIds;
@@ -211,6 +232,18 @@ public inherited sharing class WorkflowInstancePurge {
     }
 
     PurgeResult run() {
+      try {
+        plan();
+      } catch (LockException e) {
+        // Nothing is deleted. The rest waits for a new call.
+        reportUnreported(Outcome.DEFERRED, lockedMessage());
+        return finish();
+      }
+      deleteAccepted();
+      return finish();
+    }
+
+    private void plan() {
       Set<Id> instanceIds = new Set<Id>();
       for (Id i : requested) {
         if (i.getSObjectType() == Workflow_Instance__c.SObjectType) {
@@ -222,47 +255,49 @@ public inherited sharing class WorkflowInstancePurge {
       if (includeRelated) {
         expandFamilies();
       }
-      List<List<Id>> groups = groupsOf(rows.keySet());
 
-      List<List<Id>> checkable = new List<List<Id>>();
-      Set<Id> checkIds = new Set<Id>();
-      for (List<Id> grp : groups) {
+      // Bound first, so the call locks only rows that it can delete.
+      List<List<Id>> fitting = new List<List<Id>>();
+      Integer used = 0;
+      for (List<Id> grp : groupsOf(rows.keySet())) {
         if (isTooLarge(grp)) {
           reportGroup(grp, Outcome.REJECTED_TOO_LARGE, tooLargeMessage());
+        } else if (used + grp.size() > MAX_INSTANCES_PER_CALL) {
+          reportGroup(grp, Outcome.DEFERRED, deferredMessage());
         } else {
-          checkable.add(grp);
-          checkIds.addAll(grp);
+          fitting.add(grp);
+          used += grp.size();
         }
       }
-      // Lock the added related rows too, then check links on fresh data.
+
+      // Lock the added related rows, then check links on fresh data.
       Map<Id, Workflow_Instance__c> fresh = new Map<Id, Workflow_Instance__c>();
       Set<Id> toLock = new Set<Id>();
-      for (Id i : checkIds) {
-        if (locked.contains(i)) {
-          fresh.put(i, rows.get(i));
-        } else {
-          toLock.add(i);
+      for (List<Id> grp : fitting) {
+        for (Id i : grp) {
+          if (locked.contains(i)) {
+            fresh.put(i, rows.get(i));
+          } else {
+            toLock.add(i);
+          }
         }
       }
       fresh.putAll(lockRows(toLock));
       rows.putAll(fresh);
       Violations v = findViolations(fresh);
 
-      List<List<Id>> accepted = new List<List<Id>>();
-      for (List<Id> grp : checkable) {
+      for (List<Id> grp : fitting) {
         List<Id> present = presentIn(grp, fresh);
-        if (present.isEmpty()) {
+        if (present.isEmpty() || rejectIfViolated(present, v)) {
           continue;
         }
         if (v.truncated) {
-          reportGroup(present, Outcome.REJECTED_TOO_LARGE, tooLargeMessage());
-        } else if (!rejectIfViolated(present, v)) {
+          // Some links are not known. Do not guess.
+          reportGroup(present, Outcome.DEFERRED, truncatedMessage());
+        } else {
           accepted.add(present);
         }
       }
-      deleteWithinBounds(accepted);
-      reportNotFound();
-      return result;
     }
 
     // ── Reads ────────────────────────────────────────────────────────────
@@ -270,32 +305,38 @@ public inherited sharing class WorkflowInstancePurge {
       if (ids.isEmpty()) {
         return new Map<Id, Workflow_Instance__c>();
       }
-      return new Map<Id, Workflow_Instance__c>(
-        [
-          SELECT Id, Status__c, Parent_Instance__c, Previous_Instance__c
-          FROM Workflow_Instance__c
-          WHERE Id IN :ids
-          WITH SYSTEM_MODE
-          FOR UPDATE
-        ]
-      );
+      try {
+        return new Map<Id, Workflow_Instance__c>(
+          [
+            SELECT Id, Status__c, Parent_Instance__c, Previous_Instance__c
+            FROM Workflow_Instance__c
+            WHERE Id IN :ids
+            WITH SYSTEM_MODE
+            FOR UPDATE
+          ]
+        );
+      } catch (QueryException e) {
+        // The lock wait timed out or found a deadlock.
+        throw new LockException(e.getMessage());
+      }
     }
 
-    // Adds children, successors and predecessors round by round.
+    // Adds children, successors and predecessors, one link level a round.
     private void expandFamilies() {
       Set<Id> frontier = new Set<Id>(rows.keySet());
       Integer rounds = 0;
       while (!frontier.isEmpty()) {
-        Integer budget = MAX_RELATED_ROWS - relatedRowsRead;
-        if (rounds == MAX_LINK_ROUNDS || budget <= 0) {
+        Integer budget = maxRelatedRows - relatedRowsRead;
+        if (budget <= 0) {
           unexpanded.addAll(frontier);
           return;
         }
         rounds++;
+        Set<Id> known = new Set<Id>(rows.keySet());
         Set<Id> predecessorIds = new Set<Id>();
         for (Id i : frontier) {
           Id prev = rows.get(i).Previous_Instance__c;
-          if (prev != null && !rows.containsKey(prev)) {
+          if (prev != null && !known.contains(prev)) {
             predecessorIds.add(prev);
           }
         }
@@ -303,22 +344,23 @@ public inherited sharing class WorkflowInstancePurge {
           SELECT Id, Status__c, Parent_Instance__c, Previous_Instance__c
           FROM Workflow_Instance__c
           WHERE
-            Id IN :predecessorIds
+            (Id IN :predecessorIds
             OR Parent_Instance__c IN :frontier
-            OR Previous_Instance__c IN :frontier
+            OR Previous_Instance__c IN :frontier)
+            AND Id NOT IN :known
           WITH SYSTEM_MODE
           LIMIT :budget
         ];
         relatedRowsRead += found.size();
         Set<Id> next = new Set<Id>();
         for (Workflow_Instance__c row : found) {
-          if (!rows.containsKey(row.Id)) {
-            rows.put(row.Id, row);
-            next.add(row.Id);
-          }
+          rows.put(row.Id, row);
+          next.add(row.Id);
         }
-        if (found.size() == budget) {
-          // The read can be cut. These links are not known in full.
+        // A full page can be cut. A row past the last level is too deep.
+        if (
+          found.size() == budget || (rounds > maxLinkRounds && !next.isEmpty())
+        ) {
           unexpanded.addAll(frontier);
           unexpanded.addAll(next);
           return;
@@ -327,7 +369,7 @@ public inherited sharing class WorkflowInstancePurge {
       }
     }
 
-    // Reads the links of S that point out of S, after the lock.
+    // Reads the links of S that point out of S, after the lock of S.
     private Violations findViolations(Map<Id, Workflow_Instance__c> inSet) {
       Violations v = new Violations();
       if (inSet.isEmpty()) {
@@ -339,7 +381,7 @@ public inherited sharing class WorkflowInstancePurge {
         addIfOutside(refIds, row.Parent_Instance__c, keys);
         addIfOutside(refIds, row.Previous_Instance__c, keys);
       }
-      Integer cap = MAX_RELATED_ROWS + 1;
+      Integer cap = maxRelatedRows + 1;
       List<Workflow_Instance__c> outside = [
         SELECT Id, Status__c, Parent_Instance__c, Previous_Instance__c
         FROM Workflow_Instance__c
@@ -351,18 +393,30 @@ public inherited sharing class WorkflowInstancePurge {
         WITH SYSTEM_MODE
         LIMIT :cap
       ];
-      if (outside.size() == cap) {
-        v.truncated = true;
-        return v;
-      }
+      v.truncated = outside.size() == cap;
       Map<Id, Workflow_Instance__c> byId = new Map<Id, Workflow_Instance__c>(
         outside
       );
-      for (Workflow_Instance__c o : outside) {
-        if (keys.contains(o.Parent_Instance__c)) {
-          v.dangling(o.Parent_Instance__c, 'child ' + o.Id);
+      Set<Id> trusted = trustedIds(outside, inSet);
+      Map<Id, Workflow_Instance__c> relocked = lockRows(trusted);
+      for (Id i : trusted) {
+        if (relocked.containsKey(i)) {
+          byId.put(i, relocked.get(i));
+        } else {
+          // Deleted since the read. It can no longer read X.
+          byId.remove(i);
         }
-        if (keys.contains(o.Previous_Instance__c) && !isTerminal(o)) {
+      }
+
+      for (Workflow_Instance__c o : byId.values()) {
+        if (keys.contains(o.Parent_Instance__c)) {
+          if (isTerminal(o)) {
+            v.dangling(o.Parent_Instance__c, 'child ' + o.Id);
+          } else {
+            v.active(o.Parent_Instance__c, 'child ' + label(o));
+          }
+        }
+        if (keys.contains(o.Previous_Instance__c) && !isFinal(o)) {
           v.active(o.Previous_Instance__c, 'successor ' + label(o));
         }
       }
@@ -371,7 +425,7 @@ public inherited sharing class WorkflowInstancePurge {
           v.notTerminal.add(row.Id);
         }
         Workflow_Instance__c parent = byId.get(row.Parent_Instance__c);
-        if (parent != null && !isTerminal(parent)) {
+        if (parent != null && !isFinal(parent)) {
           v.active(row.Id, 'parent ' + label(parent));
         }
         if (byId.containsKey(row.Previous_Instance__c)) {
@@ -379,6 +433,30 @@ public inherited sharing class WorkflowInstancePurge {
         }
       }
       return v;
+    }
+
+    // The outside parents and successors that have a final status. The call
+    // locks them and reads them again. A redrive or rollback that starts
+    // first wins: the new status shows in the second read.
+    private Set<Id> trustedIds(
+      List<Workflow_Instance__c> outside,
+      Map<Id, Workflow_Instance__c> inSet
+    ) {
+      Set<Id> parentIds = new Set<Id>();
+      for (Workflow_Instance__c row : inSet.values()) {
+        if (row.Parent_Instance__c != null) {
+          parentIds.add(row.Parent_Instance__c);
+        }
+      }
+      Set<Id> trusted = new Set<Id>();
+      for (Workflow_Instance__c o : outside) {
+        Boolean isRelied =
+          parentIds.contains(o.Id) || inSet.containsKey(o.Previous_Instance__c);
+        if (isRelied && isFinal(o)) {
+          trusted.add(o.Id);
+        }
+      }
+      return trusted;
     }
 
     // ── Grouping ─────────────────────────────────────────────────────────
@@ -479,8 +557,7 @@ public inherited sharing class WorkflowInstancePurge {
       Id cause = null;
       Boolean causeActive = false;
       for (Id i : grp) {
-        Boolean isActive =
-          v.notTerminal.contains(i) || v.activeById.containsKey(i);
+        Boolean isActive = v.isActive(i);
         if (isActive || v.danglingById.containsKey(i)) {
           if (cause == null || (isActive && !causeActive)) {
             cause = i;
@@ -496,80 +573,65 @@ public inherited sharing class WorkflowInstancePurge {
           continue;
         }
         if (v.notTerminal.contains(i)) {
-          add(
-            i,
-            Outcome.REJECTED_NOT_TERMINAL,
-            'Status is ' +
-              rows.get(i).Status__c +
-              '. Only a terminal instance (' +
-              String.join(
-                new List<String>(WorkflowInstanceTeardown.purgeableStatuses()),
-                ', '
-              ) +
-              ') can be purged. Cancel it or let it finish, then purge it.'
-          );
+          add(i, Outcome.REJECTED_NOT_TERMINAL, notTerminalMessage(i));
         } else if (v.activeById.containsKey(i)) {
           add(
             i,
             Outcome.REJECTED_RELATED_ACTIVE,
-            'A related instance is not terminal and still reads this one: ' +
+            'A related instance can still run and read this instance: ' +
               names(v.activeById.get(i)) +
-              '. Purge again when it is terminal.'
+              '. Purge again when it has a final status.'
           );
         } else if (v.danglingById.containsKey(i)) {
           add(
             i,
             Outcome.REJECTED_RELATED,
-            'The purge would leave related instances without their link: ' +
+            'The purge would remove the link of related instances: ' +
               names(v.danglingById.get(i)) +
               '. Add them to the Ids, or set includeRelated to true.'
-          );
-        } else if (causeActive) {
-          add(
-            i,
-            Outcome.REJECTED_RELATED_ACTIVE,
-            'Related instance ' +
-              cause +
-              ' in this group is not terminal or has an active related' +
-              ' instance. A related group is purged as one unit.'
           );
         } else {
           add(
             i,
-            Outcome.REJECTED_RELATED,
+            causeActive
+              ? Outcome.REJECTED_RELATED_ACTIVE
+              : Outcome.REJECTED_RELATED,
             'Related instance ' +
               cause +
-              ' in this group was rejected. A related group is purged' +
-              ' as one unit.'
+              ' in this group cannot be purged: ' +
+              reasonOf(cause, v) +
+              '. The call purges a related group as one unit.'
           );
         }
       }
       return true;
     }
 
-    // ── Delete ───────────────────────────────────────────────────────────
-    private void deleteWithinBounds(List<List<Id>> accepted) {
-      List<List<Workflow_Instance__c>> fitting = new List<List<Workflow_Instance__c>>();
-      List<List<Id>> fittingIds = new List<List<Id>>();
-      Integer used = 0;
-      for (List<Id> grp : accepted) {
-        if (used + grp.size() > MAX_INSTANCES_PER_CALL) {
-          reportGroup(grp, Outcome.DEFERRED, deferredMessage());
-          continue;
-        }
-        used += grp.size();
-        List<Workflow_Instance__c> members = new List<Workflow_Instance__c>();
-        for (Id i : grp) {
-          members.add(new Workflow_Instance__c(Id = i));
-        }
-        fitting.add(members);
-        fittingIds.add(grp);
+    private String reasonOf(Id i, Violations v) {
+      if (v.notTerminal.contains(i)) {
+        return 'its status is ' + rows.get(i).Status__c;
       }
-      if (fitting.isEmpty()) {
+      if (v.activeById.containsKey(i)) {
+        return names(v.activeById.get(i));
+      }
+      return names(v.danglingById.get(i));
+    }
+
+    // ── Delete ───────────────────────────────────────────────────────────
+    private void deleteAccepted() {
+      if (accepted.isEmpty()) {
         return;
       }
+      List<List<Workflow_Instance__c>> members = new List<List<Workflow_Instance__c>>();
+      for (List<Id> grp : accepted) {
+        List<Workflow_Instance__c> m = new List<Workflow_Instance__c>();
+        for (Id i : grp) {
+          m.add(new Workflow_Instance__c(Id = i));
+        }
+        members.add(m);
+      }
       CleanupDocumentPurger.PurgeChunk chunk = CleanupDocumentPurger.planGroups(
-        fitting
+        members
       );
       WorkflowInstanceTeardown.Counts counts = WorkflowInstanceTeardown.run(
         chunk
@@ -580,16 +642,18 @@ public inherited sharing class WorkflowInstancePurge {
       result.deletedFileCount = counts.files;
 
       List<Id> related = new List<Id>();
-      for (List<Id> grp : fittingIds) {
+      for (List<Id> grp : accepted) {
         if (!chunk.instanceIdsToPurge.contains(grp[0])) {
           reportGroup(grp, Outcome.DEFERRED, deferredMessage());
-          continue;
-        }
-        for (Id i : grp) {
-          if (requestedSet.contains(i)) {
-            add(i, Outcome.PURGED, 'Purged with its satellites.');
-          } else {
-            related.add(i);
+        } else if (!counts.complete) {
+          reportGroup(grp, Outcome.DEFERRED, satellitesMessage());
+        } else {
+          for (Id i : grp) {
+            if (requestedSet.contains(i)) {
+              add(i, Outcome.PURGED, 'Purged with its satellites.');
+            } else {
+              related.add(i);
+            }
           }
         }
       }
@@ -608,23 +672,27 @@ public inherited sharing class WorkflowInstancePurge {
     // ── Report ───────────────────────────────────────────────────────────
     private void reportGroup(List<Id> grp, Outcome o, String message) {
       for (Id i : grp) {
-        if (requestedSet.contains(i)) {
+        if (requestedSet.contains(i) && result.get(i) == null) {
           add(i, o, message);
         }
       }
     }
 
-    private void reportNotFound() {
+    private void reportUnreported(Outcome o, String message) {
       for (Id i : requested) {
         if (result.get(i) == null) {
-          add(
-            i,
-            Outcome.NOT_FOUND,
-            'No workflow instance has this Id. It is possibly purged already.'
-          );
+          add(i, o, message);
         }
       }
-      // Requested rows first, in sorted order. Then related rows.
+    }
+
+    // Reports NOT_FOUND for the rest. Orders the rows: requested Ids first,
+    // in sorted order, then related Ids.
+    private PurgeResult finish() {
+      reportUnreported(
+        Outcome.NOT_FOUND,
+        'No workflow instance has this Id. If you purged it before, do nothing.'
+      );
       List<InstanceResult> ordered = new List<InstanceResult>();
       for (Id i : requested) {
         ordered.add(result.get(i));
@@ -635,10 +703,23 @@ public inherited sharing class WorkflowInstancePurge {
         }
       }
       result.results = ordered;
+      return result;
     }
 
     private void add(Id i, Outcome o, String message) {
       result.add(new InstanceResult(i, o, message, true));
+    }
+
+    private String notTerminalMessage(Id i) {
+      List<String> statuses = new List<String>(
+        WorkflowInstanceTeardown.purgeableStatuses()
+      );
+      statuses.sort();
+      return 'The status is ' +
+        rows.get(i).Status__c +
+        '. You can purge only an instance with the status ' +
+        String.join(statuses, ', ') +
+        '. Cancel it or let it finish. Then purge it.';
     }
   }
 
@@ -648,6 +729,11 @@ public inherited sharing class WorkflowInstancePurge {
     Set<Id> notTerminal = new Set<Id>();
     Map<Id, List<String>> activeById = new Map<Id, List<String>>();
     Map<Id, List<String>> danglingById = new Map<Id, List<String>>();
+
+    Boolean isActive(Id instanceId) {
+      return notTerminal.contains(instanceId) ||
+        activeById.containsKey(instanceId);
+    }
 
     void active(Id instanceId, String what) {
       put(activeById, instanceId, what);
@@ -667,6 +753,11 @@ public inherited sharing class WorkflowInstancePurge {
 
   private static Boolean isTerminal(Workflow_Instance__c row) {
     return WorkflowInstanceTeardown.isPurgeable(row.Status__c);
+  }
+
+  // Terminal and not Failed: no retry, run or rollback can start from it.
+  private static Boolean isFinal(Workflow_Instance__c row) {
+    return isTerminal(row) && row.Status__c != STATUS_FAILED;
   }
 
   private static String label(Workflow_Instance__c row) {
@@ -705,21 +796,37 @@ public inherited sharing class WorkflowInstancePurge {
   }
 
   private static String tooLargeMessage() {
-    return 'The related group has more than ' +
+    return 'The related group is larger than one call can purge (' +
       MAX_INSTANCES_PER_CALL +
-      ' instances, more than ' +
-      MAX_LINK_ROUNDS +
-      ' link levels, or more than ' +
-      MAX_RELATED_ROWS +
-      ' related rows. Purge the oldest generations or the children first,' +
+      ' instances, ' +
+      maxLinkRounds +
+      ' link levels, ' +
+      maxRelatedRows +
+      ' related rows). Purge the oldest generations or the children first,' +
       ' without includeRelated.';
   }
 
   private static String deferredMessage() {
-    return 'The bounds of this call (' +
+    return 'This call is full (' +
       MAX_INSTANCES_PER_CALL +
       ' instances, ' +
       CleanupDocumentPurger.MAX_DOCS_PER_CHUNK +
-      ' files) are full. Call purge again for this Id.';
+      ' files). Call purge again for this Id.';
+  }
+
+  private static String truncatedMessage() {
+    return 'The Ids in this call have more than ' +
+      maxRelatedRows +
+      ' related rows to check. Call purge again with fewer Ids.';
+  }
+
+  private static String satellitesMessage() {
+    return 'The call deleted part of the signals and logs. More remain.' +
+      ' Call purge again for this Id.';
+  }
+
+  private static String lockedMessage() {
+    return 'Another transaction locks a row of this purge.' +
+      ' Call purge again for this Id.';
   }
 }

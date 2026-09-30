@@ -1,6 +1,5 @@
 /**
  * @description Tests for the targeted instance purge (issue #142).
- * Written first (RED). They fail on code that has no purge API.
  *
  * Scenarios:
  *  1. Purge removes the instance and all satellites. Zero orphans.
@@ -14,6 +13,8 @@
  *  9. The file cap defers a group. It never splits a group.
  * 10. A family over the ceiling is refused.
  * 11. A second purge of the same Id reports NOT_FOUND.
+ * 12. Review cases: Failed parent, rollbacks, link and row bounds,
+ *     satellite pages, messages, overlapping families, status guard.
  */
 @IsTest
 private class WorkflowInstancePurgeTest {
@@ -248,7 +249,8 @@ private class WorkflowInstancePurgeTest {
         r.outcome,
         'refused: ' + instanceId
       );
-      Assert.isTrue(r.message.contains('terminal'), 'actionable message');
+      Assert.isTrue(r.message.startsWith('The status is '), r.message);
+      Assert.isTrue(r.message.contains('Cancel it'), 'actionable message');
     }
     Assert.areEqual(
       9,
@@ -737,5 +739,386 @@ private class WorkflowInstancePurgeTest {
       'already purged'
     );
     Assert.areEqual(0, again.purgedCount, 'nothing purged');
+  }
+
+  // 12 ────────────────────────────────────────────────────────────────────
+  @IsTest
+  static void failedParentBlocksChild() {
+    Workflow_Instance__c parent = insertInstance('Failed', 'fp-parent');
+    Workflow_Instance__c child = newInstance('Completed', 'fp-child');
+    child.Parent_Instance__c = parent.Id;
+    insert child;
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      child.Id
+    );
+
+    WorkflowInstancePurge.InstanceResult r = result.get(child.Id);
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_RELATED_ACTIVE,
+      r.outcome,
+      'a Failed parent can be retried and read its children'
+    );
+    Assert.isTrue(r.message.contains(parent.Id + ' (Failed)'), r.message);
+    Assert.isTrue(exists(child.Id), 'child kept');
+
+    WorkflowInstancePurge.PurgeResult both = WorkflowInstancePurge.purge(
+      new Set<Id>{ parent.Id, child.Id }
+    );
+    Assert.areEqual(2, both.purgedCount, 'parent and child go together');
+  }
+
+  @IsTest
+  static void compensatedTargetAndItsRollback() {
+    Workflow_Instance__c target = insertInstance('Completed', 'comp-target');
+    Workflow_Instance__c rollbackRun = newInstance('Compensated', 'comp-roll');
+    rollbackRun.Previous_Instance__c = target.Id;
+    insert rollbackRun;
+
+    WorkflowInstancePurge.PurgeResult alone = WorkflowInstancePurge.purge(
+      rollbackRun.Id
+    );
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_RELATED,
+      alone.outcomeOf(rollbackRun.Id),
+      'the rollback needs its target'
+    );
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      target.Id
+    );
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.PURGED,
+      result.outcomeOf(target.Id),
+      'a finished rollback does not block its target'
+    );
+    Workflow_Instance__c kept = [
+      SELECT Previous_Instance__c
+      FROM Workflow_Instance__c
+      WHERE Id = :rollbackRun.Id
+    ];
+    Assert.isNull(kept.Previous_Instance__c, 'link cleared');
+  }
+
+  @IsTest
+  static void stalledRollbackBlocksItsTarget() {
+    Workflow_Instance__c target = insertInstance('Completed', 'stall-target');
+    Workflow_Instance__c rollbackRun = newInstance(
+      'CompensationFailed',
+      'stall-roll'
+    );
+    rollbackRun.Previous_Instance__c = target.Id;
+    insert rollbackRun;
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      target.Id
+    );
+
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_RELATED_ACTIVE,
+      result.outcomeOf(target.Id),
+      'a stalled rollback still reads its target'
+    );
+  }
+
+  @IsTest
+  static void runningChildOutsideSetIsActive() {
+    Workflow_Instance__c parent = insertInstance('Completed', 'rc-parent');
+    Workflow_Instance__c child = newInstance('Running', 'rc-child');
+    child.Parent_Instance__c = parent.Id;
+    insert child;
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      parent.Id
+    );
+
+    WorkflowInstancePurge.InstanceResult r = result.get(parent.Id);
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_RELATED_ACTIVE,
+      r.outcome,
+      'the advice to set includeRelated would not help'
+    );
+    Assert.isTrue(r.message.contains(child.Id + ' (Running)'), r.message);
+  }
+
+  @IsTest
+  static void activeGroupMateRejectsRequestedId() {
+    List<Workflow_Instance__c> chain = insertChain(
+      new List<String>{ 'ContinuedAsNew', 'ContinuedAsNew', 'Running' }
+    );
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      new Set<Id>{ chain[0].Id },
+      true
+    );
+
+    WorkflowInstancePurge.InstanceResult r = result.get(chain[0].Id);
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_RELATED_ACTIVE,
+      r.outcome,
+      'the running generation blocks the family'
+    );
+    Assert.isTrue(r.message.contains(chain[2].Id), 'names the cause');
+    Assert.isTrue(r.message.contains('Running'), 'gives the reason');
+    Assert.areEqual(0, result.purgedCount, 'nothing purged');
+  }
+
+  @IsTest
+  static void linkDepthBound() {
+    WorkflowInstancePurge.maxLinkRounds = 1;
+    List<Workflow_Instance__c> shortChain = insertChain(
+      new List<String>{ 'ContinuedAsNew', 'Completed' }
+    );
+
+    // One link level fits the bound exactly.
+    WorkflowInstancePurge.PurgeResult fits = WorkflowInstancePurge.purge(
+      new Set<Id>{ shortChain[1].Id },
+      true
+    );
+    Assert.areEqual(2, fits.purgedCount, 'depth equal to the bound passes');
+
+    List<Workflow_Instance__c> longChain = insertChain(
+      new List<String>{ 'ContinuedAsNew', 'ContinuedAsNew', 'Completed' }
+    );
+    WorkflowInstancePurge.PurgeResult deep = WorkflowInstancePurge.purge(
+      new Set<Id>{ longChain[2].Id },
+      true
+    );
+    WorkflowInstancePurge.InstanceResult r = deep.get(longChain[2].Id);
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_TOO_LARGE,
+      r.outcome,
+      'depth over the bound is refused'
+    );
+    Assert.isTrue(r.message.contains('includeRelated'), 'gives advice');
+    Assert.areEqual(
+      3,
+      [SELECT COUNT() FROM Workflow_Instance__c],
+      'long chain kept'
+    );
+  }
+
+  @IsTest
+  static void familyRowBound() {
+    WorkflowInstancePurge.maxRelatedRows = 1;
+    Workflow_Instance__c parent = insertInstance('Completed', 'rows-parent');
+    List<Workflow_Instance__c> children = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 2; i++) {
+      Workflow_Instance__c c = newInstance('Completed', 'rows-child-' + i);
+      c.Parent_Instance__c = parent.Id;
+      children.add(c);
+    }
+    insert children;
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      new Set<Id>{ parent.Id },
+      true
+    );
+
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_TOO_LARGE,
+      result.outcomeOf(parent.Id),
+      'a cut family read is refused'
+    );
+  }
+
+  @IsTest
+  static void cutLinkCheckDefersOnlyUnknownGroups() {
+    WorkflowInstancePurge.maxRelatedRows = 1;
+    Workflow_Instance__c parent = insertInstance('Completed', 'cut-parent');
+    List<Workflow_Instance__c> children = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 2; i++) {
+      Workflow_Instance__c c = newInstance('Completed', 'cut-child-' + i);
+      c.Parent_Instance__c = parent.Id;
+      children.add(c);
+    }
+    insert children;
+    Workflow_Instance__c plain = insertInstance('Completed', 'cut-plain');
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      new Set<Id>{ parent.Id, plain.Id }
+    );
+
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.REJECTED_RELATED,
+      result.outcomeOf(parent.Id),
+      'a known dangling child still rejects'
+    );
+    WorkflowInstancePurge.InstanceResult r = result.get(plain.Id);
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.DEFERRED,
+      r.outcome,
+      'an unchecked group waits, it is not rejected'
+    );
+    Assert.isTrue(r.message.contains('fewer Ids'), r.message);
+    Assert.isTrue(exists(plain.Id), 'plain kept');
+  }
+
+  @IsTest
+  static void instanceCountDefersSecondFamily() {
+    List<Workflow_Instance__c> parents = new List<Workflow_Instance__c>{
+      newInstance('Completed', 'fam-a'),
+      newInstance('Completed', 'fam-b')
+    };
+    insert parents;
+    List<Workflow_Instance__c> children = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c p : parents) {
+      for (Integer i = 0; i < 29; i++) {
+        Workflow_Instance__c c = newInstance(
+          'Completed',
+          p.Correlation_Key__c + '-' + i
+        );
+        c.Parent_Instance__c = p.Id;
+        children.add(c);
+      }
+    }
+    insert children;
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      new Map<Id, Workflow_Instance__c>(parents).keySet(),
+      true
+    );
+
+    Assert.areEqual(30, result.purgedCount, 'one family of 30 fits');
+    Integer deferred = 0;
+    for (Workflow_Instance__c p : parents) {
+      if (result.outcomeOf(p.Id) == WorkflowInstancePurge.Outcome.DEFERRED) {
+        deferred++;
+      }
+    }
+    Assert.areEqual(1, deferred, 'the other family waits');
+    Assert.areEqual(
+      30,
+      [SELECT COUNT() FROM Workflow_Instance__c],
+      'deferred family kept'
+    );
+  }
+
+  @IsTest
+  static void satellitePagesDeferThenFinish() {
+    WorkflowInstanceTeardown.maxSatelliteRows = 1;
+    Workflow_Instance__c inst = insertInstance('Completed', 'pages');
+    insert new List<Workflow_Log__c>{
+      new Workflow_Log__c(Workflow_Instance__c = inst.Id, Level__c = 'Info'),
+      new Workflow_Log__c(Workflow_Instance__c = inst.Id, Level__c = 'Info')
+    };
+
+    WorkflowInstancePurge.PurgeResult first = WorkflowInstancePurge.purge(
+      inst.Id
+    );
+
+    WorkflowInstancePurge.InstanceResult r = first.get(inst.Id);
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.DEFERRED,
+      r.outcome,
+      'not purged while logs remain'
+    );
+    Assert.isTrue(r.message.contains('again'), r.message);
+    Assert.areEqual(0, first.purgedCount, 'no instance deleted');
+    Assert.areEqual(1, first.deletedLogCount, 'one page of logs');
+    Assert.isTrue(exists(inst.Id), 'instance kept');
+
+    WorkflowInstancePurge.PurgeResult second = WorkflowInstancePurge.purge(
+      inst.Id
+    );
+    Assert.areEqual(
+      WorkflowInstancePurge.Outcome.PURGED,
+      second.outcomeOf(inst.Id),
+      'second call finishes'
+    );
+  }
+
+  @IsTest
+  static void manyDanglingChildrenAreSummarized() {
+    Workflow_Instance__c parent = insertInstance('Completed', 'many-parent');
+    List<Workflow_Instance__c> children = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 7; i++) {
+      Workflow_Instance__c c = newInstance('Completed', 'many-child-' + i);
+      c.Parent_Instance__c = parent.Id;
+      children.add(c);
+    }
+    insert children;
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      parent.Id
+    );
+
+    Assert.isTrue(
+      result.get(parent.Id).message.contains('and 2 more'),
+      result.get(parent.Id).message
+    );
+  }
+
+  @IsTest
+  static void overlappingFamiliesReportEachIdOnce() {
+    List<Workflow_Instance__c> chain = insertChain(
+      new List<String>{ 'ContinuedAsNew', 'ContinuedAsNew', 'Completed' }
+    );
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      new Set<Id>{ chain[0].Id, chain[2].Id },
+      true
+    );
+
+    Assert.areEqual(3, result.purgedCount, 'one family, three rows');
+    Assert.areEqual(3, result.results.size(), 'no duplicate rows');
+    Assert.isTrue(result.get(chain[0].Id).requested, 'requested');
+    Assert.isTrue(result.get(chain[2].Id).requested, 'requested');
+    Assert.isFalse(result.get(chain[1].Id).requested, 'added');
+  }
+
+  @IsTest
+  static void fileLinkedToAnotherRecordIsKept() {
+    Workflow_Instance__c inst = insertInstance('Completed', 'other-link');
+    Workflow_Schedule__c sched = new Workflow_Schedule__c(
+      Name = 'LinkSched',
+      Workflow_Name__c = WF,
+      Cron_Expression__c = '0 2 * * *',
+      Correlation_Key_Prefix__c = 'LinkSchedKey',
+      Enabled__c = false
+    );
+    insert sched;
+    Id doc = insertFile('Input_Linked', new List<Id>{ inst.Id, sched.Id });
+
+    WorkflowInstancePurge.PurgeResult result = WorkflowInstancePurge.purge(
+      inst.Id
+    );
+
+    Assert.areEqual(1, result.purgedCount, 'instance purged');
+    Assert.areEqual(0, result.deletedFileCount, 'no file deleted');
+    Assert.isFalse(
+      remainingDocs(new Set<Id>{ doc }).isEmpty(),
+      'file linked to another record stays'
+    );
+  }
+
+  @IsTest
+  static void onlyTerminalPicklistValuesArePurgeable() {
+    Set<String> purgeable = new Set<String>();
+    for (
+      Schema.PicklistEntry e : Workflow_Instance__c.Status__c.getDescribe()
+        .getPicklistValues()
+    ) {
+      if (WorkflowInstanceTeardown.isPurgeable(e.getValue())) {
+        purgeable.add(e.getValue());
+      }
+    }
+    Assert.areEqual(
+      new Set<String>{
+        'Completed',
+        'Failed',
+        'Compensated',
+        'Cancelled',
+        'ContinuedAsNew'
+      },
+      purgeable,
+      'the delete gate holds only terminal statuses'
+    );
+    Set<String> copy = WorkflowInstanceTeardown.purgeableStatuses();
+    copy.add('Running');
+    Assert.isFalse(
+      WorkflowInstanceTeardown.isPurgeable('Running'),
+      'a change to the copy does not change the gate'
+    );
   }
 }

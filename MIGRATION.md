@@ -453,6 +453,17 @@ See [docs/debounce.md](docs/debounce.md).
 
 See [docs/stall-alerts.md](docs/stall-alerts.md).
 
+## Changed: purge deletes instance logs (issue #142)
+
+No signature changes. Read this if you keep `Workflow_Log__c` rows for audit.
+
+- `CleanupWorkflow` and `ArchiveWorkflow` now delete the `Workflow_Log__c` rows of each purged instance. Before, the rows stayed with an empty instance lookup. This includes `OperatorIntervention` rows. The archive does not copy logs. Export them first if you need them.
+- A log row with `Schedule__c` or `Schedule_Name__c` stays. It is schedule fire history.
+- A file that is linked to a user other than its owner now stays. Before, the purge ignored all user links.
+- New API: `WorkflowInstancePurge.purge(Id | Set<Id> | Set<Id>, Boolean)` deletes selected terminal instances and their satellites. It is `public`, not `global`.
+
+See [docs/instance-purge.md](docs/instance-purge.md).
+
 ## New (additive, non-breaking): `DefinitionChanged` status
 
 **Issue #89.** No signature changes. Read this if your code switches on `Status__c`.

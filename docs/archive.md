@@ -109,8 +109,11 @@ archived.
 Then the purge deletes the engine files, signals and instance logs, as
 `CleanupWorkflow` does without archival. The delete uses
 `WorkflowInstanceTeardown`, the same routine as `WorkflowInstancePurge`. See
-[instance-purge.md](instance-purge.md). A log row with `Schedule__c` stays.
-The archive does not copy logs.
+[instance-purge.md](instance-purge.md). A log row with `Schedule__c` or
+`Schedule_Name__c` stays. The archive does not copy logs. Export them first
+if you need them. When an instance has more than 5000 signal and log rows,
+the batch deletes them in pages and writes the same records again. The sink
+contract makes that safe.
 
 ## Shipped sinks
 

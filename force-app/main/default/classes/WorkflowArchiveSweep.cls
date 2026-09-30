@@ -217,11 +217,15 @@ public inherited sharing class WorkflowArchiveSweep {
    * @param skipped the run's skipped Ids, updated in place
    */
   public static void reportSkips(BatchResult batch, List<Id> skipped) {
+    // A batch that keeps its cursor can skip the same Id again.
+    Set<Id> seen = new Set<Id>(skipped);
     for (Id instanceId : batch.skippedInstanceIds) {
       if (skipped.size() >= MAX_SKIPPED_IDS) {
         return;
       }
-      skipped.add(instanceId);
+      if (seen.add(instanceId)) {
+        skipped.add(instanceId);
+      }
     }
   }
 
