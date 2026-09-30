@@ -91,6 +91,12 @@ public inherited sharing class WorkflowContinueAsNew {
     StepResult result = outcome.result;
     StepContext context = outcome.context;
     Boolean isParallel = outcome.isParallel;
+    // Check the successor input before any write (issue #227). A bad input
+    // then leaves the predecessor unchanged.
+    WorkflowInputValidator.validateContinuation(
+      instance.Workflow_Name__c,
+      result.directive().continuation.nextInputJson
+    );
     if (isParallel) {
       WorkflowSignalConsume.rollbackClaimedSignals(context);
     }

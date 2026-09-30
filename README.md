@@ -649,6 +649,13 @@ The issue's generic **Number** maps to **`DECIMAL_TYPE`** (any JSON numeric); re
 
 **Only new instances are validated — dedup hits are never blocked.** Every start in Revenant is a get-or-start (it dedups on the correlation key), and `signalOrStart` folds a signal into that decision. The input contract is enforced **only for a request that actually creates a new instance** (whose start input will be persisted), and it still runs **before that insert**. A request that resolves to an **existing** instance — a get-or-start or signal-or-start dedup hit — is **not** validated: its fallback start input is never persisted, so an invalid/minimal fallback must not (and does not) block signal delivery or the return of the existing instance. This holds at both the engine layer (scalar and bulk) and the Flow layer.
 
+**Child starts and continue-as-new are validated too.** The engine also checks the contract when a step creates an instance: `StepResult.startChild`, `StepResult.startChildren` and `StepResult.continueAsNew`. The same rules apply. The check runs before the insert. It reads the exact JSON that the engine saves. It does not check a child that already exists. A bad input throws `WorkflowInputException` in the step transaction, and no child or successor row is created.
+
+- **Bulk children:** one error lists each bad child by correlation key. No child is created.
+- **Continue-as-new:** the check runs before any write. A null input counts as an empty payload, so a contract with required fields rejects it.
+- **Type lookup:** the engine uses the parent namespace to find the child class.
+- **After a rejection:** the step transaction rolls back, and the crash handler fails the instance.
+
 **Apex (scalar & bulk).** On invalid input for a **new** start, `start(...)` / `startOrGet(...)` throw a typed **`WorkflowInputException`** whose message enumerates **every** bad field (not just the first), with the structured list also available via `ex.getFieldErrors()` (each a `WorkflowInputFieldError` carrying `fieldName`, a `reason` of `MISSING` / `WRONG_TYPE` / `MALFORMED_JSON`, and the expected/actual type). Malformed JSON is reported as an input error, never as an uncaught `JSONException`. No instance row is created. A get-or-start / `signalOrStart` call that dedups to an existing instance returns/delivers normally even with an invalid fallback payload.
 
 ```java

@@ -69,6 +69,10 @@ public inherited sharing class WorkflowChildBulkService {
       return;
     }
 
+    // Only new children reach this point. If one child breaks its contract,
+    // the engine rejects all children (issue #227).
+    WorkflowInputValidator.validateChildStarts(plan.requests, parentNamespace);
+
     if (
       !WorkflowChildBulkPlanner.insertChildInstances(plan.instances, parentId)
     ) {

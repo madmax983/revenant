@@ -42,6 +42,12 @@ public inherited sharing class WorkflowChildService {
     }
     String parentNamespace = resolveParentNamespace(parentId);
     Workflow_Instance__c instance = buildChildInstance(req, parentNamespace);
+    // Reject a bad input contract before the insert (issue #227).
+    WorkflowInputValidator.validateChildStart(
+      req.workflowName,
+      parentNamespace,
+      inputJson
+    );
 
     if (insertChildInstance(instance)) {
       return;

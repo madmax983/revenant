@@ -8,7 +8,8 @@
  * payload with a field-level {@link WorkflowInputException}. Definitions that do
  * not implement this interface are unaffected: their start input is never
  * inspected, so the feature is fully backward compatible and costs nothing to the
- * simple case. Detection is a single in-memory `instanceof` on the resolved
+ * simple case. The engine also checks the input of a child start and of a
+ * continue-as-new successor. Detection is a single in-memory `instanceof` on the resolved
  * definition instance; it adds no SOQL and no DML to the start path.
  */
 public interface ValidatedWorkflow {
