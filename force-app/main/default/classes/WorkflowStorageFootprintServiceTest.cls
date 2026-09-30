@@ -1,9 +1,9 @@
 /**
  * @description Unit tests for WorkflowStorageFootprintService: verifies per-object record
  * counts and estimated bytes, 7-/30-day growth deltas (including exclusion of records older
- * than the window), the summed ContentVersion byte volume scoped to engine-owned offloaded
- * payloads (and exclusion of non-engine files), the org data-storage-allowance metrics, and
- * the configurable warning-threshold classification. All reads are bounded aggregates; the
+ * than the window), the ContentVersion byte total (flagged files only; a user file with an engine-like
+ * title is not counted), the org data-storage-allowance metrics, and the
+ * configurable warning-threshold classification. All reads are bounded aggregates; the
  * tests seed a small, fixed number of records per object.
  */
 @IsTest
@@ -58,13 +58,20 @@ private class WorkflowStorageFootprintServiceTest {
         Key_Value__c = 'FootprintKey=FootprintValue'
       );
 
-      // Engine-owned offloaded payload (counted) plus a user file (must NOT be counted).
+      // Counted: a flagged payload. Not counted: a user file, and a user file with an
+      // engine-like title.
       ContentVersion engineCv = new ContentVersion(
         Title = 'Output_FootprintPayload',
         PathOnClient = 'Output_FootprintPayload.json',
-        VersionData = Blob.valueOf('x'.repeat(5000))
+        VersionData = Blob.valueOf('x'.repeat(5000)),
+        Revenant_Payload_Offload__c = true
       );
       insert engineCv;
+      insert new ContentVersion(
+        Title = 'Input_notes',
+        PathOnClient = 'Input_notes.txt',
+        VersionData = Blob.valueOf('z'.repeat(3000))
+      );
       insert new ContentVersion(
         Title = 'UserUploadedFile',
         PathOnClient = 'UserUploadedFile.txt',
@@ -144,11 +151,11 @@ private class WorkflowStorageFootprintServiceTest {
         'One signal counted'
       );
 
-      // Only the engine-owned file contributes to the ContentVersion byte total.
+      // Only the flagged file adds to the ContentVersion byte total.
       System.assertEquals(
         engineBytes,
         (Long) result.get('contentVersionBytes'),
-        'Content bytes reflect only the engine-owned offloaded payload'
+        'Content bytes reflect only the flagged offloaded payload'
       );
 
       Long recordBytes = (Long) result.get('estimatedRecordBytes');
@@ -187,6 +194,85 @@ private class WorkflowStorageFootprintServiceTest {
       System.assert(
         result.get('isOverThreshold') instanceof Boolean,
         'Over-threshold flag is a Boolean'
+      );
+    }
+  }
+
+  @IsTest
+  static void testSupersededVersionNotCounted() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      ContentVersion first = new ContentVersion(
+        Title = 'Output_Versioned',
+        PathOnClient = 'Output_Versioned.json',
+        VersionData = Blob.valueOf('a'.repeat(2000)),
+        Revenant_Payload_Offload__c = true
+      );
+      insert first;
+      Id docId = [
+        SELECT ContentDocumentId
+        FROM ContentVersion
+        WHERE Id = :first.Id
+      ]
+      .ContentDocumentId;
+      ContentVersion second = new ContentVersion(
+        Title = 'Output_Versioned',
+        PathOnClient = 'Output_Versioned.json',
+        ContentDocumentId = docId,
+        VersionData = Blob.valueOf('b'.repeat(3000)),
+        Revenant_Payload_Offload__c = true
+      );
+      insert second;
+      Long latestBytes = [
+        SELECT ContentSize
+        FROM ContentVersion
+        WHERE Id = :second.Id
+      ]
+      .ContentSize;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowDashboardController.getStorageFootprint();
+      Test.stopTest();
+
+      System.assertEquals(
+        latestBytes,
+        (Long) result.get('contentVersionBytes'),
+        'Only the latest version of a flagged file is counted'
+      );
+    }
+  }
+
+  @IsTest
+  static void testOffloadedPayloadIsCounted() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+        Status__c = 'Running',
+        Correlation_Key__c = 'FootprintOffloadKey'
+      );
+      insert inst;
+
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
+        inst.Id,
+        'x'.repeat(100001),
+        'Output_FootprintOffload'
+      );
+      Id docId = (Id) ((Map<String, Object>) JSON.deserializeUntyped(marker))
+        .get('$attachmentId');
+      Long bytes = [
+        SELECT ContentSize
+        FROM ContentVersion
+        WHERE ContentDocumentId = :docId AND IsLatest = TRUE
+      ]
+      .ContentSize;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowDashboardController.getStorageFootprint();
+      Test.stopTest();
+
+      System.assertEquals(
+        bytes,
+        (Long) result.get('contentVersionBytes'),
+        'A file written by the offloader is counted'
       );
     }
   }

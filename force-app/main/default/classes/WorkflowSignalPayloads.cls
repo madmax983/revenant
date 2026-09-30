@@ -106,8 +106,8 @@ public inherited sharing class WorkflowSignalPayloads {
   ) {
     List<ContentVersion> files = new List<ContentVersion>();
     for (Workflow_Signal__c row : targets) {
-      // ContentVersion.Title allows 255 characters. The existing engine prefix
-      // `Output_` keeps the file in the purge and footprint scope.
+      // ContentVersion.Title allows 255 characters. The engine prefix `Output_`
+      // keeps the file in the purge scope. The flag adds it to the footprint.
       String title =
         'Output_Signal_' +
         String.valueOf(row.Signal_Name__c)
@@ -117,7 +117,8 @@ public inherited sharing class WorkflowSignalPayloads {
         new ContentVersion(
           Title = title,
           PathOnClient = title + '.json',
-          VersionData = Blob.valueOf(row.Payload__c)
+          VersionData = Blob.valueOf(row.Payload__c),
+          Revenant_Payload_Offload__c = true
         )
       );
     }

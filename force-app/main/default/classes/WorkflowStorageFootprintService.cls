@@ -5,7 +5,7 @@
  * data objects it returns a live record count, an estimated storage size (record count x a
  * standard per-record byte estimate), and 7-/30-day creation deltas so operators can see
  * acceleration. Offloaded large payloads are accounted separately as the summed
- * ContentVersion byte volume of engine-owned files. Record bytes are expressed as a
+ * ContentVersion bytes of files that have Revenant_Payload_Offload__c = true. Record bytes are expressed as a
  * percentage of the org's DataStorageMB allowance and the offloaded file bytes as a
  * percentage of the org's FileStorageMB allowance (both via System.OrgLimits), because
  * records and files bill against separate allowances. The configurable warning threshold
@@ -344,39 +344,14 @@ public inherited sharing class WorkflowStorageFootprintService {
     };
   }
 
-  // Sums the byte volume of Revenant-owned offloaded ContentVersion files. Engine-owned
-  // documents are identified by the same title prefixes the offload writer stamps and the
-  // purger recognises (CleanupDocumentPurger.ALLOWED_PREFIXES / WorkflowPayloadOffload
-  // titles), which scopes the sum to Revenant's linked content without enumerating instances
-  // (a bounded single aggregate rather than an unbounded per-instance scan). The trailing
-  // '_%' relies on SOQL LIKE treating '_' as a single-character wildcard, matching the real
-  // 'Input_...', 'Output_...' etc. titles. Latest versions only, so superseded revisions are
-  // not double-counted.
-  //
-  // KNOWN LIMITATION (title-prefix scoping): this identifies engine files by TITLE, not by the
-  // ContentDocumentLink the offloader actually writes (savePayloadIfNeeded links each file to
-  // its Workflow_Instance__c via ContentDocumentLink.LinkedEntityId). An unrelated user file
-  // whose title happens to start with one of these prefixes (e.g. a manually uploaded
-  // 'Input_notes.txt') is therefore over-counted, inflating the file-storage figure. Scoping by
-  // ContentDocumentLink was evaluated and rejected as not cheaply bounded: ContentDocumentLink
-  // requires a LinkedEntityId (or ContentDocumentId) filter, so the only way to enumerate
-  // engine links is to bind the full set of Workflow_Instance__c ids — which in the very
-  // high-volume orgs this panel targets is millions of rows and blows the 50k SOQL-row governor,
-  // reintroducing exactly the unbounded per-instance scan this aggregate avoids. Tightening this
-  // to link-based scoping is tracked as a follow-up to issue #108.
+  // Sums the size of offloaded files. Only the engine sets Revenant_Payload_Offload__c, in
+  // system mode. A user file with an engine-like title is not counted. One aggregate query.
+  // IsLatest = TRUE skips old versions. Files from before the flag are not counted.
   private static Long revenantContentBytes() {
     AggregateResult ar = [
       SELECT SUM(ContentSize) total
       FROM ContentVersion
-      WHERE
-        IsLatest = TRUE
-        AND (Title LIKE 'Input_%'
-        OR Title LIKE 'Output_%'
-        OR Title LIKE 'State_%'
-        OR Title LIKE 'Resume_%'
-        OR Title LIKE 'ContinueInput_%'
-        OR Title LIKE 'Captures_%'
-        OR Title LIKE 'VerificationPayload%')
+      WHERE IsLatest = TRUE AND Revenant_Payload_Offload__c = TRUE
       WITH SYSTEM_MODE
     ];
     Object total = ar.get('total');
