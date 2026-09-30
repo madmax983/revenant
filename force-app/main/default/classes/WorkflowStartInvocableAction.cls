@@ -42,10 +42,16 @@ global inherited sharing class WorkflowStartInvocableAction {
     )
     global Integer priority;
 
-    @InvocableVariable(label='Debounce Seconds')
+    @InvocableVariable(
+      label='Debounce Seconds'
+      description='Optional. Wait until no trigger comes for this many seconds. Then start one time with the last input. Blank starts now.'
+    )
     global Integer debounceSeconds;
 
-    @InvocableVariable(label='Max Wait Seconds')
+    @InvocableVariable(
+      label='Max Wait Seconds'
+      description='Optional. Use with Debounce Seconds. Start after this many seconds from the first trigger, also when triggers continue. Blank has no cap.'
+    )
     global Integer maxWaitSeconds;
   }
 

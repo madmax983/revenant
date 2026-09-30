@@ -114,8 +114,9 @@ start paths are separated.
   `WorkflowBulkStartActivation`, `WorkflowBulkStartFinalize`
 - `WorkflowSignalOrStartService`, `WorkflowSignalOrStartPrepare`,
   `WorkflowSignalOrStartWake`, `WorkflowSignalOrStartCancel`
-- `WorkflowDebouncer` (facade) + `WorkflowDebounceValidator`,
-  `WorkflowDebounceSweeper` (holds `DebounceRequest`)
+- `WorkflowDebouncer` (global facade, holds `DebounceRequest`) +
+  `WorkflowDebounceValidator`, `WorkflowDebounceSweeper` (finds due Ids,
+  then locks and reads them again). See [docs/debounce.md](docs/debounce.md).
 
 ## Outcome recording & watchdog
 

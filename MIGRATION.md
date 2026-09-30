@@ -171,8 +171,8 @@ WorkflowDebouncer.startDebounced(new List<WorkflowDebouncer.DebounceRequest>{
 
 `DebounceRequest` ctor: `DebounceRequest(String workflowName, String correlationKey, String inputJson)`.
 Fluent setters: `withDebounce(Integer)`, `withMaxWait(Integer)`, `withAttributesJson(String)`, `withCausationId(String)`.
-The public enqueue entry point is `WorkflowDebouncer.startDebounced(List<DebounceRequest>)`
-(single-request `WorkflowStartService.startDebounced(WorkflowDebouncer.DebounceRequest)` also exists).
+The enqueue entry points are `WorkflowDebouncer.startDebounced(List<DebounceRequest>)` and
+`WorkflowDebouncer.startDebounced(DebounceRequest)`. Both are `global` (#140).
 
 ---
 
@@ -428,6 +428,15 @@ unchanged. See the README's "Validate Start Input Against a Contract (opt-in)"
 section for the full contract shape, type-coercion rules, and bulk/Flow behavior.
 
 ---
+
+## Changed: debounced starts (additive)
+
+**Issue #140.** No signature changes.
+
+- `WorkflowDebouncer`, `DebounceRequest(String, String, String)`, `withDebounce`, `withMaxWait` and both `startDebounced` overloads are `global`. `withAttributesJson`, `withCausationId` and the request fields stay namespace-private. Use the setters.
+- `Fire_At__c` rounds up to the next whole second. A test that compares it with a time that has milliseconds must round up too.
+
+See [docs/debounce.md](docs/debounce.md).
 
 ## Changed: stall alerts include waits
 
