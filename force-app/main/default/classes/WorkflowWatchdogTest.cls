@@ -572,7 +572,7 @@ public class WorkflowWatchdogTest {
   }
 
   @IsTest
-  static void testWatchdogStallAlertApprovalWaitExclusion() {
+  static void testWatchdogStallAlertApprovalWaitAlerts() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowWatchdog.forceBootstrapInTest = true;
       WorkflowEngine.disableQueueableInTest = true;
@@ -603,12 +603,13 @@ public class WorkflowWatchdogTest {
       insert pendingStep;
       Test.setCreatedDate(pendingStep.Id, fifteenMinsAgo);
 
+      // Issue #139: a lost approval is a stall. It sends one alert.
       WorkflowAlertManager.sentEmailsCount = 0;
       WorkflowEngine.processWatchdogHeartbeat();
       System.assertEquals(
-        0,
+        1,
         WorkflowAlertManager.sentEmailsCount,
-        'Sleeper waiting on pending approval step should not alert'
+        'An approval wait past the threshold must alert'
       );
     }
   }

@@ -1,91 +1,172 @@
 /**
- * @description Proactive stall-detection service for the workflow alerting subsystem.
- * Scans non-terminal workflow instances for inactivity beyond their configured stall
- * threshold and dispatches the resulting emails, platform events and log markers in bulk.
- * Callbacks into WorkflowAlertManager reuse the shared event-building and publishing logic.
+ * @description Sends one alert for each stalled instance (issue #139). The
+ * watchdog heartbeat calls it, so it adds no scheduled job. Does not throw.
+ *
+ * Stall: the instance has an active status and made no progress for
+ * Stall_Threshold_Minutes__c. The progress clock is the newest step
+ * CreatedDate (else the instance CreatedDate). A past Sleep_Until__c that is
+ * later moves the clock to the wake time. A future Sleep_Until__c on a
+ * suspended instance is not a stall: the engine holds a timer.
+ *
+ * Dedup: a Workflow_Log__c row with the unique Fire_Key__c
+ * Stall:<instanceId>:<clockMillis> claims each stall. New progress gives a new
+ * clock and a new key. When no channel sends, the claim is deleted, so a
+ * later sweep tries again. The detector writes only Workflow_Log__c rows.
  */
 public inherited sharing class WorkflowStallDetector {
-  /**
-   * @description Mutable accumulator threaded through the stall-detection scan.
-   */
-  private class StallScan {
-    /** @description The scan's reference timestamp. */
-    public Datetime now;
-    /** @description The active stall configs to resolve candidates against. */
-    public List<Workflow_Alert_Config__mdt> configs;
-    /** @description Ids of suspended instances that have a pending step. */
-    public Set<Id> suspendedWithPendingSteps;
-    /** @description Accumulated stall alert emails to send in bulk. */
-    public List<Messaging.SingleEmailMessage> emails;
-    /** @description Accumulated stall alert platform events to publish in bulk. */
-    public List<Workflow_Alert__e> events;
-    /** @description Accumulated stall alert log markers to insert in bulk. */
-    public List<Workflow_Log__c> logs;
-  }
+  /** @description Log_Type__c of the claim row. */
+  public static final String LOG_TYPE = 'WorkflowStallAlert';
 
-  /**
-   * @description A single instance that has been confirmed stalled and is due for alerting.
-   */
+  private static final String LOG_SOURCE = 'StallAlert';
+  private static final String KEY_PREFIX = 'Stall:';
+  private static final Long MS_PER_MINUTE = 60000;
+  // Maximum instances that one sweep reads.
+  private static final Integer MAX_CANDIDATES = 1000;
+  // Rows for each candidate: the instance, its newest step and its newest claim.
+  private static final Integer QUERY_ROWS_PER_CANDIDATE = 3;
+  // Claim insert, event publish, claim release and one error log.
+  private static final Integer DML_NEEDED = 4;
+  // Rows: claim, event and release for each alert.
+  private static final Integer ROWS_PER_ALERT = 3;
+  // Candidate query and pause cache load.
+  private static final Integer SOQL_NEEDED = 2;
+  // Query rows kept free for the watchdog step commit.
+  private static final Integer QUERY_ROW_RESERVE = 5000;
+
+  private static final List<String> ACTIVE_STATUSES = new List<String>{
+    'Pending',
+    'Running',
+    'Suspended',
+    'Compensating',
+    'Cancelling',
+    'DefinitionChanged'
+  };
+
+  private static final List<String> ENGINE_WORKFLOWS = new List<String>{
+    'WatchdogWorkflow',
+    'CleanupWorkflow',
+    'ArchiveWorkflow'
+  };
+
+  /** @description Maximum alerts for one sweep. The next sweep sends the rest. */
+  @TestVisible
+  private static Integer maxAlertsPerSweep = 25;
+
+  @TestVisible
+  private static Boolean forceBudgetExhausted = false;
+
+  @TestVisible
+  private static Boolean forceEmailCapacityExhausted = false;
+
+  // One stall that is due for an alert.
   private class StallHit {
-    /** @description The stalled workflow instance. */
     public Workflow_Instance__c instance;
-    /** @description The resolved alert config for the instance. */
     public Workflow_Alert_Config__mdt config;
-    /** @description How long the instance has been idle, in minutes. */
-    public Long idleMinutes;
-    /** @description The configured stall threshold, in minutes. */
-    public Integer threshold;
+    public Datetime clock;
+    public Integer idleMinutes;
+    public Workflow_Log__c claim;
+    public Messaging.SingleEmailMessage mail;
+    public Boolean hasChannel = false;
+    public Boolean sent = false;
   }
 
   /**
-   * @description Proactively identifies stuck workflows in non-terminal states and triggers
-   * alerts, dispatching gathered emails, events and log markers in bulk.
+   * @description Finds stalled instances and sends one alert for each new
+   * stall. Uses WorkflowEngine.mockNow when it is set. Does not throw.
+   * @return The number of stalls that got an alert.
    */
-  public static void detectAndAlertStalls() {
-    Datetime now = System.now();
-
-    // 1. Get active configs
-    List<Workflow_Alert_Config__mdt> configs = WorkflowStallConfigResolver.getActiveStallConfigs();
-    if (configs.isEmpty()) {
-      return;
-    }
-
-    // 2. Query candidates using parent-child subqueries.
-    List<Workflow_Instance__c> candidates = queryStallCandidates(now);
-    if (candidates.isEmpty()) {
-      return;
-    }
-
-    // 3. Scan candidates, accumulating emails / events / log markers.
-    StallScan scan = new StallScan();
-    scan.now = now;
-    scan.configs = configs;
-    scan.suspendedWithPendingSteps = suspendedWithPendingSteps(candidates);
-    scan.emails = new List<Messaging.SingleEmailMessage>();
-    scan.events = new List<Workflow_Alert__e>();
-    scan.logs = new List<Workflow_Log__c>();
-
-    for (Workflow_Instance__c inst : candidates) {
-      processStallCandidate(inst, scan);
-    }
-
-    // 4. Bulk dispatch and DML logs.
-    dispatchStallAlerts(scan);
+  public static Integer detectAndAlertStalls() {
+    return detectAndAlertStalls(
+      WorkflowEngine.mockNow != null ? WorkflowEngine.mockNow : System.now()
+    );
   }
 
   /**
-   * @description Queries non-terminal instances that may have stalled, eliminating the 50k
-   * SOQL-row-processed limit risk via parent-child subqueries.
-   * @param now The scan's reference timestamp used to filter resumable suspensions.
-   * @return The candidate instances to evaluate for stalls.
+   * @description Finds stalled instances at the given time and sends one
+   * alert for each new stall. Does not throw.
+   * @param now The evaluation time (the heartbeat time).
+   * @return The number of stalls that got an alert.
    */
-  private static List<Workflow_Instance__c> queryStallCandidates(Datetime now) {
+  public static Integer detectAndAlertStalls(Datetime now) {
+    Integer alerted = 0;
+    try {
+      List<Workflow_Alert_Config__mdt> configs = WorkflowStallConfigResolver.getAllConfigs();
+      Integer minThreshold = WorkflowStallConfigResolver.minStallThreshold(
+        configs
+      );
+      if (now == null || minThreshold == null || !hasBudget()) {
+        return 0;
+      }
+      List<StallHit> hits = findStalls(now, configs, minThreshold);
+      if (hits.isEmpty() || !reserveEmailCapacity(hits)) {
+        return 0;
+      }
+      hits = claim(hits);
+      if (hits.isEmpty()) {
+        return 0;
+      }
+      try {
+        dispatch(hits);
+      } finally {
+        // Release runs also when dispatch throws. Each hit knows its channels
+        // before dispatch, so an unsent claim with a channel is deleted.
+        alerted = release(hits);
+      }
+      return alerted;
+    } catch (Exception ex) {
+      WorkflowLog.error(LOG_SOURCE, 'Stall alert failed: ' + ex.getMessage());
+      return alerted;
+    }
+  }
+
+  /**
+   * @description Gives the claim key of one stall.
+   * @param instanceId The stalled instance.
+   * @param clock The progress clock of the stall.
+   * @return The Fire_Key__c value.
+   */
+  @TestVisible
+  private static String claimKey(Id instanceId, Datetime clock) {
+    return KEY_PREFIX + instanceId + ':' + clock.getTime();
+  }
+
+  private static List<StallHit> findStalls(
+    Datetime now,
+    List<Workflow_Alert_Config__mdt> configs,
+    Integer minThreshold
+  ) {
+    List<StallHit> hits = new List<StallHit>();
+    for (
+      Workflow_Instance__c inst : queryCandidates(
+        now,
+        now.addMinutes(-minThreshold)
+      )
+    ) {
+      StallHit hit = evaluate(inst, configs, now);
+      if (hit != null) {
+        hits.add(hit);
+        if (hits.size() >= maxAlertsPerSweep) {
+          break;
+        }
+      }
+    }
+    return hits;
+  }
+
+  // One query. The anti-join drops each instance with a step after the
+  // cutoff, so only idle instances fill the LIMIT. The sort puts the most
+  // recently changed instances first, so a new stall comes before an old one.
+  private static List<Workflow_Instance__c> queryCandidates(
+    Datetime now,
+    Datetime cutoff
+  ) {
     return [
       SELECT
         Id,
         Name,
         Workflow_Name__c,
         Status__c,
+        Current_Step__c,
         Sleep_Until__c,
         CreatedDate,
         Correlation_Key__c,
@@ -98,247 +179,257 @@ public inherited sharing class WorkflowStallDetector {
         (
           SELECT CreatedDate
           FROM Workflow_Logs__r
-          WHERE Log_Type__c = 'WorkflowStallAlert'
+          WHERE Log_Type__c = :LOG_TYPE
           ORDER BY CreatedDate DESC
           LIMIT 1
         )
       FROM Workflow_Instance__c
       WHERE
-        Status__c IN (
-          'Pending',
-          'Running',
-          'Suspended',
-          'Compensating',
-          'Cancelling'
-        )
-        AND Workflow_Name__c NOT IN (
-          'WatchdogWorkflow',
-          'CleanupWorkflow',
-          'ArchiveWorkflow'
-        )
+        Status__c IN :ACTIVE_STATUSES
+        AND Workflow_Name__c NOT IN :ENGINE_WORKFLOWS
         AND (Status__c != 'Suspended'
         OR Sleep_Until__c = NULL
         OR Sleep_Until__c <= :now)
+        AND CreatedDate <= :cutoff
+        AND Id NOT IN (
+          SELECT Workflow_Instance__c
+          FROM Workflow_Step_Execution__c
+          WHERE CreatedDate > :cutoff
+        )
       WITH SYSTEM_MODE
-      ORDER BY CreatedDate ASC
-      LIMIT 1000
+      ORDER BY LastModifiedDate DESC
+      LIMIT :MAX_CANDIDATES
     ];
   }
 
-  /**
-   * @description Determines which suspended instances have a Pending step (waiting on
-   * approval or a signal) and should therefore be skipped by the scan.
-   * @param candidates The candidate instances being scanned.
-   * @return The ids of suspended instances that have at least one pending step.
-   */
-  private static Set<Id> suspendedWithPendingSteps(
-    List<Workflow_Instance__c> candidates
-  ) {
-    Set<Id> suspendedIds = new Set<Id>();
-    for (Workflow_Instance__c inst : candidates) {
-      if (inst.Status__c == 'Suspended') {
-        suspendedIds.add(inst.Id);
-      }
-    }
-
-    Set<Id> result = new Set<Id>();
-    if (suspendedIds.isEmpty()) {
-      return result;
-    }
-    for (Workflow_Step_Execution__c step : [
-      SELECT Workflow_Instance__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :suspendedIds AND Status__c = 'Pending'
-      WITH SYSTEM_MODE
-    ]) {
-      result.add(step.Workflow_Instance__c);
-    }
-    return result;
-  }
-
-  /**
-   * @description Evaluates one candidate and appends any due alert artefacts to the scan.
-   * @param inst The candidate workflow instance to evaluate.
-   * @param scan The mutable scan accumulator to append alert artefacts to.
-   */
-  private static void processStallCandidate(
+  // Gives a hit when the instance is past its threshold and has no alert for
+  // this stall. Else gives null.
+  private static StallHit evaluate(
     Workflow_Instance__c inst,
-    StallScan scan
+    List<Workflow_Alert_Config__mdt> configs,
+    Datetime now
   ) {
-    if (shouldSkipCandidate(inst, scan.suspendedWithPendingSteps)) {
-      return;
+    if (
+      WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c) ||
+      WorkflowEngine.resumedInstanceIds.contains(inst.Id)
+    ) {
+      return null;
     }
-
     Workflow_Alert_Config__mdt config = WorkflowStallConfigResolver.resolveStallConfig(
       inst.Workflow_Name__c,
-      scan.configs
+      configs
     );
-    if (!hasStallThreshold(config)) {
-      return;
+    if (!WorkflowStallConfigResolver.isStallEnabled(config)) {
+      return null;
     }
-    Integer threshold = config.Stall_Threshold_Minutes__c.intValue();
-
-    Datetime lastProgress = lastProgressTime(inst);
-    Datetime lastAlert = lastAlertTime(inst);
-
-    Long diffMs = scan.now.getTime() - lastProgress.getTime();
-    Long diffMinutes = diffMs / (1000 * 60);
-    if (diffMinutes < threshold) {
-      return;
+    Datetime clock = progressClock(inst, now);
+    Long idleMinutes = (now.getTime() - clock.getTime()) / MS_PER_MINUTE;
+    if (
+      idleMinutes < config.Stall_Threshold_Minutes__c.intValue() ||
+      alertedSince(inst, clock)
+    ) {
+      return null;
     }
-
-    // Suppress if an alert was already logged since the last progress.
-    if (lastAlert != null && lastAlert >= lastProgress) {
-      return;
-    }
-
     StallHit hit = new StallHit();
     hit.instance = inst;
     hit.config = config;
-    hit.idleMinutes = diffMinutes;
-    hit.threshold = threshold;
-    appendStallAlert(hit, scan);
+    hit.clock = clock;
+    hit.idleMinutes = idleMinutes.intValue();
+    hit.mail = buildEmail(hit);
+    hit.hasChannel = hit.mail != null || config.Publish_Alert_Event__c == true;
+    return hit;
   }
 
-  /**
-   * @description Decides whether a candidate should be skipped: paused definitions,
-   * in-transaction resumes and suspended instances awaiting a pending step.
-   * @param inst The candidate workflow instance.
-   * @param suspendedWithPendingSteps Ids of suspended instances with a pending step.
-   * @return True when the candidate should be skipped by the scan.
-   */
-  private static Boolean shouldSkipCandidate(
+  private static Datetime progressClock(
     Workflow_Instance__c inst,
-    Set<Id> suspendedWithPendingSteps
+    Datetime now
   ) {
-    if (WorkflowPauseGate.isDefinitionPaused(inst.Workflow_Name__c)) {
-      return true;
-    }
-    if (WorkflowEngine.resumedInstanceIds.contains(inst.Id)) {
-      return true;
-    }
-    return inst.Status__c == 'Suspended' &&
-      suspendedWithPendingSteps.contains(inst.Id);
+    Datetime clock = inst.Workflow_Step_Executions__r.isEmpty()
+      ? inst.CreatedDate
+      : inst.Workflow_Step_Executions__r[0].CreatedDate;
+    Datetime wake = inst.Sleep_Until__c;
+    return wake != null && wake <= now && wake > clock ? wake : clock;
   }
 
-  /**
-   * @description Determines whether a config has stall alerting enabled with a positive
-   * threshold.
-   * @param config The resolved alert config to inspect.
-   * @return True when the config enables stall alerting with a positive threshold.
-   */
-  private static Boolean hasStallThreshold(Workflow_Alert_Config__mdt config) {
-    return config != null &&
-      config.Enable_Alerts__c &&
-      config.Stall_Threshold_Minutes__c != null &&
-      config.Stall_Threshold_Minutes__c > 0;
+  // True when a stall row is at or after the clock. Also covers rows from
+  // before the claim key.
+  private static Boolean alertedSince(
+    Workflow_Instance__c inst,
+    Datetime clock
+  ) {
+    return !inst.Workflow_Logs__r.isEmpty() &&
+      inst.Workflow_Logs__r[0].CreatedDate >= clock;
   }
 
-  /**
-   * @description Returns the most recent step-execution time, falling back to the instance
-   * creation time when no steps have executed.
-   * @param inst The workflow instance to inspect.
-   * @return The timestamp of the instance's last observed progress.
-   */
-  private static Datetime lastProgressTime(Workflow_Instance__c inst) {
-    if (
-      inst.Workflow_Step_Executions__r != null &&
-      !inst.Workflow_Step_Executions__r.isEmpty()
-    ) {
-      return inst.Workflow_Step_Executions__r[0].CreatedDate;
+  // Inserts the claim rows. Keeps only the hits whose claim is new.
+  private static List<StallHit> claim(List<StallHit> hits) {
+    if (hits.isEmpty()) {
+      return hits;
     }
-    return inst.CreatedDate;
-  }
-
-  /**
-   * @description Returns the most recent stall-alert log time, or null when none has been
-   * recorded.
-   * @param inst The workflow instance to inspect.
-   * @return The timestamp of the last stall alert logged for the instance, or null.
-   */
-  private static Datetime lastAlertTime(Workflow_Instance__c inst) {
-    if (inst.Workflow_Logs__r != null && !inst.Workflow_Logs__r.isEmpty()) {
-      return inst.Workflow_Logs__r[0].CreatedDate;
+    List<Workflow_Log__c> rows = new List<Workflow_Log__c>();
+    for (StallHit hit : hits) {
+      hit.claim = buildClaim(hit);
+      rows.add(hit.claim);
     }
-    return null;
-  }
-
-  /**
-   * @description Builds the email, event and log marker for a confirmed stall and appends
-   * them to the scan accumulator.
-   * @param hit The confirmed stall to build alert artefacts for.
-   * @param scan The mutable scan accumulator to append alert artefacts to.
-   */
-  private static void appendStallAlert(StallHit hit, StallScan scan) {
-    Workflow_Instance__c inst = hit.instance;
-    Workflow_Alert_Config__mdt config = hit.config;
-    String message =
-      'Workflow stall detected (idle for ' +
-      hit.idleMinutes +
-      ' minutes)';
-
-    // Build alert email if recipients configured
-    if (String.isNotBlank(config.Email_Recipients__c)) {
-      WorkflowAlertManager.StallAlertRequest request = new WorkflowAlertManager.StallAlertRequest();
-      request.instance = inst;
-      request.config = config;
-      request.idleMinutes = hit.idleMinutes.intValue();
-      request.thresholdMinutes = hit.threshold;
-      Messaging.SingleEmailMessage mail = WorkflowAlertEmailBuilder.buildStallEmail(
-        request
-      );
-      if (mail != null) {
-        scan.emails.add(mail);
+    List<Database.SaveResult> results = Database.insert(
+      rows,
+      false,
+      AccessLevel.SYSTEM_MODE
+    );
+    List<StallHit> claimed = new List<StallHit>();
+    String failure = null;
+    for (Integer i = 0; i < results.size(); i++) {
+      if (results[i].isSuccess()) {
+        claimed.add(hits[i]);
+      } else if (failure == null && !isDuplicate(results[i])) {
+        failure = results[i].getErrors()[0].getMessage();
       }
     }
-
-    // Build event if enabled
-    if (config.Publish_Alert_Event__c) {
-      WorkflowAlertManager.AlertEventRequest eventRequest = new WorkflowAlertManager.AlertEventRequest();
-      eventRequest.instance = inst;
-      eventRequest.config = config;
-      eventRequest.errorMsg = message;
-      eventRequest.alertReason = 'stall';
-      scan.events.add(WorkflowAlertManager.buildAlertEvent(eventRequest));
+    if (failure != null) {
+      // A duplicate key is a lost race. Log only other errors.
+      WorkflowLog.error(LOG_SOURCE, 'Stall claim insert failed: ' + failure);
     }
+    return claimed;
+  }
 
-    // Build log marker
-    scan.logs.add(
-      new Workflow_Log__c(
-        Workflow_Instance__c = inst.Id,
-        Workflow_Name__c = inst.Workflow_Name__c,
-        Correlation_Key__c = inst.Correlation_Key__c,
-        Log_Type__c = 'WorkflowStallAlert',
-        Level__c = 'Warn',
-        Message__c = message
-      )
+  private static Boolean isDuplicate(Database.SaveResult result) {
+    for (Database.Error err : result.getErrors()) {
+      if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static Workflow_Log__c buildClaim(StallHit hit) {
+    Workflow_Instance__c inst = hit.instance;
+    return new Workflow_Log__c(
+      Workflow_Instance__c = inst.Id,
+      Workflow_Name__c = inst.Workflow_Name__c,
+      Correlation_Key__c = inst.Correlation_Key__c,
+      Log_Type__c = LOG_TYPE,
+      Level__c = 'Warn',
+      Message__c = message(hit),
+      Fire_Key__c = claimKey(inst.Id, hit.clock),
+      Fire_Time__c = hit.clock
     );
   }
 
-  /**
-   * @description Sends gathered stall emails, publishes events and inserts the log markers.
-   * @param scan The scan accumulator holding the gathered alert artefacts.
-   */
-  private static void dispatchStallAlerts(StallScan scan) {
-    if (!scan.emails.isEmpty()) {
-      try {
-        if (!Test.isRunningTest()) {
-          Messaging.sendEmail(scan.emails, false);
-        }
-      } catch (Exception ex) {
-        WorkflowLog.error(
-          'StallAlert',
-          'Bulk stall email dispatch failed: ' + ex.getMessage()
-        );
+  private static String message(StallHit hit) {
+    String step = String.isBlank(hit.instance.Current_Step__c)
+      ? 'none'
+      : hit.instance.Current_Step__c;
+    return 'Workflow stall detected (idle for ' +
+      hit.idleMinutes +
+      ' minutes, status ' +
+      hit.instance.Status__c +
+      ', current step ' +
+      step +
+      ')';
+  }
+
+  // Sends one email call for all hits and one event publish.
+  private static void dispatch(List<StallHit> hits) {
+    List<StallHit> mailHits = new List<StallHit>();
+    List<Messaging.SingleEmailMessage> mails = new List<Messaging.SingleEmailMessage>();
+    List<StallHit> eventHits = new List<StallHit>();
+    List<Workflow_Alert__e> events = new List<Workflow_Alert__e>();
+    for (StallHit hit : hits) {
+      if (hit.mail != null) {
+        mailHits.add(hit);
+        mails.add(hit.mail);
       }
-      WorkflowAlertManager.sentEmailsCount += scan.emails.size();
+      if (hit.config.Publish_Alert_Event__c == true) {
+        eventHits.add(hit);
+        events.add(buildEvent(hit));
+      }
     }
+    markSent(mailHits, WorkflowAlertEmailBuilder.sendEmails(mails));
+    markSent(eventHits, WorkflowAlertManager.publishEachEvent(events));
+  }
 
-    // Publish all gathered event alerts in bulk
-    WorkflowAlertManager.publishEvents(scan.events);
+  private static Messaging.SingleEmailMessage buildEmail(StallHit hit) {
+    WorkflowAlertManager.StallAlertRequest request = new WorkflowAlertManager.StallAlertRequest();
+    request.instance = hit.instance;
+    request.config = hit.config;
+    request.idleMinutes = hit.idleMinutes;
+    request.thresholdMinutes = hit.config.Stall_Threshold_Minutes__c.intValue();
+    return WorkflowAlertEmailBuilder.buildStallEmail(request);
+  }
 
-    if (!scan.logs.isEmpty()) {
-      insert as system scan.logs;
+  private static Workflow_Alert__e buildEvent(StallHit hit) {
+    WorkflowAlertManager.AlertEventRequest request = new WorkflowAlertManager.AlertEventRequest();
+    request.instance = hit.instance;
+    request.config = hit.config;
+    request.errorMsg = message(hit);
+    request.alertReason = 'stall';
+    return WorkflowAlertManager.buildAlertEvent(request);
+  }
+
+  // A true result marks the hit sent.
+  private static void markSent(List<StallHit> hits, List<Boolean> results) {
+    for (Integer i = 0; i < hits.size(); i++) {
+      if (i < results.size() && results[i]) {
+        hits[i].sent = true;
+      }
     }
+  }
+
+  // Deletes the claim of each hit that has a channel but did not send. A hit
+  // with no channel keeps its row as the only record of the stall. Returns
+  // the count of kept claims.
+  private static Integer release(List<StallHit> hits) {
+    List<Workflow_Log__c> unsent = new List<Workflow_Log__c>();
+    Integer alerted = 0;
+    for (StallHit hit : hits) {
+      if (hit.hasChannel && !hit.sent) {
+        unsent.add(hit.claim);
+      } else {
+        alerted++;
+      }
+    }
+    if (!unsent.isEmpty()) {
+      Database.delete(unsent, false, AccessLevel.SYSTEM_MODE);
+    }
+    return alerted;
+  }
+
+  // Checks the org daily email limit before the claim. Without capacity, the
+  // sweep claims nothing, so no claim is inserted and deleted each sweep.
+  private static Boolean reserveEmailCapacity(List<StallHit> hits) {
+    Integer addresses = 0;
+    for (StallHit hit : hits) {
+      if (hit.mail != null) {
+        addresses += hit.mail.getToAddresses().size();
+      }
+    }
+    if (addresses == 0) {
+      return true;
+    }
+    if (forceEmailCapacityExhausted) {
+      return false;
+    }
+    try {
+      Messaging.reserveSingleEmailCapacity(addresses);
+      return true;
+    } catch (Exception ex) {
+      WorkflowLog.error(LOG_SOURCE, 'No email capacity: ' + ex.getMessage());
+      return false;
+    }
+  }
+
+  // Keeps WatchdogLiveness.DML_RESERVE statements and queries free, and one
+  // email call free.
+  private static Boolean hasBudget() {
+    Integer dml = DML_NEEDED + WatchdogLiveness.DML_RESERVE;
+    Integer soql = SOQL_NEEDED + WatchdogLiveness.DML_RESERVE;
+    return !forceBudgetExhausted &&
+      Limits.getDmlStatements() + dml <= Limits.getLimitDmlStatements() &&
+      Limits.getDmlRows() + ROWS_PER_ALERT * maxAlertsPerSweep + dml <=
+      Limits.getLimitDmlRows() &&
+      Limits.getQueries() + soql <= Limits.getLimitQueries() &&
+      Limits.getQueryRows() + QUERY_ROWS_PER_CANDIDATE * MAX_CANDIDATES +
+      QUERY_ROW_RESERVE <= Limits.getLimitQueryRows() &&
+      Limits.getEmailInvocations() + 1 < Limits.getLimitEmailInvocations();
   }
 }

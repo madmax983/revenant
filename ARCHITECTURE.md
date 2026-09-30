@@ -128,7 +128,8 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
   `WorkflowDeadlineSweep`
 - `WorkflowBatchAwaitSweep` (section 1c: wakes an instance whose awaited
   batch job ended), `WorkflowBatchJobs` (issue #138)
-- `WorkflowStallDetectionService`, `WorkflowStallDetector`,
+- `WorkflowStallDetectionService`, `WorkflowStallDetector` (one alert per
+  instance stall, claim key `Stall:<id>:<clock>`; issue #139),
   `WorkflowStallConfigResolver`
 - `WorkflowAlertManager`, `WorkflowAlertEmailBuilder`,
   `WorkflowFailureAlertEvaluator`

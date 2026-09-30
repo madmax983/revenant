@@ -135,7 +135,7 @@ public inherited sharing class WorkflowHeartbeatService {
 
     // 7. Run proactive stall detection and alerting hook
     try {
-      WorkflowAlertManager.detectAndAlertStalls();
+      WorkflowAlertManager.detectAndAlertStalls(now);
     } catch (Exception ignored) {
       // Best-effort stall detection; a failure here must not abort the watchdog heartbeat.
     }
