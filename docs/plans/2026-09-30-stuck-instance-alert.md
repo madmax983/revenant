@@ -42,10 +42,11 @@ longer than a threshold. The operator sets the threshold in Setup.
 | B8  | Use `Terminal_At__c` as the marker.                                       | No. The acceptance criteria forbid it.                               |
 | B9  | Anti-join on steps newer than the smallest threshold.                     | Yes. The query returns only idle instances. 1 SOQL.                  |
 | B10 | Sort candidates by `LastModifiedDate DESC`.                               | Yes. A new stall comes before an old stall that has an alert.        |
-| B11 | Cap alerts per sweep (100).                                               | Yes. The next sweep sends the rest.                                  |
+| B11 | Cap alerts per sweep (25).                                                | Yes. The next sweep sends the rest.                                  |
 | B12 | Delete the claim when no channel sends.                                   | Yes. The next sweep tries again.                                     |
 | B13 | Send one digest email for each recipient list.                            | No. The acceptance criteria ask for one email per instance.          |
-| B14 | Include `Held`, `Paused`, `DefinitionChanged`, `CompensationFailed`.      | No. An operator parked these, or a failure alert covers them.        |
+| B14 | Include `Held`, `Paused`, `CompensationFailed`.                           | No. An operator parked these, or a failure alert covers them.        |
+| B16 | Include `DefinitionChanged`.                                              | Yes. The engine parks it and sends no alert.                         |
 | B15 | Add Slack or webhook channels.                                            | No. Out of scope. `Workflow_Alert__e` already exists.                |
 
 ## Reverse Brainstorming (how to make it fail)
@@ -88,8 +89,8 @@ longer than a threshold. The operator sets the threshold in Setup.
 
 Terms:
 
-- Active status = `Pending`, `Running`, `Suspended`, `Compensating` or
-  `Cancelling`.
+- Active status = `Pending`, `Running`, `Suspended`, `Compensating`,
+  `Cancelling` or `DefinitionChanged`.
 - Clock = the later of the newest step `CreatedDate` (or the instance
   `CreatedDate` when no step exists) and a past `Sleep_Until__c`.
 - Config = the record for the workflow `DeveloperName`, else `Default`.
@@ -124,8 +125,8 @@ Invariants:
 3. A definition record with `Enable_Alerts__c = false` blocks `Default`.
 4. A definition record with a blank threshold blocks `Default`.
 5. A blank threshold in all records sends nothing and writes nothing.
-6. A terminal instance sends nothing. `Terminal_At__c` stays blank.
-7. The detector does not change step rows.
+6. A terminal instance sends nothing.
+7. The detector does not change step rows or `Terminal_At__c`.
 8. The claim row has the key. A second sweep sends nothing.
 9. A claim that another sweep holds blocks the alert.
 10. A failed email deletes the claim. The next sweep sends.
@@ -133,3 +134,15 @@ Invariants:
 12. SOQL is the same for 1 and 20 stalled instances.
 13. The cap sends the rest in the next sweep.
 14. An instance with a recent step sends nothing.
+
+Tests added after the agent review:
+
+15. Active statuses alert. `Held`, `Paused` and `CompensationFailed` do not.
+16. An engine workflow sends nothing.
+17. A failed event with no email releases the claim.
+18. A failed email with a sent event keeps the claim.
+19. No daily email capacity claims nothing.
+20. The email goes to each failure-alert recipient.
+21. A failure alert still sends after a stall alert.
+22. A 40-character `DeveloperName` matches.
+23. `WorkflowEngine.mockNow` moves the clock.

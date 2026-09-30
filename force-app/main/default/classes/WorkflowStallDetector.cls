@@ -24,19 +24,22 @@ public inherited sharing class WorkflowStallDetector {
   private static final Integer MAX_CANDIDATES = 1000;
   // Rows for each candidate: the instance, its newest step and its newest claim.
   private static final Integer QUERY_ROWS_PER_CANDIDATE = 3;
-  // Claim insert, event publish and claim release.
-  private static final Integer DML_NEEDED = 3;
+  // Claim insert, event publish, claim release and one error log.
+  private static final Integer DML_NEEDED = 4;
   // Rows: claim, event and release for each alert.
   private static final Integer ROWS_PER_ALERT = 3;
   // Candidate query and pause cache load.
   private static final Integer SOQL_NEEDED = 2;
+  // Query rows kept free for the watchdog step commit.
+  private static final Integer QUERY_ROW_RESERVE = 5000;
 
   private static final List<String> ACTIVE_STATUSES = new List<String>{
     'Pending',
     'Running',
     'Suspended',
     'Compensating',
-    'Cancelling'
+    'Cancelling',
+    'DefinitionChanged'
   };
 
   private static final List<String> ENGINE_WORKFLOWS = new List<String>{
@@ -47,10 +50,13 @@ public inherited sharing class WorkflowStallDetector {
 
   /** @description Maximum alerts for one sweep. The next sweep sends the rest. */
   @TestVisible
-  private static Integer maxAlertsPerSweep = 100;
+  private static Integer maxAlertsPerSweep = 25;
 
   @TestVisible
   private static Boolean forceBudgetExhausted = false;
+
+  @TestVisible
+  private static Boolean forceEmailCapacityExhausted = false;
 
   // One stall that is due for an alert.
   private class StallHit {
@@ -59,35 +65,51 @@ public inherited sharing class WorkflowStallDetector {
     public Datetime clock;
     public Integer idleMinutes;
     public Workflow_Log__c claim;
+    public Messaging.SingleEmailMessage mail;
     public Boolean hasChannel = false;
     public Boolean sent = false;
   }
 
   /**
    * @description Finds stalled instances and sends one alert for each new
-   * stall. Does not throw.
+   * stall. Uses WorkflowEngine.mockNow when it is set. Does not throw.
    * @return The number of stalls that got an alert.
    */
   public static Integer detectAndAlertStalls() {
+    return detectAndAlertStalls(
+      WorkflowEngine.mockNow != null ? WorkflowEngine.mockNow : System.now()
+    );
+  }
+
+  /**
+   * @description Finds stalled instances at the given time and sends one
+   * alert for each new stall. Does not throw.
+   * @param now The evaluation time (the heartbeat time).
+   * @return The number of stalls that got an alert.
+   */
+  public static Integer detectAndAlertStalls(Datetime now) {
     Integer alerted = 0;
     try {
       List<Workflow_Alert_Config__mdt> configs = WorkflowStallConfigResolver.getAllConfigs();
       Integer minThreshold = WorkflowStallConfigResolver.minStallThreshold(
         configs
       );
-      if (minThreshold == null || !hasBudget()) {
+      if (now == null || minThreshold == null || !hasBudget()) {
         return 0;
       }
-      List<StallHit> hits = claim(
-        findStalls(System.now(), configs, minThreshold)
-      );
+      List<StallHit> hits = findStalls(now, configs, minThreshold);
+      if (hits.isEmpty() || !reserveEmailCapacity(hits)) {
+        return 0;
+      }
+      hits = claim(hits);
       if (hits.isEmpty()) {
         return 0;
       }
       try {
         dispatch(hits);
       } finally {
-        // Release runs also when dispatch throws, so no claim stays unsent.
+        // Release runs also when dispatch throws. Each hit knows its channels
+        // before dispatch, so an unsent claim with a channel is deleted.
         alerted = release(hits);
       }
       return alerted;
@@ -213,6 +235,8 @@ public inherited sharing class WorkflowStallDetector {
     hit.config = config;
     hit.clock = clock;
     hit.idleMinutes = idleMinutes.intValue();
+    hit.mail = buildEmail(hit);
+    hit.hasChannel = hit.mail != null || config.Publish_Alert_Event__c == true;
     return hit;
   }
 
@@ -253,12 +277,28 @@ public inherited sharing class WorkflowStallDetector {
       AccessLevel.SYSTEM_MODE
     );
     List<StallHit> claimed = new List<StallHit>();
+    String failure = null;
     for (Integer i = 0; i < results.size(); i++) {
       if (results[i].isSuccess()) {
         claimed.add(hits[i]);
+      } else if (failure == null && !isDuplicate(results[i])) {
+        failure = results[i].getErrors()[0].getMessage();
       }
     }
+    if (failure != null) {
+      // A duplicate key is a lost race. Log only other errors.
+      WorkflowLog.error(LOG_SOURCE, 'Stall claim insert failed: ' + failure);
+    }
     return claimed;
+  }
+
+  private static Boolean isDuplicate(Database.SaveResult result) {
+    for (Database.Error err : result.getErrors()) {
+      if (err.getStatusCode() == StatusCode.DUPLICATE_VALUE) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static Workflow_Log__c buildClaim(StallHit hit) {
@@ -295,10 +335,9 @@ public inherited sharing class WorkflowStallDetector {
     List<StallHit> eventHits = new List<StallHit>();
     List<Workflow_Alert__e> events = new List<Workflow_Alert__e>();
     for (StallHit hit : hits) {
-      Messaging.SingleEmailMessage mail = buildEmail(hit);
-      if (mail != null) {
+      if (hit.mail != null) {
         mailHits.add(hit);
-        mails.add(mail);
+        mails.add(hit.mail);
       }
       if (hit.config.Publish_Alert_Event__c == true) {
         eventHits.add(hit);
@@ -327,10 +366,9 @@ public inherited sharing class WorkflowStallDetector {
     return WorkflowAlertManager.buildAlertEvent(request);
   }
 
-  // Each hit in the list has a channel. A true result marks it sent.
+  // A true result marks the hit sent.
   private static void markSent(List<StallHit> hits, List<Boolean> results) {
     for (Integer i = 0; i < hits.size(); i++) {
-      hits[i].hasChannel = true;
       if (i < results.size() && results[i]) {
         hits[i].sent = true;
       }
@@ -338,8 +376,8 @@ public inherited sharing class WorkflowStallDetector {
   }
 
   // Deletes the claim of each hit that has a channel but did not send. A hit
-  // with no channel keeps its row: the row is the alert. Returns the count
-  // of kept claims.
+  // with no channel keeps its row as the only record of the stall. Returns
+  // the count of kept claims.
   private static Integer release(List<StallHit> hits) {
     List<Workflow_Log__c> unsent = new List<Workflow_Log__c>();
     Integer alerted = 0;
@@ -356,6 +394,30 @@ public inherited sharing class WorkflowStallDetector {
     return alerted;
   }
 
+  // Checks the org daily email limit before the claim. Without capacity, the
+  // sweep claims nothing, so no claim is inserted and deleted each sweep.
+  private static Boolean reserveEmailCapacity(List<StallHit> hits) {
+    Integer addresses = 0;
+    for (StallHit hit : hits) {
+      if (hit.mail != null) {
+        addresses += hit.mail.getToAddresses().size();
+      }
+    }
+    if (addresses == 0) {
+      return true;
+    }
+    if (forceEmailCapacityExhausted) {
+      return false;
+    }
+    try {
+      Messaging.reserveSingleEmailCapacity(addresses);
+      return true;
+    } catch (Exception ex) {
+      WorkflowLog.error(LOG_SOURCE, 'No email capacity: ' + ex.getMessage());
+      return false;
+    }
+  }
+
   // Keeps WatchdogLiveness.DML_RESERVE statements and queries free, and one
   // email call free.
   private static Boolean hasBudget() {
@@ -366,8 +428,8 @@ public inherited sharing class WorkflowStallDetector {
       Limits.getDmlRows() + ROWS_PER_ALERT * maxAlertsPerSweep + dml <=
       Limits.getLimitDmlRows() &&
       Limits.getQueries() + soql <= Limits.getLimitQueries() &&
-      Limits.getQueryRows() + QUERY_ROWS_PER_CANDIDATE * MAX_CANDIDATES <=
-      Limits.getLimitQueryRows() &&
+      Limits.getQueryRows() + QUERY_ROWS_PER_CANDIDATE * MAX_CANDIDATES +
+      QUERY_ROW_RESERVE <= Limits.getLimitQueryRows() &&
       Limits.getEmailInvocations() + 1 < Limits.getLimitEmailInvocations();
   }
 }

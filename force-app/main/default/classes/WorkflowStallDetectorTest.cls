@@ -413,4 +413,158 @@ private class WorkflowStallDetectorTest {
 
     Assert.areEqual(1, stallRows(inst.Id).size(), 'One alert per stall.');
   }
+  @IsTest
+  static void activeStatusesAlertAndParkedStatusesDoNot() {
+    useConfig(10);
+    List<Workflow_Instance__c> active = new List<Workflow_Instance__c>();
+    for (
+      String status : new List<String>{
+        'Pending',
+        'Compensating',
+        'Cancelling',
+        'DefinitionChanged'
+      }
+    ) {
+      active.add(stalled(status, 15));
+    }
+    List<Workflow_Instance__c> parked = new List<Workflow_Instance__c>();
+    for (
+      String status : new List<String>{ 'Held', 'Paused', 'CompensationFailed' }
+    ) {
+      parked.add(stalled(status, 15));
+    }
+
+    Assert.areEqual(4, runSweep());
+    for (Workflow_Instance__c inst : active) {
+      Assert.areEqual(1, stallRows(inst.Id).size(), 'Active: ' + inst.Id);
+    }
+    for (Workflow_Instance__c inst : parked) {
+      Assert.areEqual(0, stallRows(inst.Id).size(), 'Parked: ' + inst.Id);
+    }
+  }
+
+  @IsTest
+  static void engineWorkflowSendsNothing() {
+    WorkflowAlertManager.mockConfigs.put(
+      'Default',
+      config('Default', true, 10, 'ops@test.com', false)
+    );
+    Workflow_Instance__c inst = stalled('Running', 15);
+    inst.Workflow_Name__c = 'CleanupWorkflow';
+    update inst;
+
+    Assert.areEqual(0, runSweep(), 'The engine workflow is excluded.');
+  }
+
+  @IsTest
+  static void failedEventWithNoEmailReleasesClaim() {
+    WorkflowAlertManager.mockConfigs.put(
+      FLOW_KEY,
+      config(FLOW_KEY, true, 10, '', true)
+    );
+    Workflow_Instance__c inst = stalled('Running', 15);
+    WorkflowAlertManager.forceDmlBudgetExhausted = true;
+
+    Assert.areEqual(0, runSweep());
+    Assert.areEqual(0, stallRows(inst.Id).size(), 'Claim is released.');
+  }
+
+  @IsTest
+  static void failedEmailWithSentEventKeepsClaim() {
+    WorkflowAlertManager.mockConfigs.put(
+      FLOW_KEY,
+      config(FLOW_KEY, true, 10, 'ops@test.com', true)
+    );
+    Workflow_Instance__c inst = stalled('Running', 15);
+    WorkflowAlertManager.throwTestException = true;
+    WorkflowAlertManager.publishedEvents.clear();
+
+    Assert.areEqual(1, runSweep(), 'The event sent the alert.');
+    Assert.areEqual(1, WorkflowAlertManager.publishedEvents.size());
+    Assert.areEqual(1, stallRows(inst.Id).size());
+  }
+
+  @IsTest
+  static void noEmailCapacityClaimsNothing() {
+    useConfig(10);
+    Workflow_Instance__c inst = stalled('Running', 15);
+    WorkflowStallDetector.forceEmailCapacityExhausted = true;
+
+    Assert.areEqual(0, runSweep());
+    Assert.areEqual(0, stallRows(inst.Id).size(), 'No claim churn.');
+  }
+
+  @IsTest
+  static void emailGoesToAllFailureAlertRecipients() {
+    Workflow_Alert_Config__mdt cfg = config(
+      FLOW_KEY,
+      true,
+      10,
+      'a@test.com; b@test.com',
+      false
+    );
+    WorkflowAlertManager.StallAlertRequest request = new WorkflowAlertManager.StallAlertRequest();
+    request.instance = new Workflow_Instance__c(
+      Workflow_Name__c = FLOW,
+      Status__c = 'Running'
+    );
+    request.config = cfg;
+    request.idleMinutes = 15;
+    request.thresholdMinutes = 10;
+
+    Messaging.SingleEmailMessage mail = WorkflowAlertManager.buildStallEmail(
+      request
+    );
+
+    Assert.areEqual(
+      new List<String>{ 'a@test.com', 'b@test.com' },
+      mail.getToAddresses()
+    );
+    Assert.isTrue(
+      WorkflowAlertManager.lastHtmlBody.contains('Current Step:</td><td>N/A'),
+      'A missing step shows N/A.'
+    );
+  }
+
+  @IsTest
+  static void failureAlertStillSendsAfterStallAlert() {
+    useConfig(10);
+    Workflow_Instance__c inst = stalled('Running', 15);
+    Assert.areEqual(1, runSweep());
+
+    WorkflowAlertManager.sentEmailsCount = 0;
+    inst.Status__c = 'Failed';
+    WorkflowAlertManager.sendAlert(inst, 'Boom');
+
+    Assert.areEqual(1, WorkflowAlertManager.sentEmailsCount, 'Independent.');
+  }
+
+  @IsTest
+  static void truncatedDeveloperNameMatches() {
+    String longName = 'StallTest.' + 'A'.repeat(40);
+    String key = longName.replace('.', '_').substring(0, 40);
+    WorkflowAlertManager.mockConfigs.put(
+      'Default',
+      config('Default', true, null, 'ops@test.com', false)
+    );
+    WorkflowAlertManager.mockConfigs.put(
+      key,
+      config(key, true, 10, 'ops@test.com', false)
+    );
+    Workflow_Instance__c inst = stalled('Running', 15);
+    inst.Workflow_Name__c = longName;
+    update inst;
+
+    Assert.areEqual(1, runSweep(), 'The 40-character key matches.');
+  }
+
+  @IsTest
+  static void mockNowMovesTheClock() {
+    useConfig(10);
+    Workflow_Instance__c inst = stalled('Running', 0);
+    WorkflowEngine.mockNow = Datetime.now().addMinutes(30);
+
+    Assert.areEqual(1, runSweep(), 'The sweep uses the engine clock.');
+    Assert.areEqual(1, stallRows(inst.Id).size());
+  }
 }

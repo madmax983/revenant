@@ -812,7 +812,7 @@ For modern ops routing (e.g., paging Slack, PagerDuty, Microsoft Teams, or mobil
 
 #### Instance Stall Alert
 
-When a non-terminal instance makes no progress for `Stall_Threshold_Minutes__c`, the engine sends one `'Stall'` alert. Progress is the newest step row. Signal, child and approval waits count. A future sleep does not. The alert shows the current step and the idle time. A new step resets the clock. The check runs in the watchdog heartbeat. See [docs/stall-alerts.md](docs/stall-alerts.md).
+When a non-terminal instance makes no progress for `Stall_Threshold_Minutes__c`, the engine sends one `'Stall'` alert. Progress is the newest step row. The detector includes signal, child and approval waits. It skips an instance with a future sleep. The alert shows the current step and the idle time. A new step resets the clock. The check runs in the watchdog heartbeat. See [docs/stall-alerts.md](docs/stall-alerts.md).
 
 #### Watchdog Stall Alert
 

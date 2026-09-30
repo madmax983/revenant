@@ -16,8 +16,9 @@ no unique key, and its email call had no budget guard.
 ## Decision
 
 1. Keep `Stall_Threshold_Minutes__c` as the threshold. Blank disables.
-2. Include suspended waits. Skip only a suspended instance with a future
-   `Sleep_Until__c`.
+2. Include suspended waits and `DefinitionChanged`. Skip only a suspended
+   instance with a future `Sleep_Until__c`. Skip `Held` and `Paused`
+   (operator parks) and `CompensationFailed` (a failure alert covers it).
 3. Clock = newest step `CreatedDate` (else instance `CreatedDate`). A later,
    past `Sleep_Until__c` moves the clock to the wake time.
 4. Resolve config with the failure-alert rule. A matched record wins, also
@@ -26,16 +27,20 @@ no unique key, and its email call had no budget guard.
    `Stall:<instanceId>:<clockMillis>`. Delete the claim when no channel
    sends.
 6. One query with an anti-join on recent steps, sorted by
-   `LastModifiedDate DESC`, `LIMIT 1000`. At most 100 alerts per sweep.
+   `LastModifiedDate DESC`, `LIMIT 1000`. At most 25 alerts per sweep.
 7. One email call per sweep with per-email results. Budget guard as in
-   ADR 0008.
+   ADR 0008, plus 5000 free query rows. Check the daily email limit before
+   the claim.
 
 ## Consequences
 
 - No new schema and no new scheduled job.
 - Orgs with a threshold now get alerts for long approval and signal waits.
   `MIGRATION.md` tells them to set a per-definition record.
-- The detector does 1 query when a threshold is set, and 0 when none is.
+- The detector does 1 query when a threshold is set (2 when the pause
+  cache is not loaded), and 0 when no threshold is set.
+- More than 1000 idle instances below their own threshold can delay the
+  check of other instances. The query uses the smallest threshold.
 - It writes only `Workflow_Log__c` rows.
 
 ## Alternatives

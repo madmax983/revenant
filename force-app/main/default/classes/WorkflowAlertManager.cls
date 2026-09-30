@@ -260,6 +260,16 @@ public inherited sharing class WorkflowAlertManager {
   }
 
   /**
+   * @description Sends one alert for each new instance stall at the given
+   * time (issue #139). Calls WorkflowStallDetector.
+   * @param now The evaluation time (the heartbeat time).
+   * @return The number of stalls that got an alert.
+   */
+  public static Integer detectAndAlertStalls(Datetime now) {
+    return WorkflowStallDetector.detectAndAlertStalls(now);
+  }
+
+  /**
    * @description Sends one alert when the watchdog heartbeat is stale (issue
    * #113). Calls WatchdogStallDetector.
    * @return True when this call sent the alert.

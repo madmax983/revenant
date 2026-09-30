@@ -347,8 +347,9 @@ public inherited sharing class WorkflowAlertEmailBuilder {
     return esc;
   }
 
-  // The failure path can give an instance with no Current_Step__c in the
-  // query. A read of that field throws, so check it first.
+  // A caller of WorkflowAlertManager.buildStallEmail can give an instance
+  // with no Current_Step__c in its query. A read of that field throws, so
+  // check it first.
   private static String escapedStep(Workflow_Instance__c instance) {
     Object step = instance.getPopulatedFieldsAsMap().get('Current_Step__c');
     return step == null || String.isBlank((String) step)

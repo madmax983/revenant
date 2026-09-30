@@ -22,26 +22,27 @@ flowchart LR
    does not touch the Queueable chain.
 2. **Progress clock.** The clock is the `CreatedDate` of the newest
    `Workflow_Step_Execution__c` row. If there is no step, the clock is the
-   instance `CreatedDate`. If `Sleep_Until__c` is in the past and after that
-   time, the clock is `Sleep_Until__c`.
+   instance `CreatedDate`. If `Sleep_Until__c` is in the past and is later
+   than the clock, the clock is `Sleep_Until__c`.
 3. **Stall.** All of these are true:
-   - `Status__c` is `Pending`, `Running`, `Suspended`, `Compensating` or
-     `Cancelling`.
+   - `Status__c` is `Pending`, `Running`, `Suspended`, `Compensating`,
+     `Cancelling` or `DefinitionChanged`.
    - A `Suspended` instance has no future `Sleep_Until__c`. A future value
      is an engine timer, not a stall.
    - The definition is not paused. It is not an engine workflow.
    - now − clock ≥ `Stall_Threshold_Minutes__c`.
 4. **Claim.** The detector inserts one `Workflow_Log__c` row
    (`Log_Type__c = WorkflowStallAlert`) with the unique key
-   `Stall:<instanceId>:<clockMillis>`. Only the winner of the insert sends.
+   `Stall:<instanceId>:<clockMillis>`. If the insert fails because another
+   sweep has the key, this sweep does not send.
    A new step gives a new clock, so a new stall can alert again.
 5. **Send.** One email for each stall to `Email_Recipients__c`. It shows
    the definition, instance, correlation key, status, current step and idle
    time. If `Publish_Alert_Event__c` is set, the detector also publishes a
    `Workflow_Alert__e` with `Alert_Reason__c = Stall`.
 6. **Release.** If a channel is set but nothing sends, the detector deletes
-   the claim. The next sweep tries again. With no channel, the row stays. The
-   row is the alert.
+   the claim. The next sweep tries again. With no channel, the row stays as
+   the only record of the stall.
 
 ## Configure
 
@@ -61,18 +62,25 @@ non-alphanumeric character changed to `_`. The match ignores case.
 
 - One query reads at most 1000 idle instances. An anti-join drops each
   instance with a step newer than the smallest threshold. The most recently
-  changed instances come first.
-- One sweep sends at most 100 alerts. The next sweep sends the rest.
-- One email call for each sweep. The detector keeps one email call and
-  `WatchdogLiveness.DML_RESERVE` DML statements and queries free. With no
-  budget, it sends nothing and the next sweep tries again.
+  changed instances come first. The detector does 1 query, or 2 when the
+  pause cache is not loaded.
+- The query uses the smallest threshold for all definitions. More than 1000
+  idle instances that are below their own threshold, or that already have an
+  alert, can delay the check of other instances.
+- One sweep sends at most 25 alerts. The next sweep sends the rest.
+- One email call for each sweep. The detector keeps one email call,
+  `WatchdogLiveness.DML_RESERVE` DML statements and queries, and 5000 query
+  rows free. With no budget, it sends nothing and the next sweep tries again.
+- Before the claim, the detector checks the daily email limit
+  (`Messaging.reserveSingleEmailCapacity`). With no capacity, it claims
+  nothing and logs one error.
 - The detector writes only `Workflow_Log__c` rows. It never writes step
   rows or `Terminal_At__c`.
 
 ## Not Included
 
-- `Held`, `Paused`, `DefinitionChanged` and `CompensationFailed`. An
-  operator parked these, or a failure alert covers them.
+- `Held` and `Paused`. An operator parked these.
+- `CompensationFailed`. A failure alert covers it.
 - A force fail or a cancel (issue #95).
 - Business hours (issue #118). The threshold is wall-clock minutes.
 - Slack or webhook channels. Use `Workflow_Alert__e`.
