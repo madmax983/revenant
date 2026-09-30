@@ -88,10 +88,11 @@ public class GlobalApiSubscriberTest {
      * COMPLETE with the payload.
      */
     public StepResult execute(StepContext ctx) {
-      if (ctx.shouldYield() || ctx.isCancellationRequested()) {
-        return StepResult.yield(ctx.stepStateJson);
-      }
-      if (ctx.isCancellationRequested(0)) {
+      if (
+        ctx.shouldYield() ||
+        ctx.isCancellationRequested() ||
+        ctx.isCancellationRequested(0)
+      ) {
         return StepResult.yield(ctx.stepStateJson);
       }
       StepContext.Signal decision = ctx.signals().getSignal(DECISION);

@@ -13,7 +13,7 @@ It enables unit-testing step behavior (input parsing, branching, idempotency, ou
 - **Auto-generated IDs**: Automatically generates valid faked Salesforce IDs for the workflow instance and signal records if they are not explicitly specified.
 - **Inbound Signal Seeding**: Seed inbound signals as `StepContext.Signal` objects without inserting `Workflow_Signal__c` database rows.
 - **Pre-seeded once() Captures**: Seed stable return values for the `captures().once()` capture-once API without running the producers. Seeded values are automatically JSON-normalized to replicate production deserialization boundaries.
-- **Cancel Requests**: `requestCancellation()` and `requestCancellationAfter(n)` set the result of `isCancellationRequested()` with no SOQL (issue #143).
+- **Cancel Requests**: `requestCancellation()` and `requestCancellationAfterChecks(n)` set the result of `isCancellationRequested()` with no SOQL (issue #143).
 - **Genuine StepContext**: Produces a real `StepContext` instance, ensuring that the accessor sub-objects — `captures().once()`, `signals().getSignal()`, `events().getPendingEmits()` — and `idempotencyKey` behave exactly as they do in production.
 
 ---
@@ -122,17 +122,18 @@ static void testStepIdempotency() {
 
 ## Testing Cooperative Cancellation
 
-`requestCancellationAfter(n)` makes the first `n` checks of `isCancellationRequested()` give `false`. Each later check gives `true`. `requestCancellation()` makes each check `true`. The built context reads on each check. It does not use the 1000 ms cache. See [cooperative-cancellation.md](cooperative-cancellation.md).
+`requestCancellationAfterChecks(n)` makes the first `n` checks of `isCancellationRequested()` give `false`. Each later check gives `true`. `requestCancellation()` makes each check `true`. The built context reads on each check. It does not keep a `false` answer. Do not use these to test `compensate()`: there, the engine always gives `false`. See [cooperative-cancellation.md](cooperative-cancellation.md).
 
 ```java
 @isTest
 static void testLoopStopsAtNextCheck() {
     StepContext ctx = new StepContextTestBuilder()
-        .requestCancellationAfter(1) // check 1: false, check 2: true
+        .requestCancellation() // check 1: true
         .build();
 
     StepResult result = new MyWorkflow.LoopStep().execute(ctx);
 
     System.assertEquals(StepResult.ActionType.YIELD, result.directive().action);
+    // Assert the work of one batch only, so a normal YIELD cannot pass the test.
 }
 ```

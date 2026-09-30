@@ -93,14 +93,26 @@ private class StepCancellationTest {
   }
 
   @IsTest
-  static void nullOrNegativeMaxAgeReadsEachCall() {
+  static void negativeMaxAgeReadsEachCall() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      CountingSource source = new CountingSource(false);
+      StepContext ctx = contextWith(source);
+
+      ctx.isCancellationRequested(-5);
+      ctx.isCancellationRequested(-5);
+      Assert.areEqual(2, source.reads, 'A negative age means 0');
+    }
+  }
+
+  @IsTest
+  static void nullMaxAgeUsesDefault() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       CountingSource source = new CountingSource(false);
       StepContext ctx = contextWith(source);
 
       ctx.isCancellationRequested(null);
-      ctx.isCancellationRequested(-5);
-      Assert.areEqual(2, source.reads, 'Null and negative mean 0');
+      ctx.isCancellationRequested(null);
+      Assert.areEqual(1, source.reads, 'Null means the default age');
     }
   }
 
@@ -147,6 +159,29 @@ private class StepCancellationTest {
       Assert.isFalse(ctx.isCancellationRequested(0));
       Assert.areEqual(0, source.reads, 'No read without SOQL headroom');
       Assert.isFalse(ctx.wasCancellationObserved());
+    }
+  }
+
+  @IsTest
+  static void exactReserveSkipsRead() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      CountingSource source = new CountingSource(true);
+      StepContext ctx = contextWith(source);
+      StepCancellation.soqlReserve =
+        Limits.getLimitQueries() - Limits.getQueries();
+
+      Assert.isFalse(ctx.isCancellationRequested(0));
+      Assert.areEqual(0, source.reads, 'The reserve stays free');
+    }
+  }
+
+  @IsTest
+  static void reserveIsTwentyOrAFifthOfTheLimit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Assert.areEqual(
+        Math.max(20, Limits.getLimitQueries() / 5),
+        StepCancellation.reserve()
+      );
     }
   }
 

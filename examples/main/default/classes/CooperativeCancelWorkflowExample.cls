@@ -1,13 +1,15 @@
 /**
  * @description Reference example for cooperative cancellation (issue #143). A
  * long loop tags Accounts in batches of CHECK_EVERY records. After each batch it
- * calls `ctx.isCancellationRequested()`. When an operator cancels the instance,
- * the loop stops at its next check. The engine drops the returned result, sets
- * the step row to `Cancelled` and rolls back the reserve step when the cancel
- * asked for it.
+ * calls `ctx.isCancellationRequested(0)`. When the instance has a cancel
+ * request, the loop stops at its next check. The engine drops the returned
+ * result and sets the step row to `Cancelled`. When the cancel asks for
+ * compensations, the engine runs `compensate()` of the reserve step.
  *
- * Work after a cancel is at most one batch. Tune CHECK_EVERY: a small value
- * stops sooner, a large value costs fewer SOQL queries.
+ * The work after the check that sees the request is 0. The work after the
+ * request commits is one batch at most. Tune CHECK_EVERY: a small value stops
+ * sooner, a large value uses fewer SOQL queries. The engine does not
+ * compensate the stopped step. Each batch that it tagged stays tagged.
  */
 public inherited sharing class CooperativeCancelWorkflowExample {
   /** Text that the loop writes to `Account.Description`. */
@@ -131,9 +133,10 @@ public inherited sharing class CooperativeCancelWorkflowExample {
           continue;
         }
         flush(batch, state);
-        // Check once for each batch, not for each record. After a cancel, the
-        // engine drops this YIELD and ends the step.
-        if (ctx.isCancellationRequested() || ctx.shouldYield()) {
+        // Check once for each batch, not for each record. The batch size
+        // already limits the SOQL cost, so read each time (age 0). After a
+        // cancel request, the engine drops this YIELD and ends the step.
+        if (ctx.isCancellationRequested(0) || ctx.shouldYield()) {
           return StepResult.yield(JSON.serialize(state));
         }
       }

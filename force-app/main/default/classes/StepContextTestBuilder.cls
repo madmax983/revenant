@@ -232,7 +232,7 @@ public inherited sharing class StepContextTestBuilder {
    * @return This builder, for chaining.
    */
   public StepContextTestBuilder requestCancellation() {
-    return requestCancellationAfter(0);
+    return requestCancellationAfterChecks(0);
   }
 
   /**
@@ -242,7 +242,7 @@ public inherited sharing class StepContextTestBuilder {
    * @param checks The number of checks that give false.
    * @return This builder, for chaining.
    */
-  public StepContextTestBuilder requestCancellationAfter(Integer checks) {
+  public StepContextTestBuilder requestCancellationAfterChecks(Integer checks) {
     this.exec.cancelAfterChecksVal = Math.max(0, checks ?? 0);
     return this;
   }

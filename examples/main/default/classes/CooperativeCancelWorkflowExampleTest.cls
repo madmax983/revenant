@@ -1,7 +1,8 @@
 /**
  * @description Tests for `CooperativeCancelWorkflowExample` (issue #143). A
- * test tagger cancels the instance during a batch, as an operator does while
- * the loop runs. The loop must stop at its next check.
+ * test tagger cancels the instance in the same transaction, during a batch. A
+ * real cancel from another transaction waits for the step row lock (ADR 0017).
+ * The loop must stop at its next check.
  */
 @IsTest
 private class CooperativeCancelWorkflowExampleTest {
@@ -185,7 +186,7 @@ private class CooperativeCancelWorkflowExampleTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       insertAccounts(20);
       StepContext ctx = new StepContextTestBuilder()
-        .requestCancellationAfter(1)
+        .requestCancellation()
         .build();
 
       StepResult result = new CooperativeCancelWorkflowExample.TagAccountsStep()
@@ -193,9 +194,27 @@ private class CooperativeCancelWorkflowExampleTest {
 
       Assert.areEqual(StepResult.ActionType.YIELD, result.directive().action);
       Assert.areEqual(
-        2 * CooperativeCancelWorkflowExample.CHECK_EVERY,
+        CooperativeCancelWorkflowExample.CHECK_EVERY,
         taggedCount(),
-        'Check 1 is false, check 2 is true'
+        'Check 1 is true: the loop stops after batch 1, not at RUN_LIMIT'
+      );
+    }
+  }
+
+  @IsTest
+  static void stepRunsFullBatchesWithoutCancel() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      insertAccounts(20);
+      StepContext ctx = new StepContextTestBuilder().build();
+
+      StepResult result = new CooperativeCancelWorkflowExample.TagAccountsStep()
+        .execute(ctx);
+
+      Assert.areEqual(StepResult.ActionType.YIELD, result.directive().action);
+      Assert.areEqual(
+        CooperativeCancelWorkflowExample.RUN_LIMIT,
+        taggedCount(),
+        'With no cancel, the run tags RUN_LIMIT records'
       );
     }
   }

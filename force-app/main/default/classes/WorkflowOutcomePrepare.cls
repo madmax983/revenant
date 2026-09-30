@@ -1,9 +1,10 @@
 /**
  * @description Prepares a freshly re-locked workflow instance for the outcome
- * dispatch. Guards against a stale completion (rolling back its claimed signals
- * and cancelling a still-running execution), ends a step that stopped for a
- * cancel (issue #143), persists reported progress and capture-once values, restores a blanked current step, and asserts the instance
- * is runnable before the outcome handler acts. Extracted from `WorkflowEngine`;
+ * dispatch. Guards against a stale completion: it rolls back the claimed
+ * signals and cancels a still-running execution. Ends a step that stopped for
+ * a cancel (issue #143). Persists reported progress and capture-once values,
+ * restores a blanked current step, and asserts the instance is runnable before
+ * the outcome handler acts. Extracted from `WorkflowEngine`;
  * {@link WorkflowOutcomePrepare#prepareStepOutcome} is invoked by the outcome
  * seam after the FOR UPDATE re-lock. All SOQL and DML run in system mode.
  */

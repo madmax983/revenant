@@ -375,7 +375,7 @@ global inherited sharing class StepContext {
   /**
    * Reads whether the instance of a step has a cancel request (issue #143).
    * The engine gives a source for `execute()` only. The context caches the
-   * answer. Implemented by `WorkflowCancelProbe`.
+   * answer. `WorkflowCancelProbe` implements it.
    */
   public interface CancellationSource {
     /**
@@ -673,8 +673,9 @@ global inherited sharing class StepContext {
     }
 
     /**
-     * @description Sets the age that the no-argument cancel check reuses a
-     * `false` answer. Null means StepCancellation.DEFAULT_MAX_AGE_MILLIS.
+     * @description Sets the milliseconds that the no-argument cancel check
+     * keeps a `false` answer. Null means
+     * StepCancellation.DEFAULT_MAX_AGE_MILLIS. A negative value means 0.
      * @param val The age in milliseconds.
      * @return This builder, for chaining.
      */
@@ -705,33 +706,36 @@ global inherited sharing class StepContext {
   }
 
   /**
-   * Tells if an operator cancelled this instance or one of its five nearest
-   * ancestors (status `Cancelled` or `Cancelling`). Issue #143.
+   * @description Tells if a cancel request exists for this instance or for one
+   * of its nearest ancestors (status `Cancelled` or `Cancelling`). Issue #143.
    *
-   * Apex cannot stop a running `execute()`. A long loop must check this flag
-   * and return. The engine then drops the returned result, sets the step row
-   * to `Cancelled` and does not write `Completed`. The rollback that the cancel
-   * asked for runs as usual. A step that does not check works as before.
+   * Apex cannot stop a running `execute()`. This check is advisory. After a
+   * `true` answer, return `StepResult.yield(...)`. The engine then drops the
+   * result and sets the step row to `Cancelled`. It does not write
+   * `Completed`. It does not compensate this step. A step that does not check
+   * works as before.
    *
-   * Cost: 0 DML and 1 SOQL at most. A `false` answer is reused for
-   * 1000 ms. A `true` answer is kept. No read occurs when fewer than 20 SOQL
-   * queries remain. Call it every N iterations, not for each record.
+   * Cost: 0 DML and 1 SOQL at most. The context keeps a `true` answer. It
+   * keeps a `false` answer for a short time. It does not read when few SOQL
+   * queries remain. Call it every N iterations, not for each record. See
+   * docs/cooperative-cancellation.md for the defaults and the row-lock limit.
    *
    * Always `false` in `compensate()`: a rollback must finish.
    *
-   * @return True when the step must stop and return.
+   * @return True when a cancel is requested. The step should return.
    */
   global Boolean isCancellationRequested() {
     return this.stepCancel.isRequested();
   }
 
   /**
-   * Same as `isCancellationRequested()`, with an age that you set. A `false`
-   * answer is reused for `maxAgeMillis`. Use 0 to read each time.
+   * @description Same as `isCancellationRequested()`, with an age that you set.
+   * The context keeps a `false` answer for `maxAgeMillis`. Use 0 to read each
+   * time.
    *
-   * @param maxAgeMillis Milliseconds that a `false` answer stays valid. Null or
-   * a negative value means 0.
-   * @return True when the step must stop and return.
+   * @param maxAgeMillis Milliseconds that a `false` answer stays valid. Null
+   * means the default age. A negative value means 0.
+   * @return True when a cancel is requested. The step should return.
    */
   global Boolean isCancellationRequested(Integer maxAgeMillis) {
     return this.stepCancel.isRequested(maxAgeMillis);

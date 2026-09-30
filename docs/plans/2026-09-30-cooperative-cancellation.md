@@ -40,7 +40,7 @@ the answer. `WorkflowCancelProbe` does the one SOQL read.
 - **No flag in `compensate()`.** A rollback must finish. A compensation
   context has no source, so the accessor gives `false`.
 - **Test builder.** `StepContextTestBuilder.requestCancellation()` and
-  `requestCancellationAfter(n)` give a unit test the flag with 0 SOQL.
+  `requestCancellationAfterChecks(n)` give a unit test the flag with 0 SOQL.
 
 ## 2. Reverse brainstorming (how can it fail?)
 
@@ -119,3 +119,38 @@ Seam rules, when the step saw `true`:
 4. Docs: `docs/cooperative-cancellation.md`, ADR 0017, README,
    `docs/strict-determinism.md`, `docs/step-context-test-builder.md`.
 5. Review: agents for correctness, platform limits, API, tests and docs.
+
+## 6. Review results
+
+Four review agents (engine, platform limits, tests, docs) and the Codex PR
+review found these issues. We fixed them:
+
+- The SOQL guard read one more time when exactly the reserve was left. Now it
+  reads only with more than the reserve. The reserve is 20, or 20% of the
+  limit when that is more, the same point as `shouldYield()`.
+- `isCancellationRequested(null)` meant 0, but the builder took null as the
+  default. Now null means the default age in both.
+- `requestCancellationAfter(n)` looked like a time value. It is now
+  `requestCancellationAfterChecks(n)`.
+- The example test with the test builder could not tell a cancel from a
+  normal YIELD. It now uses `requestCancellation()` and asserts one batch.
+- The example checked with the 1000 ms cache after each batch, so its second
+  check was almost always cached. It now uses `isCancellationRequested(0)`.
+- The abandoned step row got no telemetry. The seam now writes CPU, SOQL and
+  heap with the status.
+- New tests: a timed step, a non-runnable instance, an ancestor request that
+  goes away before the seam, and seam unit tests (no context, no step row,
+  a step row with no Id).
+- The docs said the flag sees an operator cancel during a long loop. The
+  engine inserts each step row before the run, and the running step locks
+  it. So a cancel from another transaction does not commit while the step
+  runs. The docs, the README and ADR 0017 now say this first, with a lock
+  table.
+- The docs did not say that the engine does not compensate the stopped step.
+  They now say it.
+- The docs named `WorkflowEngine.cancel(id, true)`, which is not `global`.
+  They now name the Cancel Workflow action and the `Cancel` signal.
+
+Open, for the owner: a cancel request that does not wait for the lock of the
+running step row (Codex P1). The issue puts changes to `cancel()` and new
+fields out of scope. ADR 0017 lists the options.

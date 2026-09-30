@@ -9,6 +9,8 @@ private class WorkflowCooperativeCancelTest {
   private static final String LOOP_WORKFLOW = 'WorkflowCooperativeCancelTest.LoopWorkflow';
   private static final String SAGA_WORKFLOW = 'WorkflowCooperativeCancelTest.SagaLoopWorkflow';
   private static final String LOOP_STEP = 'WorkflowCooperativeCancelTest.LoopStep';
+  private static final String TIMED_WORKFLOW = 'WorkflowCooperativeCancelTest.TimedLoopWorkflow';
+  private static final String TIMED_STEP = 'WorkflowCooperativeCancelTest.TimedLoopStep';
   private static final String COMP_STEP = 'WorkflowCooperativeCancelTest.ReserveStep';
 
   // Operator actions that the loop step can do at item `actAtItem`.
@@ -25,6 +27,11 @@ private class WorkflowCooperativeCancelTest {
   private static Id actionTargetId;
   private static Boolean cooperative = true;
   private static Boolean useDefaultMaxAge = false;
+  // Optional: the status that the operator action also writes on this instance.
+  private static Id selfId;
+  private static String selfStatusAtAction;
+  // Optional: after the step sees true, set the parent back to Suspended.
+  private static Boolean revertParentAfterSeen = false;
 
   // Loop results.
   private static Integer processed = 0;
@@ -91,6 +98,35 @@ private class WorkflowCooperativeCancelTest {
   }
 
   /**
+   * @description Workflow with one loop step that has a timeout.
+   */
+  public class TimedLoopWorkflow implements WorkflowDefinition {
+    /**
+     * @description Lists the steps.
+     * @return The timed loop step.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ TIMED_STEP };
+    }
+    /**
+     * @description Gives the first step.
+     * @return The timed loop step.
+     */
+    public String getInitialStep() {
+      return TIMED_STEP;
+    }
+    /**
+     * @description Ends after the loop step.
+     * @param currentStepName The step that completed.
+     * @param result Its result.
+     * @return Null.
+     */
+    public String getNextStep(String currentStepName, StepResult result) {
+      return null;
+    }
+  }
+
+  /**
    * @description Compensatable step. Its rollback records the cancel flag.
    */
   public class ReserveStep implements CompensatableStep {
@@ -117,7 +153,7 @@ private class WorkflowCooperativeCancelTest {
    * @description Loop step. It does the operator action at `actAtItem`. When
    * `cooperative` is true, it checks the flag every `checkEvery` items.
    */
-  public class LoopStep implements WorkflowStep {
+  public virtual class LoopStep implements WorkflowStep {
     /**
      * @description Runs the loop.
      * @param ctx The step context.
@@ -137,6 +173,12 @@ private class WorkflowCooperativeCancelTest {
           Math.mod(item, checkEvery) == 0 &&
           isCancelled(ctx)
         ) {
+          if (revertParentAfterSeen) {
+            update new Workflow_Instance__c(
+              Id = actionTargetId,
+              Status__c = 'Suspended'
+            );
+          }
           return StepResult.yield(JSON.serialize(item));
         }
       }
@@ -150,7 +192,27 @@ private class WorkflowCooperativeCancelTest {
     }
   }
 
+  /**
+   * @description Loop step with a timeout. Its `finally` block saves the step
+   * row before the seam runs.
+   */
+  public class TimedLoopStep extends LoopStep implements TimeoutConfigurable {
+    /**
+     * @description Gives the step timeout.
+     * @return 300 seconds.
+     */
+    public Integer getTimeoutSeconds() {
+      return 300;
+    }
+  }
+
   private static void act() {
+    if (selfStatusAtAction != null) {
+      update new Workflow_Instance__c(
+        Id = selfId,
+        Status__c = selfStatusAtAction
+      );
+    }
     if (action == CANCEL) {
       WorkflowEngine.cancel(actionTargetId);
     } else if (action == CANCEL_WITH_COMPENSATION) {
@@ -298,7 +360,7 @@ private class WorkflowCooperativeCancelTest {
   }
 
   @IsTest
-  static void defaultAccessorSeesCancelBeforeFirstCheck() {
+  static void defaultAccessorSeesEarlierCancel() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Id instanceId = start(LOOP_WORKFLOW);
@@ -336,7 +398,7 @@ private class WorkflowCooperativeCancelTest {
   }
 
   @IsTest
-  static void parentCancelReachesChildStep() {
+  static void parentCancelCascadesToRunningChild() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Id parentId = insertParent();
@@ -414,5 +476,140 @@ private class WorkflowCooperativeCancelTest {
       List<Workflow_Step_Execution__c> rows = stepRows(instanceId, LOOP_STEP);
       Assert.areEqual('Completed', rows[0].Status__c);
     }
+  }
+
+  @IsTest
+  static void timedStepEndsCancelled() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Id instanceId = start(TIMED_WORKFLOW);
+      actionTargetId = instanceId;
+
+      WorkflowEngine.runStep(instanceId, null);
+
+      assertStoppedWithinOneCheck();
+      Assert.areEqual('Cancelled', statusOf(instanceId));
+      List<Workflow_Step_Execution__c> rows = stepRows(instanceId, TIMED_STEP);
+      Assert.areEqual(1, rows.size());
+      Assert.areEqual(
+        'Cancelled',
+        rows[0].Status__c,
+        'The seam writes Cancelled after the timeout save'
+      );
+    }
+  }
+
+  @IsTest
+  static void nonRunnableInstanceKeepsOldPath() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Id parentId = insertParent();
+      Id childId = startChild(LOOP_WORKFLOW, parentId);
+      actionTargetId = parentId;
+      action = MARK_CANCELLED;
+      selfId = childId;
+      selfStatusAtAction = 'Compensating';
+
+      Exception thrown;
+      try {
+        WorkflowEngine.runStep(childId, null);
+      } catch (WorkflowEngine.WorkflowException ex) {
+        thrown = ex;
+      }
+
+      Assert.isNotNull(thrown, 'A Compensating instance keeps the old throw');
+      Assert.areEqual(30, processed, 'The step saw the flag');
+      Assert.areNotEqual(
+        'Cancelled',
+        stepRows(childId, LOOP_STEP)[0].Status__c,
+        'The seam did not act'
+      );
+    }
+  }
+
+  @IsTest
+  static void withdrawnAncestorCancelKeepsNormalPath() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Id parentId = insertParent();
+      Id childId = startChild(LOOP_WORKFLOW, parentId);
+      actionTargetId = parentId;
+      action = MARK_CANCELLING;
+      revertParentAfterSeen = true;
+
+      WorkflowEngine.runStep(childId, null);
+
+      Assert.areEqual(30, processed, 'The step saw the flag');
+      Assert.areEqual(
+        'Running',
+        statusOf(childId),
+        'No cancel at the seam: the YIELD runs'
+      );
+      Assert.areEqual('Running', stepRows(childId, LOOP_STEP)[0].Status__c);
+    }
+  }
+
+  @IsTest
+  static void seamIgnoresAnOutcomeWithNoContext() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.StepOutcomeContext outcome = new WorkflowEngine.StepOutcomeContext();
+      Assert.isFalse(
+        WorkflowCooperativeCancel.stopIfCancelled(
+          outcome,
+          new Workflow_Instance__c(Status__c = 'Cancelled')
+        )
+      );
+    }
+  }
+
+  @IsTest
+  static void seamWithNoStepRowDoesNoDml() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.StepOutcomeContext outcome = observedOutcome();
+      Integer dmlBefore = Limits.getDmlStatements();
+
+      Assert.isTrue(
+        WorkflowCooperativeCancel.stopIfCancelled(
+          outcome,
+          new Workflow_Instance__c(Status__c = 'Cancelled')
+        )
+      );
+      Assert.areEqual(dmlBefore, Limits.getDmlStatements());
+    }
+  }
+
+  @IsTest
+  static void seamInsertsAnUnsavedStepRowAsCancelled() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id parentId = insertParent();
+      WorkflowEngine.StepOutcomeContext outcome = observedOutcome();
+      // A new CalloutStep row has no Id until after execute().
+      outcome.stepExec = new Workflow_Step_Execution__c(
+        Workflow_Instance__c = parentId,
+        Step_Name__c = 'CalloutLoop',
+        Status__c = 'Running'
+      );
+
+      Assert.isTrue(
+        WorkflowCooperativeCancel.stopIfCancelled(
+          outcome,
+          new Workflow_Instance__c(Id = parentId, Status__c = 'Cancelling')
+        )
+      );
+      List<Workflow_Step_Execution__c> rows = stepRows(parentId, 'CalloutLoop');
+      Assert.areEqual(1, rows.size(), 'An audit row exists');
+      Assert.areEqual('Cancelled', rows[0].Status__c);
+    }
+  }
+
+  // An outcome whose context saw a cancel, with no step row.
+  private static WorkflowEngine.StepOutcomeContext observedOutcome() {
+    StepContext ctx = new StepContextTestBuilder()
+      .requestCancellation()
+      .build();
+    Assert.isTrue(ctx.isCancellationRequested());
+    WorkflowEngine.StepOutcomeContext outcome = new WorkflowEngine.StepOutcomeContext();
+    outcome.context = ctx;
+    return outcome;
   }
 }

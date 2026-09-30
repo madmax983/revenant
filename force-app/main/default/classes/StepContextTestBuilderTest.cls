@@ -399,7 +399,7 @@ public class StepContextTestBuilderTest {
   static void testRequestCancellationAfterChecks() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       StepContext ctx = new StepContextTestBuilder()
-        .requestCancellationAfter(2)
+        .requestCancellationAfterChecks(2)
         .build();
 
       Assert.isFalse(ctx.isCancellationRequested(), 'Check 1');
