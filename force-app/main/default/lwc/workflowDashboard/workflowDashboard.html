@@ -1329,6 +1329,12 @@
 
                                             <!-- Slowest-step ranking -->
                                             <div class="slds-text-title_caps slds-m-bottom_small">Steps ranked by median wall-clock (slowest first)</div>
+                                            <template if:true={latencyStepsApproximate}>
+                                                <p class="slds-text-color_weak slds-m-bottom_small" role="status">
+                                                    <lightning-badge label="Approximate"></lightning-badge>
+                                                    Approximate step ranking: parallel steps cannot be timed one by one, so they are left out.
+                                                </p>
+                                            </template>
                                             <template if:true={hasLatencySteps}>
                                                 <table class="slds-table slds-table_cell-buffer slds-table_bordered">
                                                     <thead>

@@ -306,7 +306,7 @@ public inherited sharing class WorkflowDashboardController {
    * @param workflowName The workflow definition name to analyze.
    * @param windowKey The window key ('1h' | '24h' | '7d'; blank/unknown → all time).
    * @return A map with the window, cap metadata/isCapped flag, sample size, the p50/p95/p99/max
-   *         duration milliseconds, and the per-step median ranking rows.
+   *         duration milliseconds, the stepsApproximate flag, and the per-step median ranking rows.
    */
   @AuraEnabled
   public static Map<String, Object> getDefinitionLatency(

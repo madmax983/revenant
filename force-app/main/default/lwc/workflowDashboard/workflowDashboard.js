@@ -843,6 +843,10 @@ export default class WorkflowDashboard extends LightningElement {
     return this.latencyData ? this.latencyData.isCapped : false;
   }
 
+  get latencyStepsApproximate() {
+    return this.latencyData ? !!this.latencyData.stepsApproximate : false;
+  }
+
   get latencySampleSize() {
     return this.latencyData ? this.latencyData.sampleSize : 0;
   }

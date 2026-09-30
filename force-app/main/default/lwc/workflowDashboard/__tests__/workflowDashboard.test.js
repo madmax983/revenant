@@ -691,6 +691,49 @@ describe("c-workflow-dashboard latency panel", () => {
     });
   });
 
+  async function openLatency(stepsApproximate) {
+    getDefinitionLatency.mockResolvedValue({
+      workflowName: "BillingWorkflow",
+      windowKey: "24h",
+      isCapped: false,
+      capLimit: 2000,
+      sampleSize: 1,
+      p50Ms: 10000,
+      p95Ms: 10000,
+      p99Ms: 10000,
+      maxMs: 10000,
+      stepsApproximate,
+      steps: [{ stepName: "ChargeCard", medianMs: 1000, sampleCount: 1 }],
+    });
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot
+      .querySelector('[data-id="workflow-filter"]')
+      .dispatchEvent(
+        new CustomEvent("change", { detail: { value: "BillingWorkflow" } }),
+      );
+    findButton(element, (btn) => btn.label === "Latency").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  it("shows an approximate badge on the step ranking when fan-out is detected", async () => {
+    const element = await openLatency(true);
+    expect(element.shadowRoot.textContent).toContain(
+      "Approximate step ranking",
+    );
+  });
+
+  it("hides the approximate badge for a serial run", async () => {
+    const element = await openLatency(false);
+    expect(element.shadowRoot.textContent).not.toContain(
+      "Approximate step ranking",
+    );
+  });
+
   it("renders percentile tiles, the slowest-step ranking and the truncation badge", async () => {
     getDefinitionLatency.mockResolvedValue({
       workflowName: "BillingWorkflow",
