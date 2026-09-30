@@ -2,8 +2,9 @@
  * @description Determines whether a workflow instance is genuinely stalled (idle past
  * the threshold with no live job, sleep timer, declared timeout, or pending step), builds
  * the shared display rows for the instance lists, and classifies statuses into the
- * summary-tile buckets. Extracted from WorkflowDashboardController so the instance-list
- * and stalled endpoints share one copy of this pure (non-SOQL) logic.
+ * summary-tile buckets (see WorkflowHealthBuckets). Extracted from
+ * WorkflowDashboardController so the instance-list and stalled endpoints share one copy
+ * of this pure (non-SOQL) logic.
  */
 public inherited sharing class WorkflowStallDetectionService {
   /**
@@ -183,9 +184,9 @@ public inherited sharing class WorkflowStallDetectionService {
   }
 
   /**
-   * @description Adds a per-status aggregate count into the total plus its
-   * active/completed/failed bucket (statuses outside the three buckets still count toward
-   * total only).
+   * @description Adds a per-status aggregate count into the total plus its bucket. Active,
+   * failed and suspended follow WorkflowHealthBuckets (same as the Workflow Catalog).
+   * Completed and ContinuedAsNew count as completed. Other statuses count toward total only.
    * @param results The running totals map to mutate.
    * @param stat The status being bucketed.
    * @param count The aggregate count for the status.
@@ -196,30 +197,12 @@ public inherited sharing class WorkflowStallDetectionService {
     Integer count
   ) {
     results.put('total', results.get('total') + count);
-    if (isActiveStat(stat)) {
-      results.put('active', results.get('active') + count);
-    } else if (stat == 'Completed' || stat == 'ContinuedAsNew') {
-      results.put('completed', results.get('completed') + count);
-    } else if (isFailedStat(stat)) {
-      results.put('failed', results.get('failed') + count);
+    String bucket = WorkflowHealthBuckets.bucketOf(stat);
+    if (bucket == null && (stat == 'Completed' || stat == 'ContinuedAsNew')) {
+      bucket = 'completed';
     }
-  }
-
-  private static Boolean isActiveStat(String stat) {
-    return stat == 'Pending' ||
-      stat == 'Running' ||
-      stat == 'Suspended' ||
-      stat == 'Compensating' ||
-      stat == 'Cancelling' ||
-      stat == 'Paused' ||
-      stat == 'DefinitionChanged' ||
-      stat == 'Held';
-  }
-
-  private static Boolean isFailedStat(String stat) {
-    return stat == 'Failed' ||
-      stat == 'CompensationFailed' ||
-      stat == 'Compensated' ||
-      stat == 'Cancelled';
+    if (bucket != null) {
+      results.put(bucket, results.get(bucket) + count);
+    }
   }
 }

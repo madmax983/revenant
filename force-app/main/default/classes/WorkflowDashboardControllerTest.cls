@@ -476,6 +476,48 @@ public class WorkflowDashboardControllerTest {
     }
   }
 
+  @IsTest
+  static void testGetWorkflowStatsUsesCatalogBuckets() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> rows = new List<Workflow_Instance__c>();
+      for (
+        String status : new List<String>{
+          'Running',
+          'Suspended',
+          'Failed',
+          'CompensationFailed',
+          'Compensated',
+          'Cancelled',
+          'Completed'
+        }
+      ) {
+        rows.add(
+          new Workflow_Instance__c(
+            Workflow_Name__c = 'BucketDef',
+            Status__c = status,
+            Input__c = '"x"'
+          )
+        );
+      }
+      insert rows;
+
+      Map<String, Integer> stats = WorkflowDashboardController.getWorkflowStats(
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter('BucketDef', '', '')
+          .build()
+      );
+      System.assertEquals(7, stats.get('total'));
+      System.assertEquals(1, stats.get('active'), 'Suspended is not active');
+      System.assertEquals(1, stats.get('suspended'));
+      System.assertEquals(
+        2,
+        stats.get('failed'),
+        'Compensated/Cancelled are not failed'
+      );
+      System.assertEquals(1, stats.get('completed'));
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // getDefinitionTrends — per-definition success-rate & throughput (Issue #33)
   // ──────────────────────────────────────────────────────────────────────────

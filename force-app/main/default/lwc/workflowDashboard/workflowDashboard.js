@@ -325,7 +325,7 @@ export default class WorkflowDashboard extends LightningElement {
   instances = [];
   filteredInstances = [];
   definitions = [];
-  stats = { total: 0, active: 0, completed: 0, failed: 0 };
+  stats = { total: 0, active: 0, suspended: 0, completed: 0, failed: 0 };
 
   // UI state
   selectedInstanceId;
@@ -3108,10 +3108,16 @@ export default class WorkflowDashboard extends LightningElement {
     return `Re-drive (${this.stats ? this.stats.failed : 0})`;
   }
 
+  // Bulk cancel also cancels Suspended instances, so both buckets count.
+  get cancellableCount() {
+    return this.stats
+      ? (this.stats.active || 0) + (this.stats.suspended || 0)
+      : 0;
+  }
+
   get isCancelDisabled() {
     return (
-      !this.stats ||
-      this.stats.active === 0 ||
+      this.cancellableCount === 0 ||
       this.cancellingMatching ||
       this.showingStalled
     );
@@ -3120,7 +3126,7 @@ export default class WorkflowDashboard extends LightningElement {
   get cancelButtonLabel() {
     return this.cancellingMatching
       ? "Counting..."
-      : `Cancel (${this.stats ? this.stats.active : 0})`;
+      : `Cancel (${this.cancellableCount})`;
   }
 
   handleRedriveMatching() {

@@ -182,10 +182,10 @@ public inherited sharing class WorkflowInstanceListService {
   }
 
   /**
-   * @description Rolls instances up into total / active / completed / failed counts for
+   * @description Rolls instances up into total / active / suspended / completed / failed counts for
    * the summary tiles; reuses InstanceQuery but reads only the filter fields.
    * @param criteria The filter criteria (pagination and failureCategory ignored).
-   * @return A map of the total, active, completed, and failed counts.
+   * @return A map of the total, active, suspended, completed, and failed counts.
    */
   public static Map<String, Integer> rollupStats(
     WorkflowDashboardController.InstanceQuery criteria
@@ -196,6 +196,7 @@ public inherited sharing class WorkflowInstanceListService {
     Map<String, Integer> results = new Map<String, Integer>{
       'total' => 0,
       'active' => 0,
+      'suspended' => 0,
       'completed' => 0,
       'failed' => 0
     };

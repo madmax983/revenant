@@ -132,6 +132,8 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 - `WorkflowStallDetectionService`, `WorkflowStallDetector` (one alert per
   instance stall, claim key `Stall:<id>:<clock>`; issue #139),
   `WorkflowStallConfigResolver`
+- `WorkflowHealthBuckets` (one active/failed/suspended status mapping for the
+  Workflow Catalog and the dashboard stat tiles; issue #225)
 - `WorkflowAlertManager`, `WorkflowAlertEmailBuilder`,
   `WorkflowFailureAlertEvaluator`
 - `WatchdogLiveness` (sweep stamp, stale state), `WatchdogStallDetector`

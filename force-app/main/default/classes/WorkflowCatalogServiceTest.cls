@@ -122,6 +122,51 @@ public class WorkflowCatalogServiceTest {
   }
 
   @IsTest
+  static void testCatalogAgreesWithDashboardStatTiles() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Integer n = 0;
+      for (
+        String status : new List<String>{
+          'Pending',
+          'Running',
+          'Compensating',
+          'Cancelling',
+          'Paused',
+          'DefinitionChanged',
+          'Held',
+          'Failed',
+          'CompensationFailed',
+          'Suspended',
+          'Completed',
+          'ContinuedAsNew',
+          'Compensated',
+          'Cancelled'
+        }
+      ) {
+        insertInstance(DESCRIBED, status, 'parity-' + n++);
+      }
+
+      Map<String, Object> row = rowFor(
+        WorkflowCatalogService.buildCatalogFor(new List<String>{ DESCRIBED }),
+        DESCRIBED
+      );
+      Map<String, Integer> tiles = WorkflowDashboardController.getWorkflowStats(
+        WorkflowDashboardQueryBuilders.instanceQuery()
+          .filter(DESCRIBED, '', '')
+          .build()
+      );
+      for (String key : new List<String>{ 'active', 'failed', 'suspended' }) {
+        System.assertEquals(
+          (Integer) row.get(key),
+          tiles.get(key),
+          'Catalog and stat tiles agree on ' + key
+        );
+      }
+      System.assertEquals(7, tiles.get('active'));
+    }
+  }
+
+  @IsTest
   static void testHealthCountsPivotPerDefinition() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Active bucket: Pending, Running, Compensating, Cancelling, Paused (5).
