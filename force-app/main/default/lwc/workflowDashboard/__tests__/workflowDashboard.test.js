@@ -1068,6 +1068,47 @@ describe("c-workflow-dashboard bulk cancel", () => {
     expect(toastEvent.detail.title).toBe("Success");
   });
 
+  it("enables Cancel and counts Suspended when only Suspended instances match", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 2,
+      active: 0,
+      suspended: 2,
+      completed: 0,
+      failed: 0,
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    const button = findButton(
+      element,
+      (btn) => btn.label && btn.label.startsWith("Cancel ("),
+    );
+    expect(button.label).toBe("Cancel (2)");
+    expect(button.disabled).toBe(false);
+  });
+
+  it("labels the stat tiles Active and Suspended", async () => {
+    getWorkflowStats.mockResolvedValue({
+      total: 5,
+      active: 3,
+      suspended: 2,
+      completed: 0,
+      failed: 0,
+    });
+
+    const element = createComponent();
+    await flushPromises();
+
+    const text = element.shadowRoot.textContent;
+    expect(text).not.toContain("Running / Suspended");
+    const titles = Array.from(
+      element.shadowRoot.querySelectorAll(".stat-card .slds-text-title_caps"),
+    ).map((n) => n.textContent.trim());
+    expect(titles).toContain("Active");
+    expect(titles).toContain("Suspended");
+  });
+
   it("shows info toast and does not open modal when getCancelEligibleCount returns 0", async () => {
     getWorkflowStats.mockResolvedValue({
       total: 5,

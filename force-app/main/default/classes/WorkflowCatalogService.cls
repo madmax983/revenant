@@ -21,42 +21,9 @@
  * WITH SYSTEM_MODE, matching the sibling read services.
  */
 public inherited sharing class WorkflowCatalogService {
-  // Non-terminal in-flight statuses rolled up as "active".
-  private static final Set<String> ACTIVE_STATUSES = new Set<String>{
-    'Pending',
-    'Running',
-    'Compensating',
-    'Cancelling',
-    'Paused',
-    'DefinitionChanged',
-    'Held'
-  };
-
-  // Broken/recoverable statuses rolled up as "failed".
-  private static final Set<String> FAILED_STATUSES = new Set<String>{
-    'Failed',
-    'CompensationFailed'
-  };
-
-  // The single status parked as "suspended" (awaiting a signal / manual action).
-  private static final String SUSPENDED_STATUS = 'Suspended';
-
-  // Union of the statuses the health rollup cares about. Restricting the aggregate to these
-  // both bounds the number of GROUP BY rows (<= ~200 definitions * 10 statuses) and skips the
-  // clean-terminal (Completed/Cancelled/Compensated/ContinuedAsNew) rows the Catalog never
-  // shows, so the scan stays governor-safe for large orgs.
-  private static final Set<String> HEALTH_STATUSES = new Set<String>{
-    'Pending',
-    'Running',
-    'Compensating',
-    'Cancelling',
-    'Paused',
-    'DefinitionChanged',
-    'Held',
-    'Failed',
-    'CompensationFailed',
-    'Suspended'
-  };
+  // Statuses the health rollup counts. Bounds the GROUP BY rows and skips the clean-terminal
+  // rows the Catalog never shows. The mapping lives in WorkflowHealthBuckets.
+  private static final Set<String> HEALTH_STATUSES = WorkflowHealthBuckets.HEALTH_STATUSES;
 
   /**
    * @description Builds the read-only Workflow Catalog AFTER enforcing the dashboard
@@ -129,12 +96,9 @@ public inherited sharing class WorkflowCatalogService {
         buckets = newZeroBuckets();
         countsByDefinition.put(workflowName, buckets);
       }
-      if (ACTIVE_STATUSES.contains(status)) {
-        buckets.put('active', buckets.get('active') + count);
-      } else if (FAILED_STATUSES.contains(status)) {
-        buckets.put('failed', buckets.get('failed') + count);
-      } else if (status == SUSPENDED_STATUS) {
-        buckets.put('suspended', buckets.get('suspended') + count);
+      String bucket = WorkflowHealthBuckets.bucketOf(status);
+      if (bucket != null) {
+        buckets.put(bucket, buckets.get(bucket) + count);
       }
     }
     return countsByDefinition;
