@@ -51,7 +51,11 @@ private class WorkflowPayloadOffloadTest {
     System.assertEquals('{"a":1}', stored, 'A small payload stays inline');
     System.assertEquals(
       0,
-      [SELECT COUNT() FROM ContentVersion WHERE Revenant_Payload_Offload__c = TRUE],
+      [
+        SELECT COUNT()
+        FROM ContentVersion
+        WHERE Revenant_Payload_Offload__c = TRUE
+      ],
       'No flagged file exists'
     );
   }

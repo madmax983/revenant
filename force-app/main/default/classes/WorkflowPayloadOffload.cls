@@ -223,7 +223,9 @@ public inherited sharing class WorkflowPayloadOffload {
    * stored as a file and a `{"$attachmentId":...}` marker is returned; otherwise
    * the value is returned unchanged for inline storage. It does not encode. For
    * author data, pass `WorkflowPayloadCodecs.encode(text, kind)`: the offload
-   * test then uses the encoded length, and the file holds ciphertext.
+   * test then uses the encoded length, and the file holds ciphertext. The file
+   * gets `Revenant_Payload_Offload__c = true`, which scopes the Storage Footprint
+   * file total.
    * @param instanceId Id of the owning instance (links the stored document)
    * @param textValue the stored text to offload
    * @param title title/filename for the offloaded ContentVersion
@@ -239,6 +241,7 @@ public inherited sharing class WorkflowPayloadOffload {
       cv.Title = title;
       cv.PathOnClient = title + '.json';
       cv.VersionData = Blob.valueOf(textValue);
+      cv.Revenant_Payload_Offload__c = true;
       Database.insert(cv, true, AccessLevel.SYSTEM_MODE);
 
       Id docId = [
