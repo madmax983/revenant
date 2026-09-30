@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Revenant_Payload_Offload__c</fullName>
     <defaultValue>false</defaultValue>
-    <description>Set only by WorkflowPayloadOffload in system mode: true for a file that holds an offloaded payload. The Storage Footprint panel sums the size of these files. No permission set grants access, so a user cannot mark a file.</description>
+    <description>Set only by WorkflowPayloadOffload in system mode: true for a file that holds an offloaded payload. The Storage Footprint panel sums the size of these files. No Revenant permission set grants access.</description>
     <externalId>false</externalId>
     <label>Revenant Payload Offload</label>
     <trackTrending>false</trackTrending>

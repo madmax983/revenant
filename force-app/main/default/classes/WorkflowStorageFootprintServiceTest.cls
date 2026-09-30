@@ -1,9 +1,9 @@
 /**
  * @description Unit tests for WorkflowStorageFootprintService: verifies per-object record
  * counts and estimated bytes, 7-/30-day growth deltas (including exclusion of records older
- * than the window), the summed ContentVersion byte volume scoped to files that carry the engine
- * offload flag (and exclusion of user files, even with an engine-like title), the org data-storage-allowance metrics, and
- * the configurable warning-threshold classification. All reads are bounded aggregates; the
+ * than the window), the ContentVersion byte total (flagged files only; a user file with an engine-like
+ * title is not counted), the org data-storage-allowance metrics, and the
+ * configurable warning-threshold classification. All reads are bounded aggregates; the
  * tests seed a small, fixed number of records per object.
  */
 @IsTest
@@ -58,8 +58,8 @@ private class WorkflowStorageFootprintServiceTest {
         Key_Value__c = 'FootprintKey=FootprintValue'
       );
 
-      // Offloaded payload (counted), a user file and a user file with an engine-like title
-      // (neither is counted).
+      // Counted: a flagged payload. Not counted: a user file, and a user file with an
+      // engine-like title.
       ContentVersion engineCv = new ContentVersion(
         Title = 'Output_FootprintPayload',
         PathOnClient = 'Output_FootprintPayload.json',
@@ -151,7 +151,7 @@ private class WorkflowStorageFootprintServiceTest {
         'One signal counted'
       );
 
-      // Only the engine-owned file contributes to the ContentVersion byte total.
+      // Only the flagged file adds to the ContentVersion byte total.
       System.assertEquals(
         engineBytes,
         (Long) result.get('contentVersionBytes'),

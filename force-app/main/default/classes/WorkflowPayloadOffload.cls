@@ -224,8 +224,8 @@ public inherited sharing class WorkflowPayloadOffload {
    * the value is returned unchanged for inline storage. It does not encode. For
    * author data, pass `WorkflowPayloadCodecs.encode(text, kind)`: the offload
    * test then uses the encoded length, and the file holds ciphertext. The file
-   * gets `Revenant_Payload_Offload__c = true`, which scopes the Storage Footprint
-   * file total.
+   * gets `Revenant_Payload_Offload__c = true`. The Storage Footprint panel counts
+   * only these files.
    * @param instanceId Id of the owning instance (links the stored document)
    * @param textValue the stored text to offload
    * @param title title/filename for the offloaded ContentVersion

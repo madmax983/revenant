@@ -124,6 +124,32 @@ private class WorkflowSignalPayloadsTest {
   }
 
   @IsTest
+  static void offloadedSignalFilesAreFlagged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c row = new Workflow_Signal__c(
+        Workflow_Instance__c = inst.Id,
+        Signal_Name__c = 'Go',
+        Payload__c = WorkflowSignalPayloads.encode('S'.repeat(100001))
+      );
+
+      WorkflowSignalPayloads.offloadOversized(
+        new List<Workflow_Signal__c>{ row }
+      );
+
+      System.assertEquals(
+        1,
+        [
+          SELECT COUNT()
+          FROM ContentVersion
+          WHERE Revenant_Payload_Offload__c = TRUE
+        ],
+        'The signal payload file carries the offload flag'
+      );
+    }
+  }
+
+  @IsTest
   static void discardOffloadsDeletesFiles() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowPayloadCodecs.setCodec(new AesCodec());

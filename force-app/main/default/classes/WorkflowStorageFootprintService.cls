@@ -5,7 +5,7 @@
  * data objects it returns a live record count, an estimated storage size (record count x a
  * standard per-record byte estimate), and 7-/30-day creation deltas so operators can see
  * acceleration. Offloaded large payloads are accounted separately as the summed
- * ContentVersion byte volume of files the offloader flagged. Record bytes are expressed as a
+ * ContentVersion bytes of files that have Revenant_Payload_Offload__c = true. Record bytes are expressed as a
  * percentage of the org's DataStorageMB allowance and the offloaded file bytes as a
  * percentage of the org's FileStorageMB allowance (both via System.OrgLimits), because
  * records and files bill against separate allowances. The configurable warning threshold
@@ -344,10 +344,9 @@ public inherited sharing class WorkflowStorageFootprintService {
     };
   }
 
-  // Sums the size of the files the offloader wrote. It writes
-  // Revenant_Payload_Offload__c (system mode only), so a user file with an engine-like title
-  // is not counted. One aggregate, no row scan per instance. Latest versions only, so old
-  // versions are not counted twice. Files from before the flag existed are not counted.
+  // Sums the size of offloaded files. Only the engine sets Revenant_Payload_Offload__c, in
+  // system mode. A user file with an engine-like title is not counted. One aggregate query.
+  // IsLatest = TRUE skips old versions. Files from before the flag are not counted.
   private static Long revenantContentBytes() {
     AggregateResult ar = [
       SELECT SUM(ContentSize) total

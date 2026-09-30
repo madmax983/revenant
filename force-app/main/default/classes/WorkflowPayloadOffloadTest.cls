@@ -1,6 +1,6 @@
 /**
- * @description Tests that `savePayloadIfNeeded` marks the files it writes as engine
- * offloads, and writes no file for a small payload.
+ * @description Tests that `savePayloadIfNeeded` flags the file it writes. A small
+ * payload writes no file.
  */
 @IsTest
 private class WorkflowPayloadOffloadTest {
