@@ -2,8 +2,9 @@
  * @description Determines whether a workflow instance is genuinely stalled (idle past
  * the threshold with no live job, sleep timer, declared timeout, or pending step), builds
  * the shared display rows for the instance lists, and classifies statuses into the
- * summary-tile buckets (see WorkflowHealthBuckets). Extracted from WorkflowDashboardController so the instance-list
- * and stalled endpoints share one copy of this pure (non-SOQL) logic.
+ * summary-tile buckets (see WorkflowHealthBuckets). Extracted from
+ * WorkflowDashboardController so the instance-list and stalled endpoints share one copy
+ * of this pure (non-SOQL) logic.
  */
 public inherited sharing class WorkflowStallDetectionService {
   /**

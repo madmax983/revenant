@@ -4,6 +4,23 @@
  */
 @IsTest
 private class WorkflowHealthBucketsTest {
+  private static final List<String> ALL_STATUSES = new List<String>{
+    'Pending',
+    'Running',
+    'Compensating',
+    'Cancelling',
+    'Paused',
+    'DefinitionChanged',
+    'Held',
+    'Failed',
+    'CompensationFailed',
+    'Suspended',
+    'Completed',
+    'ContinuedAsNew',
+    'Compensated',
+    'Cancelled'
+  };
+
   private static Map<String, Integer> zeroStats() {
     return new Map<String, Integer>{
       'total' => 0,
@@ -49,9 +66,29 @@ private class WorkflowHealthBucketsTest {
 
   @IsTest
   static void healthStatusesHoldExactlyTheBucketedStatuses() {
+    for (String status : ALL_STATUSES) {
+      System.assertEquals(
+        WorkflowHealthBuckets.bucketOf(status) != null,
+        WorkflowHealthBuckets.HEALTH_STATUSES.contains(status),
+        'HEALTH_STATUSES for ' + status
+      );
+    }
     System.assertEquals(10, WorkflowHealthBuckets.HEALTH_STATUSES.size());
-    System.assert(WorkflowHealthBuckets.HEALTH_STATUSES.contains('Suspended'));
-    System.assert(!WorkflowHealthBuckets.HEALTH_STATUSES.contains('Cancelled'));
+  }
+
+  @IsTest
+  static void legacyTilesCountNullAndUnknownInTotalOnly() {
+    Map<String, Integer> r = zeroStats();
+    WorkflowStallDetectionService.bucketWorkflowStat(r, null, 2);
+    WorkflowStallDetectionService.bucketWorkflowStat(r, 'Bogus', 3);
+    System.assertEquals(5, r.get('total'));
+    System.assertEquals(
+      0,
+      r.get('active') +
+        r.get('suspended') +
+        r.get('failed') +
+        r.get('completed')
+    );
   }
 
   @IsTest

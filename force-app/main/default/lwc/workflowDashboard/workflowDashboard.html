@@ -97,43 +97,43 @@
         <template if:false={viewingSchedules}>
         <!-- Summary Stats Card Row -->
         <div class="slds-grid slds-wrap slds-gutters slds-m-bottom_large">
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 stat-tile-col slds-m-bottom_small">
                 <div class="stat-card border-left-blue">
                     <div class="slds-text-title_caps slds-text-color_weak">Total Runs</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small">{stats.total}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 stat-tile-col slds-m-bottom_small">
                 <div class="stat-card border-left-orange">
                     <div class="slds-text-title_caps slds-text-color_weak">Active</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{stats.active}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 stat-tile-col slds-m-bottom_small">
                 <div class="stat-card border-left-orange">
                     <div class="slds-text-title_caps slds-text-color_weak">Suspended</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{stats.suspended}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 stat-tile-col slds-m-bottom_small">
                 <div class="stat-card border-left-green">
                     <div class="slds-text-title_caps slds-text-color_weak">Completed</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-green">{stats.completed}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 stat-tile-col slds-m-bottom_small">
                 <div class="stat-card border-left-red">
                     <div class="slds-text-title_caps slds-text-color_weak">Failed</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-red">{stats.failed}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 stat-tile-col slds-m-bottom_small">
                 <div class="stat-card border-left-purple">
                     <div class="slds-text-title_caps slds-text-color_weak">Stalled</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-purple">{stalledCountDisplay}</div>
                 </div>
             </div>
-            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 slds-large-size_1-of-6 slds-m-bottom_small">
+            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3 stat-tile-col slds-m-bottom_small">
                 <div class="stat-card border-left-orange">
                     <div class="slds-text-title_caps slds-text-color_weak">Unrouted Signals</div>
                     <div class="slds-text-heading_large slds-m-top_xx-small text-orange">{unroutedCountDisplay}</div>

@@ -9,6 +9,8 @@ public inherited sharing class WorkflowHealthBuckets {
   public static final String FAILED = 'failed';
   public static final String SUSPENDED = 'suspended';
 
+  private static final String SUSPENDED_STATUS = 'Suspended';
+
   private static final Set<String> ACTIVE_STATUSES = new Set<String>{
     'Pending',
     'Running',
@@ -41,13 +43,13 @@ public inherited sharing class WorkflowHealthBuckets {
     if (FAILED_STATUSES.contains(status)) {
       return FAILED;
     }
-    return status == 'Suspended' ? SUSPENDED : null;
+    return status == SUSPENDED_STATUS ? SUSPENDED : null;
   }
 
   private static Set<String> buildHealthStatuses() {
     Set<String> all = new Set<String>(ACTIVE_STATUSES);
     all.addAll(FAILED_STATUSES);
-    all.add('Suspended');
+    all.add(SUSPENDED_STATUS);
     return all;
   }
 }
