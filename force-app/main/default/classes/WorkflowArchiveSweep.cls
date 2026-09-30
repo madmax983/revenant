@@ -11,7 +11,10 @@
  *    (master-detail).
  *
  * If `write` throws, step 3 does not run. A retry writes the same records
- * again. The sink contract makes that safe.
+ * again. The sink contract makes that safe. When an instance has more signal
+ * and log rows than one teardown deletes, the batch deletes a page of them,
+ * keeps the instances and yields. The next batch writes the same records
+ * again and continues.
  *
  * Archive bounds for each batch: at most 20 instances and 500 step rows. A
  * new instance starts only below a sixth of the heap. The first instance
@@ -33,7 +36,7 @@ public inherited sharing class WorkflowArchiveSweep {
   /** @description Maximum skipped Ids that a run reports. */
   public static final Integer MAX_SKIPPED_IDS = 2000;
 
-  private static final Set<String> TERMINAL_STATUSES = WorkflowInstanceTeardown.PURGEABLE_STATUSES;
+  private static final Set<String> TERMINAL_STATUSES = WorkflowInstanceTeardown.purgeableStatuses();
 
   @TestVisible
   private static Integer maxStepRows = MAX_ARCHIVE_STEP_ROWS;
@@ -152,8 +155,12 @@ public inherited sharing class WorkflowArchiveSweep {
       if (!toWrite.isEmpty()) {
         sink.write(toWrite);
       }
+      if (!purge(chunk, result)) {
+        // Satellites remain. Keep the cursor. The next batch continues.
+        result.hasMore = true;
+        return result;
+      }
       handled.addAll(chunk.instanceIdsToPurge);
-      purge(chunk, result);
       Integer done = moveCursor(candidates, handled, result);
       result.hasMore =
         done > 0 &&
@@ -161,6 +168,7 @@ public inherited sharing class WorkflowArchiveSweep {
         candidates.size() == limitSize);
       return result;
     }
+    // An incomplete purge gives purgedCount 0, so hasMore stays true.
     purge(chunk, result);
     // More can remain when this batch did not take every candidate, or when
     // the query filled the batch.
@@ -170,11 +178,16 @@ public inherited sharing class WorkflowArchiveSweep {
     return result;
   }
 
-  private static void purge(
+  // Returns false when satellites remain and no instance was deleted.
+  private static Boolean purge(
     CleanupDocumentPurger.PurgeChunk chunk,
     BatchResult result
   ) {
-    result.purgedCount = WorkflowInstanceTeardown.run(chunk).instances;
+    WorkflowInstanceTeardown.Counts counts = WorkflowInstanceTeardown.run(
+      chunk
+    );
+    result.purgedCount = counts.instances;
+    return counts.complete;
   }
 
   // Moves the cursor past the leading candidates that are handled (purged,

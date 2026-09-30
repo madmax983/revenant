@@ -128,7 +128,7 @@ public inherited sharing class CleanupDocumentPurger {
       return;
     }
     for (ContentDocument doc : [
-      SELECT Id, Title
+      SELECT Id, Title, OwnerId
       FROM ContentDocument
       WHERE Id IN :idx.allDocIds
       WITH SYSTEM_MODE
@@ -234,7 +234,7 @@ public inherited sharing class CleanupDocumentPurger {
       }
       // B. Shared Link Check — skip files still shared outside this purge batch
       if (
-        !isSharedElsewhere(docId, idx.docToLinksMap, chunk.instanceIdsToPurge)
+        !isSharedElsewhere(doc, idx.docToLinksMap, chunk.instanceIdsToPurge)
       ) {
         chunk.finalDocIdsToDelete.add(docId);
       }
@@ -258,18 +258,19 @@ public inherited sharing class CleanupDocumentPurger {
 
   /**
    * @description Determines whether a document is shared with any record other than a
-   * Workflow_Instance__c being deleted in this batch (the default User link is ignored).
-   * @param docId The id of the document to evaluate.
+   * Workflow_Instance__c being deleted in this batch. Only the owner's User link is
+   * ignored. A link to any other User is a share, so the file stays.
+   * @param doc The document to evaluate.
    * @param docToLinksMap The map of document id to its content document links.
    * @param instanceIdsToPurge The instance ids being deleted in this batch.
    * @return True if the document is shared elsewhere and must not be deleted.
    */
   private static Boolean isSharedElsewhere(
-    Id docId,
+    ContentDocument doc,
     Map<Id, List<ContentDocumentLink>> docToLinksMap,
     Set<Id> instanceIdsToPurge
   ) {
-    List<ContentDocumentLink> cdls = docToLinksMap.get(docId);
+    List<ContentDocumentLink> cdls = docToLinksMap.get(doc.Id);
     if (cdls == null) {
       return false;
     }
@@ -278,8 +279,8 @@ public inherited sharing class CleanupDocumentPurger {
       String sObjType = linkedId.getSObjectType()
         .getDescribe(SObjectDescribeOptions.DEFERRED)
         .getName();
-      // Ignore the default User link created on file upload
-      if (sObjType == 'User') {
+      // Ignore the owner link created on file upload.
+      if (sObjType == 'User' && linkedId == doc.OwnerId) {
         continue;
       }
       // Shared if linked to any record other than a Workflow_Instance__c that is

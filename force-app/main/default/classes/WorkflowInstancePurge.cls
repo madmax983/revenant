@@ -8,7 +8,7 @@
  * ```
  *
  * Rules for each instance X in the final set S:
- * 1. X is terminal ({@link WorkflowInstanceTeardown#PURGEABLE_STATUSES}).
+ * 1. X is terminal ({@link WorkflowInstanceTeardown#isPurgeable}).
  * 2. Each child of X is in S.
  * 3. The predecessor of X (`Previous_Instance__c`) is in S.
  * 4. A successor of X that is not in S is terminal.
@@ -503,7 +503,7 @@ public inherited sharing class WorkflowInstancePurge {
               rows.get(i).Status__c +
               '. Only a terminal instance (' +
               String.join(
-                new List<String>(WorkflowInstanceTeardown.PURGEABLE_STATUSES),
+                new List<String>(WorkflowInstanceTeardown.purgeableStatuses()),
                 ', '
               ) +
               ') can be purged. Cancel it or let it finish, then purge it.'
@@ -666,7 +666,7 @@ public inherited sharing class WorkflowInstancePurge {
   }
 
   private static Boolean isTerminal(Workflow_Instance__c row) {
-    return WorkflowInstanceTeardown.PURGEABLE_STATUSES.contains(row.Status__c);
+    return WorkflowInstanceTeardown.isPurgeable(row.Status__c);
   }
 
   private static String label(Workflow_Instance__c row) {
