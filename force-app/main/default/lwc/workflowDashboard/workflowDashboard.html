@@ -1768,7 +1768,7 @@
                                              <span class={selectedInst.waitingOnBadgeClass} style="margin-right: 8px;">Waiting On: {selectedInst.waitingOn}</span>
                                          </template>
                                          <template if:true={selectedInst.hasWaitDescriptor}>
-                                             <span class="badge badge-teal" style="margin-right: 8px;" title="Awaited signal - paste into Send Signal">Awaiting: {selectedInst.waitDescriptorLabel}</span>
+                                             <span class="badge badge-teal" style="margin-right: 8px;" title="Awaited signal">Awaiting: {selectedInst.waitDescriptorLabel}</span>
                                          </template>
                                          <span class={selectedInst.statusBadgeClass}>{selectedInst.Status__c}</span>
                                     </div>
@@ -2530,6 +2530,11 @@
                             class="slds-m-bottom_small signal-name-input"
                             data-id="signal-name-input">
                         </lightning-input>
+                        <template if:true={isApprovalSignalName}>
+                            <p class="slds-text-color_error slds-m-bottom_small" role="alert" data-id="approval-signal-notice">
+                                Error: You cannot send an approval signal here. Close this window. Then select Approve or Reject on the approval step.
+                            </p>
+                        </template>
                         <lightning-textarea
                             label="Payload JSON (Optional)"
                             value={signalPayload}

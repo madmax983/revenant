@@ -297,6 +297,9 @@ const ASYNC_LIMITS = {
   HEAP: 12000000,
 };
 
+// True if the name starts with "approve:". Only Approve and Reject send these signals (#233).
+const isApprovalSignal = (name) => /^approve:/i.test((name || "").trim());
+
 export default class WorkflowDashboard extends LightningElement {
   // App Builder settings for the Platform Event thresholds (#120). If a value
   // is blank or not valid, the component uses the server values.
@@ -993,7 +996,17 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get isSendSignalDisabled() {
-    return !this.signalName || !this.signalName.trim() || this.loadingDetails;
+    return (
+      !this.signalName ||
+      !this.signalName.trim() ||
+      this.isApprovalSignalName ||
+      this.loadingDetails
+    );
+  }
+
+  // Block an approval name. Only Approve and Reject add the decision payload and do the role check (#233).
+  get isApprovalSignalName() {
+    return isApprovalSignal(this.signalName);
   }
 
   // Builds the shared stats/count promises and settles them alongside the
@@ -3379,12 +3392,11 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenSignalModal() {
     this.signalModalOpen = true;
-    // Pre-fill the awaited signal name (approval/child waits) so the operator can send it
-    // with no transformation; a generic/timer wait leaves it blank for manual entry.
-    this.signalName =
-      this.selectedInst && this.selectedInst.awaitedSignalName
-        ? this.selectedInst.awaitedSignalName
-        : "";
+    // Fill in the awaited signal name for a child wait. Leave it blank for an approval wait:
+    // the operator must use Approve or Reject (#233). Leave it blank for a generic or timer wait.
+    const awaited =
+      (this.selectedInst && this.selectedInst.awaitedSignalName) || "";
+    this.signalName = isApprovalSignal(awaited) ? "" : awaited;
     this.signalPayload = "";
   }
 
@@ -3403,6 +3415,9 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleSignalModalConfirm() {
+    if (this.isApprovalSignalName) {
+      return;
+    }
     if (this.signalPayload && this.signalPayload.trim()) {
       const textarea = this.template.querySelector(
         '[data-id="signal-payload-input"]',

@@ -2379,6 +2379,84 @@ describe("c-workflow-dashboard awaited-signal descriptor (#84)", () => {
     );
     expect(nameInput.value).toBe("");
   });
+
+  // Issue #233: a generic send has no decision payload and skips the role check.
+  function mockApprovalWait() {
+    const inst = {
+      Id: "a0G000000000001",
+      Name: "WI-0001",
+      Workflow_Name__c: "TestWorkflow",
+      Status__c: "Suspended",
+    };
+    getFilteredInstances.mockResolvedValue([inst]);
+    getInstanceDetails.mockResolvedValue({
+      instance: inst,
+      steps: [],
+      children: [],
+      payloadFiles: {},
+      waitDescriptor: {
+        type: "approval",
+        signalName: "Approve:Review",
+        label: "Approve:Review",
+        stepName: "ReviewStep",
+      },
+    });
+  }
+
+  function typeSignalName(element, value) {
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    nameInput.value = value;
+    nameInput.dispatchEvent(new CustomEvent("change"));
+    return flushPromises();
+  }
+
+  function getConfirmBtn(element) {
+    return element.shadowRoot.querySelector(
+      'lightning-button[data-id="confirm-signal-btn"]',
+    );
+  }
+
+  it("does not pre-fill the Send Signal modal for an approval wait", async () => {
+    mockApprovalWait();
+
+    const element = await openSignalModal();
+
+    const nameInput = element.shadowRoot.querySelector(
+      'lightning-input[data-id="signal-name-input"]',
+    );
+    expect(nameInput.value).toBe("");
+    expect(getConfirmBtn(element).disabled).toBe(true);
+  });
+
+  it("blocks a typed approval signal name and points to Approve or Reject", async () => {
+    mockApprovalWait();
+    const element = await openSignalModal();
+
+    await typeSignalName(element, " approve:Review ");
+
+    const notice = element.shadowRoot.querySelector(
+      '[data-id="approval-signal-notice"]',
+    );
+    expect(notice).not.toBeNull();
+    expect(getConfirmBtn(element).disabled).toBe(true);
+    getConfirmBtn(element).dispatchEvent(new CustomEvent("click"));
+    await flushPromises();
+    expect(injectSignal).not.toHaveBeenCalled();
+  });
+
+  it("shows no approval notice for a non-approval signal name", async () => {
+    mockApprovalWait();
+    const element = await openSignalModal();
+
+    await typeSignalName(element, "PaymentReceived");
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="approval-signal-notice"]'),
+    ).toBeNull();
+    expect(getConfirmBtn(element).disabled).toBe(false);
+  });
 });
 
 describe("c-workflow-dashboard business attributes filters", () => {
