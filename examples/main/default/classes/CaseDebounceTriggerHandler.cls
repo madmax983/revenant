@@ -46,14 +46,16 @@ public inherited sharing class CaseDebounceTriggerHandler {
           'description' => c.Description
         };
 
-        // Collect bulk debounce request: debounce for 5 seconds
+        // Wait for 5 quiet seconds. Start after 300 seconds at most.
+        // Use only the fluent setters. A subscriber org cannot see the fields.
+        // In a subscriber org, put the namespace first: rvn.WorkflowDebouncer.
         WorkflowDebouncer.DebounceRequest debounceReq = new WorkflowDebouncer.DebounceRequest(
-          'CaseDebounceWorkflowExample',
-          'Case_Debounce_' + c.Id,
-          JSON.serialize(input)
-        );
-        debounceReq.debounceSeconds = 5;
-        debounceReq.maxWaitSeconds = null;
+            'CaseDebounceWorkflowExample',
+            'Case_Debounce_' + c.Id,
+            JSON.serialize(input)
+          )
+          .withDebounce(5)
+          .withMaxWait(300);
         debounceRequests.add(debounceReq);
       }
     }

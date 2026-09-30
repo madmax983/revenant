@@ -379,6 +379,44 @@ public class GlobalApiSubscriberTest {
   }
 
   @IsTest
+  static void debouncedStartArmsWithoutAnInstance() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      WorkflowDebouncer.startDebounced(
+        new WorkflowDebouncer.DebounceRequest(
+            WORKFLOW,
+            'global-api-debounce-1',
+            '{"sku":"A-3"}'
+          )
+          .withDebounce(10)
+          .withMaxWait(60)
+      );
+      WorkflowDebouncer.startDebounced(
+        new List<WorkflowDebouncer.DebounceRequest>{
+          new WorkflowDebouncer.DebounceRequest(
+              WORKFLOW,
+              'global-api-debounce-2',
+              null
+            )
+            .withDebounce(10)
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        null,
+        WorkflowStatusRead.getStatus('global-api-debounce-1'),
+        'The start waits for the quiet window'
+      );
+      System.assertEquals(
+        null,
+        WorkflowStatusRead.getStatus('global-api-debounce-2'),
+        'The bulk start waits for the quiet window'
+      );
+    }
+  }
+
+  @IsTest
   static void resultFactoriesAndRetryPolicyAreReachable() {
     RetryPolicy policy = new RetryPolicy(2, (Double) 1.5, 4);
     System.assertEquals(2, policy.initialIntervalSeconds, 'Interval');

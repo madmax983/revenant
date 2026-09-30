@@ -218,7 +218,7 @@ private class WorkflowInputValidationRoutingTest {
       Test.startTest();
       // Arm an INVALID debounced ValidatedWorkflow row: it is accepted at arm time
       // (the contract is deferred to sweep, per the ratified arm-and-defer rule)...
-      WorkflowStartService.startDebounced(
+      WorkflowDebouncer.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             CONTRACT_WF,
             'VIV_deb_sweep_bad',
@@ -227,7 +227,7 @@ private class WorkflowInputValidationRoutingTest {
           .withDebounce(10)
       );
       // ...alongside a VALID sibling row armed in the same window.
-      WorkflowStartService.startDebounced(
+      WorkflowDebouncer.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             CONTRACT_WF,
             'VIV_deb_sweep_good',

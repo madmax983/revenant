@@ -1,9 +1,9 @@
 /**
  * @description Sequences the watchdog heartbeat: the fixed-order body that
  * WorkflowEngine.processWatchdogHeartbeat() delegates to. Runs the timeout,
- * deadline, batch-wait, sleep-resume, unrouted-signal, schedule, debounce, schedule-health
- * alert, concurrency-reconcile, transient-retry-rescue, orphan-reclaim, and
- * stall-detection phases in strict order, then publishes deferred lifecycle
+ * deadline, batch-wait, sleep-resume, unrouted-signal, schedule, schedule-health
+ * alert, concurrency-reconcile, transient-retry-rescue, orphan-reclaim,
+ * stall-detection and debounce phases in strict order, then publishes deferred lifecycle
  * events so a best-effort publish can never spend a DML statement a required
  * section needs. Then it publishes the engine-health snapshot
  * (WorkflowMetricsPublisher, default off) and writes the liveness stamp
@@ -81,13 +81,6 @@ public inherited sharing class WorkflowHeartbeatService {
       // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
     }
 
-    // 3b. Process due debounced starts (0-slot: runs inside the watchdog heartbeat).
-    try {
-      WorkflowDebouncer.sweep();
-    } catch (Exception ignored) {
-      // Best-effort sweep; a failure here must not abort the watchdog heartbeat.
-    }
-
     // 3c. Alert on overdue or failed schedules (issue #126). It runs after
     // the schedule sweep, so a row that this sweep fired is not reported.
     // It does not write instance, step or schedule rows.
@@ -138,6 +131,16 @@ public inherited sharing class WorkflowHeartbeatService {
       WorkflowAlertManager.detectAndAlertStalls(now);
     } catch (Exception ignored) {
       // Best-effort stall detection; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 7-debounce. Process due debounced starts (0-slot, issue #140). It locks
+    // its rows until the heartbeat commits. A trigger that re-arms such a key
+    // waits. Thus it runs late, but before 7a, so `$global` is still last.
+    try {
+      WorkflowDebouncer.sweep();
+    } catch (Exception ex) {
+      // The next heartbeat tries again. An error must not stop the heartbeat.
+      WorkflowLog.error('DebounceSweep', ex.getMessage());
     }
 
     // 7a. Issue #136: reconcile the global slot count and record an emergency

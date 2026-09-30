@@ -650,7 +650,7 @@ public class WorkflowPayloadCodecE2ETest {
       String input = '{"ssn":"' + SECRET + '"}';
 
       Test.startTest();
-      WorkflowStartService.startDebounced(
+      WorkflowDebouncer.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowPayloadCodecE2ETest.SecretWorkflow',
             'codec-debounce',
@@ -819,7 +819,7 @@ public class WorkflowPayloadCodecE2ETest {
       WorkflowEngine.disableQueueableInTest = true;
       WorkflowEngine.mockNow = Datetime.now();
       Test.startTest();
-      WorkflowStartService.startDebounced(
+      WorkflowDebouncer.startDebounced(
         new WorkflowDebouncer.DebounceRequest(
             'WorkflowPayloadCodecE2ETest.SecretWorkflow',
             'codec-debounce-good',

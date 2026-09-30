@@ -43,7 +43,11 @@ public inherited sharing class WorkflowDebounceSweeper {
    * @param now The sweep timestamp used to select due states and drive retry math.
    */
   public static void sweep(Datetime now) {
-    List<Debounce_State__c> dueStates = loadDueStates(now);
+    List<Id> dueIds = findDueIds(now);
+    if (dueIds.isEmpty()) {
+      return;
+    }
+    List<Debounce_State__c> dueStates = lockDueStates(dueIds, now);
     if (dueStates.isEmpty()) {
       return;
     }
@@ -56,29 +60,71 @@ public inherited sharing class WorkflowDebounceSweeper {
   }
 
   /**
-   * @description Loads up to 100 due, non-exhausted debounce states ordered for
-   * stable, deterministic firing.
+   * @description Finds up to 100 due, non-exhausted debounce states, oldest
+   * first. SOQL does not allow ORDER BY with FOR UPDATE, so this query does
+   * not lock. lockDueStates locks the rows.
    * @param now The cutoff timestamp; states with Fire_At__c at or before this fire.
-   * @return The due debounce states, ordered by Fire_At__c then Id.
+   * @return The due state Ids, ordered by Fire_At__c then Id.
    */
-  private static List<Debounce_State__c> loadDueStates(Datetime now) {
-    return [
-      SELECT
-        Id,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Input_Json__c,
-        Attributes_Json__c,
-        Causation_Id__c,
-        Fire_At__c,
-        Retry_Count__c,
-        Error_Message__c
+  @TestVisible
+  private static List<Id> findDueIds(Datetime now) {
+    List<Id> ids = new List<Id>();
+    for (Debounce_State__c state : [
+      SELECT Id
       FROM Debounce_State__c
       WHERE Fire_At__c <= :now AND (Retry_Count__c = NULL OR Retry_Count__c < 3)
       WITH SYSTEM_MODE
       ORDER BY Fire_At__c ASC, Id ASC
       LIMIT 100
-    ];
+    ]) {
+      ids.add(state.Id);
+    }
+    return ids;
+  }
+
+  /**
+   * @description Locks the found rows and reads them again. A trigger that
+   * re-arms a row now waits for this sweep. A row that a trigger re-armed
+   * before the lock is not due, so the sweep skips it. Thus the sweep starts
+   * the newest input. It does not delete a newer input.
+   * @param ids The Ids from findDueIds.
+   * @param now The cutoff timestamp.
+   * @return The rows that are still due, in the order of ids.
+   */
+  @TestVisible
+  private static List<Debounce_State__c> lockDueStates(
+    List<Id> ids,
+    Datetime now
+  ) {
+    Map<Id, Debounce_State__c> byId = new Map<Id, Debounce_State__c>(
+      [
+        SELECT
+          Id,
+          Workflow_Name__c,
+          Correlation_Key__c,
+          Input_Json__c,
+          Attributes_Json__c,
+          Causation_Id__c,
+          Fire_At__c,
+          Retry_Count__c,
+          Error_Message__c
+        FROM Debounce_State__c
+        WHERE
+          Id IN :ids
+          AND Fire_At__c <= :now
+          AND (Retry_Count__c = NULL
+          OR Retry_Count__c < 3)
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]
+    );
+    List<Debounce_State__c> due = new List<Debounce_State__c>();
+    for (Id stateId : ids) {
+      if (byId.containsKey(stateId)) {
+        due.add(byId.get(stateId));
+      }
+    }
+    return due;
   }
 
   /**
@@ -133,7 +179,7 @@ public inherited sharing class WorkflowDebounceSweeper {
     Savepoint sp = Database.setSavepoint();
     try {
       if (!ctx.startRequests.isEmpty()) {
-        WorkflowEngine.startOrGet(ctx.startRequests);
+        WorkflowStartService.startOrGetActiveBulk(ctx.startRequests);
       }
       ctx.toDelete.addAll(ctx.dueStates);
     } catch (Exception ex) {
@@ -185,7 +231,9 @@ public inherited sharing class WorkflowDebounceSweeper {
   ) {
     Savepoint individualSp = Database.setSavepoint();
     try {
-      WorkflowEngine.startOrGet(new List<WorkflowEngine.StartRequest>{ req });
+      WorkflowStartService.startOrGetActiveBulk(
+        new List<WorkflowEngine.StartRequest>{ req }
+      );
       return true;
     } catch (Exception innerEx) {
       Database.rollback(individualSp);
@@ -225,7 +273,7 @@ public inherited sharing class WorkflowDebounceSweeper {
     if (currentRetries >= 3) {
       state.Fire_At__c = now.addYears(100); // Quarantine
     } else {
-      // Exponential backoff retry in 1 or 2 minutes
+      // Retry after 1 minute, then after 2 minutes.
       state.Fire_At__c = now.addSeconds(currentRetries * 60);
     }
   }

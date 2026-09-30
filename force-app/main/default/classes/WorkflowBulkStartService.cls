@@ -40,6 +40,26 @@ public inherited sharing class WorkflowBulkStartService {
   public static List<WorkflowEngine.StartResult> startOrGetBulk(
     List<WorkflowEngine.StartRequest> requests
   ) {
+    return startOrGetBulk(requests, true);
+  }
+
+  /**
+   * @description Bulk get-or-start that matches only active instances. A key
+   * whose last run is terminal gets a new instance, also inside the dedup
+   * window. The debounce sweep uses it (issue #140): each burst is a new run.
+   * @param requests the start requests to process
+   * @return StartResults index-aligned with requests (null per null request)
+   */
+  public static List<WorkflowEngine.StartResult> startOrGetActiveBulk(
+    List<WorkflowEngine.StartRequest> requests
+  ) {
+    return startOrGetBulk(requests, false);
+  }
+
+  private static List<WorkflowEngine.StartResult> startOrGetBulk(
+    List<WorkflowEngine.StartRequest> requests,
+    Boolean includeTerminal
+  ) {
     List<WorkflowEngine.StartResult> results = new List<WorkflowEngine.StartResult>();
     if (requests == null || requests.isEmpty()) {
       return results;
@@ -55,9 +75,9 @@ public inherited sharing class WorkflowBulkStartService {
 
     // 2. Pre-resolve existing instances within the dedup scope (keyed by the
     //    normalized correlation key to honor case-insensitive matching).
-    Map<String, Workflow_Instance__c> existingByKey = WorkflowStartDedup.findExistingByKey(
-      correlationKeys
-    );
+    Map<String, Workflow_Instance__c> existingByKey = includeTerminal
+      ? WorkflowStartDedup.findExistingByKey(correlationKeys)
+      : WorkflowStartDedup.findActiveByKey(correlationKeys);
 
     // 3. Decide per request (preserving order): dedup to an existing instance,
     //    dedup to an intra-batch sibling, or build a fresh instance to insert.

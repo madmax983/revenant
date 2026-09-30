@@ -171,8 +171,8 @@ WorkflowDebouncer.startDebounced(new List<WorkflowDebouncer.DebounceRequest>{
 
 `DebounceRequest` ctor: `DebounceRequest(String workflowName, String correlationKey, String inputJson)`.
 Fluent setters: `withDebounce(Integer)`, `withMaxWait(Integer)`, `withAttributesJson(String)`, `withCausationId(String)`.
-The public enqueue entry point is `WorkflowDebouncer.startDebounced(List<DebounceRequest>)`
-(single-request `WorkflowStartService.startDebounced(WorkflowDebouncer.DebounceRequest)` also exists).
+The enqueue entry points are `WorkflowDebouncer.startDebounced(List<DebounceRequest>)` and
+`WorkflowDebouncer.startDebounced(DebounceRequest)`. Both are `global` (#140).
 
 ---
 
@@ -426,6 +426,19 @@ and `Validation Error` (String) — so a Flow can branch on invalid input instea
 catching a fault. Existing invocable outputs (`Workflow Instance ID`, `Is New`) are
 unchanged. See the README's "Validate Start Input Against a Contract (opt-in)"
 section for the full contract shape, type-coercion rules, and bulk/Flow behavior.
+
+---
+
+## Changed: debounced starts (additive)
+
+**Issue #140.** No signature changes.
+
+- `WorkflowDebouncer`, `DebounceRequest(String, String, String)`, `withDebounce`, `withMaxWait` and both `startDebounced` overloads are `global`. Set the windows with `withDebounce` and `withMaxWait`. A subscriber org cannot set attributes or a causation id.
+- `Fire_At__c` rounds up to the next whole second. A test that compares it with a time that has milliseconds must round up too.
+- The sweep matches only an active instance. Before, a burst within `Dedup_Window_Minutes__c` of a finished run went to that run. Now it starts a new run.
+- `WorkflowStartService.startDebounced` is removed. Use `WorkflowDebouncer.startDebounced`.
+
+See [docs/debounce.md](docs/debounce.md).
 
 ---
 

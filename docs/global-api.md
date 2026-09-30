@@ -18,6 +18,7 @@ Decision record: [ADR 0006](adr/0006-frozen-global-api.md). Issue: #122.
 
 - **Authoring SPI:** the step and definition interfaces, `RetryConfigurable`, `AutoRetryConfigurable`, `StepContext` and its accessor objects, `StepResult`, `RetryPolicy`, `CaptureProducer`.
 - **Control facade:** `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`) and `WorkflowStatusRead.getStatus`.
+- **Debounced start:** `WorkflowDebouncer.startDebounced` and `DebounceRequest` (issue #140). See [debounce.md](debounce.md).
 - **Flow:** the Start, Signal, and Get Workflow Status invocable actions.
 
 `getStatus` is on `WorkflowStatusRead`, not on `WorkflowEngine`. It moved there on 2026-07-15, before this release. The README names `WorkflowStatusRead.getStatus` as the read contract.
@@ -242,6 +243,15 @@ static WorkflowStatusRead.getStatus(String): WorkflowEngine.WorkflowStatus
 static WorkflowStatusRead.getStatus(List<Id>): List<WorkflowEngine.WorkflowStatus>
 static WorkflowStatusRead.getStatus(List<String>): List<WorkflowEngine.WorkflowStatus>
 
+# Debounced start
+global class WorkflowDebouncer
+static WorkflowDebouncer.startDebounced(WorkflowDebouncer.DebounceRequest): void
+static WorkflowDebouncer.startDebounced(List<WorkflowDebouncer.DebounceRequest>): void
+global class WorkflowDebouncer.DebounceRequest
+new WorkflowDebouncer.DebounceRequest(String, String, String)
+WorkflowDebouncer.DebounceRequest.withDebounce(Integer): WorkflowDebouncer.DebounceRequest
+WorkflowDebouncer.DebounceRequest.withMaxWait(Integer): WorkflowDebouncer.DebounceRequest
+
 # Flow: Start Workflow
 global class WorkflowStartInvocableAction
 @InvocableMethod static WorkflowStartInvocableAction.startWorkflow(List<WorkflowStartInvocableAction.StartRequest>): List<WorkflowStartInvocableAction.StartResult>
@@ -303,7 +313,8 @@ Not global in v1. Add one only when a subscriber needs it. You cannot remove a g
 
 - `WorkflowEngine.signalOrStart` and the Signal-or-Start invocable action.
 - `WorkflowHistoryRead.getHistory`, `WorkflowHistoryRead.getStepError`, `WorkflowInstanceQuery.findInstances`.
-- `RateLimiter.acquire`, `WorkflowDebouncer.startDebounced`, `WorkflowResumeService.resumeInstance`, `WorkflowCancellation.cancelWithCompensations`.
+- `RateLimiter.acquire`, `WorkflowResumeService.resumeInstance`, `WorkflowCancellation.cancelWithCompensations`.
+- `WorkflowDebouncer.DebounceRequest.withAttributesJson` and `withCausationId`.
 - `WorkflowEngine.StartRequest.inputJson`. `StepContext.Signal.createdDate`.
 - `WorkflowBatchStep` as `global virtual`, with `bind()` and `Binding`, so a subscriber can extend it (issue #138). Today a subscriber uses the input JSON.
 - Opt-in interfaces: `ExecutionTimeoutConfigurable`, `CircuitBreakerGuarded`, `ValidatedWorkflow`, `WorkflowCatalogDescribable`, `PayloadCodec`, `WorkflowArchiveSink`.
