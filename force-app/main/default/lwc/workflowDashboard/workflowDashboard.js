@@ -632,7 +632,9 @@ export default class WorkflowDashboard extends LightningElement {
   get stepsNoteMessage() {
     const count = this.stepCount + (this.stepCountCapped ? "+" : "");
     const text =
-      "Input and output show for the newest " + this.stepTextRows + ".";
+      "Input, output and error text show for the newest " +
+      this.stepTextRows +
+      ".";
     if (!this.stepsTruncated) {
       return "The instance has " + count + " steps. " + text;
     }

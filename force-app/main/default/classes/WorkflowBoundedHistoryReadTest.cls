@@ -208,6 +208,31 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   @IsTest
+  static void longTextReadStopsAtTheHeapBudget() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Running'
+      );
+      insert inst;
+      insertRows(inst.Id, 'Big.Step', 'Completed', 10, 0);
+      WorkflowInstanceDetailService.textHeapBudget = 1;
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Assert.areEqual(10, steps.size(), 'No row is hidden');
+      Assert.areEqual(2, details.get('stepTextRows'), 'One chunk is read');
+      Assert.isNotNull(steps[9].Output__c, 'The newest row has text');
+      Assert.isNull(steps[7].Output__c, 'A row past the budget has no text');
+    }
+  }
+
+  @IsTest
   static void shortHistoryIsNotTruncated() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = new Workflow_Instance__c(

@@ -12,6 +12,16 @@ public inherited sharing class WorkflowInstanceDetailService {
   /** @description Newest rows that carry Input, Output and error text. */
   public static final Integer LONG_TEXT_ROWS = 50;
 
+  // Heap the long text reads may add (bytes). The read stops at the budget.
+  @TestVisible
+  private static Integer textHeapBudget = 2000000;
+
+  // Rows per long text query. A small chunk keeps one read below the budget.
+  private static final Integer TEXT_CHUNK = 2;
+
+  // Window rows that carry long text in the last loadStepWindow call.
+  private static Integer textRowsRead = 0;
+
   // Upper bound of the step row count. COUNT() uses one query row.
   private static final Integer STEP_COUNT_CAP = 50000;
 
@@ -113,7 +123,7 @@ public inherited sharing class WorkflowInstanceDetailService {
       'stepCount' => stepCount,
       'stepCountCapped' => stepCount >= STEP_COUNT_CAP,
       'stepWindow' => MAX_STEP_ROWS,
-      'stepTextRows' => LONG_TEXT_ROWS,
+      'stepTextRows' => textRowsRead,
       'children' => children,
       'successor' => successors.isEmpty() ? null : successors[0],
       'waitingOn' => computeDetailWaitingOn(instance),
@@ -135,7 +145,8 @@ public inherited sharing class WorkflowInstanceDetailService {
   }
 
   // Reads the newest MAX_STEP_ROWS rows without long text. Then reads the long
-  // text for the newest LONG_TEXT_ROWS rows and the latest parked (Pending) row.
+  // text for up to LONG_TEXT_ROWS newest rows and the latest parked (Pending) row,
+  // within a heap budget.
   // Returns the rows in ascending order. A row with no long text has null fields.
   private static List<Workflow_Step_Execution__c> loadStepWindow(
     Id instanceId
@@ -158,11 +169,11 @@ public inherited sharing class WorkflowInstanceDetailService {
       LIMIT :maxRows
     ];
     Set<Id> windowIds = new Set<Id>();
-    Set<Id> textIds = new Set<Id>();
+    List<Id> newestTextIds = new List<Id>();
     for (Integer i = 0; i < newest.size(); i++) {
       windowIds.add(newest[i].Id);
       if (i < LONG_TEXT_ROWS) {
-        textIds.add(newest[i].Id);
+        newestTextIds.add(newest[i].Id);
       }
     }
     // The wait descriptor needs the parked row, even when it is older.
@@ -175,28 +186,16 @@ public inherited sharing class WorkflowInstanceDetailService {
       LIMIT 1
     ];
     Id parkedId = parked.isEmpty() ? null : parked[0].Id;
-    if (parkedId != null) {
-      textIds.add(parkedId);
-    }
-    Map<Id, Workflow_Step_Execution__c> withText = new Map<Id, Workflow_Step_Execution__c>(
-      [
-        SELECT
-          Id,
-          Step_Name__c,
-          Status__c,
-          Input__c,
-          Output__c,
-          Retry_Count__c,
-          Error_Details__c,
-          CPU_Time_Ms__c,
-          SOQL_Query_Count__c,
-          Heap_Size_Bytes__c,
-          CreatedDate
-        FROM Workflow_Step_Execution__c
-        WHERE Id IN :textIds
-        WITH SYSTEM_MODE
-      ]
+    Map<Id, Workflow_Step_Execution__c> withText = readLongText(
+      parkedId,
+      newestTextIds
     );
+    textRowsRead = 0;
+    for (Id rowId : windowIds) {
+      if (withText.containsKey(rowId)) {
+        textRowsRead++;
+      }
+    }
 
     List<Workflow_Step_Execution__c> steps = new List<Workflow_Step_Execution__c>();
     if (parkedId != null && !windowIds.contains(parkedId)) {
@@ -213,6 +212,57 @@ public inherited sharing class WorkflowInstanceDetailService {
       steps.add(row);
     }
     return steps;
+  }
+
+  // Reads the long text of the parked row, then of the newest rows, in small
+  // chunks. It stops when the reads used the heap budget. It always reads the
+  // first chunk.
+  private static Map<Id, Workflow_Step_Execution__c> readLongText(
+    Id parkedId,
+    List<Id> newestIds
+  ) {
+    List<Id> order = new List<Id>();
+    if (parkedId != null) {
+      order.add(parkedId);
+    }
+    for (Id rowId : newestIds) {
+      if (rowId != parkedId) {
+        order.add(rowId);
+      }
+    }
+    Integer heapLimit = Limits.getHeapSize() + textHeapBudget;
+    Map<Id, Workflow_Step_Execution__c> withText = new Map<Id, Workflow_Step_Execution__c>();
+    for (Integer i = 0; i < order.size(); i += TEXT_CHUNK) {
+      if (i > 0 && Limits.getHeapSize() > heapLimit) {
+        break;
+      }
+      List<Id> chunk = new List<Id>();
+      for (Integer j = i; j < Math.min(i + TEXT_CHUNK, order.size()); j++) {
+        chunk.add(order[j]);
+      }
+      withText.putAll(
+        new Map<Id, Workflow_Step_Execution__c>(
+          [
+            SELECT
+              Id,
+              Step_Name__c,
+              Status__c,
+              Input__c,
+              Output__c,
+              Retry_Count__c,
+              Error_Details__c,
+              CPU_Time_Ms__c,
+              SOQL_Query_Count__c,
+              Heap_Size_Bytes__c,
+              CreatedDate
+            FROM Workflow_Step_Execution__c
+            WHERE Id IN :chunk
+            WITH SYSTEM_MODE
+          ]
+        )
+      );
+    }
+    return withText;
   }
 
   private static Workflow_Instance__c loadInstanceDetailRecord(Id instanceId) {

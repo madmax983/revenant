@@ -4000,7 +4000,7 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     );
     expect(note).not.toBeNull();
     expect(note.textContent).toBe(
-      "Showing the newest 500 of 10000 steps. Input and output show for the newest 50.",
+      "Showing the newest 500 of 10000 steps. Input, output and error text show for the newest 50.",
     );
   });
 
@@ -4039,7 +4039,7 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
       '[data-id="steps-truncated"]',
     );
     expect(note.textContent).toBe(
-      "The instance has 120 steps. Input and output show for the newest 50.",
+      "The instance has 120 steps. Input, output and error text show for the newest 50.",
     );
   });
 
