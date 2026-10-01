@@ -188,8 +188,8 @@ public inherited sharing class WorkflowInstanceHold {
   // A run that waits for a concurrency slot must not be Running without one.
   // It goes back to Suspended and the admission gate takes it. Sleep_Until__c
   // lets the watchdog drive it again if the enqueue is lost.
-  // A future timer from a wait that ended in the park keeps the instance
-  // Suspended (issue #240). The sleep sweep wakes it.
+  // A timer from a wait that ended in the park keeps the instance Suspended
+  // (issue #240). The sleep sweep wakes it.
   // Returns true when the timer keeps the instance asleep, so no step may run.
   private static Boolean unpark(Workflow_Instance__c inst) {
     if (inst.Concurrency_Parked__c && !inst.Concurrency_Slot_Held__c) {

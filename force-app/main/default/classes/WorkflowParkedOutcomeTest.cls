@@ -12,7 +12,8 @@ public class WorkflowParkedOutcomeTest {
   private static final String CHILD_WF = 'WorkflowEngineMocksATest.ChildWorkflow';
   private static final List<String> PARKS = new List<String>{
     'DefinitionChanged',
-    'Paused'
+    'Paused',
+    'Held'
   };
 
   /** @description One-step definition for the release tests. */
@@ -81,11 +82,19 @@ public class WorkflowParkedOutcomeTest {
     return outcome;
   }
 
+  // A Datetime field keeps whole seconds. The test value has no milliseconds.
+  private static Datetime futureWake() {
+    return Datetime.newInstance(
+      (Datetime.now().addHours(1).getTime() / 1000) * 1000
+    );
+  }
+
   private static Workflow_Instance__c load(Id instanceId) {
     return [
       SELECT
         Id,
         Status__c,
+        Workflow_Name__c,
         Correlation_Key__c,
         Current_Step__c,
         Sleep_Until__c,
@@ -284,7 +293,7 @@ public class WorkflowParkedOutcomeTest {
   static void testReleaseKeepsFutureTimer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Datetime wake = Datetime.now().addHours(1);
+      Datetime wake = futureWake();
       Workflow_Instance__c inst = newInstance('DefinitionChanged', wake);
       newStepExec(inst.Id);
       WorkflowDefinitionChangeService.release(inst.Id);
@@ -294,8 +303,10 @@ public class WorkflowParkedOutcomeTest {
     }
   }
 
+  // A timed wait can end in the park and its timer can end before release. The
+  // sweep then routes the timeout fallback. Release must not run the step.
   @IsTest
-  static void testReleaseRunsWhenTimerElapsed() {
+  static void testReleaseKeepsElapsedTimerForSweep() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newInstance(
@@ -304,7 +315,23 @@ public class WorkflowParkedOutcomeTest {
       );
       newStepExec(inst.Id);
       WorkflowDefinitionChangeService.release(inst.Id);
-      System.assertEquals('Running', load(inst.Id).Status__c);
+      System.assertEquals('Suspended', load(inst.Id).Status__c);
+    }
+  }
+
+  @IsTest
+  static void testReleaseParallelKeepsTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Datetime wake = futureWake();
+      Workflow_Instance__c inst = newInstance('DefinitionChanged', wake);
+      inst.Current_Step__c = STEP + ',' + STEP_B;
+      update inst;
+      newStepExec(inst.Id);
+      WorkflowDefinitionChangeService.release(inst.Id);
+      Workflow_Instance__c after = load(inst.Id);
+      System.assertEquals('Suspended', after.Status__c);
+      System.assertEquals(wake, after.Sleep_Until__c);
     }
   }
 
@@ -323,7 +350,7 @@ public class WorkflowParkedOutcomeTest {
   static void testPauseResumeKeepsFutureTimer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Datetime wake = Datetime.now().addHours(1);
+      Datetime wake = futureWake();
       Workflow_Instance__c sleeping = newInstance('Paused', wake);
       Workflow_Instance__c plain = newInstance('Paused', null);
       newStepExec(sleeping.Id);
@@ -336,10 +363,24 @@ public class WorkflowParkedOutcomeTest {
   }
 
   @IsTest
+  static void testPauseResumeKeepsElapsedTimerForSweep() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newInstance(
+        'Paused',
+        Datetime.now().addMinutes(-5)
+      );
+      newStepExec(inst.Id);
+      WorkflowPauseGate.resumeDefinition(WF);
+      System.assertEquals('Suspended', load(inst.Id).Status__c);
+    }
+  }
+
+  @IsTest
   static void testHoldReleaseKeepsFutureTimer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Datetime wake = Datetime.now().addHours(1);
+      Datetime wake = futureWake();
       Workflow_Instance__c inst = newInstance('Held', wake);
       inst.Held_At__c = Datetime.now();
       update inst;

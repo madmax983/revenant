@@ -21,7 +21,7 @@ A step can finish after its instance parks (`DefinitionChanged`, `Paused`). A wa
 | B1  | One shared park check. `waitStatus` and the join use it.       | Yes. One place, five handlers fixed.                       |
 | B2  | Guard each handler.                                            | No. Five copies.                                           |
 | B3  | Guard in `assertInstanceRunnable`. Throw on a park.            | No. The step result would be lost.                         |
-| B4  | On release, a future `Sleep_Until__c` gives `Suspended`.       | Yes. The sweep wakes it. No new field.                     |
+| B4  | On release, any `Sleep_Until__c` gives `Suspended`.            | Yes. The sweep wakes it. No new field.                     |
 | B5  | New marker field for "wait recorded in park".                  | No. Needs permission, report and doc changes.              |
 | B6  | Reschedule a sleep job on release.                             | No. The sweep is the backstop. Not needed.                 |
 | B7  | Pause park clears `Sleep_Until__c`, like the other gates.      | Yes. Makes B4 safe.                                        |
@@ -29,15 +29,15 @@ A step can finish after its instance parks (`DefinitionChanged`, `Paused`). A wa
 
 ## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                           | Prevention                                                    |
-| ----------------------------------------------------- | ------------------------------------------------------------- |
-| A normal wait stops to write `Suspended`.             | Test: a `Running` instance still gets `Suspended`.            |
-| A stale timer keeps a released instance asleep.       | Pause park clears the timer. Test.                            |
-| An elapsed timer keeps the instance asleep.           | Only a future timer gives `Suspended`. Test.                  |
-| A parallel instance resumes a sleeping branch early.  | Same rule for parallel. Test.                                 |
-| Parallel FAIL verdict keeps the park and strands.     | FAIL stays terminal. No open branch to drive. Test pins it.   |
-| Hold release runs a step that must sleep.             | Hold release uses the same rule. Test.                        |
-| Paused instance with a timer is dropped by the sweep. | Sweep only reads `Suspended`. Release sets `Suspended`. Test. |
+| Way to fail                                             | Prevention                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------- |
+| A normal wait stops to write `Suspended`.               | Test: a `Running` instance still gets `Suspended`.            |
+| A stale timer keeps a released instance asleep.         | Pause park clears the timer. Test.                            |
+| An elapsed timed wait runs early. Its fallback is lost. | Any timer gives `Suspended`. The sweep routes it. Test.       |
+| A parallel instance resumes a sleeping branch early.    | Same rule for parallel. Test.                                 |
+| Parallel FAIL verdict keeps the park and strands.       | FAIL stays terminal. No open branch to drive. Test pins it.   |
+| Hold release runs a step that must sleep.               | Hold release uses the same rule. Test.                        |
+| Paused instance with a timer is dropped by the sweep.   | Sweep only reads `Suspended`. Release sets `Suspended`. Test. |
 
 ## Six Hats
 
@@ -51,6 +51,7 @@ A step can finish after its instance parks (`DefinitionChanged`, `Paused`). A wa
 ## Decision
 
 - FAIL from the parallel verdict ends the instance. A failed branch has no delivery. Release could not drive it. The test pins this choice.
+- A parallel sibling can delay a branch that the park stopped. A timer is one field for all branches. A later change can add a timer for each branch.
 - Hold has the same release gap. It uses the same helper.
 
 ## Steps

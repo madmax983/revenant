@@ -53,8 +53,8 @@ public inherited sharing class WorkflowPauseResumeDrainer {
     List<Workflow_Instance__c> toRun = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c inst : parked) {
       toUpdate.add(inst);
-      // Issue #240: a future timer from a wait that ended in the park keeps the
-      // instance Suspended. The sleep sweep wakes it. No worker runs now.
+      // Issue #240: a timer from a wait that ended in the park keeps the instance
+      // Suspended. The sleep sweep wakes it. No worker runs now.
       if (WorkflowParkedTimer.settle(inst)) {
         continue;
       }

@@ -9,8 +9,8 @@ public inherited sharing class WorkflowDefinitionChangeService {
   /**
    * @description Releases one DefinitionChanged instance. It re-stamps the live
    * fingerprint and shape, sets Running, re-arms step timeouts, and enqueues the
-   * current step (or each open parallel branch). A future timer from a wait that
-   * ended in the park gives Suspended and no enqueue.
+   * current step (or each open parallel branch). A timer from a wait that ended
+   * in the park gives Suspended and no enqueue.
    * @param instanceId The parked instance.
    * @throws WorkflowEngine.WorkflowException When the instance is not parked,
    * the live definition does not resolve, or a current step is not in the live
@@ -75,7 +75,7 @@ public inherited sharing class WorkflowDefinitionChangeService {
       inst.Id
     );
     if (waiting) {
-      return; // A wait that ended its step in the park. The sweep wakes it.
+      return; // A wait ended in the park. The sweep wakes it.
     }
     // Re-arm before enqueue so a delayed worker still has a deadline.
     WorkflowTimeoutReArm.reArmTimeoutsForResume(
