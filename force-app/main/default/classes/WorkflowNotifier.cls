@@ -473,8 +473,8 @@ public inherited sharing class WorkflowNotifier {
   }
 
   // Nothing is sent yet: ask the platform to deliver the batch again. After
-  // MAX_RETRIES, stop: the rows stay Requested. WorkflowNotifierSweep sends
-  // them again.
+  // MAX_RETRIES, stop: the rows stay Requested. WorkflowNotifierSweep
+  // publishes them again.
   private static void retryOrGiveUp(String reason) {
     Integer retries;
     try {
@@ -1009,7 +1009,12 @@ public inherited sharing class WorkflowNotifier {
     return truncate(JSON.serialize(message));
   }
 
-  private static String truncate(String text) {
+  /**
+   * @description Cuts a text at the length of Message__c.
+   * @param text The text.
+   * @return The text, or its first part.
+   */
+  public static String truncate(String text) {
     return text != null &&
       text.length() > MAX_MESSAGE_LENGTH
       ? text.substring(0, MAX_MESSAGE_LENGTH)

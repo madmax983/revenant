@@ -153,15 +153,6 @@ public inherited sharing class WorkflowHeartbeatService {
       // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
     }
 
-    // 7c. Issue #274: publish lost approver-notification requests again.
-    // Best effort. It checks its DML budget and keeps a reserve.
-    try {
-      WorkflowNotifierSweep.run(now);
-    } catch (Exception ex) {
-      // The next heartbeat tries again. An error must not stop the heartbeat.
-      WorkflowLog.error('NotifierSweep', ex.getMessage());
-    }
-
     // All required heartbeat work (timed-out-step failures, sleep resumptions,
     // and schedule sweeps) is now done, so the best-effort lifecycle publish
     // runs after it with no risk of starving a required update/enqueue of its DML budget.
@@ -174,6 +165,15 @@ public inherited sharing class WorkflowHeartbeatService {
       WorkflowMetricsPublisher.publishSnapshot(now);
     } catch (Exception ignored) {
       // A failed snapshot must not stop the watchdog heartbeat.
+    }
+
+    // 7c. Issue #274: publish lost approver-notification requests again.
+    // Best effort. It checks its DML budget and keeps a reserve.
+    try {
+      WorkflowNotifierSweep.run(now);
+    } catch (Exception ex) {
+      // The next heartbeat tries again. An error must not stop the heartbeat.
+      WorkflowLog.error('NotifierSweep', ex.getMessage());
     }
 
     // 8. Write the liveness stamp (issue #113). Only a complete sweep gets

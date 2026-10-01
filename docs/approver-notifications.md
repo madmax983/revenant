@@ -115,7 +115,7 @@ A step that waits again on the same row with a new notification (for example, a 
 | `Requested` | The SUSPEND published the request. The trigger did not run yet. |
 | `Sending` | The trigger claimed the row, then the send or the result update stopped. The engine never reads the row again, so it never sends it two times. |
 | `Sent` | The platform accepted the send. It does not prove delivery. |
-| `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, too many recipients, a request that is not readable, no delivery after 3 attempts to publish again, or the error. |
+| `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, too many recipients, a request that is not readable, 3 publish attempts gave no delivery, or the error. |
 | `Skipped` | `Send_Notifications__c` was off at send time, or the wait ended before the send. |
 
 `Message__c` holds the request as JSON. After the send, it also has a `result` key. The sweep adds an `attempts` key.
@@ -133,7 +133,7 @@ Issue #274. The watchdog heartbeat runs `WorkflowNotifierSweep` (step 7c). It fi
 
 The sweep never sends. The trigger reads only `Requested` rows and claims each row, so a row is never sent twice. A row that becomes `Sent` is not read again.
 
-Limits of one heartbeat: 1 SOQL, 2 DML statements, max 20 DML rows, 0 send calls. The sweep stops when fewer than 12 DML statements or 40 DML rows are left. It does not throw.
+Limits of one heartbeat: 1 SOQL, 2 DML statements, max 20 DML rows, 0 send calls. The sweep stops when fewer than 13 DML statements or 31 DML rows are free. It keeps the reserve of the liveness stamp. It does not throw.
 
 ## Configuration
 

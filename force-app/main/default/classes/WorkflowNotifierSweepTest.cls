@@ -164,6 +164,44 @@ private class WorkflowNotifierSweepTest {
     Assert.areEqual(0, WorkflowNotifierSweep.publishedEvents.size());
   }
 
+  @IsTest
+  static void rowAtExactThresholdIsNotStale() {
+    insert as system anchor('Requested', T0, null);
+
+    Assert.areEqual(0, WorkflowNotifierSweep.run(T0.addMinutes(15)));
+    Assert.areEqual(
+      1,
+      WorkflowNotifierSweep.run(T0.addMinutes(15).addSeconds(1))
+    );
+  }
+
+  @IsTest
+  static void freshRowsDoNotBlockStaleRows() {
+    Workflow_Log__c fresh = anchor('Requested', T0.addMinutes(20), null);
+    Workflow_Log__c stale = anchor('Requested', T0, null);
+    insert as system new List<Workflow_Log__c>{ fresh, stale };
+
+    Assert.areEqual(1, WorkflowNotifierSweep.run(T0.addMinutes(30)));
+    Assert.areEqual(
+      stale.Fire_Key__c,
+      WorkflowNotifierSweep.publishedEvents[0].Idempotency_Key__c
+    );
+    Assert.isNull(attemptsOf(reload(fresh)));
+  }
+
+  @IsTest
+  static void oversizeUnreadableMessageStillFails() {
+    Workflow_Log__c row = anchor('Requested', T0, null);
+    row.Message__c = '{'.repeat(131000);
+    insert as system row;
+
+    Assert.areEqual(0, WorkflowNotifierSweep.run(T0.addMinutes(16)));
+
+    Workflow_Log__c after = reload(row);
+    Assert.areEqual('Failed', after.Outcome__c, 'The save does not fail');
+    Assert.isTrue(after.Message__c.length() <= 131000);
+  }
+
   // ----- Limits and errors
 
   @IsTest
@@ -177,17 +215,24 @@ private class WorkflowNotifierSweepTest {
     Integer count = WorkflowNotifierSweep.run(T0.addHours(1));
 
     Assert.areEqual(WorkflowNotifierSweep.MAX_ROWS, count);
-    Integer waiting = 0;
+    Set<String> waiting = new Set<String>();
     for (Workflow_Log__c row : [
-      SELECT Message__c
+      SELECT Fire_Key__c, Message__c
       FROM Workflow_Log__c
       WITH SYSTEM_MODE
     ]) {
       if (!row.Message__c.contains('attempts')) {
-        waiting++;
+        waiting.add(row.Fire_Key__c);
       }
     }
-    Assert.areEqual(2, waiting, 'The oldest rows go first; two rows wait');
+    Assert.areEqual(
+      new Set<String>{
+        rows[WorkflowNotifierSweep.MAX_ROWS].Fire_Key__c,
+        rows[WorkflowNotifierSweep.MAX_ROWS + 1].Fire_Key__c
+      },
+      waiting,
+      'The oldest rows go first: the two newest rows wait'
+    );
   }
 
   @IsTest
@@ -237,23 +282,40 @@ private class WorkflowNotifierSweepTest {
       UserInfo.getOrganizationId()
     );
     Test.startTest();
+    // The input 'none' suspends with no notification: a Pending step row
+    // with no anchor row and no event, as after a lost publish.
     Id instanceId = WorkflowEngine.start(
       'WorkflowNotifierTest.NotifyWorkflow',
       'sweep-e2e',
-      new Map<String, Object>{
-        'recipient' => String.valueOf(UserInfo.getUserId())
-      }
+      new Map<String, Object>{ 'none' => true }
     );
     new WorkflowTestHarness(instanceId).drive();
-    Workflow_Log__c row = [
-      SELECT Id, Outcome__c
-      FROM Workflow_Log__c
-      WHERE
-        Workflow_Instance__c = :instanceId
-        AND Log_Type__c = :WorkflowNotifier.LOG_TYPE
+    Workflow_Step_Execution__c step = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Pending'
       WITH SYSTEM_MODE
     ];
-    Assert.areEqual('Requested', row.Outcome__c, 'No event ran yet');
+    String key = WorkflowNotifier.fireKey(step.Id);
+    Workflow_Log__c row = anchor('Requested', Datetime.now(), null);
+    row.Fire_Key__c = key;
+    row.Workflow_Instance__c = instanceId;
+    row.Message__c = JSON.serialize(
+      new Map<String, Object>{
+        'key' => key,
+        'type' => WorkflowNotification.DEFAULT_TYPE,
+        'title' => 'Approve order',
+        'body' => 'Order needs your decision',
+        'target' => instanceId,
+        'recipients' => new List<String>{
+          String.valueOf(UserInfo.getUserId())
+        },
+        'owners' => new List<Id>()
+      }
+    );
+    insert as system row;
+    Test.getEventBus().deliver();
+    Assert.areEqual('Requested', reload(row).Outcome__c, 'No event: lost');
 
     WorkflowNotifierSweep.run(Datetime.now().addHours(1));
     Test.getEventBus().deliver();
@@ -262,11 +324,7 @@ private class WorkflowNotifierSweepTest {
     Test.stopTest();
 
     Assert.areEqual('Sent', reload(row).Outcome__c);
-    Assert.areEqual(
-      1,
-      WorkflowNotifier.sentNotifications.size(),
-      'Two events for one key send one notification'
-    );
+    Assert.areEqual(1, WorkflowNotifier.sentNotifications.size());
     Assert.areEqual(
       1,
       WorkflowNotifierSweep.publishedEvents.size(),

@@ -21,9 +21,9 @@ public inherited sharing class WorkflowNotifierSweep {
   private static final String ATTEMPTS_KEY = 'attempts';
   // DML statements of one sweep: the row update and the publish.
   private static final Integer DML_STATEMENTS = 2;
-  // Headroom for DML that runs after the sweep in the heartbeat.
-  private static final Integer DML_STATEMENT_RESERVE = 10;
-  private static final Integer DML_ROW_RESERVE = 20;
+  // Headroom for the liveness stamp that runs after the sweep: its own
+  // reserve and its one statement.
+  private static final Integer DML_RESERVE = WatchdogLiveness.DML_RESERVE + 1;
 
   // Test captures and hooks.
   @TestVisible
@@ -72,14 +72,10 @@ public inherited sharing class WorkflowNotifierSweep {
         ? (Integer) req.get(ATTEMPTS_KEY)
         : 0;
       if (attempts >= MAX_ATTEMPTS) {
-        fail(
-          row,
-          req,
-          'No delivery after ' + MAX_ATTEMPTS + ' attempts to publish again'
-        );
+        fail(row, req, MAX_ATTEMPTS + ' publish attempts gave no delivery');
       } else {
         req.put(ATTEMPTS_KEY, attempts + 1);
-        row.Message__c = JSON.serialize(req);
+        row.Message__c = WorkflowNotifier.truncate(JSON.serialize(req));
         row.Fire_Time__c = now;
         retry.add(row);
       }
@@ -161,7 +157,7 @@ public inherited sharing class WorkflowNotifierSweep {
     row.Outcome__c = WorkflowNotifier.OUTCOME_FAILED;
     row.Level__c = 'Error';
     row.Message__c = req.isEmpty()
-      ? reason + '\n' + row.Message__c
+      ? WorkflowNotifier.truncate(reason + '\n' + row.Message__c)
       : WorkflowNotifier.withResult(req, reason);
   }
 
@@ -170,9 +166,9 @@ public inherited sharing class WorkflowNotifierSweep {
   private static Boolean hasBudget() {
     return !forceDmlBudgetExhausted &&
       Limits.getQueries() < Limits.getLimitQueries() &&
-      Limits.getDmlStatements() + DML_STATEMENTS + DML_STATEMENT_RESERVE <=
+      Limits.getDmlStatements() + DML_STATEMENTS + DML_RESERVE <=
       Limits.getLimitDmlStatements() &&
-      Limits.getDmlRows() + (2 * MAX_ROWS) + DML_ROW_RESERVE <=
+      Limits.getDmlRows() + (2 * MAX_ROWS) + DML_RESERVE <=
       Limits.getLimitDmlRows();
   }
 }
