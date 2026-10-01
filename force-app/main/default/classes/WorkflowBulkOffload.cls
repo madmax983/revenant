@@ -33,7 +33,8 @@ public inherited sharing class WorkflowBulkOffload {
   /**
    * @description Offloads each item whose text is longer than 100 000
    * characters. Other values stay as they are. A file has the offload flag and
-   * a link to the owner.
+   * a link to the owner. It clears `text` on each offloaded item to save heap,
+   * so do not read that item again.
    * @param items the items to check
    * @return for each item, in order: a `{"$attachmentId":...}` marker or the
    * original text
@@ -44,8 +45,10 @@ public inherited sharing class WorkflowBulkOffload {
     List<ContentVersion> files = new List<ContentVersion>();
     for (Integer i = 0; i < items.size(); i++) {
       Item item = items[i];
-      stored.add(item.text);
-      if (String.isNotBlank(item.text) && item.text.length() > INLINE_LIMIT) {
+      Boolean large =
+        String.isNotBlank(item.text) && item.text.length() > INLINE_LIMIT;
+      stored.add(large ? null : item.text);
+      if (large) {
         largeIndexes.add(i);
         files.add(
           new ContentVersion(
@@ -55,6 +58,8 @@ public inherited sharing class WorkflowBulkOffload {
             Revenant_Payload_Offload__c = true
           )
         );
+        // Free the text now. Only the blob stays in memory until the insert.
+        item.text = null;
       }
     }
     if (files.isEmpty()) {
