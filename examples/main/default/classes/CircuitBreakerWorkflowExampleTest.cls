@@ -180,6 +180,17 @@ public class CircuitBreakerWorkflowExampleTest {
           CircuitBreakerWorkflowExample.callAttempts,
           'The probe actually invoked the (now healthy) dependency'
         );
+        System.assertEquals(
+          1,
+          [
+            SELECT Breaker_Probe_Epoch__c
+            FROM Workflow_Step_Execution__c
+            WHERE Workflow_Instance__c = :probe
+            LIMIT 1
+          ]
+          .Breaker_Probe_Epoch__c,
+          'The probe step row carries the half-open phase it consumed'
+        );
       } finally {
         WorkflowEngine.useDynamicScheduling = priorDynamic;
       }

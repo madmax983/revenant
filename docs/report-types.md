@@ -41,7 +41,7 @@ These fields can contain a pointer or an encoded value:
 
 `WorkflowStatusRead.getStatus` reads the file and decodes the value. A report cannot do this. Thus the types do not include these fields.
 
-The types also do not include engine internals: `Active_Correlation_Key__c`, `Admission_Key__c`, `Async_Job_Id__c`, `Compensation_Stack__c`, `Definition_Fingerprint__c`, `Definition_Shape__c` and `Decision_Record__c`. The step field `Workflow_Instance__c` is not a column, because the instance section shows the parent.
+The types also do not include engine internals: `Active_Correlation_Key__c`, `Admission_Key__c`, `Async_Job_Id__c`, `Compensation_Stack__c`, `Definition_Fingerprint__c`, `Definition_Shape__c`, `Breaker_Probe_Epoch__c` and `Decision_Record__c`. The step field `Workflow_Instance__c` is not a column, because the instance section shows the parent.
 
 **This is not access control.** With no codec, these fields contain the plaintext value or a pointer. The platform also makes standard report types for these objects (`Workflow Instances`, `Workflow Instances with Workflow Step Executions`). They show all fields. This includes these fields. A user who can read a field and has **Create and Customize Reports** can report on it. To stop this, remove the field read access, or limit the report permission and the report folders.
 

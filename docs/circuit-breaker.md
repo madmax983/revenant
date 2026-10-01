@@ -83,6 +83,11 @@ unbounded.
   within one heartbeat cadence with zero traffic. A bounded number of trial probes are
   admitted; a probe **success** closes the breaker (restoring normal admission and
   resetting the failure count), a probe **failure** re-opens it for another open window.
+- **Only a probe closes.** Each Half-Open phase has a number (`Half_Open_Epoch__c`).
+  A probe step stores that number on its `Workflow_Step_Execution__c` row
+  (`Breaker_Probe_Epoch__c`). A success closes the breaker only if the number is the
+  current one. A step that was admitted while Closed, or a probe from an earlier phase,
+  changes nothing. See [ADR 0019](adr/0019-breaker-probe-epoch.md).
 
 Breaker state lives entirely outside the append-only `Workflow_Step_Execution__c` audit
 trail and the `Compensation_Stack__c` LIFO ordering — neither is affected.

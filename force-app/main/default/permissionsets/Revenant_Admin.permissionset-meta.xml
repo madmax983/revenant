@@ -256,6 +256,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Step_Execution__c.Breaker_Probe_Epoch__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Step_Execution__c.Wait_Type__c</field>
         <readable>true</readable>
     </fieldPermissions>
@@ -537,6 +542,11 @@
     </fieldPermissions>
 
     <!-- fieldPermissions for Circuit_Breaker_State__c -->
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Circuit_Breaker_State__c.Half_Open_Epoch__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
         <field>Circuit_Breaker_State__c.Opened_At__c</field>

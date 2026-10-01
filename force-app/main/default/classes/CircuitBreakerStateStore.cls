@@ -102,7 +102,8 @@ public inherited sharing class CircuitBreakerStateStore {
         Failure_Count__c,
         Window_Started_At__c,
         Opened_At__c,
-        Half_Open_Probes_Admitted__c
+        Half_Open_Probes_Admitted__c,
+        Half_Open_Epoch__c
       FROM Circuit_Breaker_State__c
       WHERE Dependency_Key__c = :dependencyKey
       WITH SYSTEM_MODE
