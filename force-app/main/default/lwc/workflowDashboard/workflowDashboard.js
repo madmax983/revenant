@@ -639,11 +639,11 @@ export default class WorkflowDashboard extends LightningElement {
       return "The instance has " + count + " steps. " + text;
     }
     return (
-      "Showing the newest " +
+      "Showing " +
       this.stepWindow +
       " of " +
       count +
-      " steps. " +
+      " steps: the newest steps and the step that waits. " +
       text
     );
   }

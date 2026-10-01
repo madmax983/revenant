@@ -63,7 +63,7 @@ A parked, paused or stale delivery does not pay: the guard runs after these gate
 
 ## Bounded reads (issue #261)
 
-The detail pane does not read all step rows. It reads the newest 500 rows without long text. Then it reads `Input__c`, `Output__c` and `Error_Details__c` for the newest 50 rows only. It reads two rows for each query. It stops when these reads add 2 MB of heap or when fewer than 40 SOQL queries remain. The note gives the number of rows that have text. It also reads the latest parked (`Pending`) row first, so the wait descriptor stays correct. Older rows show no long text. The pane shows a note when rows are hidden or when more than 50 rows exist. The note gives the window size and the row count. The row count stops at 50,000 and then shows "50000+".
+The detail pane does not read all step rows. It reads the newest 500 rows without long text. Then it reads `Input__c`, `Output__c` and `Error_Details__c` for the newest 50 rows only. It reads two rows for each query. It stops when these reads add 2 MB of heap or when fewer than 40 SOQL queries remain. The note gives the number of rows that have text. It also reads the latest parked (`Pending`) row first, so the wait descriptor stays correct. Older rows show no long text. The pane shows a note when rows are hidden or when more than 50 rows exist. The note gives the number of rows shown (the newest rows and the parked row) and the row count. The row count stops at 50,000 and then shows "50000+".
 
 The pane does not read an offloaded wait state above 500,000 bytes. The wait shows as a generic wait.
 
