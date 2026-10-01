@@ -129,7 +129,7 @@ fn allows_a_system_prefix_but_not_a_member_path() {
 #[test]
 fn a_reference_without_a_call_is_not_flagged() {
     let src = step("Object a = Datetime.now;\nString b = 'x'.now();");
-    assert!(hazards(&run(&[("S.cls", &src)])).is_empty());
+    assert_eq!(hazards(&run(&[("S.cls", &src)])), Vec::new());
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn files_of_test_classes_are_excluded() {
 fn a_class_that_is_not_a_step_is_not_scanned() {
     let src = "public class Service { Datetime now() { return Datetime.now(); } }";
     let report = run(&[("Service.cls", src)]);
-    assert!(report.defects.is_empty());
+    assert_eq!(report.defects, Vec::new());
     assert_eq!(report.step_classes_scanned, 0);
 }
 
@@ -274,7 +274,7 @@ fn a_supertype_cycle_does_not_hang() {
     let a = "public class A extends B { void x() { Datetime.now(); } }";
     let b = "public class B extends A { }";
     let report = run(&[("A.cls", a), ("B.cls", b)]);
-    assert!(report.defects.is_empty());
+    assert_eq!(report.defects, Vec::new());
 }
 
 #[test]
@@ -442,10 +442,9 @@ fn a_nested_supertype_resolves_in_its_own_outer_class_first() {
                    abstract class Base {}\n\
                    class Impl extends Base { void x() { Datetime.now(); } }\n\
                    }";
-    assert!(
-        run(&[("OrderFlow.cls", order), ("InvoiceFlow.cls", invoice)])
-            .defects
-            .is_empty()
+    assert_eq!(
+        run(&[("OrderFlow.cls", order), ("InvoiceFlow.cls", invoice)]).defects,
+        Vec::new()
     );
 
     // Flow.Impl extends Flow.Base (a step), not the top-level Base.
@@ -513,7 +512,7 @@ fn a_variable_named_like_a_keyword_or_class_is_not_flagged() {
          Object n = userInfo.get('name');\n\
          Boolean e = userInfo.isEmpty();",
     );
-    assert!(hazards(&run(&[("S.cls", &src)])).is_empty());
+    assert_eq!(hazards(&run(&[("S.cls", &src)])), Vec::new());
 }
 
 #[test]
