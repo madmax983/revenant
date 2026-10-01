@@ -16,11 +16,12 @@ private class WorkflowPayloadBudgetTest {
       );
     }
     insert versions;
+    Set<Id> versionIds = new Map<Id, ContentVersion>(versions).keySet();
     List<Id> docIds = new List<Id>();
     for (ContentVersion cv : [
       SELECT ContentDocumentId
       FROM ContentVersion
-      WHERE Id IN :versions
+      WHERE Id IN :versionIds
       ORDER BY CreatedDate ASC, Id ASC
     ]) {
       docIds.add(cv.ContentDocumentId);
@@ -54,6 +55,15 @@ private class WorkflowPayloadBudgetTest {
     return inst;
   }
 
+  private static Workflow_Instance__c seedAndLoad(Integer count, Integer size) {
+    Id instanceId = seed(count, size).Id;
+    return [
+      SELECT Id, Input__c, Output__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+  }
+
   private static List<Workflow_Step_Execution__c> stepsOf(Id instanceId) {
     return [
       SELECT Output__c
@@ -64,11 +74,7 @@ private class WorkflowPayloadBudgetTest {
 
   @IsTest
   static void bodiesAreResolvedWithinTheBudget() {
-    Workflow_Instance__c inst = [
-      SELECT Id, Input__c, Output__c, Progress__c
-      FROM Workflow_Instance__c
-      WHERE Id = :seed(3, 100).Id
-    ];
+    Workflow_Instance__c inst = seedAndLoad(3, 100);
     List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
 
     WorkflowPayloadService.resolvePayloadsInBulk(inst, steps);
@@ -80,11 +86,7 @@ private class WorkflowPayloadBudgetTest {
 
   @IsTest
   static void largeBodyShowsTheDisplayTextAndALink() {
-    Workflow_Instance__c inst = [
-      SELECT Id, Input__c, Output__c, Progress__c
-      FROM Workflow_Instance__c
-      WHERE Id = :seed(1, 60000).Id
-    ];
+    Workflow_Instance__c inst = seedAndLoad(1, 60000);
     List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
 
     Map<String, Object> files = WorkflowPayloadService.resolvePayloadsInBulk(
@@ -105,11 +107,7 @@ private class WorkflowPayloadBudgetTest {
 
   @IsTest
   static void readStopsAtTheHeapBudget() {
-    Workflow_Instance__c inst = [
-      SELECT Id, Input__c, Output__c, Progress__c
-      FROM Workflow_Instance__c
-      WHERE Id = :seed(12, 100).Id
-    ];
+    Workflow_Instance__c inst = seedAndLoad(12, 100);
     List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
     WorkflowPayloadService.attachmentHeapBudget = 1;
 
@@ -131,11 +129,7 @@ private class WorkflowPayloadBudgetTest {
 
   @IsTest
   static void bodyAboveTheBatchSizeIsNotRead() {
-    Workflow_Instance__c inst = [
-      SELECT Id, Input__c, Output__c, Progress__c
-      FROM Workflow_Instance__c
-      WHERE Id = :seed(3, 1000).Id
-    ];
+    Workflow_Instance__c inst = seedAndLoad(3, 1000);
     List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
     WorkflowPayloadService.attachmentBatchBytes = 999;
 
@@ -151,11 +145,7 @@ private class WorkflowPayloadBudgetTest {
 
   @IsTest
   static void batchesHoldAtMostTheBatchBytes() {
-    Workflow_Instance__c inst = [
-      SELECT Id, Input__c, Output__c, Progress__c
-      FROM Workflow_Instance__c
-      WHERE Id = :seed(4, 1000).Id
-    ];
+    Workflow_Instance__c inst = seedAndLoad(4, 1000);
     List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
     WorkflowPayloadService.attachmentBatchBytes = 2500;
 
@@ -172,11 +162,7 @@ private class WorkflowPayloadBudgetTest {
 
   @IsTest
   static void readStopsWhenTheQueriesRunLow() {
-    Workflow_Instance__c inst = [
-      SELECT Id, Input__c, Output__c, Progress__c
-      FROM Workflow_Instance__c
-      WHERE Id = :seed(12, 100).Id
-    ];
+    Workflow_Instance__c inst = seedAndLoad(12, 100);
     List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
     WorkflowPayloadService.queryReserve = Limits.getLimitQueries();
 
