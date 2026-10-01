@@ -17,29 +17,23 @@ public inherited sharing class WorkflowDeterminismGuard {
   /** @description Workflow_Log__c type of a divergence. */
   public static final String LOG_TYPE = 'StepNonDeterminism';
   /**
-   * @description Inputs value when the guard cannot read all inputs. The
-   * guard then does not compare and keeps the record.
+   * @description Inputs value that makes the guard skip the compare and keep
+   * the record. captureInputs no longer returns it; verify still accepts it.
    */
   public static final String UNKNOWN_INPUTS = 'unknown';
 
-  // Max live signals the guard reads. Over it, the guard digests the oldest
-  // rows and the total count, so a backlog cannot use up the query-row limit.
+  // Max live signals the guard reads. Each payload can hold 131,072
+  // characters, so the cap bounds the heap (about 2.6 million characters).
+  // Over it, the guard digests the first rows and the total count.
   @TestVisible
-  private static Integer maxLiveSignals = 200;
-  // Max payload characters the guard digests. Over it, the inputs are
-  // unknown. The query loads the payloads first, so this limits digest work.
-  // The heap cost equals the cost of the step read of the same signals.
-  @TestVisible
-  private static Integer maxPayloadChars = 1000000;
-
+  private static Integer maxLiveSignals = 20;
   /**
    * @description Digests the inputs of a step run. Call before execute(), so
    * a signal that arrives during the run counts as a new input.
    * @param ctx The run context with the step row.
    * @param context The hydrated step context.
    * @param prevOutput The stored previous step output.
-   * @return The inputs digest, UNKNOWN_INPUTS when the live signal payloads
-   * are over the budget, or null when strict mode is off.
+   * @return The inputs digest, or null when strict mode is off.
    */
   public static String captureInputs(
     WorkflowStepRunner.RunStepContext ctx,
@@ -79,13 +73,8 @@ public inherited sharing class WorkflowDeterminismGuard {
     // the claims of this run as Received, so a re-check after the run sees
     // the same inputs.
     Set<Id> ownClaims = context.signals().getClaimedSignalIds();
-    Integer payloadChars = 0;
     for (Integer i = 0; i < live.size() && i < maxLiveSignals; i++) {
       Workflow_Signal__c sig = live[i];
-      payloadChars += sig.Payload__c?.length() ?? 0;
-      if (payloadChars > maxPayloadChars) {
-        return UNKNOWN_INPUTS;
-      }
       String status = ownClaims.contains(sig.Id) ? 'Received' : sig.Status__c;
       // A name or payload edit changes the digest: a legal route change.
       parts.add(

@@ -23,7 +23,7 @@ This session has no org and no `sf` CLI. The Apex tests are written but not run 
 ## Reverse Brainstorming (how to make it worse)
 
 - Digest the decoded payload: a plaintext digest defeats the payload codec. **Avoid:** digest the stored form.
-- Read all payloads without a limit: heap overflow. **Avoid:** a payload budget. Over it, the inputs are unknown.
+- Read all payloads without a limit: heap overflow. **Avoid:** a row cap of 20. A budget check cannot help: it runs after the load.
 - Add `SystemModstamp`: hides every parallel divergence. **Avoid.**
 - Change the digest format without care: an old record has other inputs. **Check:** the engine reads it as new inputs. It records again. No false positive.
 - Change the SOQL count of the off path. **Avoid:** the off path stays free.
@@ -42,9 +42,9 @@ This session has no org and no `sf` CLI. The Apex tests are written but not run 
 | Item of #256 | Result |
 |--------------|--------|
 | Edited live signal | **Fixed.** Digest name and payload. |
-| More than 200 live signals | **Fixed.** First rows plus total count. |
+| More than 20 live signals | **Fixed.** First rows plus total count. |
 | More than 2000 children | **Fixed.** Aggregate by status. |
-| Payload heap | **Reduced.** Cap of 200 rows. Budget of payload characters. |
+| Payload heap | **Bounded.** Cap of 20 rows. |
 | Wait bookkeeping, codec, offload | Kept. See ADR 0003. |
 | Compensated divergence category | Kept. See ADR 0003. |
 | `$timeoutResume` marker | Kept. See ADR 0003. |
@@ -57,8 +57,7 @@ This session has no org and no `sf` CLI. The Apex tests are written but not run 
 1. A name edit of a live signal changes the inputs.
 2. A payload edit of a live signal changes the inputs.
 3. Over the signal cap: the inputs are known, and a new arrival changes them.
-4. Over the payload budget: the inputs are unknown.
-5. A claim, a null payload and a foreign claim change the digest correctly.
-6. Engine: a payload edit of a live signal is not a divergence.
-7. Many children: the inputs are known, and a status change changes them.
-8. Cost: two SOQL queries in the normal path (existing test).
+4. A claim, a null payload and a foreign claim change the digest correctly.
+5. Engine: a payload edit of a live signal is not a divergence.
+6. Many children: the inputs are known, and a status change changes them.
+7. Cost: two SOQL queries in the normal path (existing test).

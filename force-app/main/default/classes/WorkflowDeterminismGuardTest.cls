@@ -427,23 +427,6 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
-  static void captureInputsGivesUnknownOverThePayloadBudget() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.strictDeterminism = true;
-      WorkflowDeterminismGuard.maxPayloadChars = 10;
-      Workflow_Instance__c inst = insertInstance();
-      Workflow_Signal__c sig = insertSignals(inst, 1)[0];
-      sig.Payload__c = '{"big":"0123456789"}';
-      update sig;
-      Assert.areEqual(
-        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
-        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
-        'Payloads over the budget give unknown inputs'
-      );
-    }
-  }
-
-  @IsTest
   static void captureInputsChangesOnAClaimedSignalPayloadEdit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
@@ -509,32 +492,6 @@ private class WorkflowDeterminismGuardTest {
         before,
         digestOf(rowContext(inst.Id), contextFor(inst.Id)),
         'A claim by another branch is a new input'
-      );
-    }
-  }
-
-  @IsTest
-  static void captureInputsAddsThePayloadsOfAllSignalsToTheBudget() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.strictDeterminism = true;
-      Workflow_Instance__c inst = insertInstance();
-      List<Workflow_Signal__c> sigs = insertSignals(inst, 2);
-      for (Workflow_Signal__c sig : sigs) {
-        sig.Payload__c = '0123456789';
-      }
-      update sigs;
-
-      WorkflowDeterminismGuard.maxPayloadChars = 20;
-      Assert.areNotEqual(
-        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
-        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
-        'A total equal to the budget gives a digest'
-      );
-      WorkflowDeterminismGuard.maxPayloadChars = 19;
-      Assert.areEqual(
-        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
-        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
-        'The budget covers the total of all rows'
       );
     }
   }

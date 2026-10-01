@@ -47,10 +47,10 @@ When the mode is off, the engine does no SOQL and no extra DML statement for it.
 
 When the mode is on, each step run costs:
 
-- Two SOQL queries (three over 200 live signals): the live signals, and the child statuses (one aggregate row for each status).
-- One query row for each live signal (`Received` or `Processing`). Max 201 rows. Over 200, one more `COUNT()` query.
-- The heap holds the stored name and payload of each live signal, as for the step read. Over 1,000,000 payload characters, the inputs are unknown.
-- Before it reports a divergence, the engine reads the inputs again (two more SOQL queries, three over 200 live signals).
+- Two SOQL queries (three over 20 live signals): the live signals, and the child statuses (one aggregate row for each status).
+- One query row for each live signal (`Received` or `Processing`). Max 21 rows. Over 20, one more `COUNT()` query.
+- The heap holds the stored name and payload of the first 20 live signals. A payload has max 131,072 characters, so the heap cost is bounded.
+- Before it reports a divergence, the engine reads the inputs again (two more SOQL queries, three over 20 live signals).
 - One SHA-256 digest of the stored inputs.
 
 ## What the engine records
@@ -148,8 +148,7 @@ Correct the step code before you retry. A deploy of changed step code can change
 - The engine does not check `compensate()`.
 - With a payload codec, each wait that writes step state writes new stored state. The engine then compares less often.
 - An approval, child or timed wait writes step state. The first duplicate run after it has new inputs. The engine compares from the second duplicate run.
-- Over 200 live signals, the engine digests the first 200 (by Id) and the total count. An edit of a newer signal does not change the digest.
-- Live signal payloads over 1,000,000 characters give unknown inputs. The engine does not compare that run and keeps the record.
+- Over 20 live signals, the engine digests the first 20 (by Id) and the total count. An edit of a newer signal does not change the digest.
 - The engine re-checks the full live-signal set. A change to a signal that the step did not read prevents the report. See [ADR 0003](adr/0003-strict-determinism-mode.md).
 - A compensated or error-routed divergence keeps a blank `Failure_Category__c`. Use the log query above.
 - Step state over 100,000 characters is offloaded. Each wait writes a new marker, so the engine does not compare that step.

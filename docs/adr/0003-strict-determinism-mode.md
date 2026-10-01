@@ -23,7 +23,7 @@ decision.
 2. When the mode is on, digest the step inputs before `execute()`: the
    stored step input, previous output and step state, the attempt, the
    timeout-resume flag, the live signals (Id, status, stored name and stored
-   payload) and the child count for each status. Two SOQL queries (three over 200 live
+   payload) and the child count for each status. Two SOQL queries (three over 20 live
    signals).
 3. Build a decision text from routing data only. Each value is JSON. Sort
    split and child targets.
@@ -34,8 +34,7 @@ decision.
    decisions: keep the record. Clear the record when the inputs changed and
    the decision is not a wait.
 6. Before a divergence, read the inputs again. An input that arrived during
-   the run makes the new decision legal. Over 1,000,000 payload characters,
-   the inputs are unknown: no compare, keep the record.
+   the run makes the new decision legal.
 7. Handle a divergence in the outcome seam, after the re-lock and the stale
    guard, before the dispatch. Fail the step row, write an Error log row
    (`StepNonDeterminism`) and call `failWorkflowInstance` with the new
@@ -81,10 +80,11 @@ Fixed:
   payload. A trigger that blocks edits was rejected: it blocks a legal admin
   edit.
 - Children use one aggregate query. No cap, no unknown inputs.
-- Over 200 live signals, the digest holds the first rows (by Id) and the
+- Over 20 live signals, the digest holds the first rows (by Id) and the
   total count. `SystemModstamp` is not used: a claim changes it.
-- A payload budget (1,000,000 characters) limits the digest work. The heap
-  cost equals the cost of the step read.
+- The cap of 20 signals bounds the payload heap (a payload has max 131,072
+  characters). A byte budget was rejected: it runs after the query loads
+  the rows.
 
 Kept, with a reason:
 
