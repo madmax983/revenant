@@ -501,6 +501,34 @@ public inherited sharing class WorkflowPayloadOffload {
   }
 
   /**
+   * @description Links the file of a marker to a new owner, only when the
+   * current owner already has the link. A marker that a caller forged does not
+   * give access to another file.
+   * @param marker the stored value (a non-marker is ignored)
+   * @param fromOwnerId the instance that must own the file now
+   * @param toOwnerId the instance that gets the link
+   * @return true when the method added the link
+   */
+  public static Boolean shareIfOwned(
+    String marker,
+    Id fromOwnerId,
+    Id toOwnerId
+  ) {
+    Id docId = markerDocId(marker);
+    if (docId == null) {
+      return false;
+    }
+    Set<Id> owners = linksFor(new List<String>{ marker }).get(docId);
+    if (owners == null || !owners.contains(fromOwnerId)) {
+      return false;
+    }
+    if (!owners.contains(toOwnerId)) {
+      linkToOwner(docId, toOwnerId);
+    }
+    return true;
+  }
+
+  /**
    * @description Links an offloaded file to an instance, so the instance can
    * read it. Use it when a new instance inherits a marker.
    * @param docId the ContentDocument Id of the file

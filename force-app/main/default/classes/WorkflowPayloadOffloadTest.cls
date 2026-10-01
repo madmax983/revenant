@@ -295,4 +295,38 @@ private class WorkflowPayloadOffloadTest {
     System.assertEquals(markerB, out[1], 'A foreign file stays marker');
     System.assertEquals(1, used, 'Only the file query runs: ' + used);
   }
+
+  @IsTest
+  static void testShareIfOwnedChecksCurrentOwner() {
+    Workflow_Instance__c from = newInstance();
+    Workflow_Instance__c to = childOf(from);
+    Workflow_Instance__c stranger = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'ShareStrangerKey'
+    );
+    insert stranger;
+    String own = offload(from.Id, '{"own":1}');
+    String foreign = offload(stranger.Id, '{"foreign":1}');
+
+    System.assertEquals(
+      true,
+      WorkflowPayloadOffload.shareIfOwned(own, from.Id, to.Id),
+      'The owner shares its file'
+    );
+    System.assert(
+      WorkflowPayloadOffload.resolvePayload(own, to.Id).startsWith('{"own":1}'),
+      'The new owner reads the shared file'
+    );
+    System.assertEquals(
+      false,
+      WorkflowPayloadOffload.shareIfOwned(foreign, from.Id, to.Id),
+      'A forged marker is not shared'
+    );
+    System.assertEquals(
+      foreign,
+      WorkflowPayloadOffload.resolvePayload(foreign, to.Id),
+      'The foreign file stays unreadable'
+    );
+  }
 }
