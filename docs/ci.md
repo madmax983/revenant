@@ -42,10 +42,13 @@ org per run. Runs share one CI org. `scripts/ci-org/ci-org.mjs` does the work.
   not answer, or the delete fails, the keeper stops and keeps the old cache, so it does not
   strand an org.
 - **A killed run does not strand an org.** The script writes the file `.ci-org-creating`
-  before it creates an org and removes it when the org is accounted for (cached, handed
-  to the run as a one-off, or deleted). If the run is cancelled in between, the file stays,
-  and the last step deletes the org. An org that the CLI never finished creating cannot be
-  found this way, and it ends at its expiry.
+  before it creates an org. It removes the file only when the org is accounted for: after
+  `main()` has written the step outputs, after a confirmed delete, or after `sf` reports that
+  the create failed. If the run is cancelled in between, or a delete fails, the file stays,
+  and the last step deletes the org under the alias `ci`. A borrower logs the stale shared
+  org out before it makes a one-off org, so that this step never deletes the shared org.
+  An org that the CLI never finished creating cannot be found this way, and it ends at its
+  expiry.
 - **No org is stranded by the cache.** The job looks up the new cache entry after the
   save. If the entry is missing (the save only warns on failure), or the run was cancelled
   before it, the last step deletes the new org.

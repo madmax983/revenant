@@ -250,17 +250,32 @@ function retireOldOrg(cached, ctx) {
 }
 
 /**
- * Runs `fn` with a marker file on disk. The marker exists from before `sf org create` until
- * the org is accounted for (a result, or an error that cleaned up). A run that is
- * killed in between leaves it, and the workflow deletes the org that the marker names.
- * The workflow cannot use its step outputs for this: a killed step may write none.
+ * The creation marker: a file that exists from before `sf org create` until the org is
+ * accounted for. The org is accounted for when `main()` has written the step outputs, or
+ * when the org is confirmed deleted, or when the create failed (there is no org). A run
+ * that is killed in between, or a delete that failed, leaves the marker, and the workflow
+ * deletes the org under the alias `ci`. The workflow cannot use its step outputs for this:
+ * a killed step may write none.
  */
-function withMarker(markerFile, fn) {
+export function markCreating(markerFile) {
   if (markerFile) writeFileSync(markerFile, `${ALIAS}\n`);
+}
+
+export function clearMarker(markerFile) {
+  if (markerFile) rmSync(markerFile, { force: true });
+}
+
+/**
+ * Makes the org with the marker in place. `sf` reporting a failed create means there is no
+ * org, so the marker goes. Any other error (not a CiOrgError) may have left an org.
+ */
+function createMarked(markerFile, durationDays, ctx) {
+  markCreating(markerFile);
   try {
-    return fn();
-  } finally {
-    if (markerFile) rmSync(markerFile, { force: true });
+    createOrg(durationDays, ctx);
+  } catch (error) {
+    if (error instanceof CiOrgError) clearMarker(markerFile);
+    throw error;
   }
 }
 
@@ -315,48 +330,43 @@ export function prepare({
         return { source: "shared", save: false };
       }
       log("The shared CI org is not usable. Making a one-off org.");
+      // The alias `ci` must not point at the shared org while the new org is made: a
+      // killed run would then delete the shared org.
+      run(["org", "logout", "--target-org", ALIAS, "--no-prompt", "--json"]);
     } else {
       log("No usable shared CI org in the cache. Making a one-off org.");
     }
-    withMarker(markerFile, () => createOrg(durationDays, ctx));
+    createMarked(markerFile, durationDays, ctx);
     return { source: "oneoff", save: false };
   }
 
   // keeper: free the active slot first, then make a new org.
   retireOldOrg(cached, ctx);
-  withMarker(markerFile, () => {
-    createOrg(durationDays, ctx);
-    const shown = run([
-      "org",
-      "display",
-      "--verbose",
-      "--target-org",
-      ALIAS,
-      "--json",
-    ]);
-    const authUrl = shown.json?.result?.sfdxAuthUrl;
-    if (shown.status !== 0 || !authUrl) {
-      // Do not leave an org that nobody can borrow. It would hold one of the 3 active slots.
-      deleteOrg(ctx);
-      throw new CiOrgError("The new org shows no sfdxAuthUrl, so it cannot be shared.");
-    }
-    log(maskLine(authUrl));
-    // Keep the expiry with the URL. Without the display value, count from the creation time.
-    const expirationDate =
-      shown.json?.result?.expirationDate ??
-      new Date(now + durationDays * DAY_MS).toISOString().slice(0, 10);
-    // Keep the org id too: the next keeper run asks the Dev Hub about this org by id.
-    const orgId = shown.json?.result?.id;
-    try {
-      mkdirSync(dirname(authFile), { recursive: true });
-      writeFileSync(authFile, encrypt(JSON.stringify({ authUrl, expirationDate, orgId }), secret), {
-        mode: 0o600,
-      });
-    } catch (error) {
-      deleteOrg(ctx); // An org that is not in the cache cannot be borrowed or retired.
-      throw error;
-    }
-  });
+  createMarked(markerFile, durationDays, ctx);
+  const shown = run(["org", "display", "--verbose", "--target-org", ALIAS, "--json"]);
+  const authUrl = shown.json?.result?.sfdxAuthUrl;
+  if (shown.status !== 0 || !authUrl) {
+    // Do not leave an org that nobody can borrow. It would hold one of the 3 active slots.
+    // The marker stays unless the delete is confirmed, so that the workflow tries again.
+    if (deleteOrg(ctx)) clearMarker(markerFile);
+    throw new CiOrgError("The new org shows no sfdxAuthUrl, so it cannot be shared.");
+  }
+  log(maskLine(authUrl));
+  // Keep the expiry with the URL. Without the display value, count from the creation time.
+  const expirationDate =
+    shown.json?.result?.expirationDate ??
+    new Date(now + durationDays * DAY_MS).toISOString().slice(0, 10);
+  // Keep the org id too: the next keeper run asks the Dev Hub about this org by id.
+  const orgId = shown.json?.result?.id;
+  try {
+    mkdirSync(dirname(authFile), { recursive: true });
+    writeFileSync(authFile, encrypt(JSON.stringify({ authUrl, expirationDate, orgId }), secret), {
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (deleteOrg(ctx)) clearMarker(markerFile); // An org that is not cached cannot be reused.
+    throw error;
+  }
   return { source: "created", save: true };
 }
 
@@ -397,6 +407,8 @@ export function main(argv, env = process.env) {
       `source=${result.source}\nsave=${result.save}\n`,
     );
   }
+  // Now the workflow can see the org through the outputs. The marker is no longer needed.
+  clearMarker(args.markerFile);
   return result;
 }
 
