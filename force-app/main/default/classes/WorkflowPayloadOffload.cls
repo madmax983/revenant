@@ -236,39 +236,10 @@ public inherited sharing class WorkflowPayloadOffload {
     String textValue,
     String title
   ) {
-    if (String.isNotBlank(textValue) && textValue.length() > 100000) {
-      ContentVersion cv = new ContentVersion();
-      cv.Title = title;
-      cv.PathOnClient = title + '.json';
-      cv.VersionData = Blob.valueOf(textValue);
-      cv.Revenant_Payload_Offload__c = true;
-      Database.insert(cv, true, AccessLevel.SYSTEM_MODE);
-
-      Id docId = [
-        SELECT ContentDocumentId
-        FROM ContentVersion
-        WHERE Id = :cv.Id
-        WITH SYSTEM_MODE
-      ]
-      .ContentDocumentId;
-
-      ContentDocumentLink cdl = new ContentDocumentLink();
-      cdl.ContentDocumentId = docId;
-      cdl.LinkedEntityId = instanceId;
-      cdl.ShareType = 'V';
-      cdl.Visibility = 'InternalUsers';
-      try {
-        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
-      } catch (DmlException ignored) {
-        // Default visibility rejected; retry the link with AllUsers visibility.
-        cdl.Visibility = 'AllUsers';
-        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
+    return WorkflowBulkOffload.save(
+      new List<WorkflowBulkOffload.Item>{
+        new WorkflowBulkOffload.Item(instanceId, textValue, title)
       }
-
-      return JSON.serialize(
-        new Map<String, String>{ '$attachmentId' => docId }
-      );
-    }
-    return textValue;
+    )[0];
   }
 }

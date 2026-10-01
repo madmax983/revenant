@@ -171,7 +171,9 @@ The engine wraps codec output in an envelope:
   fields.
 - **Size.** Encryption makes a payload larger. The engine compares the length
   of the encoded text with the offload limit (100 000 characters). Signal
-  payloads with a target instance also offload. Unrouted signals and debounce
+  payloads with a target instance also offload. Bulk start, bulk child start
+  and bulk resume use one file insert, one query and one link insert for all
+  rows. DML does not grow with the row count. Unrouted signals and debounce
   input have no owner record, so they stay inline. With an AES + base64 codec,
   keep them below about 95 000 bytes of UTF-8 text.
 - **Heap.** A large payload needs more heap while the codec runs. Keep very

@@ -156,7 +156,8 @@ The payload seam. Callers encode, then save. Save offloads. Resolve
 rehydrates and decodes. Control data (markers, status, keys) is not encoded. See
 [docs/payload-codec.md](docs/payload-codec.md).
 
-- `WorkflowPayloadOffload` (save / resolve seam)
+- `WorkflowPayloadOffload` (save / resolve seam), `WorkflowBulkOffload`
+  (bulk file offload)
 - `WorkflowPayloadCodecs` (config, fail-closed encode/decode),
   `WorkflowPayloadEnvelope` (stored form), `WorkflowSignalPayloads` (signal
   encode and bulk offload)
