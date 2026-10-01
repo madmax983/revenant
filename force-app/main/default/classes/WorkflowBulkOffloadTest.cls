@@ -118,7 +118,7 @@ private class WorkflowBulkOffloadTest {
         System.assert(stored[i].startsWith(OFFLOAD_PREFIX), 'Row ' + i);
         System.assertEquals(
           String.valueOf(i).repeat(BIG),
-          WorkflowPayloadOffload.resolvePayload(stored[i]),
+          WorkflowPayloadOffload.resolvePayload(stored[i], insts[i].Id),
           'Marker ' + i + ' points to its own file'
         );
         System.assertEquals(
@@ -221,7 +221,7 @@ private class WorkflowBulkOffloadTest {
       System.assert(single.startsWith(OFFLOAD_PREFIX), 'Legacy behavior');
       System.assertEquals(
         'q'.repeat(BIG),
-        WorkflowPayloadOffload.resolvePayload(single)
+        WorkflowPayloadOffload.resolvePayload(single, inst.Id)
       );
     }
   }
@@ -289,13 +289,14 @@ private class WorkflowBulkOffloadTest {
       System.assertEquals(two, three, 'DML is the same for 2 and 3 rows');
       System.assertEquals(5, flaggedFileCount(), 'One file per row');
       for (Workflow_Instance__c inst : [
-        SELECT Input__c
+        SELECT Id, Input__c
         FROM Workflow_Instance__c
         WHERE Correlation_Key__c LIKE 's%'
       ]) {
         System.assert(inst.Input__c.startsWith(OFFLOAD_PREFIX));
         System.assert(
-          WorkflowPayloadOffload.resolvePayload(inst.Input__c).contains('bbbb'),
+          WorkflowPayloadOffload.resolvePayload(inst.Input__c, inst.Id)
+            .contains('bbbb'),
           'Input decodes to the original'
         );
       }
@@ -390,14 +391,17 @@ private class WorkflowBulkOffloadTest {
       System.assertEquals(dmlTwo, dmlThree, 'DML is the same for 2 and 6 rows');
       System.assertEquals(5, flaggedFileCount(), 'One file per row');
       for (Workflow_Step_Execution__c step : [
-        SELECT Output__c
+        SELECT Output__c, Workflow_Instance__c
         FROM Workflow_Step_Execution__c
         WHERE Workflow_Instance__r.Correlation_Key__c LIKE 'r%'
       ]) {
         System.assert(step.Output__c.startsWith(OFFLOAD_PREFIX));
         System.assertEquals(
           'r'.repeat(BIG),
-          WorkflowPayloadOffload.resolvePayload(step.Output__c),
+          WorkflowPayloadOffload.resolvePayload(
+            step.Output__c,
+            step.Workflow_Instance__c
+          ),
           'Output decodes to the resume payload'
         );
       }
