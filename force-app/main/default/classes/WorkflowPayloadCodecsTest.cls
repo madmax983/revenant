@@ -346,8 +346,11 @@ private class WorkflowPayloadCodecsTest {
       WorkflowPayloadCodecs.decode(
         WorkflowPayloadCodecs.encode('r', CodecContext.PayloadKind.STEP_OUTPUT)
       );
-      WorkflowPayloadOffload.resolvePayload(stored);
-      WorkflowPayloadOffload.resolvePayloads(new List<String>{ stored });
+      WorkflowPayloadOffload.resolvePayload(stored, inst.Id);
+      WorkflowPayloadOffload.resolvePayloads(
+        new List<String>{ stored },
+        inst.Id
+      );
       System.assertEquals(
         dmlBefore,
         Limits.getDmlStatements(),
@@ -376,10 +379,16 @@ private class WorkflowPayloadCodecsTest {
 
       System.assert(stored.startsWith(ENVELOPE_PREFIX), 'Envelope expected');
       System.assert(!stored.contains(SECRET), 'No plaintext inline');
-      System.assertEquals(plain, WorkflowPayloadOffload.resolvePayload(stored));
       System.assertEquals(
         plain,
-        WorkflowPayloadOffload.resolvePayloads(new List<String>{ stored })[0]
+        WorkflowPayloadOffload.resolvePayload(stored, inst.Id)
+      );
+      System.assertEquals(
+        plain,
+        WorkflowPayloadOffload.resolvePayloads(
+          new List<String>{ stored },
+          inst.Id
+        )[0]
       );
     }
   }
@@ -410,10 +419,16 @@ private class WorkflowPayloadCodecsTest {
       String fileText = cv.VersionData.toString();
       System.assert(fileText.startsWith(ENVELOPE_PREFIX), 'Blob is enveloped');
       System.assert(!fileText.contains(SECRET), 'No plaintext in the blob');
-      System.assertEquals(plain, WorkflowPayloadOffload.resolvePayload(stored));
       System.assertEquals(
         plain,
-        WorkflowPayloadOffload.resolvePayloads(new List<String>{ stored })[0]
+        WorkflowPayloadOffload.resolvePayload(stored, inst.Id)
+      );
+      System.assertEquals(
+        plain,
+        WorkflowPayloadOffload.resolvePayloads(
+          new List<String>{ stored },
+          inst.Id
+        )[0]
       );
     }
   }
@@ -439,7 +454,10 @@ private class WorkflowPayloadCodecsTest {
         stored.startsWith(OFFLOAD_PREFIX),
         'The offload test must use the encoded length'
       );
-      System.assertEquals(plain, WorkflowPayloadOffload.resolvePayload(stored));
+      System.assertEquals(
+        plain,
+        WorkflowPayloadOffload.resolvePayload(stored, inst.Id)
+      );
     }
   }
 
@@ -490,12 +508,18 @@ private class WorkflowPayloadCodecsTest {
 
       System.assertEquals(
         marker,
-        WorkflowPayloadOffload.resolveControlPayload(marker),
+        WorkflowPayloadOffload.resolveControlPayload(
+          marker,
+          UserInfo.getUserId()
+        ),
         'Control markers stay readable'
       );
       System.assertEquals(
         null,
-        WorkflowPayloadOffload.resolveControlPayload(encoded),
+        WorkflowPayloadOffload.resolveControlPayload(
+          encoded,
+          UserInfo.getUserId()
+        ),
         'Operator views do not decode author state'
       );
     }
@@ -540,7 +564,8 @@ private class WorkflowPayloadCodecsTest {
       WorkflowPayloadCodecs.setCodec(null);
 
       List<String> resolved = WorkflowPayloadOffload.resolveControlPayloads(
-        new List<String>{ bigState, bigMarker }
+        new List<String>{ bigState, bigMarker },
+        new List<Id>{ inst.Id, inst.Id }
       );
 
       System.assertEquals(

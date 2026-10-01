@@ -888,6 +888,7 @@ global inherited sharing class WorkflowEngine {
    * @param requests the signal requests to deliver
    */
   global static void signal(List<SignalRequest> requests) {
+    WorkflowSignalRouter.rejectMarkerPayloads(requests);
     WorkflowSignalBatch.routeSignalBatch(requests);
   }
 

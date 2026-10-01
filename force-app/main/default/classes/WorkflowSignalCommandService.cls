@@ -41,6 +41,11 @@ public inherited sharing class WorkflowSignalCommandService {
     requireInjectableInstance(instanceId);
 
     Map<String, Object> payloadMap = parseInjectionPayload(payloadJson);
+    if (payloadMap.containsKey('$attachmentId')) {
+      throw WorkflowDashboardSupport.auraError(
+        'Payload cannot start with an offload marker.'
+      );
+    }
     payloadMap.put('operatorId', UserInfo.getUserId());
     payloadMap.put('operatorUsername', UserInfo.getUserName());
     payloadMap.put('operator', UserInfo.getName());

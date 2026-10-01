@@ -90,11 +90,29 @@ public inherited sharing class WorkflowCompensationContext {
       .instanceId(instance.Id)
       .workflowName(instance.Workflow_Name__c)
       .stepName(run.compensationStepLogName)
-      .inputJson(WorkflowPayloadOffload.resolvePayload(stepExec.Input__c))
-      .previousStepOutput(WorkflowPayloadOffload.resolvePayload(prevOutput))
-      .stepStateJson(WorkflowPayloadOffload.resolvePayload(stepExec.Output__c))
+      .inputJson(
+        resolveEitherOwner(
+          stepExec.Input__c,
+          run.forwardSourceInstanceId,
+          instance.Id
+        )
+      )
+      .previousStepOutput(
+        resolveEitherOwner(prevOutput, run.forwardSourceInstanceId, instance.Id)
+      )
+      .stepStateJson(
+        resolveEitherOwner(
+          stepExec.Output__c,
+          run.forwardSourceInstanceId,
+          instance.Id
+        )
+      )
       .workflowInputJson(
-        WorkflowPayloadOffload.resolvePayload(instance.Input__c)
+        resolveEitherOwner(
+          instance.Input__c,
+          run.forwardSourceInstanceId,
+          instance.Id
+        )
       )
       .workflowVersion(
         instance.Definition_Version__c != null
@@ -108,6 +126,26 @@ public inherited sharing class WorkflowCompensationContext {
       .attempt(run.attempt)
       .maxAttempts(run.maxAttempts)
       .build();
+  }
+
+  // A copied value is linked to the forward source. A value that the
+  // compensation wrote is linked to the compensating instance. Try both.
+  private static String resolveEitherOwner(
+    String raw,
+    Id forwardSourceId,
+    Id instanceId
+  ) {
+    String resolved = WorkflowPayloadOffload.resolvePayload(
+      raw,
+      forwardSourceId
+    );
+    if (
+      forwardSourceId != instanceId &&
+      WorkflowPayloadOffload.markerDocId(resolved) != null
+    ) {
+      resolved = WorkflowPayloadOffload.resolvePayload(resolved, instanceId);
+    }
+    return resolved;
   }
 
   // Derive attempt/maxAttempts and captured-values map for the compensation.
@@ -133,7 +171,8 @@ public inherited sharing class WorkflowCompensationContext {
     }
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
-        stepExec.Captured_Values__c
+        stepExec.Captured_Values__c,
+        run.instance.Id
       );
       if (String.isNotBlank(resolvedCaptures)) {
         try {

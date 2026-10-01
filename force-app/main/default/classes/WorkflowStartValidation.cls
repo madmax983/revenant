@@ -71,6 +71,49 @@ public inherited sharing class WorkflowStartValidation {
   }
 
   /**
+   * @description Rejects start input that is an offload marker. Call it at
+   * public start entry points. A marker can point at a file of another
+   * instance. It checks the raw input JSON and the key of a Map input,
+   * because a Map input serializes to a marker.
+   * @param req the start request to check (null is ignored)
+   */
+  public static void rejectOffloadMarkerInput(WorkflowEngine.StartRequest req) {
+    if (req == null) {
+      return;
+    }
+    WorkflowPayloadOffload.rejectOffloadMarker(req.inputJson, 'Input');
+    if (req.inputJson == null && req.input != null) {
+      if (isMarkerShapedMap(req.input)) {
+        throw new WorkflowEngine.WorkflowException(
+          'Input cannot start with an offload marker.'
+        );
+      }
+      // Any typed Map serializes to the marker shape.
+      if (!(req.input instanceof String)) {
+        WorkflowPayloadOffload.rejectOffloadMarker(
+          JSON.serialize(req.input),
+          'Input'
+        );
+      }
+    }
+  }
+
+  /**
+   * @description Tests whether a value is a Map that has the marker key.
+   * @param value the value to test
+   * @return true when the value is a Map with the `$attachmentId` key
+   */
+  public static Boolean isMarkerShapedMap(Object value) {
+    if (value instanceof Map<String, Object>) {
+      return ((Map<String, Object>) value).containsKey('$attachmentId');
+    }
+    if (value instanceof Map<String, String>) {
+      return ((Map<String, String>) value).containsKey('$attachmentId');
+    }
+    return false;
+  }
+
+  /**
    * @description §1 of the bulk pipeline: validate each request and gather
    * correlation keys; pre-validate any not-yet-cached workflow names in bulk via
    * `ApexTypeImplementor`.

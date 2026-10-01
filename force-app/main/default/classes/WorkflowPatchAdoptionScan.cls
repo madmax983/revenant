@@ -92,20 +92,31 @@ public inherited sharing class WorkflowPatchAdoptionScan {
    * @description Resolves the captured-values payloads for a chunk of step
    * executions in sub-batches of 40 to stay under the synchronous Apex heap cap
    * (6 MB), rehydrating any offloaded payloads through {@link WorkflowPayloadOffload}.
-   * @param execs the step executions whose captured values to resolve
+   * @param execs the step executions whose captured values to resolve. Each owner
+   *        is its Workflow_Instance__c.
    * @return the resolved captured-values JSON strings, index-aligned with execs
    */
   private static List<String> resolveCapturesInBatches(
     List<Workflow_Step_Execution__c> execs
   ) {
     Integer offloadBatchSize = 40;
+    List<String> allRaw = new List<String>();
+    for (Workflow_Step_Execution__c exec : execs) {
+      allRaw.add(exec.Captured_Values__c);
+    }
+    // One link query for the whole chunk, not one per batch.
+    Map<Id, Set<Id>> links = WorkflowPayloadOffload.linksFor(allRaw);
     List<String> resolvedCaptures = new List<String>();
     for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
       List<String> batchRaw = new List<String>();
+      List<Id> batchOwners = new List<Id>();
       for (Integer m = k; m < k + offloadBatchSize && m < execs.size(); m++) {
         batchRaw.add(execs[m].Captured_Values__c);
+        batchOwners.add(execs[m].Workflow_Instance__c);
       }
-      resolvedCaptures.addAll(WorkflowPayloadOffload.resolvePayloads(batchRaw));
+      resolvedCaptures.addAll(
+        WorkflowPayloadOffload.resolvePayloads(batchRaw, batchOwners, links)
+      );
     }
     return resolvedCaptures;
   }

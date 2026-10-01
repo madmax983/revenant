@@ -259,10 +259,32 @@ public inherited sharing class WorkflowBulkResumeService {
 
   /**
    * @description Resumes multiple suspended workflows in a bulk-friendly
-   * transaction.
+   * transaction. It rejects a payload that is an offload marker.
    * @param requests the resume requests to process
    */
   public static void resume(List<WorkflowEngine.ResumeRequest> requests) {
+    if (requests != null) {
+      for (WorkflowEngine.ResumeRequest req : requests) {
+        if (req != null) {
+          WorkflowPayloadOffload.rejectOffloadMarker(
+            req.payload,
+            'Resume payload'
+          );
+        }
+      }
+    }
+    resumeFromEvent(requests);
+  }
+
+  /**
+   * @description Internal resume path for engine events. It does not reject a
+   * marker payload, because a child completion event can carry one. Public
+   * callers use {@link #resume}.
+   * @param requests the resume requests to process
+   */
+  public static void resumeFromEvent(
+    List<WorkflowEngine.ResumeRequest> requests
+  ) {
     if (requests == null || requests.isEmpty()) {
       return;
     }

@@ -401,7 +401,7 @@ public class RequestCreditCheckStep implements WorkflowStep {
             if (outcome.isSuccess()) {
                 // Resume: read the child's output.
                 Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
-                    WorkflowPayloadOffload.resolvePayload(outcome.output)
+                    WorkflowPayloadOffload.resolvePayload(outcome.output, ctx.workflowInstanceId)
                 );
                 // ... inspect childResult and return StepResult.complete(nextStep, output)
             } else {

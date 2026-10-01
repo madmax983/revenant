@@ -237,8 +237,10 @@ public inherited sharing class WorkflowSignalSources {
         rawPayloads.add(c.Payload__c);
       }
       // Resolve offloaded payloads in one bulk query rather than one per row.
-      List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-        rawPayloads
+      List<String> resolvedPayloads = resolveRows(
+        rows,
+        rawPayloads,
+        instanceId
       );
 
       List<StepContext.Signal> out = new List<StepContext.Signal>();
@@ -435,8 +437,10 @@ public inherited sharing class WorkflowSignalSources {
       // row), matching the read-only list path: a claimed page of offloaded
       // child-completion signals would otherwise run one ContentVersion query
       // each and could exhaust SOQL.
-      List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-        rawPayloads
+      List<String> resolvedPayloads = resolveRows(
+        claimedRows,
+        rawPayloads,
+        instanceId
       );
       List<StepContext.Signal> result = new List<StepContext.Signal>();
       for (Integer i = 0; i < claimedRows.size(); i++) {
@@ -492,7 +496,10 @@ public inherited sharing class WorkflowSignalSources {
           return new StepContext.Signal(
               c.Id,
               c.Signal_Name__c,
-              WorkflowPayloadOffload.resolvePayload(c.Payload__c)
+              WorkflowPayloadOffload.resolvePayload(
+                c.Payload__c,
+                ownerFor(c.Signal_Name__c, instanceId)
+              )
             )
             .withCreatedDate(c.CreatedDate);
         }
@@ -555,11 +562,35 @@ public inherited sharing class WorkflowSignalSources {
       return new StepContext.Signal(
           cand.Id,
           cand.Signal_Name__c,
-          WorkflowPayloadOffload.resolvePayload(cand.Payload__c)
+          WorkflowPayloadOffload.resolvePayload(
+            cand.Payload__c,
+            ownerFor(cand.Signal_Name__c, instanceId)
+          )
         )
         .withCreatedDate(cand.CreatedDate)
         .asClaimed();
     }
+  }
+
+  // A caller can publish a ChildCompleted event. The signal read must not
+  // resolve a marker for it. Only the child outcome read does, after it checks
+  // that the marker is the output of a child (WorkflowChildPayloadProvenance).
+  private static Id ownerFor(String signalName, Id instanceId) {
+    return signalName != null && signalName.startsWith('ChildCompleted:')
+      ? null
+      : instanceId;
+  }
+
+  private static List<String> resolveRows(
+    List<Workflow_Signal__c> rows,
+    List<String> rawPayloads,
+    Id instanceId
+  ) {
+    List<Id> owners = new List<Id>();
+    for (Workflow_Signal__c row : rows) {
+      owners.add(ownerFor(row.Signal_Name__c, instanceId));
+    }
+    return WorkflowPayloadOffload.resolvePayloads(rawPayloads, owners);
   }
 
   /**
@@ -625,7 +656,10 @@ public inherited sharing class WorkflowSignalSources {
     return new StepContext.Signal(
         records[0].Id,
         records[0].Signal_Name__c,
-        WorkflowPayloadOffload.resolvePayload(records[0].Payload__c)
+        WorkflowPayloadOffload.resolvePayload(
+          records[0].Payload__c,
+          ownerFor(records[0].Signal_Name__c, instanceId)
+        )
       )
       .withCreatedDate(records[0].CreatedDate);
   }
@@ -682,8 +716,10 @@ public inherited sharing class WorkflowSignalSources {
       rawPayloads.add(sig.Payload__c);
     }
     // Resolve any offloaded payloads with a single bulk query (not one per row).
-    List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-      rawPayloads
+    List<String> resolvedPayloads = resolveRows(
+      records,
+      rawPayloads,
+      instanceId
     );
 
     List<StepContext.Signal> signals = new List<StepContext.Signal>();

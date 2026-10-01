@@ -771,8 +771,8 @@ private class WorkflowEngineGetStatusTest {
       Integer dmlUsed = Limits.getDmlStatements() - dmlBefore;
 
       System.assert(
-        queriesUsed <= 2,
-        'Should use at most 2 SOQL queries (instance + ContentVersion): used ' +
+        queriesUsed <= 3,
+        'Should use at most 3 SOQL queries (instance + link + file): used ' +
         queriesUsed
       );
       System.assertEquals(0, dmlUsed, 'getStatus must perform zero DML');
@@ -896,8 +896,8 @@ private class WorkflowEngineGetStatusTest {
       Integer queriesUsed = Limits.getQueries() - queriesBefore;
 
       System.assert(
-        queriesUsed <= 2,
-        'Bulk fetch of 2 offloaded outputs should cost at most 2 SOQL: used ' +
+        queriesUsed <= 3,
+        'Bulk fetch of 2 offloaded outputs should cost at most 3 SOQL: used ' +
         queriesUsed
       );
       System.assertEquals(big1, results[0].output);
@@ -1045,9 +1045,9 @@ private class WorkflowEngineGetStatusTest {
 
       // The key path resolves the winner from metadata, then fetches the winner's
       // output and rehydrates the offload: a small constant (here metadata lookup +
-      // winner fetch + ContentVersion = 3), independent of list size, zero DML.
+      // winner fetch + link + file = 4), independent of list size, zero DML.
       System.assert(
-        queriesUsed <= 4,
+        queriesUsed <= 5,
         'Bulk-by-key with offloaded output should cost a small constant SOQL: used ' +
         queriesUsed
       );
@@ -1079,6 +1079,48 @@ private class WorkflowEngineGetStatusTest {
       System.assertEquals(single.status, bulkResults[0].status);
       System.assertEquals(single.output, bulkResults[0].output);
       System.assertEquals(single.isTerminal, bulkResults[0].isTerminal);
+    }
+  }
+
+  @IsTest
+  static void testForgedMarkerToOtherInstanceFileStaysText() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c a = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-forge-a')
+        .output(null)
+        .errorMessage(null)
+        .build();
+      Workflow_Instance__c b = new InstanceBuilder()
+        .status('Completed')
+        .correlationKey('key-forge-b')
+        .output(null)
+        .errorMessage(null)
+        .build();
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
+        b.Id,
+        'B'.repeat(110001),
+        'Output-' + b.Id
+      );
+      b.Output__c = marker;
+      a.Output__c = marker;
+      update as system new List<Workflow_Instance__c>{ a, b };
+
+      Test.startTest();
+      WorkflowEngine.WorkflowStatus forged = WorkflowStatusRead.getStatus(a.Id);
+      WorkflowEngine.WorkflowStatus owner = WorkflowStatusRead.getStatus(b.Id);
+      Test.stopTest();
+
+      System.assertEquals(
+        marker,
+        forged.output,
+        'A forged marker must stay as text'
+      );
+      System.assertEquals(
+        110001,
+        owner.output.length(),
+        'The owner must still read its own file'
+      );
     }
   }
 

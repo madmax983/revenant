@@ -213,7 +213,10 @@ public with sharing class AiSupportTriageWorkflowExample {
       // Resolve the stored value. The engine can offload it. A payload codec can
       // encode it.
       Map<String, Object> decision = (Map<String, Object>) JSON.deserializeUntyped(
-        WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
+        WorkflowPayloadOffload.resolvePayload(
+          sig.Payload__c,
+          ctx.workflowInstanceId
+        )
       );
       return StepResult.complete(
         null,
