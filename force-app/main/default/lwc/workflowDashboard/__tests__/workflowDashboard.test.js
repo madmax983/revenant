@@ -3990,6 +3990,8 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
       steps: [{ Id: "s1", Step_Name__c: "A", Status__c: "Completed" }],
       stepsTruncated: true,
       stepCount: 10000,
+      stepWindow: 500,
+      stepTextRows: 50,
     });
     const element = await openFirst();
 
@@ -3998,7 +4000,7 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     );
     expect(note).not.toBeNull();
     expect(note.textContent).toBe(
-      "Showing the newest 1 of 10000 steps. Older steps are hidden.",
+      "Showing the newest 500 of 10000 steps. Input and output show for the newest 50.",
     );
   });
 

@@ -249,16 +249,11 @@ public inherited sharing class WorkflowCompensationStepLog {
     Boolean completedOnly
   ) {
     Map<String, Id> latestIdByKey = new Map<String, Id>();
-    for (Workflow_Step_Execution__c exec : [
-      SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :instanceIds AND Step_Name__c IN :stepNames
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-    ]) {
-      if (completedOnly && exec.Status__c != 'Completed') {
-        continue;
-      }
+    for (
+      Workflow_Step_Execution__c exec : completedOnly
+        ? completedIdRows(instanceIds, stepNames)
+        : allIdRows(instanceIds, stepNames)
+    ) {
       String key = exec.Workflow_Instance__c + '|' + exec.Step_Name__c;
       if (!latestIdByKey.containsKey(key)) {
         latestIdByKey.put(key, exec.Id);
@@ -287,6 +282,37 @@ public inherited sharing class WorkflowCompensationStepLog {
       );
     }
     return latestByKey;
+  }
+
+  // Id-only rows of every execution, newest first.
+  private static List<Workflow_Step_Execution__c> allIdRows(
+    Set<Id> instanceIds,
+    Set<String> stepNames
+  ) {
+    return [
+      SELECT Id, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds AND Step_Name__c IN :stepNames
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+  }
+
+  // Id-only rows of the Completed executions, newest first.
+  private static List<Workflow_Step_Execution__c> completedIdRows(
+    Set<Id> instanceIds,
+    Set<String> stepNames
+  ) {
+    return [
+      SELECT Id, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c IN :stepNames
+        AND Status__c = 'Completed'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
   }
 
   /**

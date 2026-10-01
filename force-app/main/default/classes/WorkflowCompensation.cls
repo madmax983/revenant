@@ -142,12 +142,12 @@ public inherited sharing class WorkflowCompensation {
       return;
     }
 
-    // Seed from the last Completed visit. A later failed or halted visit has no result.
     // Determine the source of the forward executions (original completed run or this run)
     Id forwardSourceInstanceId = WorkflowCompensationRunner.resolveForwardSourceInstanceId(
       instance
     );
 
+    // Use the last Completed visit. Do not use a later Failed or halted visit.
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Input__c, Output__c
       FROM Workflow_Step_Execution__c

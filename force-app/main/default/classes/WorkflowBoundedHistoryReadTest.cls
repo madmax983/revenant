@@ -96,7 +96,7 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   // ============================================================
-  // Finding 1: the detail pane
+  // Detail pane
   // ============================================================
 
   @IsTest
@@ -115,10 +115,14 @@ private class WorkflowBoundedHistoryReadTest {
       );
 
       Test.startTest();
+      Integer rowsBefore = Limits.getQueryRows();
       Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
         inst.Id
       );
+      Integer rowsUsed = Limits.getQueryRows() - rowsBefore;
       Test.stopTest();
+
+      Assert.isTrue(rowsUsed < 1000, 'The read is bounded: ' + rowsUsed);
 
       List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
         'steps'
@@ -228,6 +232,56 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   @IsTest
+  static void windowEdgeIsExact() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c exact = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Running'
+      );
+      Workflow_Instance__c over = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Running'
+      );
+      insert new List<Workflow_Instance__c>{ exact, over };
+      insertRows(exact.Id, 'Edge.Step', 'Completed', 500, 0);
+      insertRows(over.Id, 'Edge.Step', 'Completed', 501, 0);
+
+      Map<String, Object> exactDetails = WorkflowInstanceDetailService.loadDetails(
+        exact.Id
+      );
+      Map<String, Object> overDetails = WorkflowInstanceDetailService.loadDetails(
+        over.Id
+      );
+
+      Assert.areEqual(false, exactDetails.get('stepsTruncated'), '500 rows');
+      Assert.areEqual(true, overDetails.get('stepsTruncated'), '501 rows');
+      Assert.areEqual(501, overDetails.get('stepCount'), 'The count is exact');
+    }
+  }
+
+  @IsTest
+  static void parkedStepInsideTheWindowIsNotDuplicated() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Suspended'
+      );
+      insert inst;
+      insertRows(inst.Id, 'Short.Step', 'Completed', 3, 0);
+      insertRows(inst.Id, 'Park.Step', 'Pending', 1, 3);
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Assert.areEqual(4, steps.size(), 'No row is duplicated');
+    }
+  }
+
+  @IsTest
   static void parkedStepOutsideTheWindowStillGivesTheWaitDescriptor() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = new Workflow_Instance__c(
@@ -249,6 +303,16 @@ private class WorkflowBoundedHistoryReadTest {
       Map<String, Object> descriptor = (Map<String, Object>) details.get(
         'waitDescriptor'
       );
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Assert.areEqual(
+        WorkflowInstanceDetailService.MAX_STEP_ROWS + 1,
+        steps.size(),
+        'The parked row is added outside the window'
+      );
+      Assert.isNotNull(steps[0].Output__c, 'The parked row has its Output');
+      Assert.isNull(steps[1].Output__c, 'A window row has no Output');
       Assert.isNotNull(descriptor, 'The parked step is still read');
       Assert.areEqual(
         WorkflowWaitDescriptorService.TYPE_APPROVAL,
@@ -259,7 +323,7 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   // ============================================================
-  // Finding 2: seed from the last Completed visit
+  // First compensation step
   // ============================================================
 
   @IsTest
@@ -347,6 +411,75 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   @IsTest
+  static void bulkPathHandlesInstancesWithAndWithoutACompletedVisit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c failedOnly = compensatingInstance();
+      Workflow_Instance__c looped = compensatingInstance();
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = failedOnly.Id,
+        Step_Name__c = FWD,
+        Status__c = 'Failed',
+        Input__c = 'in-failed'
+      );
+      seedLoopedForwardStep(looped.Id);
+
+      WorkflowCompensation.preCreateFirstCompensationSteps(
+        new List<Workflow_Instance__c>{ failedOnly, looped }
+      );
+
+      Assert.isNull(compensationRow(failedOnly.Id).Input__c, 'No seed');
+      Assert.areEqual('in-done', compensationRow(looped.Id).Input__c, 'Seed');
+    }
+  }
+
+  @IsTest
+  static void retryWithoutACheckpointFallsBackToTheCompletedVisit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      seedLoopedForwardStep(inst.Id);
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = COMP,
+        Status__c = 'Failed'
+      );
+
+      WorkflowCompensationStepLog.appendCompensationRetryStep(
+        inst,
+        new List<String>{ FWD }
+      );
+
+      Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
+      Assert.areEqual('Pending', seeded.Status__c, 'A new attempt');
+      Assert.areEqual('out-done', seeded.Output__c, 'Completed visit');
+    }
+  }
+
+  @IsTest
+  static void liveDriveSeedsFromTheLastCompletedVisit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      seedLoopedForwardStep(inst.Id);
+      WorkflowCompensationRunner.CompensationRun run = new WorkflowCompensationRunner.CompensationRun();
+      run.instance = inst;
+      run.compensationStepLogName = COMP;
+      run.activeStepName = FWD;
+      run.forwardSourceInstanceId = inst.Id;
+
+      Boolean ready = WorkflowCompensationStepLog.prepareCompensationStepExec(
+        run
+      );
+
+      Assert.isTrue(ready, 'A new attempt is ready');
+      Assert.areEqual('in-done', run.stepExec.Input__c, 'Input of Completed');
+      Assert.areEqual(
+        'out-done',
+        run.stepExec.Output__c,
+        'Output of Completed'
+      );
+    }
+  }
+
+  @IsTest
   static void retryPathSeedsFromTheLastCompletedVisit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = compensatingInstance();
@@ -406,7 +539,7 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   // ============================================================
-  // Finding 3: the visit read of the _Compensate rows
+  // Visit read of the _Compensate rows
   // ============================================================
 
   @IsTest
