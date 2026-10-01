@@ -276,6 +276,75 @@ public class WorkflowWaitDescriptorServiceTest {
   }
 
   @IsTest
+  static void testPluralChildKeysMatchingOnlyTerminalChildrenIsGeneric() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Issue #232: a finished child cannot send a signal. Opaque state with its key stays
+      // generic.
+      for (
+        String status : new List<String>{
+          'Completed',
+          'Failed',
+          'Compensated',
+          'Cancelled',
+          'ContinuedAsNew'
+        }
+      ) {
+        Workflow_Instance__c parent = seedParentWithChildren(
+          new List<String>{ 'order-42' },
+          status
+        );
+        Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+          parent,
+          oneStep(
+            pendingStep(
+              'WaitDescTest.OpaquePluralStep',
+              '{"childCorrelationKeys":["order-42"]}'
+            )
+          )
+        );
+        System.assertEquals(
+          WorkflowWaitDescriptorService.TYPE_GENERIC,
+          d.get('type'),
+          'A ' + status + ' child does not corroborate a child wait'
+        );
+        System.assertEquals(null, d.get('signalName'));
+        System.assertEquals(null, d.get('childSignalNames'));
+      }
+    }
+  }
+
+  @IsTest
+  static void testPluralChildKeysWithOneLiveChildIsChildCompletion() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // A join with one finished and one live child is still a real wait.
+      Workflow_Instance__c parent = seedParentWithChildren(
+        new List<String>{ 'ship-1' },
+        'Completed'
+      );
+      insert as system new Workflow_Instance__c(
+        Workflow_Name__c = 'WaitDescTest.ChildWorkflow',
+        Status__c = 'Running',
+        Parent_Instance__c = parent.Id,
+        Correlation_Key__c = 'SHIP-2'
+      );
+      Map<String, Object> d = WorkflowWaitDescriptorService.describeSignalWait(
+        parent,
+        oneStep(
+          pendingStep(
+            'WaitDescTest.RealFanOutStep',
+            '{"childCorrelationKeys":["ship-1","ship-2"]}'
+          )
+        )
+      );
+      System.assertEquals(
+        WorkflowWaitDescriptorService.TYPE_CHILD,
+        d.get('type'),
+        'One live matching child makes the wait a child wait'
+      );
+    }
+  }
+
+  @IsTest
   static void testRealStartChildrenCorroboratedIsChildCompletion() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // The counterpart to the uncorroborated case: a REAL START_CHILDREN join whose parent
@@ -1220,9 +1289,17 @@ public class WorkflowWaitDescriptorServiceTest {
   // one child Workflow_Instance__c per correlation key, linked via Parent_Instance__c=parent and
   // carrying that Correlation_Key__c — mirroring the engine's own parent→child linkage
   // (WorkflowChildBulkPlanner writes Parent_Instance__c; the gate matches on Correlation_Key__c).
-  // Children are seeded Completed so they don't collide on the active-correlation unique index.
+  // Children are Running by default. A status argument sets another status. Keys stay distinct per
+  // parent, so the active-correlation unique index does not collide.
   private static Workflow_Instance__c seedParentWithChildren(
     List<String> childKeys
+  ) {
+    return seedParentWithChildren(childKeys, 'Running');
+  }
+
+  private static Workflow_Instance__c seedParentWithChildren(
+    List<String> childKeys,
+    String childStatus
   ) {
     Workflow_Instance__c parent = suspendedInstance(null);
     insert as system parent;
@@ -1231,7 +1308,7 @@ public class WorkflowWaitDescriptorServiceTest {
       children.add(
         new Workflow_Instance__c(
           Workflow_Name__c = 'WaitDescTest.ChildWorkflow',
-          Status__c = 'Completed',
+          Status__c = childStatus,
           Parent_Instance__c = parent.Id,
           Correlation_Key__c = key
         )

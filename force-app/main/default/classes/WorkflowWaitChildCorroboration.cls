@@ -2,14 +2,16 @@
  * @description Read-time corroboration for a plural START_CHILDREN wait descriptor (issue #84),
  * used by {@link WorkflowWaitDescriptorService} on its single-row detail path.
  *
- * <p>A parked parent's bulk-child state persists only {@code {"childCorrelationKeys":[...]}} — the
- * engine (WorkflowStepSuspension.handleStartChildrenOutcome) writes NO in-state companion marker
- * for the plural join, so the mere presence of that array cannot distinguish a REAL bulk-child
- * join from opaque author state that happens to carry a {@code childCorrelationKeys} array. A stray
- * {@code ChildCompleted:<key>} suggestion would not unblock such a generic wait, so before labeling
- * the state a child-completion wait this helper CORROBORATES it against the engine's own
- * parent→child linkage: the parked parent must actually have spawned a child whose
- * {@code Correlation_Key__c} matches one of the awaited keys.
+ * <p>A parked parent's bulk-child state persists only {@code {"childCorrelationKeys":[...]}}. The
+ * engine (WorkflowStepSuspension.handleStartChildrenOutcome) writes NO in-state marker for the
+ * plural join. So the array alone cannot tell a REAL bulk-child join from opaque author state.
+ * A {@code ChildCompleted:<key>} signal does not wake a generic wait. This helper checks the
+ * state against the parent-to-child link. The parked parent must have a live child. The child
+ * must have a {@code Correlation_Key__c} that matches an awaited key. A finished child does not
+ * count (issue #232).
+ *
+ * <p>Known limit: all matching children can finish before the parent resumes. The wait then
+ * shows as generic until the engine uses the signal. If the signal is lost, it stays generic.
  *
  * <p>The single-child START_CHILD state ({@code {"childWorkflowName":...,"childCorrelationKey":...}})
  * already carries the {@code childWorkflowName} companion marker WorkflowStepSuspension writes, so
@@ -27,6 +29,15 @@ public inherited sharing class WorkflowWaitChildCorroboration {
   // Bounds the parent→child lookup regardless of fan-out. The query is keyed by the indexed
   // Parent_Instance__c so it is selective; the cap is a defensive ceiling on a pathological fan-out.
   private static final Integer CHILD_LOOKUP_CAP = 2000;
+
+  // A child in one of these statuses is finished and cannot send a completion signal.
+  private static final Set<String> TERMINAL_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled',
+    'ContinuedAsNew'
+  };
 
   /**
    * @description Decides whether a parked child-wait state is a GENUINE child-completion wait.
@@ -50,7 +61,7 @@ public inherited sharing class WorkflowWaitChildCorroboration {
     return hasCorroboratingChild(instanceId, normalizedExpectedKeys(state));
   }
 
-  // True when the parent really spawned a child whose (normalized) Correlation_Key__c is one of the
+  // True when the parent has a live child whose (normalized) Correlation_Key__c is one of the
   // (normalized) awaited keys. Bounded, read-only, single query keyed by the indexed parent lookup.
   private static Boolean hasCorroboratingChild(
     Id instanceId,
@@ -60,9 +71,11 @@ public inherited sharing class WorkflowWaitChildCorroboration {
       return false;
     }
     for (Workflow_Instance__c child : [
-      SELECT Correlation_Key__c, Status__c
+      SELECT Correlation_Key__c
       FROM Workflow_Instance__c
-      WHERE Parent_Instance__c = :instanceId
+      WHERE
+        Parent_Instance__c = :instanceId
+        AND Status__c NOT IN :TERMINAL_STATUSES
       WITH SYSTEM_MODE
       LIMIT :CHILD_LOOKUP_CAP
     ]) {
