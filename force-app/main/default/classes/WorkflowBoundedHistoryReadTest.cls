@@ -233,6 +233,25 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   @IsTest
+  static void longTextReadStopsWhenTheQueriesRunLow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Running'
+      );
+      insert inst;
+      insertRows(inst.Id, 'Big.Step', 'Completed', 10, 0);
+      WorkflowInstanceDetailService.queryReserve = Limits.getLimitQueries();
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+
+      Assert.areEqual(2, details.get('stepTextRows'), 'One chunk is read');
+    }
+  }
+
+  @IsTest
   static void shortHistoryIsNotTruncated() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = new Workflow_Instance__c(

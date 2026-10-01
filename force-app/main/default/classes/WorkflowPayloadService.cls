@@ -16,6 +16,11 @@ public inherited sharing class WorkflowPayloadService {
   @TestVisible
   private static Integer attachmentHeapBudget = 2000000;
 
+  // SOQL queries the attachment reads leave free for the caller. The read stops
+  // when fewer queries remain.
+  @TestVisible
+  private static Integer queryReserve = 25;
+
   // Max body bytes in one ContentVersion query. The size is known before the read
   // (ContentSize). A body above this is not read and shows its marker text.
   @TestVisible
@@ -153,7 +158,8 @@ public inherited sharing class WorkflowPayloadService {
   // Reads the verified attachment bodies in batches. A batch holds at most
   // attachmentBatchBytes of body (sizes come from ContentSize, with no blob read).
   // A body above that size is skipped. It keeps the display text only. It stops
-  // when the reads used the heap budget (the first batch always runs).
+  // when the reads used the heap budget or the query budget (the first batch
+  // always runs).
   private static Map<Id, AttachmentBody> loadAttachmentData(
     Set<Id> attachmentIds,
     Id linkedEntityId
@@ -169,7 +175,11 @@ public inherited sharing class WorkflowPayloadService {
     Integer heapLimit = Limits.getHeapSize() + attachmentHeapBudget;
     Boolean first = true;
     for (List<Id> batch : planBatches(verified)) {
-      if (!first && Limits.getHeapSize() > heapLimit) {
+      if (
+        !first &&
+        (Limits.getHeapSize() > heapLimit ||
+        Limits.getQueries() + queryReserve > Limits.getLimitQueries())
+      ) {
         break;
       }
       first = false;

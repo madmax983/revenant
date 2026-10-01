@@ -16,6 +16,10 @@ public inherited sharing class WorkflowInstanceDetailService {
   @TestVisible
   private static Integer textHeapBudget = 2000000;
 
+  // SOQL queries the long text reads leave free for the caller.
+  @TestVisible
+  private static Integer queryReserve = 40;
+
   // Rows per long text query. A small chunk keeps one read below the budget.
   private static final Integer TEXT_CHUNK = 2;
 
@@ -233,7 +237,11 @@ public inherited sharing class WorkflowInstanceDetailService {
     Integer heapLimit = Limits.getHeapSize() + textHeapBudget;
     Map<Id, Workflow_Step_Execution__c> withText = new Map<Id, Workflow_Step_Execution__c>();
     for (Integer i = 0; i < order.size(); i += TEXT_CHUNK) {
-      if (i > 0 && Limits.getHeapSize() > heapLimit) {
+      if (
+        i > 0 &&
+        (Limits.getHeapSize() > heapLimit ||
+        Limits.getQueries() + queryReserve > Limits.getLimitQueries())
+      ) {
         break;
       }
       List<Id> chunk = new List<Id>();

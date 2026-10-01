@@ -169,4 +169,25 @@ private class WorkflowPayloadBudgetTest {
     // Links, sizes, and two batches of two bodies.
     Assert.areEqual(4, used, 'Two bodies in each batch');
   }
+
+  @IsTest
+  static void readStopsWhenTheQueriesRunLow() {
+    Workflow_Instance__c inst = [
+      SELECT Id, Input__c, Output__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :seed(12, 100).Id
+    ];
+    List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
+    WorkflowPayloadService.queryReserve = Limits.getLimitQueries();
+
+    WorkflowPayloadService.resolvePayloadsInBulk(inst, steps);
+
+    Integer resolved = 0;
+    for (Workflow_Step_Execution__c step : steps) {
+      if (step.Output__c == 'X'.repeat(100)) {
+        resolved++;
+      }
+    }
+    Assert.areEqual(5, resolved, 'Only the first batch is read');
+  }
 }
