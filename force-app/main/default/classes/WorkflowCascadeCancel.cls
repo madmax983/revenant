@@ -5,10 +5,13 @@
  * Flow:
  * 1. `WorkflowInstanceTrigger` (after update) calls {@link requestCascade} for
  *    each instance that enters `Failed`, `Compensated` or `CompensationFailed`.
+ *    After insert, it calls {@link requestCascadeForLateChildren} for the
+ *    parents of the new children. It requests a cascade for a parent that
+ *    already failed. The pass then cancels a child that commits late
+ *    (issue #241).
  * 2. {@link requestCascade} publishes one `CASCADE_CANCEL` `Workflow_Event__e`
- *    for each such parent. It runs no query, so it also covers a child that is
- *    linked later. The event is `PublishAfterCommit`: a rolled-back failure sends
- *    no event.
+ *    for each such parent. It runs no query. The event is `PublishAfterCommit`:
+ *    a rolled-back failure sends no event.
  * 3. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
  *    transaction with its own governor limits.
  * 4. Each pass walks one page of the cancel traversal: the active children of a
@@ -96,6 +99,47 @@ public inherited sharing class WorkflowCascadeCancel {
         LoggingLevel.WARN,
         'Cascade cancel request failed: ' + ex.getMessage()
       );
+    }
+  }
+
+  /**
+   * @description Requests a cascade for each parent that is already in a
+   * failure state. A child was linked to it after its cascade pass (issue
+   * #241). It runs one query, and none when `parentIds` is empty. The query
+   * locks the parents: a parent that fails at the same time waits for this
+   * transaction, or this one sees the failure. If the query cannot run (query
+   * or row budget spent, lock timeout), it requests a cascade for every parent. The
+   * pass drops a parent that has not failed. The paged pass cancels the child.
+   * @param parentIds parents of the new children
+   */
+  public static void requestCascadeForLateChildren(Set<Id> parentIds) {
+    if (
+      parentIds == null ||
+      parentIds.isEmpty() ||
+      !WorkflowEngine.cascadeCancelChildrenOnFailure
+    ) {
+      return;
+    }
+    if (
+      Limits.getQueries() >= Limits.getLimitQueries() ||
+      Limits.getQueryRows() + parentIds.size() > Limits.getLimitQueryRows()
+    ) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Late child cascade check skipped: query budget spent'
+      );
+      requestCascade(parentIds);
+      return;
+    }
+    try {
+      requestCascade(lockedFailedParents(parentIds));
+    } catch (Exception ex) {
+      // Fire-and-forget: a late-child check must never fail the child start.
+      System.debug(
+        LoggingLevel.WARN,
+        'Late child cascade check failed: ' + ex.getMessage()
+      );
+      requestCascade(parentIds);
     }
   }
 
@@ -227,6 +271,25 @@ public inherited sharing class WorkflowCascadeCancel {
     // The rest of the tree is reachable only through these events: a publish
     // failure must fail the pass, so the rollback and retry path runs.
     publishOrThrow(next);
+  }
+
+  // Same read as stillFailedParents, with a row lock (issue #241). Id order
+  // keeps the lock order stable.
+  private static Set<Id> lockedFailedParents(Set<Id> parentIds) {
+    Set<Id> failed = new Set<Id>();
+    for (Workflow_Instance__c parent : [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :parentIds
+      WITH SYSTEM_MODE
+      ORDER BY Id
+      FOR UPDATE
+    ]) {
+      if (FAILURE_STATUSES.contains(parent.Status__c)) {
+        failed.add(parent.Id);
+      }
+    }
+    return failed;
   }
 
   private static Set<Id> stillFailedParents(Set<Id> parentIds) {

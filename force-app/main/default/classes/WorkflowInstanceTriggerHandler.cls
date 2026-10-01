@@ -8,6 +8,8 @@
  * rank key. On each save it syncs the indexed admission queue field (issue #132).
  * After update: it requests the cascade cancel of in-flight children for each
  * parent that enters a failure state (issue #94).
+ * After insert: it requests the cascade for a new child whose parent already
+ * failed (issue #241).
  *
  * Sharing: inherited sharing. Triggers execute in system context; a handler with
  * inherited sharing runs with the sharing of its caller (the trigger, i.e. system) and
@@ -79,8 +81,7 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
 
   /**
    * @description Requests the cascade cancel of in-flight children for each
-   * instance whose status changed into a failure state. Insert does not
-   * request a cascade: a new record has no children.
+   * instance whose status changed into a failure state.
    */
   public void handleAfterUpdate() {
     if (oldMap == null || !WorkflowEngine.cascadeCancelChildrenOnFailure) {
@@ -97,6 +98,24 @@ public inherited sharing class WorkflowInstanceTriggerHandler {
       }
     }
     WorkflowCascadeCancel.requestCascade(failedParentIds);
+  }
+
+  /**
+   * @description Requests the cascade cancel for the parent of each new
+   * child that is not finished. A parent that is not in a failure state is
+   * ignored. A new child that has no parent costs no query.
+   */
+  public void handleAfterInsert() {
+    Set<Id> parentIds = new Set<Id>();
+    for (Workflow_Instance__c instance : newInstances) {
+      if (
+        instance.Parent_Instance__c != null &&
+        !TERMINAL_STATUSES.contains(instance.Status__c)
+      ) {
+        parentIds.add(instance.Parent_Instance__c);
+      }
+    }
+    WorkflowCascadeCancel.requestCascadeForLateChildren(parentIds);
   }
 
   /**
