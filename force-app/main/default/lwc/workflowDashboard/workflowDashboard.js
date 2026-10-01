@@ -336,6 +336,7 @@ export default class WorkflowDashboard extends LightningElement {
   steps = [];
   stepsTruncated = false;
   stepCount = 0;
+  stepCountCapped = false;
   stepWindow = 0;
   stepTextRows = 0;
   childInstances = [];
@@ -624,15 +625,24 @@ export default class WorkflowDashboard extends LightningElement {
     return this.steps.length > 0;
   }
 
-  get stepsTruncatedMessage() {
+  get showStepsNote() {
+    return this.stepsTruncated || this.stepCount > this.stepTextRows;
+  }
+
+  get stepsNoteMessage() {
+    const count = this.stepCount + (this.stepCountCapped ? "+" : "");
+    const text =
+      "Input and output show for the newest " + this.stepTextRows + ".";
+    if (!this.stepsTruncated) {
+      return "The instance has " + count + " steps. " + text;
+    }
     return (
       "Showing the newest " +
       this.stepWindow +
       " of " +
-      this.stepCount +
-      " steps. Input and output show for the newest " +
-      this.stepTextRows +
-      "."
+      count +
+      " steps. " +
+      text
     );
   }
 
@@ -1661,6 +1671,7 @@ export default class WorkflowDashboard extends LightningElement {
 
         this.stepsTruncated = result.stepsTruncated === true;
         this.stepCount = result.stepCount || 0;
+        this.stepCountCapped = result.stepCountCapped === true;
         this.stepWindow = result.stepWindow || 0;
         this.stepTextRows = result.stepTextRows || 0;
         this.steps = result.steps.map((step) => {

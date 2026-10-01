@@ -111,6 +111,7 @@ public inherited sharing class WorkflowInstanceDetailService {
       // The window holds the newest MAX_STEP_ROWS rows (issue #261).
       'stepsTruncated' => stepCount > MAX_STEP_ROWS,
       'stepCount' => stepCount,
+      'stepCountCapped' => stepCount >= STEP_COUNT_CAP,
       'stepWindow' => MAX_STEP_ROWS,
       'stepTextRows' => LONG_TEXT_ROWS,
       'children' => children,
