@@ -297,6 +297,9 @@ const ASYNC_LIMITS = {
   HEAP: 12000000,
 };
 
+// True if the name starts with "approve:". Only Approve and Reject send these signals (#233).
+const isApprovalSignal = (name) => /^approve:/i.test((name || "").trim());
+
 export default class WorkflowDashboard extends LightningElement {
   // App Builder settings for the Platform Event thresholds (#120). If a value
   // is blank or not valid, the component uses the server values.
@@ -1010,7 +1013,17 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   get isSendSignalDisabled() {
-    return !this.signalName || !this.signalName.trim() || this.loadingDetails;
+    return (
+      !this.signalName ||
+      !this.signalName.trim() ||
+      this.isApprovalSignalName ||
+      this.loadingDetails
+    );
+  }
+
+  // Block an approval name. Only Approve and Reject add the decision payload and do the role check (#233).
+  get isApprovalSignalName() {
+    return isApprovalSignal(this.signalName);
   }
 
   // Builds the shared stats/count promises and settles them alongside the
@@ -3400,12 +3413,12 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenSignalModal() {
     this.signalModalOpen = true;
-    // Pre-fill the awaited name (approval or single-child wait). A multi-child or generic
-    // wait stays blank: the operator picks a key from the list or types one.
-    this.signalName =
-      this.selectedInst && this.selectedInst.awaitedSignalName
-        ? this.selectedInst.awaitedSignalName
-        : "";
+    // Fill in the awaited name for a single-child wait. Leave it blank for an approval wait:
+    // the operator must use Approve or Reject (#233). A multi-child or generic wait stays
+    // blank: the operator picks a key from the list or types one.
+    const awaited =
+      (this.selectedInst && this.selectedInst.awaitedSignalName) || "";
+    this.signalName = isApprovalSignal(awaited) ? "" : awaited;
     this.signalPayload = "";
   }
 
@@ -3428,6 +3441,9 @@ export default class WorkflowDashboard extends LightningElement {
   }
 
   handleSignalModalConfirm() {
+    if (this.isApprovalSignalName) {
+      return;
+    }
     if (this.signalPayload && this.signalPayload.trim()) {
       const textarea = this.template.querySelector(
         '[data-id="signal-payload-input"]',
