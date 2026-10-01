@@ -248,6 +248,8 @@ public inherited sharing class WorkflowBulkResumeService {
           'Resume_' + step.Id
         )
       );
+      // Drop this reference. The item holds the text until the file exists.
+      step.Output__c = null;
     }
     List<String> stored = WorkflowBulkOffload.save(items);
     for (Integer i = 0; i < steps.size(); i++) {
