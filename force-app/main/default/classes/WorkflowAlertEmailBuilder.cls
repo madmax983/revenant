@@ -5,6 +5,19 @@
  * is best-effort and swallows failures so alerting can never disrupt callers.
  */
 public inherited sharing class WorkflowAlertEmailBuilder {
+  // Dot-separated local atoms, then two or more dot-separated domain labels.
+  private static final String LOCAL_ATOM = '[A-Za-z0-9!#$%&\'*+/=?^_`{|}~-]+';
+  private static final String DOMAIN_LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
+  private static final String ADDRESS_REGEX =
+    LOCAL_ATOM +
+    '(?:\\.' +
+    LOCAL_ATOM +
+    ')*@' +
+    DOMAIN_LABEL +
+    '(?:\\.' +
+    DOMAIN_LABEL +
+    ')+';
+
   /**
    * @description Escaped, display-safe view of a workflow instance's identifying fields,
    * shared by the failure and stall email bodies.
@@ -308,18 +321,57 @@ public inherited sharing class WorkflowAlertEmailBuilder {
   }
 
   /**
-   * @description Splits, trims and drops blank recipient addresses.
+   * @description Splits, trims and drops blank and invalid recipient addresses (#265).
+   * A list with valid and invalid addresses keeps the valid ones.
    * @param recipients The raw, delimiter-separated recipient address list.
-   * @return The cleaned list of individual recipient addresses.
+   * @return The valid recipient addresses.
    */
   public static List<String> parseRecipients(String recipients) {
     List<String> toAddresses = new List<String>();
-    for (String email : recipients.split('[,;]')) {
-      if (String.isNotBlank(email)) {
-        toAddresses.add(email.trim());
+    for (String token : tokens(recipients)) {
+      if (isValidAddress(token)) {
+        toAddresses.add(token);
       }
     }
     return toAddresses;
+  }
+
+  /**
+   * @description Lists the non-blank tokens that are not valid addresses (#265).
+   * @param recipients The raw, delimiter-separated recipient address list, or null.
+   * @return The invalid tokens, in list order.
+   */
+  public static List<String> invalidRecipients(String recipients) {
+    List<String> invalid = new List<String>();
+    for (String token : tokens(recipients)) {
+      if (!isValidAddress(token)) {
+        invalid.add(token);
+      }
+    }
+    return invalid;
+  }
+
+  /**
+   * @description Conservative syntax check. It needs one @, a dotted domain and no
+   * spaces. It does not check that the address can receive mail.
+   * @param address One trimmed address, or null.
+   * @return True when the address has a valid shape.
+   */
+  public static Boolean isValidAddress(String address) {
+    return address != null && Pattern.matches(ADDRESS_REGEX, address);
+  }
+
+  private static List<String> tokens(String recipients) {
+    List<String> result = new List<String>();
+    if (recipients == null) {
+      return result;
+    }
+    for (String part : recipients.split('[,;]')) {
+      if (String.isNotBlank(part)) {
+        result.add(part.trim());
+      }
+    }
+    return result;
   }
 
   /**

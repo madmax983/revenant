@@ -368,6 +368,41 @@ private class WorkflowReadinessControllerTest {
   }
 
   /**
+   * @description Malformed-only recipients warn and the finding names each token (#265).
+   */
+  @IsTest
+  static void testMalformedRecipientsWarnAndNameTokens() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(true, 'not-an-email; ops@', false));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(WARN, alert.status, 'No valid address warns');
+    System.assert(alert.finding.contains('not-an-email'), alert.finding);
+    System.assert(alert.finding.contains('ops@'), alert.finding);
+  }
+
+  /**
+   * @description One valid address among bad ones still passes (#265).
+   */
+  @IsTest
+  static void testMixedRecipientsPass() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(true, 'bad, ops@example.com', false));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    System.assertEquals(
+      PASS,
+      check('alertConfig', checks).status,
+      'One valid address is a channel'
+    );
+  }
+
+  /**
    * @description A trigger that is not deployed fails.
    */
   @IsTest
