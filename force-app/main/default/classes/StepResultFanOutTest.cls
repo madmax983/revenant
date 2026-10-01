@@ -348,15 +348,20 @@ public class StepResultFanOutTest {
       Id dummyInstanceId = TestIdFactory.generate(Organization.SObjectType);
 
       List<StepContext.Signal> signals = new List<StepContext.Signal>{
-        new StepContext.Signal(
-          null,
-          'ChildCompleted:KeyA',
-          '{"result":"successA"}'
+        new StepContext.Signal(null, 'ChildCompleted:KeyA', null),
+        new StepContext.Signal(null, 'ChildFailed:KeyB', null)
+      };
+      // The signals wake the parent. The child records give the outcomes.
+      List<Workflow_Instance__c> children = new List<Workflow_Instance__c>{
+        new Workflow_Instance__c(
+          Correlation_Key__c = 'KeyA',
+          Status__c = 'Completed',
+          Output__c = '{"result":"successA"}'
         ),
-        new StepContext.Signal(
-          null,
-          'ChildFailed:KeyB',
-          '{"status":"Failed","errorMessage":"errorB","output":null}'
+        new Workflow_Instance__c(
+          Correlation_Key__c = 'KeyB',
+          Status__c = 'Failed',
+          Error_Message__c = 'errorB'
         )
       };
 
@@ -370,6 +375,7 @@ public class StepResultFanOutTest {
         .workflowInputJson('{}')
         .workflowVersion(1)
         .pendingSignals(signals)
+        .childRecords(children)
         .build();
 
       List<StepContext.ChildOutcome> outcomes = ctx.signals()

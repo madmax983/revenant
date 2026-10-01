@@ -137,3 +137,16 @@ static void testLoopStopsAtNextCheck() {
     // Assert the work of one batch only, so a normal YIELD cannot pass the test.
 }
 ```
+
+## Child outcomes
+
+A `ChildCompleted:<key>` or `ChildFailed:<key>` signal only wakes the step. `getChildOutcome` reads the child record. Seed the signal with `addSignal` and the child with `childRecords`:
+
+```apex
+StepContext ctx = new StepContextTestBuilder()
+  .addSignal(new StepContext.Signal(null, 'ChildCompleted:k1', null))
+  .childRecords(new List<Workflow_Instance__c>{
+    new Workflow_Instance__c(Correlation_Key__c = 'k1', Status__c = 'Completed', Output__c = '{"score":700}')
+  })
+  .build();
+```

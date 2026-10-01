@@ -200,8 +200,8 @@ public inherited sharing class WorkflowPayloadOffload {
   /**
    * @description Resolves child-completion values for a parent. A marker
    * resolves when its file is linked to the parent or to a child of the parent.
-   * The caller checks that the value is the child output (see
-   * {@link WorkflowChildPayloadProvenance}).
+   * The caller reads the value from the child record
+   * (see StepChildOutcomes).
    * @param rawValues the raw (possibly marker) payload strings
    * @param parentId the parent instance that reads the values
    * @return the resolved payloads, index-aligned with rawValues

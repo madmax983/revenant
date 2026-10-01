@@ -7,22 +7,25 @@
  */
 @IsTest
 public class StepContextCaptureReplayTest {
-  // Builds a StepContext backed by a single child-outcome signal. Shared by the
-  // getChildOutcome tests to avoid duplicating the context-assembly arrange block.
+  // Builds a StepContext backed by child-outcome signals and in-memory child
+  // records. The signal wakes the parent. The record gives the outcome.
   private static StepContext childOutcomeContext(
-    Map<String, StepContext.Signal> sigs
+    Map<String, StepContext.Signal> sigs,
+    List<Workflow_Instance__c> children
   ) {
     return new StepContext.Builder()
       .instanceId(TestIdFactory.generate(Organization.SObjectType))
       .workflowName('W')
       .stepName('S')
       .signalSource(new StepContextTestData.MapSignalSource(sigs))
+      .childRecords(children)
       .build();
   }
 
   private static StepContext childOutcomeContext(
     String signalName,
-    String payload
+    String payload,
+    List<Workflow_Instance__c> children
   ) {
     return childOutcomeContext(
       new Map<String, StepContext.Signal>{
@@ -31,7 +34,22 @@ public class StepContextCaptureReplayTest {
           signalName,
           payload
         )
-      }
+      },
+      children
+    );
+  }
+
+  private static Workflow_Instance__c childRecord(
+    String status,
+    String error,
+    String output
+  ) {
+    return new Workflow_Instance__c(
+      Id = TestIdFactory.generate(Workflow_Instance__c.SObjectType),
+      Correlation_Key__c = 'CC_1',
+      Status__c = status,
+      Error_Message__c = error,
+      Output__c = output
     );
   }
 
@@ -582,7 +600,8 @@ public class StepContextCaptureReplayTest {
   static void testGetChildOutcomeNotPresent() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       StepContext ctx = childOutcomeContext(
-        new Map<String, StepContext.Signal>()
+        new Map<String, StepContext.Signal>(),
+        new List<Workflow_Instance__c>()
       );
 
       StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
@@ -599,7 +618,10 @@ public class StepContextCaptureReplayTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       StepContext ctx = childOutcomeContext(
         'ChildCompleted:CC_1',
-        '{"score":700}'
+        null,
+        new List<Workflow_Instance__c>{
+          childRecord('Completed', null, '{"score":700}')
+        }
       );
 
       StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
@@ -621,7 +643,12 @@ public class StepContextCaptureReplayTest {
           '{"status":"Failed","errorMessage":"Step crashed","output":"partialData"}'
         )
       };
-      StepContext ctx = childOutcomeContext(sigs);
+      StepContext ctx = childOutcomeContext(
+        sigs,
+        new List<Workflow_Instance__c>{
+          childRecord('Failed', 'Step crashed', 'partialData')
+        }
+      );
 
       StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
@@ -633,7 +660,7 @@ public class StepContextCaptureReplayTest {
   }
 
   @IsTest
-  static void testGetChildOutcomeFailedMalformed() {
+  static void testGetChildOutcomeFailedIgnoresPayloadText() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Map<String, StepContext.Signal> sigs = new Map<String, StepContext.Signal>{
         'childfailed:cc_1' => new StepContext.Signal(
@@ -642,13 +669,22 @@ public class StepContextCaptureReplayTest {
           'Raw error message string'
         )
       };
-      StepContext ctx = childOutcomeContext(sigs);
+      StepContext ctx = childOutcomeContext(
+        sigs,
+        new List<Workflow_Instance__c>{
+          childRecord('Failed', 'Real error', null)
+        }
+      );
 
       StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
       System.assertEquals(false, outcome.isSuccess());
       System.assertEquals('Failed', outcome.status);
-      System.assertEquals('Raw error message string', outcome.errorMessage);
+      System.assertEquals(
+        'Real error',
+        outcome.errorMessage,
+        'Not the payload'
+      );
       System.assertEquals(null, outcome.output);
     }
   }
@@ -658,7 +694,10 @@ public class StepContextCaptureReplayTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       StepContext ctx = childOutcomeContext(
         'ChildCompleted:CC_1',
-        '{"score":700}'
+        null,
+        new List<Workflow_Instance__c>{
+          childRecord('Completed', null, '{"score":700}')
+        }
       );
 
       StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
@@ -687,7 +726,10 @@ public class StepContextCaptureReplayTest {
           '{"status":"Failed"}'
         )
       };
-      StepContext ctx = childOutcomeContext(sigs);
+      StepContext ctx = childOutcomeContext(
+        sigs,
+        new List<Workflow_Instance__c>{ childRecord('Failed', 'x', null) }
+      );
 
       StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');
       System.assertEquals(true, outcome.isPresent());
@@ -709,7 +751,8 @@ public class StepContextCaptureReplayTest {
   static void testGetChildOutcomeDoesNotConsumeWhenAbsent() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       StepContext ctx = childOutcomeContext(
-        new Map<String, StepContext.Signal>()
+        new Map<String, StepContext.Signal>(),
+        new List<Workflow_Instance__c>()
       );
 
       StepContext.ChildOutcome outcome = ctx.signals().getChildOutcome('CC_1');

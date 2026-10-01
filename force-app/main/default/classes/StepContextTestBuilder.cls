@@ -10,6 +10,7 @@ public inherited sharing class StepContextTestBuilder {
   private ExecState exec = new ExecState();
   private Map<String, Object> capturedValues = new Map<String, Object>();
   private List<StepContext.Signal> pendingSignals = new List<StepContext.Signal>();
+  private List<Workflow_Instance__c> childRecordsVal = new List<Workflow_Instance__c>();
 
   private static Integer fakeIdSequence = 0;
   private static Map<SObjectType, String> keyPrefixCache = new Map<SObjectType, String>();
@@ -364,6 +365,18 @@ public inherited sharing class StepContextTestBuilder {
   }
 
   /**
+   * @description Sets the child records of the instance. A child signal wakes
+   * the step. The record of the child gives the outcome, so seed one record for
+   * each child that the step reads with `getChildOutcome`.
+   * @param val The child instance records (key, status, error, output).
+   * @return This builder for chaining.
+   */
+  public StepContextTestBuilder childRecords(List<Workflow_Instance__c> val) {
+    this.childRecordsVal = val == null ? new List<Workflow_Instance__c>() : val;
+    return this;
+  }
+
+  /**
    * @description Assembles the configured StepContext entirely in memory (0 DML,
    * 0 SOQL), supplying defaults for unset fields and wiring the static signal source.
    * @return The fully-constructed StepContext for step-level unit testing.
@@ -387,6 +400,7 @@ public inherited sharing class StepContextTestBuilder {
       .workflowVersion(this.exec.workflowVersionVal)
       .stepVisit(this.exec.stepVisitVal)
       .signalSource(source)
+      .childRecords(this.childRecordsVal)
       .previousRunAt(this.exec.previousRunAtVal)
       .capturedValuesMap(new Map<String, Object>(this.capturedValues))
       .attempt(this.exec.attemptVal)

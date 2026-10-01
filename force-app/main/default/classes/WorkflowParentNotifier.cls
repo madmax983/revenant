@@ -2,7 +2,9 @@
  * @description Parent-notification surface for the Revenant engine. Publishes
  * child-completion signals (`ChildCompleted` / `ChildFailed` `Workflow_Event__e`
  * platform events) back to the parents of completed or failed child instances,
- * skipping parents already in a terminal state. Extracted from `WorkflowEngine`; the
+ * skipping parents already in a terminal state. A signal only wakes the parent.
+ * The parent reads the outcome from the child record, never from the event.
+ * Extracted from `WorkflowEngine`; the
  * resident `WorkflowEngine.WorkflowException` type is referenced fully qualified. All
  * SOQL/DML executes in system mode.
  */
@@ -32,12 +34,7 @@ public inherited sharing class WorkflowParentNotifier {
 
     // Query child instances to ensure all fields are loaded (avoids SObjectException)
     List<Workflow_Instance__c> freshChildren = [
-      SELECT
-        Parent_Instance__c,
-        Correlation_Key__c,
-        Status__c,
-        Error_Message__c,
-        Output__c
+      SELECT Parent_Instance__c, Correlation_Key__c, Status__c
       FROM Workflow_Instance__c
       WHERE Id IN :childInstances
       WITH SYSTEM_MODE
@@ -112,34 +109,11 @@ public inherited sharing class WorkflowParentNotifier {
       ? parent.Correlation_Key__c
       : parent.Id;
 
-    String signalName;
-    String payload;
-    if (child.Status__c == 'Completed') {
-      signalName = 'ChildCompleted';
-      payload = child.Output__c;
-    } else {
-      signalName = 'ChildFailed';
-      Map<String, Object> outcomeData = new Map<String, Object>{
-        'status' => child.Status__c,
-        'errorMessage' => child.Error_Message__c != null
-          ? child.Error_Message__c.left(10000)
-          : null,
-        // The stored form, not plaintext: nothing decoded goes on the event
-        // bus. The parent decodes it only after it checks the child record.
-        'output' => child.Output__c
-      };
-      // With a codec, the wrapper stays inline. The signal insert encodes it
-      // and offloads the encoded text when it is too large, so the signal
-      // read resolves it in one pass. An offload here would give a marker
-      // that the signal insert encodes as input.
-      payload = WorkflowPayloadCodecs.isIdentity()
-        ? WorkflowPayloadOffload.savePayloadIfNeeded(
-            parent.Id,
-            JSON.serialize(outcomeData),
-            'ChildFailedOutcome_' + child.Id
-          )
-        : JSON.serialize(outcomeData);
-    }
+    // The event only wakes the parent. It has no payload. The parent reads
+    // the outcome from the child record.
+    String signalName = child.Status__c == 'Completed'
+      ? 'ChildCompleted'
+      : 'ChildFailed';
 
     signalName += String.isNotBlank(child.Correlation_Key__c)
       ? ':' + child.Correlation_Key__c
@@ -147,8 +121,7 @@ public inherited sharing class WorkflowParentNotifier {
 
     return new Workflow_Event__e(
       Workflow_Instance_Id__c = targetKey,
-      Event_Type__c = 'SIGNAL:' + signalName,
-      Payload__c = payload
+      Event_Type__c = 'SIGNAL:' + signalName
     );
   }
 

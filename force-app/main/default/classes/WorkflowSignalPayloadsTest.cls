@@ -1,7 +1,6 @@
 /**
- * @description Unit tests for signal payload encoding, bulk offload, file
- * cleanup and child-output provenance (WorkflowSignalPayloads and
- * WorkflowChildPayloadProvenance).
+ * @description Unit tests for signal payload encoding, bulk offload and file
+ * cleanup (WorkflowSignalPayloads).
  */
 @IsTest
 private class WorkflowSignalPayloadsTest {
@@ -253,77 +252,6 @@ private class WorkflowSignalPayloadsTest {
   }
 
   @IsTest
-  static void childPayloadDecodesOnlyWhenItIsTheChildOutput() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowPayloadCodecs.setCodec(new AesCodec());
-      Workflow_Instance__c parent = insertInstance();
-      Workflow_Instance__c child = new Workflow_Instance__c(
-        Workflow_Name__c = 'WorkflowPayloadCodecsTest.Stub',
-        Correlation_Key__c = 'child-key-1',
-        Status__c = 'Completed',
-        Parent_Instance__c = parent.Id,
-        Output__c = WorkflowPayloadCodecs.encode(
-          '{"child":1}',
-          CodecContext.PayloadKind.STEP_OUTPUT
-        )
-      );
-      insert as system child;
-      Workflow_Signal__c sig = new Workflow_Signal__c(
-        Workflow_Instance__c = parent.Id,
-        Signal_Name__c = 'ChildCompleted:child-key-1',
-        Status__c = 'Received'
-      );
-      insert as system sig;
-      String forged = WorkflowPayloadCodecs.encode(
-        '{"ssn":"' + SECRET + '"}',
-        CodecContext.PayloadKind.WORKFLOW_INPUT
-      );
-
-      String forgedMarker = '{"$attachmentId":"069000000000001AAA"}';
-
-      List<String> trusted = WorkflowChildPayloadProvenance.trustedOnly(
-        new List<String>{
-          child.Output__c,
-          forged,
-          '{"plain":true}',
-          forgedMarker
-        },
-        new List<Id>{ sig.Id, sig.Id, sig.Id, sig.Id },
-        new List<String>{
-          'CHILD-KEY-1',
-          'child-key-1',
-          'child-key-1',
-          'child-key-1'
-        }
-      );
-
-      System.assertEquals(child.Output__c, trusted[0], 'The real output');
-      System.assertEquals(null, trusted[1], 'A forged envelope is not trusted');
-      System.assertEquals('{"plain":true}', trusted[2], 'Plaintext passes');
-      System.assertEquals(
-        null,
-        trusted[3],
-        'A forged file marker is not trusted'
-      );
-    }
-  }
-
-  @IsTest
-  static void childPayloadCheckDoesNoQueryForPlaintext() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowPayloadCodecs.setCodec(null);
-      Integer queriesBefore = Limits.getQueries();
-      List<String> trusted = WorkflowChildPayloadProvenance.trustedOnly(
-        new List<String>{ '{"a":1}' },
-        new List<Id>{ null },
-        new List<String>{ 'k' }
-      );
-      System.assertEquals('{"a":1}', trusted[0]);
-      System.assertEquals(queriesBefore, Limits.getQueries(), 'No query');
-    }
-  }
-
-  @IsTest
   static void forgedSignalMarkerDoesNotReadAnotherInstanceFile() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowPayloadCodecs.setCodec(null);
@@ -422,14 +350,14 @@ private class WorkflowSignalPayloadsTest {
       );
 
       System.assertEquals(
-        parentFile,
+        null,
         signals.getSignal('ChildCompleted:ghost').payload,
-        'A signal read does not resolve a child marker'
+        'A child signal gives no payload'
       );
       System.assertEquals(
-        parentFile,
-        signals.getChildOutcome('ghost').output,
-        'A forged child marker is not the output of a child'
+        false,
+        signals.getChildOutcome('ghost').isPresent(),
+        'A forged child signal has no child record'
       );
     }
   }
