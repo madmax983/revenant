@@ -91,8 +91,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .ci-org
-          key: ci-org-v1-none
-          restore-keys: ci-org-v1-
+          key: ci-org-v2-none
+          restore-keys: ci-org-v2-
       - name: Get the CI org
         id: org
         env:
@@ -111,7 +111,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .ci-org
-          key: ci-org-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ci-org-v2-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Deploy
         run: sf project deploy start --target-org ci --wait 60
       - name: Run all local Apex tests

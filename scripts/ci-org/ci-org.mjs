@@ -144,13 +144,29 @@ function login(authUrl, { run, log }) {
   }
 }
 
-function readAuthFile(authFile, secret) {
+/**
+ * Reads the cached credential: { authUrl, expirationDate }. Returns null when there is no
+ * file, the secret is wrong, or the content is not a credential. The expiry is saved
+ * with the URL because a login from an auth URL does not restore it: `sf org display`
+ * can then show no expirationDate.
+ */
+export function readAuthFile(authFile, secret) {
   if (!existsSync(authFile)) return null;
   try {
-    return decrypt(readFileSync(authFile, "utf8"), secret).trim();
+    const payload = JSON.parse(decrypt(readFileSync(authFile, "utf8"), secret));
+    if (typeof payload?.authUrl !== "string" || !payload.authUrl.trim()) return null;
+    return { authUrl: payload.authUrl.trim(), expirationDate: payload.expirationDate };
   } catch {
     return null;
   }
+}
+
+/** `display` with the saved expiry, when `sf org display` shows none. */
+export function withExpiry(display, savedExpiration) {
+  if (!display?.result || display.result.expirationDate || !savedExpiration) {
+    return display;
+  }
+  return { ...display, result: { ...display.result, expirationDate: savedExpiration } };
 }
 
 /**
@@ -231,12 +247,12 @@ export function prepare({
     throw new CiOrgError(`Unknown mode "${mode}". Use keeper or borrow.`);
   }
   const ctx = { run, log };
-  const cachedUrl = readAuthFile(authFile, secret);
+  const cached = readAuthFile(authFile, secret);
 
   if (mode === "borrow") {
-    if (cachedUrl && login(cachedUrl, ctx)) {
+    if (cached && login(cached.authUrl, ctx)) {
       const shown = run(["org", "display", "--target-org", ALIAS, "--json"]);
-      if (isUsable(shown.json, now)) {
+      if (isUsable(withExpiry(shown.json, cached.expirationDate), now)) {
         return { source: "shared", save: false };
       }
       log("The shared CI org is not usable. Making a one-off org.");
@@ -248,7 +264,7 @@ export function prepare({
   }
 
   // keeper: free the active slot first, then make a new org.
-  if (cachedUrl && login(cachedUrl, ctx)) {
+  if (cached && login(cached.authUrl, ctx)) {
     // Stop when the old org stays. A new org would take a second active slot, and the
     // cache would lose the only auth URL that can still reach the old one.
     if (!deleteOrg(ctx)) {
@@ -273,8 +289,14 @@ export function prepare({
     throw new CiOrgError("The new org shows no sfdxAuthUrl, so it cannot be shared.");
   }
   log(maskLine(authUrl));
+  // Keep the expiry with the URL. Without the display value, count from the creation time.
+  const expirationDate =
+    shown.json?.result?.expirationDate ??
+    new Date(now + durationDays * DAY_MS).toISOString().slice(0, 10);
   mkdirSync(dirname(authFile), { recursive: true });
-  writeFileSync(authFile, encrypt(authUrl, secret), { mode: 0o600 });
+  writeFileSync(authFile, encrypt(JSON.stringify({ authUrl, expirationDate }), secret), {
+    mode: 0o600,
+  });
   return { source: "created", save: true };
 }
 

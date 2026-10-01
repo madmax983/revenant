@@ -15,6 +15,8 @@ import {
   main,
   parseArgs,
   prepare,
+  readAuthFile,
+  withExpiry,
 } from "./ci-org.mjs";
 
 const NOW = Date.parse("2026-10-01T12:00:00Z");
@@ -46,6 +48,11 @@ function fakeSf(plan) {
 
 function tmpAuthFile() {
   return join(mkdtempSync(join(tmpdir(), "ci-org-test-")), "sub", "auth.enc");
+}
+
+/** The cache text that the keeper writes: the auth URL and its expiry, encrypted. */
+function cacheText(authUrl, expirationDate = "2026-10-04", secret = SECRET) {
+  return encrypt(JSON.stringify({ authUrl, expirationDate }), secret);
 }
 
 /** Writes an auth file, and its folder. */
@@ -143,7 +150,7 @@ test("borrow: a cache that another secret wrote makes a one-off org", () => {
 
 test("borrow: a failed login, an expired org or a near-expiry org make a one-off org", () => {
   const authFile = tmpAuthFile();
-  seed(authFile, encrypt(ORG_URL, SECRET));
+  seed(authFile, cacheText(ORG_URL));
   for (const plan of [
     { "org login sfdx-url": { status: 1, json: {} } },
     { "org login sfdx-url": { status: 0, json: {} }, "org display --target-org": display("2026-09-30") },
@@ -176,14 +183,16 @@ test("keeper: with no old org it creates an org and writes an encrypted auth fil
   assert.ok(existsSync(authFile));
   const onDisk = readFileSync(authFile, "utf8");
   assert.ok(!onDisk.includes("scratch-refresh-token"), "the file is encrypted");
-  assert.equal(decrypt(onDisk, SECRET), ORG_URL);
+  const saved = JSON.parse(decrypt(onDisk, SECRET));
+  assert.equal(saved.authUrl, ORG_URL);
+  assert.equal(saved.expirationDate, "2026-10-04", "3 days after the creation time, when sf shows none");
   assert.ok(lines.includes(`::add-mask::${ORG_URL}`), "the URL is masked in the log");
   assert.ok(!sf.calls.some((c) => c[1] === "delete"), "there is no old org to delete");
 });
 
 test("keeper: it deletes the old org before it creates a new one", () => {
   const authFile = tmpAuthFile();
-  seed(authFile, encrypt("force://old", SECRET));
+  seed(authFile, cacheText("force://old"));
   const sf = fakeSf({
     "org login sfdx-url": { status: 0, json: {} },
     "org delete scratch": { status: 0, json: {} },
@@ -193,12 +202,12 @@ test("keeper: it deletes the old org before it creates a new one", () => {
   prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
   const names = sf.calls.map((c) => c.slice(0, 3).join(" "));
   assert.ok(names.indexOf("org delete scratch") < names.indexOf("org create scratch"));
-  assert.equal(decrypt(readFileSync(authFile, "utf8"), SECRET), ORG_URL);
+  assert.equal(readAuthFile(authFile, SECRET).authUrl, ORG_URL);
 });
 
 test("keeper: it stops, creates nothing and keeps the cache when the old org cannot be deleted", () => {
   const authFile = tmpAuthFile();
-  const before = encrypt("force://old", SECRET);
+  const before = cacheText("force://old");
   seed(authFile, before);
   const sf = fakeSf({
     "org login sfdx-url": { status: 0, json: {} },
@@ -217,7 +226,7 @@ test("keeper: it stops, creates nothing and keeps the cache when the old org can
 
 test("keeper: it still creates an org when the old one is gone", () => {
   const authFile = tmpAuthFile();
-  seed(authFile, encrypt("force://old", SECRET));
+  seed(authFile, cacheText("force://old"));
   const sf = fakeSf({
     "org login sfdx-url": { status: 1, json: {} },
     "org create scratch": { status: 0, json: {} },
@@ -240,6 +249,52 @@ test("keeper: it fails when the new org has no auth URL, and keeps no file", () 
   );
   assert.ok(!existsSync(authFile));
   assert.ok(sf.calls.some((c) => c[1] === "delete"), "the unusable org is deleted");
+});
+
+test("keeper: it saves the expiry that sf shows", () => {
+  const authFile = tmpAuthFile();
+  const sf = fakeSf({
+    "org create scratch": { status: 0, json: {} },
+    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL, expirationDate: "2026-10-09" } } },
+  });
+  prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
+  assert.deepEqual(readAuthFile(authFile, SECRET), { authUrl: ORG_URL, expirationDate: "2026-10-09" });
+});
+
+test("borrow: sf shows no expirationDate after an auth URL login, so the saved expiry counts", () => {
+  const noExpiry = { status: 0, json: { status: 0, result: { connectedStatus: "Connected", status: "Active" } } };
+  for (const [saved, expected] of [
+    ["2026-10-04", "shared"],
+    ["2026-10-01", "oneoff"], // under a day left
+    [null, "oneoff"], // nothing to count from: do not trust the org
+  ]) {
+    const authFile = tmpAuthFile();
+    seed(authFile, cacheText(ORG_URL, saved));
+    const sf = fakeSf({
+      "org login sfdx-url": { status: 0, json: {} },
+      "org display --target-org": noExpiry,
+      "org create scratch": { status: 0, json: {} },
+    });
+    const result = prepare({ mode: "borrow", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
+    assert.equal(result.source, expected, `saved expiry ${saved}`);
+  }
+});
+
+test("withExpiry fills only a missing expiry; readAuthFile rejects what is not a credential", () => {
+  const shown = { status: 0, result: { connectedStatus: "Connected" } };
+  assert.equal(withExpiry(shown, "2026-10-04").result.expirationDate, "2026-10-04");
+  assert.equal(withExpiry({ status: 0, result: { expirationDate: "2026-10-09" } }, "2026-10-04").result.expirationDate, "2026-10-09");
+  assert.equal(withExpiry(null, "2026-10-04"), null);
+  assert.equal(withExpiry(shown, undefined), shown);
+
+  const authFile = tmpAuthFile();
+  assert.equal(readAuthFile(authFile, SECRET), null, "no file");
+  seed(authFile, encrypt(ORG_URL, SECRET)); // a bare URL, not the payload
+  assert.equal(readAuthFile(authFile, SECRET), null, "not a payload");
+  seed(authFile, encrypt(JSON.stringify({ authUrl: "  " }), SECRET));
+  assert.equal(readAuthFile(authFile, SECRET), null, "empty URL");
+  seed(authFile, cacheText(ORG_URL));
+  assert.equal(readAuthFile(authFile, "another"), null, "wrong secret");
 });
 
 test("deleteOrg: sf delete works, or the Dev Hub deletes the ActiveScratchOrg record", () => {
@@ -271,7 +326,7 @@ test("deleteOrg: sf delete works, or the Dev Hub deletes the ActiveScratchOrg re
 
 test("keeper: it falls back to the Dev Hub when sf cannot delete the old org", () => {
   const authFile = tmpAuthFile();
-  seed(authFile, encrypt("force://old", SECRET));
+  seed(authFile, cacheText("force://old"));
   const sf = fakeSf({
     "org login sfdx-url": { status: 0, json: {} },
     "org display --target-org": { status: 0, json: { result: { id: "00DgL00000KS7MPUA1" } } },
