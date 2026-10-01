@@ -249,7 +249,13 @@ export function prepare({
 
   // keeper: free the active slot first, then make a new org.
   if (cachedUrl && login(cachedUrl, ctx)) {
-    deleteOrg(ctx);
+    // Stop when the old org stays. A new org would take a second active slot, and the
+    // cache would lose the only auth URL that can still reach the old one.
+    if (!deleteOrg(ctx)) {
+      throw new CiOrgError(
+        "The previous shared CI org could not be deleted. It stays in the cache, and the next keeper run tries again.",
+      );
+    }
   }
   createOrg(durationDays, ctx);
   const shown = run([

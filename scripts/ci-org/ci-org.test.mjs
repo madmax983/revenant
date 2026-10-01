@@ -196,6 +196,25 @@ test("keeper: it deletes the old org before it creates a new one", () => {
   assert.equal(decrypt(readFileSync(authFile, "utf8"), SECRET), ORG_URL);
 });
 
+test("keeper: it stops, creates nothing and keeps the cache when the old org cannot be deleted", () => {
+  const authFile = tmpAuthFile();
+  const before = encrypt("force://old", SECRET);
+  seed(authFile, before);
+  const sf = fakeSf({
+    "org login sfdx-url": { status: 0, json: {} },
+    "org display --target-org": { status: 0, json: { result: { id: "00DgL00000KS7MPUA1" } } },
+    "org delete scratch": { status: 1, json: {} },
+    "data query --query": { status: 0, json: { result: { records: [] } } },
+    "org create scratch": { status: 0, json: {} },
+  });
+  assert.throws(
+    () => prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } }),
+    /could not be deleted/,
+  );
+  assert.ok(!sf.calls.some((c) => c[1] === "create"), "no new org is created");
+  assert.equal(readFileSync(authFile, "utf8"), before, "the cache file is unchanged");
+});
+
 test("keeper: it still creates an org when the old one is gone", () => {
   const authFile = tmpAuthFile();
   seed(authFile, encrypt("force://old", SECRET));

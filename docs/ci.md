@@ -50,7 +50,7 @@ org per run. Runs share one CI org. `scripts/ci-org/ci-org.mjs` does the work.
 - **Cost.** About 1 signup a day for the keeper. A one-off org adds 1 for each run that
   finds no shared org. The quickstart smoke still makes 1 org for each PR push that
   touches the engine. Count it in the 6.
-- A Dev Hub allows 3 active scratch orgs. The shared org uses 1. The keeper deletes the old org first. If `sf org delete scratch` cannot (the CLI knows the org only from an auth URL), it deletes the `ActiveScratchOrg` record through the Dev Hub.
+- A Dev Hub allows 3 active scratch orgs. The shared org uses 1. The keeper deletes the old org first, and stops (the old org and its cache stay, the next night retries) if the old org cannot be deleted. If `sf org delete scratch` cannot (the CLI knows the org only from an auth URL), it deletes the `ActiveScratchOrg` record through the Dev Hub.
 
 ## Run the checks locally
 
