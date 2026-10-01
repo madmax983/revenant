@@ -27,8 +27,7 @@
  *    explicitly cancelling a parent reaps its in-flight children.  A parent that
  *    FAILS also cancels its in-flight children (issue #94, README section 6).  A
  *    child that fails publishes ChildFailed, and the step reads the failure with
- *    getChildOutcome.  A child that times out publishes nothing, so a production
- *    composite adds its own timeout.
+ *    getChildOutcome.  A child that times out to Failed does the same.
  */
 public inherited sharing class ChildWorkflowCompositionExample implements WorkflowDefinition {
   /** Minimum credit score required to approve the loan. */
