@@ -16,6 +16,11 @@ public inherited sharing class WorkflowInstanceDetailService {
   @TestVisible
   private static Integer textHeapBudget = 2000000;
 
+  // The long text reads stop after the first chunk when the transaction heap is
+  // above this size (bytes). It is half of the limit, as in WorkflowPayloadService.
+  @TestVisible
+  private static Integer heapCeiling = Limits.getLimitHeapSize() / 2;
+
   // SOQL queries the long text reads leave free for the caller.
   @TestVisible
   private static Integer queryReserve = 40;
@@ -243,6 +248,7 @@ public inherited sharing class WorkflowInstanceDetailService {
       if (
         i > 0 &&
         (Limits.getHeapSize() > heapLimit ||
+        Limits.getHeapSize() > heapCeiling ||
         Limits.getQueries() + queryReserve > Limits.getLimitQueries())
       ) {
         break;

@@ -176,4 +176,20 @@ private class WorkflowPayloadBudgetTest {
     }
     Assert.areEqual(5, resolved, 'Only the first batch is read');
   }
+
+  @IsTest
+  static void noBatchStartsAboveTheHeapCeiling() {
+    Workflow_Instance__c inst = seedAndLoad(6, 100);
+    List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
+    WorkflowPayloadService.heapCeiling = 1;
+
+    WorkflowPayloadService.resolvePayloadsInBulk(inst, steps);
+
+    for (Workflow_Step_Execution__c step : steps) {
+      Assert.isTrue(
+        step.Output__c.startsWith('{"$attachmentId":'),
+        'No body is read above the ceiling'
+      );
+    }
+  }
 }
