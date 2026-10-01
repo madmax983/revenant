@@ -104,10 +104,16 @@ public class StepResultFanOutTest {
 
       if (outcome1.isPresent() && outcome2.isPresent()) {
         Map<String, Object> res1 = (Map<String, Object>) JSON.deserializeUntyped(
-          WorkflowPayloadOffload.resolvePayload(outcome1.output)
+          WorkflowPayloadOffload.resolvePayload(
+            outcome1.output,
+            ctx.workflowInstanceId
+          )
         );
         Map<String, Object> res2 = (Map<String, Object>) JSON.deserializeUntyped(
-          WorkflowPayloadOffload.resolvePayload(outcome2.output)
+          WorkflowPayloadOffload.resolvePayload(
+            outcome2.output,
+            ctx.workflowInstanceId
+          )
         );
         Integer val1 = ((Decimal) res1.get('result')).intValue();
         Integer val2 = ((Decimal) res2.get('result')).intValue();
@@ -415,7 +421,7 @@ public class StepResultFanOutTest {
         WHERE Id = :parentId
       ];
       Map<String, Object> output = (Map<String, Object>) JSON.deserializeUntyped(
-        WorkflowPayloadOffload.resolvePayload(parentInst.Output__c)
+        WorkflowPayloadOffload.resolvePayload(parentInst.Output__c, parentId)
       );
       System.assertEquals(80, ((Decimal) output.get('sum')).intValue());
     }

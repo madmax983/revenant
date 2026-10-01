@@ -92,7 +92,10 @@ public class ParallelSagaFanoutWorkflowExampleTest {
         WITH SYSTEM_MODE
       ];
       Map<String, Object> outputMap = (Map<String, Object>) JSON.deserializeUntyped(
-        WorkflowPayloadOffload.resolvePayload(completedInst.Output__c)
+        WorkflowPayloadOffload.resolvePayload(
+          completedInst.Output__c,
+          instanceId
+        )
       );
       System.assertNotEquals(null, outputMap, 'Output should be present');
       System.assert(

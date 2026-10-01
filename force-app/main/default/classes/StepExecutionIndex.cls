@@ -154,6 +154,7 @@ public inherited sharing class StepExecutionIndex {
         Step_Name__c,
         Status__c,
         Captured_Values__c,
+        Workflow_Instance__c,
         Workflow_Instance__r.CreatedDate
       FROM Workflow_Step_Execution__c
       WHERE Id IN :targetIds

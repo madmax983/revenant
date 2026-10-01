@@ -153,7 +153,9 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 ## Payload persistence & codec
 
 The payload seam. Callers encode, then save. Save offloads. Resolve
-rehydrates and decodes. Control data (markers, status, keys) is not encoded. See
+rehydrates and decodes. Resolve reads a file only when it links to the owner
+instance. Public entry points reject marker input. Control data (markers,
+status, keys) is not encoded. See
 [docs/payload-codec.md](docs/payload-codec.md).
 
 - `WorkflowPayloadOffload` (save / resolve seam), `WorkflowBulkOffload`
@@ -162,7 +164,7 @@ rehydrates and decodes. Control data (markers, status, keys) is not encoded. See
   `WorkflowPayloadEnvelope` (stored form), `WorkflowSignalPayloads` (signal
   encode and bulk offload)
 - Child outcomes: `StepChildOutcomes` reads the child record. A child signal
-  only wakes the parent. See [ADR 0021](docs/adr/0021-engine-provenance-child-outcomes.md)
+  only wakes the parent. See [ADR 0022](docs/adr/0022-engine-provenance-child-outcomes.md)
   and [the threat model](docs/payload-ingress-threat-model.md).
 - `PayloadCodec`, `CodecContext`, `IdentityPayloadCodec` (public API)
 - Rehydrators that also decode: `WorkflowStatusProjection`,

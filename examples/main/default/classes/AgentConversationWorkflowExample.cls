@@ -182,7 +182,10 @@ public with sharing class AgentConversationWorkflowExample {
       // Resolve the stored value. The engine can offload it. A payload codec can
       // encode it.
       Map<String, Object> payload = parseJson(
-        WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
+        WorkflowPayloadOffload.resolvePayload(
+          sig.Payload__c,
+          ctx.workflowInstanceId
+        )
       );
       return StepResult.complete(
         null,

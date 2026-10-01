@@ -166,9 +166,56 @@ public class WorkflowStatusInvocableActionTest {
       );
       // Parity with what an Apex caller sees via the engine.
       System.assertEquals(
-        WorkflowPayloadOffload.resolvePayload(inst.Output__c),
+        WorkflowPayloadOffload.resolvePayload(inst.Output__c, inst.Id),
         res.outputJson,
         'Action output must match the engine rehydration path'
+      );
+    }
+  }
+
+  @IsTest
+  static void testForgedMarkerToOtherInstanceFileStaysText() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c a = new Workflow_Instance__c(
+        Workflow_Name__c = 'Test.Workflow',
+        Status__c = 'Completed',
+        Correlation_Key__c = 'ForgeA'
+      );
+      Workflow_Instance__c b = new Workflow_Instance__c(
+        Workflow_Name__c = 'Test.Workflow',
+        Status__c = 'Completed',
+        Correlation_Key__c = 'ForgeB'
+      );
+      insert new List<Workflow_Instance__c>{ a, b };
+      String secret = '"' + 'S'.repeat(110000) + '"';
+      b.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
+        b.Id,
+        secret,
+        'Output_B'
+      );
+      update b;
+      // A holds the marker of the file that belongs to B.
+      a.Output__c = b.Output__c;
+      update a;
+
+      Test.startTest();
+      List<WorkflowStatusInvocableAction.StatusResult> results = WorkflowStatusInvocableAction.getStatus(
+        new List<WorkflowStatusInvocableAction.StatusRequest>{
+          req(a.Id),
+          req(b.Id)
+        }
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        b.Output__c,
+        results[0].outputJson,
+        'A forged marker must stay as text'
+      );
+      System.assertEquals(
+        secret,
+        results[1].outputJson,
+        'The owner must still read its own file'
       );
     }
   }

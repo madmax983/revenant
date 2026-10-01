@@ -1,6 +1,6 @@
 # ADR 0002: Payload codec at the offload seam, with an engine envelope
 
-- Status: Accepted (point 5 updated by ADR 0021)
+- Status: Accepted (point 5 updated by ADR 0022)
 - Date: 2026-09-27
 - Issue: #99
 
@@ -24,7 +24,7 @@ add-on. An ISV cannot assume that a subscriber org has it.
    `{"$codec":"<KIND>","data":"..."}`. The identity codec adds no envelope.
 5. Always encode external input, also input that looks like an envelope. A
    signal name gives no trust. A child outcome comes from the child record,
-   not from the signal (ADR 0021).
+   not from the signal (ADR 0022).
 6. Do not encode control data: offload markers, engine wait markers, status,
    compensation stack, keys and timestamps.
 7. Fail closed. Misconfiguration, a config read failure or a missing codec

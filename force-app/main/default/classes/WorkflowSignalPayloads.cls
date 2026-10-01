@@ -30,26 +30,35 @@ public inherited sharing class WorkflowSignalPayloads {
    * wake-only signal gives null and is not resolved.
    * @param signalName the signal name
    * @param stored the stored payload
+   * @param ownerId the instance that reads the signal
    * @return the payload text, or null for a wake-only signal
    */
-  public static String readPayload(String signalName, String stored) {
+  public static String readPayload(
+    String signalName,
+    String stored,
+    Id ownerId
+  ) {
     return isWakeOnly(signalName)
       ? null
-      : WorkflowPayloadOffload.resolvePayload(stored);
+      : WorkflowPayloadOffload.resolvePayload(stored, ownerId);
   }
 
   /**
    * @description Resolves and decodes the stored payloads of signal rows in
    * one bulk pass. A wake-only signal gives null and is not resolved.
    * @param rows the signal rows
+   * @param ownerId the instance that reads the signals
    * @return the payload texts, index-aligned with the rows
    */
-  public static List<String> readPayloads(List<Workflow_Signal__c> rows) {
+  public static List<String> readPayloads(
+    List<Workflow_Signal__c> rows,
+    Id ownerId
+  ) {
     List<String> stored = new List<String>();
     for (Workflow_Signal__c row : rows) {
       stored.add(isWakeOnly(row.Signal_Name__c) ? null : row.Payload__c);
     }
-    return WorkflowPayloadOffload.resolvePayloads(stored);
+    return WorkflowPayloadOffload.resolvePayloads(stored, ownerId);
   }
 
   /**

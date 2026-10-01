@@ -309,10 +309,15 @@ public inherited sharing class BatchFanoutWorkflowExample {
       // Resolve stored outputs in bulk. The engine can offload them. A payload
       // codec can encode them.
       List<String> rawOutputs = new List<String>();
+      List<Id> childIds = new List<Id>();
       for (Workflow_Instance__c child : childInstances) {
         rawOutputs.add(child.Output__c);
+        childIds.add(child.Id);
       }
-      List<String> outputs = WorkflowPayloadOffload.resolvePayloads(rawOutputs);
+      List<String> outputs = WorkflowPayloadOffload.resolvePayloads(
+        rawOutputs,
+        childIds
+      );
       for (Integer i = 0; i < childInstances.size(); i++) {
         Object childOut = outputs[i] != null
           ? JSON.deserializeUntyped(outputs[i])

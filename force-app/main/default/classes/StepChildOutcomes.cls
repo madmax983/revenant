@@ -32,7 +32,17 @@ public inherited sharing class StepChildOutcomes {
    * @param signals The owning StepSignals used for signal reads and marking.
    */
   public StepChildOutcomes(StepSignals signals) {
+    this(signals, null);
+  }
+
+  /**
+   * @description Constructs the child-outcome resolver for one instance.
+   * @param signals The owning StepSignals used for signal reads and marking.
+   * @param instanceId The reading instance Id, or null for none.
+   */
+  public StepChildOutcomes(StepSignals signals, Id instanceId) {
     this.signals = signals;
+    this.instanceId = instanceId;
   }
 
   /**
@@ -184,7 +194,7 @@ public inherited sharing class StepChildOutcomes {
 
   // Resolves offload markers and decodes the stored outputs of the verified
   // children in one pass. Only a verified child record gives a stored value.
-  private static Map<String, String> resolveOutputs(
+  private Map<String, String> resolveOutputs(
     Map<String, Workflow_Instance__c> children
   ) {
     List<String> keys = new List<String>();
@@ -199,7 +209,11 @@ public inherited sharing class StepChildOutcomes {
     if (stored.isEmpty()) {
       return outputs;
     }
-    List<String> resolved = WorkflowPayloadOffload.resolvePayloads(stored);
+    // An offloaded output is a file of this instance or of one of its children.
+    List<String> resolved = WorkflowPayloadOffload.resolveChildPayloads(
+      stored,
+      instanceId
+    );
     for (Integer i = 0; i < keys.size(); i++) {
       outputs.put(keys[i], resolved[i]);
     }

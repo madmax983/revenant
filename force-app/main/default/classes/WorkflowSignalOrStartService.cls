@@ -46,6 +46,7 @@ public inherited sharing class WorkflowSignalOrStartService {
     if (requests == null || requests.isEmpty()) {
       return new List<WorkflowEngine.StartResult>();
     }
+    rejectMarkerInputs(requests);
 
     System.Savepoint sp = Database.setSavepoint();
     SignalOrStartRun run = new SignalOrStartRun();
@@ -78,6 +79,20 @@ public inherited sharing class WorkflowSignalOrStartService {
       Database.rollback(sp);
       WorkflowResumeEnqueue.clearEnqueueGuards(run.activeInstIdsToWake);
       throw e;
+    }
+  }
+
+  // Rejects a caller payload or start input that is an offload marker. Runs
+  // before any write.
+  private static void rejectMarkerInputs(
+    List<WorkflowEngine.SignalOrStartRequest> requests
+  ) {
+    for (WorkflowEngine.SignalOrStartRequest req : requests) {
+      if (req == null) {
+        continue;
+      }
+      WorkflowPayloadOffload.rejectOffloadMarker(req.payload, 'Signal payload');
+      WorkflowStartValidation.rejectOffloadMarkerInput(req.start);
     }
   }
 

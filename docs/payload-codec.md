@@ -60,7 +60,10 @@ The codec also does not cover these fields. Do not put sensitive data in them:
 ## Write a codec
 
 Implement `PayloadCodec`. Use a public class with a public no-argument
-constructor.
+constructor. `PayloadCodec` and `CodecContext` are `global`. A subscriber org
+uses the package namespace, for example `implements <namespace>.PayloadCodec`, where `<namespace>` is the package
+namespace. See
+[global-api.md](global-api.md).
 
 ```apex
 public with sharing class AesPayloadCodec implements PayloadCodec {
@@ -118,9 +121,15 @@ byte for byte. Existing orgs do not need a migration.
 
 If your code reads `Input__c`, `Output__c`, `Progress__c`,
 `Captured_Values__c` or `Payload__c` with SOQL, give the value to
-`WorkflowPayloadOffload.resolvePayload` (one value) or `resolvePayloads` (a
-list). These methods load offloaded files and decode the value. Tests that
-check stored text must also resolve it first.
+`WorkflowPayloadOffload.resolvePayload(text, ownerId)` (one value) or
+`resolvePayloads(texts, ownerId)` (a list). The owner is the instance that
+holds the value. These methods load offloaded files and decode the value. Tests
+that check stored text must also resolve it first.
+
+A marker resolves only when its file is linked to the owner. A file of another
+instance, or an unlinked file, stays as marker text. For child outputs, use
+`resolveChildPayloads(texts, parentId)`: it also accepts files linked to a child
+of the parent.
 
 `StepContext`, `ctx.signals()`, `getStatus`, the status Flow action and
 `WorkflowTestHarness` already give decoded payloads.
@@ -157,8 +166,13 @@ The engine wraps codec output in an envelope:
 - With a codec, the engine encodes input that starts with `{"$codec":` or
   `{"$attachmentId":` like any other input, so input cannot point the engine
   at a stored value or a file.
-- With the identity codec, do not start a payload with `{"$codec":` or
-  `{"$attachmentId":`. The engine reads these as stored forms. See #242.
+- The public start, signal, signal-or-start, resume, invocable and dashboard
+  entry points reject input that starts with `{"$attachmentId":`. The
+  `Workflow_Event__e` handler drops a marker payload, except on the engine
+  `SIGNAL:ChildCompleted:` and `SIGNAL:ChildFailed:` events. The link check on
+  read also protects that path.
+- With the identity codec, do not start a payload with `{"$codec":`. The engine
+  reads it as a stored form.
 
 ## Behavior to know
 

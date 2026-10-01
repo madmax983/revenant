@@ -191,7 +191,7 @@ public class WorkflowEngineCore2Test {
       System.assertEquals(
         '{"status":"success"}',
         (String) JSON.deserialize(
-          WorkflowPayloadOffload.resolvePayload(inst.Output__c),
+          WorkflowPayloadOffload.resolvePayload(inst.Output__c, inst.Id),
           String.class
         )
       );
@@ -543,6 +543,45 @@ public class WorkflowEngineCore2Test {
         link.Visibility == 'InternalUsers' || link.Visibility == 'AllUsers',
         'Invalid visibility: ' + link.Visibility
       );
+    }
+  }
+
+  // A marker that points at the file of another instance must stay as text.
+  @IsTest
+  static void forgedMarkerDoesNotResolveForeignFile() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Id victimId = WorkflowEngine.start(
+        'WorkflowEngineTest.HappyWorkflow',
+        'ForgeVictimKey',
+        null
+      );
+      Id attackerId = WorkflowEngine.start(
+        'WorkflowEngineTest.HappyWorkflow',
+        'ForgeAttackerKey',
+        null
+      );
+      String secret = 'SECRET-' + 'x'.repeat(100001);
+      String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
+        victimId,
+        secret,
+        'VictimPayload'
+      );
+      System.assert(marker.startsWith('{"$attachmentId":'));
+
+      List<Workflow_Step_Execution__c> execs = new List<Workflow_Step_Execution__c>{
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = attackerId,
+          Captured_Values__c = marker
+        ),
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = victimId,
+          Captured_Values__c = marker
+        )
+      };
+      List<String> resolved = StepExecutionParse.resolveCapturePayloads(execs);
+
+      System.assertEquals(marker, resolved[0], 'Forged marker stays text');
+      System.assertEquals(secret, resolved[1], 'Owner reads its own file');
     }
   }
 

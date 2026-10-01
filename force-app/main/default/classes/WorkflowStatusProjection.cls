@@ -1,7 +1,7 @@
 /**
  * @description Status-DTO projection and offloaded-output rehydration for the
- * Revenant read API. Fetches winner instances' DTO fields, resolves all offload
- * markers in one bounded ContentVersion query, rehydrates each terminal
+ * Revenant read API. Fetches winner instances' DTO fields, resolves the offload
+ * markers that each instance owns in one bounded query pair, rehydrates each terminal
  * instance's `Output__c`, and assembles the resident `WorkflowEngine.WorkflowStatus`
  * DTO. Extracted from `WorkflowEngine`; consumed by {@link WorkflowStatusRead} and
  * {@link WorkflowCausationLineage}. Read-only (zero DML); all SOQL runs in system
@@ -40,18 +40,18 @@ public inherited sharing class WorkflowStatusProjection {
 
   /**
    * @description Builds a WorkflowStatus DTO from a queried instance, using the
-   * pre-fetched offloaded-output map so no additional SOQL is issued per row.
+   * pre-fetched owned-output map so no additional SOQL is issued per row.
    * Exposed for {@link WorkflowCausationLineage}, which assembles lineage status
    * DTOs through this method.
    * @param inst the queried instance row to project
-   * @param resolvedOutputByDocId the pre-resolved offloaded-output map keyed by
-   *        ContentDocumentId
+   * @param resolvedOutputByKey the owned file text, keyed by
+   *        {@link WorkflowPayloadOffload#ownedKey}
    * @param gate the record-access gate that decodes or redacts the output
    * @return the assembled status DTO
    */
   public static WorkflowEngine.WorkflowStatus buildStatus(
     Workflow_Instance__c inst,
-    Map<Id, String> resolvedOutputByDocId,
+    Map<String, String> resolvedOutputByKey,
     WorkflowPayloadAccess.Gate gate
   ) {
     Boolean terminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
@@ -59,12 +59,7 @@ public inherited sharing class WorkflowStatusProjection {
     );
     String output = null;
     if (terminal) {
-      output = rehydrateFromMap(
-        inst.Output__c,
-        resolvedOutputByDocId,
-        gate,
-        inst.Id
-      );
+      output = rehydrateFromMap(inst, resolvedOutputByKey, gate);
       // A terminal instance has definitively produced its output, so surface an
       // empty result as '' rather than null. (Salesforce coerces an empty text
       // field to null on insert.) This keeps output == null meaning exactly "not
@@ -78,67 +73,43 @@ public inherited sharing class WorkflowStatusProjection {
   }
 
   /**
-   * @description Resolves all offload markers found in a collection of instances
-   * in one ContentVersion SOQL query. Exposed for {@link WorkflowCausationLineage},
-   * which bulk-resolves ancestor outputs before assembling lineage status DTOs.
-   * @param instances the instances whose offloaded outputs to resolve
-   * @return a map from ContentDocumentId to resolved text (empty when none)
+   * @description Loads the offloaded outputs that each instance owns, with one
+   * link query and one file query. A marker whose file is not linked to its own
+   * instance does not load. Exposed for {@link WorkflowCausationLineage}, which
+   * bulk-resolves ancestor outputs before assembling lineage status DTOs.
+   * @param instances the instances whose offloaded outputs to load
+   * @return the file text by {@link WorkflowPayloadOffload#ownedKey} (empty when none)
    */
-  public static Map<Id, String> bulkResolveOffloadedOutputs(
+  public static Map<String, String> bulkResolveOffloadedOutputs(
     List<Workflow_Instance__c> instances
   ) {
-    Set<Id> docIds = new Set<Id>();
+    List<Id> docIds = new List<Id>();
+    List<Id> ownerIds = new List<Id>();
     for (Workflow_Instance__c inst : instances) {
-      Id docId = getOffloadDocId(inst.Output__c);
+      Id docId = WorkflowPayloadOffload.markerDocId(inst.Output__c);
       if (docId != null) {
         docIds.add(docId);
+        ownerIds.add(inst.Id);
       }
     }
-    Map<Id, String> resolved = new Map<Id, String>();
-    if (!docIds.isEmpty()) {
-      for (ContentVersion cv : [
-        SELECT ContentDocumentId, VersionData
-        FROM ContentVersion
-        WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
-        WITH SYSTEM_MODE
-      ]) {
-        if (cv.VersionData != null) {
-          resolved.put(cv.ContentDocumentId, cv.VersionData.toString());
-        }
-      }
-    }
-    return resolved;
+    return WorkflowPayloadOffload.loadOwned(docIds, ownerIds, false);
   }
 
-  // Extracts the ContentDocumentId from an offload marker, or null if not a marker.
-  private static Id getOffloadDocId(String textValue) {
-    if (
-      String.isNotBlank(textValue) && textValue.startsWith('{"$attachmentId":')
-    ) {
-      try {
-        Map<String, Object> marker = (Map<String, Object>) JSON.deserializeUntyped(
-          textValue
-        );
-        return (Id) marker.get('$attachmentId');
-      } catch (Exception ignored) {
-        // Not a valid offload marker; treat as a non-offloaded value.
-      }
-    }
-    return null;
-  }
-
-  // Rehydrates a single output string using the pre-fetched resolved map, then
-  // decodes it through the record-access gate.
+  // Rehydrates the output of one instance from the owned map, then decodes it
+  // through the record-access gate.
   private static String rehydrateFromMap(
-    String textValue,
-    Map<Id, String> resolvedOutputByDocId,
-    WorkflowPayloadAccess.Gate gate,
-    Id instanceId
+    Workflow_Instance__c inst,
+    Map<String, String> resolvedOutputByKey,
+    WorkflowPayloadAccess.Gate gate
   ) {
-    Id docId = getOffloadDocId(textValue);
-    String stored = (docId != null && resolvedOutputByDocId.containsKey(docId))
-      ? resolvedOutputByDocId.get(docId)
-      : textValue;
-    return gate.decode(stored, instanceId);
+    String stored = inst.Output__c;
+    Id docId = WorkflowPayloadOffload.markerDocId(inst.Output__c);
+    if (docId != null) {
+      String key = WorkflowPayloadOffload.ownedKey(inst.Id, docId);
+      if (resolvedOutputByKey.containsKey(key)) {
+        stored = resolvedOutputByKey.get(key);
+      }
+    }
+    return gate.decode(stored, inst.Id);
   }
 }

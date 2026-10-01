@@ -33,8 +33,18 @@ global inherited sharing class StepSignals {
    * @param signalSource The SignalSource implementation, or null for none.
    */
   public StepSignals(StepContext.SignalSource signalSource) {
+    this(signalSource, null);
+  }
+
+  /**
+   * @description Constructs the signal accessor for one instance. The instance
+   * id decides which offloaded child outputs the accessor may read.
+   * @param signalSource The SignalSource implementation, or null for none.
+   * @param instanceId The instance that reads the signals, or null for none.
+   */
+  public StepSignals(StepContext.SignalSource signalSource, Id instanceId) {
     this.state = new StepSignalState(signalSource);
-    this.childOutcomes = new StepChildOutcomes(this);
+    this.childOutcomes = new StepChildOutcomes(this, instanceId);
   }
 
   /**

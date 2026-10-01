@@ -23,11 +23,15 @@ The Salesforce guide says that a `COUNT` query with `GROUP BY` uses one query ro
 5. The durations use the instances that got a `Terminal_At__c` in the window. One query reads the newest 2,001 of these rows. Apex uses the first 2,000. When the query returns 2,001 rows, the result has `isSampled = true` and each duration shows "≈".
 6. A definition that has only a finished instance in the window gets a row with `started = 0`.
 7. The map key is the lower-case name, because SOQL `GROUP BY` ignores case.
-8. The endpoint is on a new `WorkflowFleetHealthController`. Both dashboard permission sets grant it.
+8. The result has at most 500 rows (`MAX_DEFINITIONS`, #263). A new name after the map is full gets no row, in the count step and in the duration step. The result has `definitionsCapped = true` and `definitionCap`. The view shows a note.
+9. The row query reads the newest instances first, so it keeps the newest names. The aggregate query has no order, so its kept names are not defined.
+10. The endpoint is on a new `WorkflowFleetHealthController`. Both dashboard permission sets grant it.
 
 ## Consequences
 
 - Each call uses three queries.
+- The map holds at most 500 definition rows. Names past the cap have no row.
+- The duration step can add a name only when a slot is free.
 - Query rows are at most 20,001 + 20,000 + 2,001 = 42,002. This is true in both cases of aggregate row accounting.
 - Counts are exact up to 20,000 started instances in the window.
 - A definition with many terminal instances can fill the duration sample. Other definitions then have fewer or no duration values.
@@ -36,6 +40,7 @@ The Salesforce guide says that a `COUNT` query with `GROUP BY` uses one query ro
 
 ## Rejected Options
 
+- An "other" row for the dropped names: its success rate has no meaning.
 - A formula field for the duration: the issue does not allow a new field.
 - Hour buckets (`HOUR_IN_DAY`) with `MIN` and `MAX`: one-hour error, and the group count grows.
 - A full scan in a SOQL `for` loop: cost grows with volume.

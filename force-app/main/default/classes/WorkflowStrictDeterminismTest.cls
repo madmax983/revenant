@@ -228,6 +228,13 @@ public class WorkflowStrictDeterminismTest {
           );
           return StepResult.complete(OTHER, null);
         }
+        when 'cfgRoute' {
+          // The route depends on the payload of a live Cfg signal.
+          StepContext.Signal cfg = ctx.signals().getSignal('Cfg');
+          return cfg.isPresent() && cfg.payload == 'B'
+            ? StepResult.complete(OTHER, null)
+            : StepResult.suspend();
+        }
         when 'captured' {
           String tier = (String) ctx.captures()
             .once('tier', new TierProducer());
@@ -639,6 +646,42 @@ public class WorkflowStrictDeterminismTest {
         'The new signal completes the run'
       );
       Assert.isTrue(done.reachedStep(NEXT), 'The run reaches Next');
+      Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
+    }
+  }
+
+  @IsTest
+  static void liveSignalPayloadEditIsNotDivergence() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      WorkflowEngine.strictDeterminism = true;
+      mode = 'cfgRoute';
+      Id instId = WorkflowEngine.start(
+        GateWorkflow.class.getName(),
+        'Strict-cfg-' + Crypto.getRandomInteger(),
+        null
+      );
+      Workflow_Signal__c cfg = new Workflow_Signal__c(
+        Workflow_Instance__c = instId,
+        Signal_Name__c = 'Cfg',
+        Payload__c = 'A',
+        Status__c = 'Received'
+      );
+      insert cfg;
+      WorkflowEngine.runStep(instId); // Cfg is A: the gate waits.
+      Assert.areEqual('Suspended', load(instId).Status__c, 'The gate waits');
+
+      // An admin edits the live signal. The route change is legal.
+      cfg.Payload__c = 'B';
+      update cfg;
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+
+      Assert.areEqual(
+        1,
+        rows(instId, OTHER).size(),
+        'The edited signal routes the run to Other'
+      );
       Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
     }
   }

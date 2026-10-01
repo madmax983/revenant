@@ -83,10 +83,11 @@ public inherited sharing class WorkflowFailureDetails {
    * after the last separator is decoded only when it is a stored form. Other
    * text does not change. With the identity codec, the value does not change.
    * @param details the stored Error_Details__c value
+   * @param instanceId the instance that owns the step execution
    * @return the value with plaintext failure data
    */
-  public static String resolve(String details) {
-    return resolveWith(details, null);
+  public static String resolve(String details, Id instanceId) {
+    return resolveWith(details, instanceId, false);
   }
 
   /**
@@ -98,11 +99,16 @@ public inherited sharing class WorkflowFailureDetails {
    * @return the value with plaintext failure data, or the placeholder
    */
   public static String resolveForUser(String details, Id instanceId) {
-    return resolveWith(details, instanceId);
+    return resolveWith(details, instanceId, true);
   }
 
-  // A non-null instanceId turns on the record-access check.
-  private static String resolveWith(String details, Id instanceId) {
+  // The owner decides which offload file the method may read. checkAccess
+  // turns on the record-access check.
+  private static String resolveWith(
+    String details,
+    Id instanceId,
+    Boolean checkAccess
+  ) {
     Integer at = details == null ? -1 : details.lastIndexOf(SEPARATOR);
     if (at < 0) {
       return details;
@@ -115,7 +121,7 @@ public inherited sharing class WorkflowFailureDetails {
       return details;
     }
     if (
-      instanceId != null &&
+      checkAccess &&
       !WorkflowPayloadAccess.readableIds(new Set<Id>{ instanceId })
         .contains(instanceId)
     ) {
@@ -125,6 +131,6 @@ public inherited sharing class WorkflowFailureDetails {
     }
     return details.left(at) +
       SEPARATOR +
-      WorkflowPayloadOffload.resolvePayload(stored);
+      WorkflowPayloadOffload.resolvePayload(stored, instanceId);
   }
 }

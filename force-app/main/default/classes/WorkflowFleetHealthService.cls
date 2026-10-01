@@ -1,7 +1,7 @@
 /**
  * @description Builds the Fleet Health summary (#111). It makes one row for each definition
- * that has instances in a rolling window. It does no DML, publishes no events and starts no
- * jobs.
+ * that has instances in a rolling window, up to MAX_DEFINITIONS rows. It does no DML,
+ * publishes no events and starts no jobs.
  *
  * Cost: three queries for each call. Query rows are at most 2 * COUNT_CAP + SAMPLE_CAP + 2
  * for all instance volumes. This is true if an aggregate query uses one query row for each
@@ -28,6 +28,11 @@ public inherited sharing class WorkflowFleetHealthService {
   // number of instances or fewer started in the window.
   private static final Integer AGGREGATE_MAX = 2000;
 
+  // The maximum number of rows. A name that arrives after the map is full gets no row. The
+  // map and the rows do not grow with the number of names. The row query reads the newest
+  // instances first. The aggregate query has no order, so its kept names are not defined.
+  private static final Integer MAX_DEFINITIONS = 500;
+
   // Tests set these caps. They are null in production.
   @TestVisible
   private static Integer countCapOverride = null;
@@ -35,6 +40,11 @@ public inherited sharing class WorkflowFleetHealthService {
   private static Integer aggregateMaxOverride = null;
   @TestVisible
   private static Integer sampleCapOverride = null;
+  @TestVisible
+  private static Integer maxDefinitionsOverride = null;
+
+  // True when a name got no row because the map was full. It is reset for each call.
+  private static Boolean definitionsCapped = false;
 
   private static final Set<String> COMPLETED_STATUSES = new Set<String>{
     'Completed',
@@ -64,9 +74,9 @@ public inherited sharing class WorkflowFleetHealthService {
    * that started in the window. The durations use the instances that got a Terminal_At__c
    * in the window.
    * @param windowKey '1h', '24h' or '7d'. A blank or unknown key gives '24h'.
-   * @return A map with windowKey, windowHours, countCap, countsCapped, sampleCap, isSampled
-   *         and rows. The rows go from the lowest success rate to the highest. A row with no
-   *         rate goes last.
+   * @return A map with windowKey, windowHours, countCap, countsCapped, definitionCap,
+   *         definitionsCapped, sampleCap, isSampled and rows. The rows go from the lowest
+   *         success rate to the highest. A row with no rate goes last.
    */
   public static Map<String, Object> fleetHealth(String windowKey) {
     WorkflowDashboardSupport.checkAuthorization();
@@ -78,6 +88,7 @@ public inherited sharing class WorkflowFleetHealthService {
     Datetime since = Datetime.now().addHours(-windowHours);
 
     try {
+      definitionsCapped = false;
       Map<String, DefinitionHealth> byName = new Map<String, DefinitionHealth>();
       Boolean countsCapped = addCounts(byName, since);
       Boolean isSampled = addDurations(byName, since);
@@ -94,6 +105,8 @@ public inherited sharing class WorkflowFleetHealthService {
         'windowHours' => windowHours,
         'countCap' => countCap(),
         'countsCapped' => countsCapped,
+        'definitionCap' => maxDefinitions(),
+        'definitionsCapped' => definitionsCapped,
         'sampleCap' => sampleCap(),
         'isSampled' => isSampled,
         'rows' => rows
@@ -131,7 +144,10 @@ public inherited sharing class WorkflowFleetHealthService {
         ORDER BY CreatedDate DESC
         LIMIT :cap
       ]) {
-        healthFor(byName, inst.Workflow_Name__c).addCount(inst.Status__c, 1);
+        DefinitionHealth health = healthFor(byName, inst.Workflow_Name__c);
+        if (health != null) {
+          health.addCount(inst.Status__c, 1);
+        }
       }
       return inWindow > cap;
     }
@@ -146,8 +162,13 @@ public inherited sharing class WorkflowFleetHealthService {
       GROUP BY Workflow_Name__c, Status__c
     ];
     for (AggregateResult ar : groups) {
-      healthFor(byName, (String) ar.get('Workflow_Name__c'))
-        .addCount((String) ar.get('Status__c'), (Integer) ar.get('cnt'));
+      DefinitionHealth health = healthFor(
+        byName,
+        (String) ar.get('Workflow_Name__c')
+      );
+      if (health != null) {
+        health.addCount((String) ar.get('Status__c'), (Integer) ar.get('cnt'));
+      }
     }
     return false;
   }
@@ -171,10 +192,12 @@ public inherited sharing class WorkflowFleetHealthService {
     Integer used = Math.min(sample.size(), cap);
     for (Integer i = 0; i < used; i++) {
       Workflow_Instance__c inst = sample[i];
-      healthFor(byName, inst.Workflow_Name__c)
-        .addDuration(
+      DefinitionHealth health = healthFor(byName, inst.Workflow_Name__c);
+      if (health != null) {
+        health.addDuration(
           inst.Terminal_At__c.getTime() - inst.CreatedDate.getTime()
         );
+      }
     }
     return sample.size() > cap;
   }
@@ -187,12 +210,19 @@ public inherited sharing class WorkflowFleetHealthService {
     return aggregateMaxOverride != null ? aggregateMaxOverride : AGGREGATE_MAX;
   }
 
+  private static Integer maxDefinitions() {
+    return maxDefinitionsOverride != null
+      ? maxDefinitionsOverride
+      : MAX_DEFINITIONS;
+  }
+
   private static Integer sampleCap() {
     return sampleCapOverride != null ? sampleCapOverride : SAMPLE_CAP;
   }
 
   // SOQL GROUP BY ignores case. The lower-case key does the same, so one definition gets
-  // one row. The row keeps the first spelling.
+  // one row. The row keeps the first spelling. Returns null for a new name when the map is
+  // full, and sets definitionsCapped.
   private static DefinitionHealth healthFor(
     Map<String, DefinitionHealth> byName,
     String workflowName
@@ -200,6 +230,10 @@ public inherited sharing class WorkflowFleetHealthService {
     String key = workflowName.toLowerCase();
     DefinitionHealth health = byName.get(key);
     if (health == null) {
+      if (byName.size() >= maxDefinitions()) {
+        definitionsCapped = true;
+        return null;
+      }
       health = new DefinitionHealth(workflowName);
       byName.put(key, health);
     }

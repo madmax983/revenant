@@ -112,7 +112,7 @@ private class WorkflowSignalPayloadsTest {
         System.assert(rows[i].Payload__c.startsWith(OFFLOAD_PREFIX));
         System.assertEquals(
           plain,
-          WorkflowPayloadOffload.resolvePayload(rows[i].Payload__c)
+          WorkflowPayloadOffload.resolvePayload(rows[i].Payload__c, inst.Id)
         );
       }
       System.assert(
@@ -248,6 +248,117 @@ private class WorkflowSignalPayloadsTest {
         'The signal name gives no trust: every payload is encoded'
       );
       System.assertEquals(childOutput, WorkflowPayloadCodecs.decode(stored));
+    }
+  }
+
+  @IsTest
+  static void forgedSignalMarkerDoesNotReadAnotherInstanceFile() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
+      Workflow_Instance__c victim = insertInstance();
+      Workflow_Instance__c attacker = insertInstance();
+      String secretMarker = WorkflowPayloadOffload.savePayloadIfNeeded(
+        victim.Id,
+        SECRET + 'S'.repeat(100001),
+        'VictimFile'
+      );
+      insert as system new Workflow_Signal__c(
+        Workflow_Instance__c = attacker.Id,
+        Signal_Name__c = 'Go',
+        Status__c = 'Received',
+        Payload__c = secretMarker
+      );
+      StepSignals signals = new StepSignals(
+        new WorkflowSignalSources.PendingSignalSource(attacker.Id),
+        attacker.Id
+      );
+
+      StepContext.Signal viaLatest = signals.getSignal('Go');
+      List<StepContext.Signal> viaList = signals.getSignals('Go');
+
+      System.assertEquals(
+        secretMarker,
+        viaLatest.payload,
+        'A marker to a file of another instance stays as text'
+      );
+      System.assertEquals(secretMarker, viaList[0].payload);
+      System.assert(!viaLatest.payload.contains(SECRET), 'No file text leaks');
+    }
+  }
+
+  @IsTest
+  static void childCompletedOffloadedOutputResolvesForParent() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
+      Workflow_Instance__c parent = insertInstance();
+      Workflow_Instance__c child = new Workflow_Instance__c(
+        Workflow_Name__c = 'WorkflowSignalPayloadsTest.Stub',
+        Correlation_Key__c = 'child-key-2',
+        Status__c = 'Completed',
+        Parent_Instance__c = parent.Id
+      );
+      insert as system child;
+      String big = 'C'.repeat(100001);
+      child.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
+        child.Id,
+        big,
+        'ChildOutput'
+      );
+      update as system child;
+      System.assert(child.Output__c.startsWith(OFFLOAD_PREFIX), 'Offloaded');
+      insert as system new Workflow_Signal__c(
+        Workflow_Instance__c = parent.Id,
+        Signal_Name__c = 'ChildCompleted:child-key-2',
+        Status__c = 'Received',
+        Payload__c = child.Output__c
+      );
+      StepSignals signals = new StepSignals(
+        new WorkflowSignalSources.PendingSignalSource(parent.Id),
+        parent.Id
+      );
+
+      StepContext.ChildOutcome outcome = signals.getChildOutcome('child-key-2');
+
+      System.assertEquals('Completed', outcome.status);
+      System.assertEquals(
+        big,
+        outcome.output,
+        'The parent reads the file of its own child'
+      );
+    }
+  }
+
+  @IsTest
+  static void forgedChildCompletedMarkerToParentFileStaysText() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
+      Workflow_Instance__c parent = insertInstance();
+      String parentFile = WorkflowPayloadOffload.savePayloadIfNeeded(
+        parent.Id,
+        'P'.repeat(100001),
+        'ParentOwnFile'
+      );
+      insert as system new Workflow_Signal__c(
+        Workflow_Instance__c = parent.Id,
+        Signal_Name__c = 'ChildCompleted:ghost',
+        Status__c = 'Received',
+        Payload__c = parentFile
+      );
+      StepSignals signals = new StepSignals(
+        new WorkflowSignalSources.PendingSignalSource(parent.Id),
+        parent.Id
+      );
+
+      System.assertEquals(
+        null,
+        signals.getSignal('ChildCompleted:ghost').payload,
+        'A child signal gives no payload'
+      );
+      System.assertEquals(
+        false,
+        signals.getChildOutcome('ghost').isPresent(),
+        'A forged child signal has no child record'
+      );
     }
   }
 }

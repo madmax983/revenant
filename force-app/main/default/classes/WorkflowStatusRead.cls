@@ -110,7 +110,7 @@ global inherited sharing class WorkflowStatusRead {
     }
 
     // Bulk-resolve all offloaded outputs in a single ContentVersion query.
-    Map<Id, String> resolvedOutputByDocId = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
+    Map<String, String> resolvedOutputByDocId = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
       instById.values()
     );
 
@@ -194,7 +194,7 @@ global inherited sharing class WorkflowStatusRead {
       new Set<Id>(winnerIdByKey.values())
     );
 
-    Map<Id, String> resolvedOutputByDocId = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
+    Map<String, String> resolvedOutputByDocId = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
       instById.values()
     );
 

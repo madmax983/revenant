@@ -1,4 +1,4 @@
-# ADR 0021: Child outcomes come from the child record
+# ADR 0022: Child outcomes come from the child record
 
 - Status: Accepted
 - Date: 2026-10-01

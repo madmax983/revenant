@@ -152,7 +152,10 @@ public inherited sharing class WorkflowParallelJoin {
     StepResult mockResult = StepResult.complete(
       null,
       !spawningSteps.isEmpty()
-        ? WorkflowPayloadOffload.resolvePayload(spawningSteps[0].Output__c)
+        ? WorkflowPayloadOffload.resolvePayload(
+            spawningSteps[0].Output__c,
+            instance.Id
+          )
         : null
     );
 
@@ -163,7 +166,7 @@ public inherited sharing class WorkflowParallelJoin {
     );
 
     String joinInputJson = JSON.serialize(
-      buildJoinInput(activeParallelSteps, latestExecByStep)
+      buildJoinInput(instance.Id, activeParallelSteps, latestExecByStep)
     );
 
     if (String.isBlank(nextStepName)) {
@@ -180,19 +183,29 @@ public inherited sharing class WorkflowParallelJoin {
 
   // Assemble the join step's input map from each branch's resolved output.
   private static Map<String, Object> buildJoinInput(
+    Id instanceId,
     List<String> activeParallelSteps,
     Map<String, Workflow_Step_Execution__c> latestExecByStep
   ) {
     Map<String, Object> joinInput = new Map<String, Object>();
+    List<String> stepNames = new List<String>();
+    List<String> rawOutputs = new List<String>();
     for (String ps : activeParallelSteps) {
       Workflow_Step_Execution__c pe = latestExecByStep.get(ps);
-      if (pe == null) {
-        continue;
+      if (pe != null) {
+        stepNames.add(ps);
+        rawOutputs.add(pe.Output__c);
       }
+    }
+    // One bulk read for all branches.
+    List<String> resolvedOutputs = WorkflowPayloadOffload.resolvePayloads(
+      rawOutputs,
+      instanceId
+    );
+    for (Integer i = 0; i < stepNames.size(); i++) {
+      String ps = stepNames[i];
       Object outputVal = null;
-      String resolvedOutput = WorkflowPayloadOffload.resolvePayload(
-        pe.Output__c
-      );
+      String resolvedOutput = resolvedOutputs[i];
       if (String.isNotBlank(resolvedOutput)) {
         try {
           outputVal = JSON.deserializeUntyped(resolvedOutput);

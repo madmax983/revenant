@@ -49,8 +49,9 @@ asks for a Big Object tier. Some orgs want other cold stores, for example S3.
 
 ## Consequences
 
-- `WorkflowArchiveSink` and `WorkflowArchiveRecord` are public API. Change
-  them only in an additive way.
+- `WorkflowArchiveSink` and `WorkflowArchiveRecord` are API. They became
+  `global` in [ADR 0021](0021-global-codec-and-archive.md). Change them only
+  in an additive way.
 - Tests cannot write Big Objects. The Big Object sink has a test seam, so the
   real `insertImmediate` and Big Object SOQL run only in an org.
 - `CleanupWorkflow`'s step is now a `CalloutStep`. Its Running row is saved

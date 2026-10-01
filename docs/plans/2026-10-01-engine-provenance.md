@@ -52,7 +52,7 @@ A signal can wake a parent. A signal cannot set a child outcome. The parent read
 - A signal for a missing, foreign or running child gives no outcome. The step still reads the signal, as before.
 - `StepContext.Builder.childRecords` and `StepContextTestBuilder.childRecords` seed children for unit tests.
 - Delete `WorkflowChildPayloadProvenance`.
-- Add the threat model and ADR 0021. Update the codec guide.
+- Add the threat model and ADR 0022. Update the codec guide.
 
 ## Out of scope
 

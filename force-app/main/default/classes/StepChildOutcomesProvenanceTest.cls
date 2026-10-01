@@ -651,15 +651,23 @@ private class StepChildOutcomesProvenanceTest {
 
       System.assertEquals(
         null,
-        WorkflowSignalPayloads.readPayload('ChildCompleted:k', FORGED_MARKER)
+        WorkflowSignalPayloads.readPayload(
+          'ChildCompleted:k',
+          FORGED_MARKER,
+          null
+        )
       );
       System.assertEquals(
         null,
-        WorkflowSignalPayloads.readPayload('childfailed:k', '{"$codec":"X"}')
+        WorkflowSignalPayloads.readPayload(
+          'childfailed:k',
+          '{"$codec":"X"}',
+          null
+        )
       );
       System.assertEquals(
         '{"a":1}',
-        WorkflowSignalPayloads.readPayload('Other', '{"a":1}'),
+        WorkflowSignalPayloads.readPayload('Other', '{"a":1}', null),
         'Other signals keep their payload'
       );
       System.assertEquals(before, Limits.getQueries(), 'No file query');

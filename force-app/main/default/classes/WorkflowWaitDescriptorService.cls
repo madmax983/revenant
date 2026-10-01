@@ -210,7 +210,10 @@ public inherited sharing class WorkflowWaitDescriptorService {
   ) {
     String stepName = pending.Step_Name__c;
     Map<String, Object> state = parseState(
-      WorkflowPayloadOffload.resolveControlPayload(pending.Output__c)
+      WorkflowPayloadOffload.resolveControlPayload(
+        pending.Output__c,
+        instance.Id
+      )
     );
     Map<String, Object> approval = approvalDescriptor(stepName, state);
     if (approval != null) {

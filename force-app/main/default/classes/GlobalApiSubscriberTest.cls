@@ -213,6 +213,167 @@ public class GlobalApiSubscriberTest {
     }
   }
 
+  /**
+   * @description Payload codec. Marks each payload with its kind.
+   */
+  public class SubscriberCodec implements PayloadCodec {
+    /**
+     * @description Adds a kind prefix.
+     * @param plaintext The payload text.
+     * @param ctx The payload context.
+     * @return The prefixed text.
+     */
+    public String encode(String plaintext, CodecContext ctx) {
+      return ctx.kind.name() + ':' + plaintext;
+    }
+
+    /**
+     * @description Removes the kind prefix.
+     * @param stored The stored text.
+     * @param ctx The payload context.
+     * @return The original text.
+     */
+    public String decode(String stored, CodecContext ctx) {
+      return stored.removeStart(ctx.kind.name() + ':');
+    }
+  }
+
+  /**
+   * @description Archive sink that keeps records in memory.
+   */
+  public class SubscriberSink implements WorkflowArchiveSink {
+    private final Map<Id, WorkflowArchiveRecord> store = new Map<Id, WorkflowArchiveRecord>();
+
+    /**
+     * @description Stores the records. A second write of an Id replaces it.
+     * @param records The records.
+     */
+    public void write(List<WorkflowArchiveRecord> records) {
+      for (WorkflowArchiveRecord r : records) {
+        store.put(r.instanceId, r);
+      }
+    }
+
+    /**
+     * @description Reads records by instance Id.
+     * @param instanceIds The instance Ids.
+     * @return The stored records.
+     */
+    public List<WorkflowArchiveRecord> readByInstanceIds(Set<Id> instanceIds) {
+      List<WorkflowArchiveRecord> out = new List<WorkflowArchiveRecord>();
+      for (Id instanceId : instanceIds) {
+        if (store.containsKey(instanceId)) {
+          out.add(store.get(instanceId));
+        }
+      }
+      return out;
+    }
+
+    /**
+     * @description Reads records by correlation key hash.
+     * @param correlationKey The correlation key.
+     * @return At most the maximum number of records.
+     */
+    public List<WorkflowArchiveRecord> readByCorrelationKey(
+      String correlationKey
+    ) {
+      String hash = WorkflowArchive.hashCorrelationKey(correlationKey);
+      List<WorkflowArchiveRecord> out = new List<WorkflowArchiveRecord>();
+      for (WorkflowArchiveRecord r : store.values()) {
+        if (
+          WorkflowArchive.hashCorrelationKey(r.correlationKey) == hash &&
+          out.size() < WorkflowArchive.MAX_READ_RECORDS
+        ) {
+          out.add(r);
+        }
+      }
+      return out;
+    }
+  }
+
+  /**
+   * @description Compile probe for the archive read API. The tests do not run
+   * it, because a read needs the configured sink.
+   */
+  public class ArchiveReadProbe {
+    /**
+     * @description Reads archived history with each entry point.
+     * @param instanceId The instance Id.
+     * @return The number of records read.
+     */
+    public Integer read(Id instanceId) {
+      try {
+        WorkflowArchiveRecord one = WorkflowArchive.getArchivedHistory(
+          instanceId
+        );
+        List<WorkflowArchiveRecord> many = WorkflowArchive.findArchivedHistory(
+          'global-api-run'
+        );
+        return many.size() + (one == null ? 0 : 1);
+      } catch (WorkflowArchive.ArchiveException e) {
+        return -1;
+      }
+    }
+  }
+
+  @IsTest
+  static void subscriberCodecRoundTripsEachPayloadKind() {
+    PayloadCodec codec = new SubscriberCodec();
+    for (CodecContext.PayloadKind kind : CodecContext.PayloadKind.values()) {
+      CodecContext ctx = new CodecContext(kind);
+      String stored = codec.encode('{"a":1}', ctx);
+      System.assertEquals(kind.name() + ':{"a":1}', stored, 'Encoded');
+      System.assertEquals('{"a":1}', codec.decode(stored, ctx), 'Round trip');
+    }
+  }
+
+  @IsTest
+  static void subscriberSinkStoresAndReadsAnArchiveRecord() {
+    WorkflowArchiveRecord record = new WorkflowArchiveRecord();
+    record.instanceId = UserInfo.getUserId();
+    record.workflowName = WORKFLOW;
+    record.correlationKey = 'Global-Api-Archive';
+    record.status = 'Completed';
+    record.createdAt = Datetime.now().addMinutes(-2);
+    record.archivedAt = Datetime.now();
+    record.input = '{"sku":"A-1"}';
+    record.droppedPayloadCount = 1;
+    record.stepCount = 2;
+    WorkflowArchiveRecord.Step step = new WorkflowArchiveRecord.Step();
+    step.sequence = 1;
+    step.stepName = DECIDE_STEP;
+    step.status = 'Completed';
+    step.attempt = 0;
+    step.startedAt = record.createdAt;
+    step.endedAt = record.createdAt.addSeconds(3);
+    record.steps.add(step);
+
+    WorkflowArchiveSink sink = new SubscriberSink();
+    sink.write(new List<WorkflowArchiveRecord>{ record });
+    sink.write(new List<WorkflowArchiveRecord>{ record });
+
+    List<WorkflowArchiveRecord> byId = sink.readByInstanceIds(
+      new Set<Id>{ record.instanceId }
+    );
+    List<WorkflowArchiveRecord> byKey = sink.readByCorrelationKey(
+      'global-api-archive'
+    );
+    System.assertEquals(1, byId.size(), 'One record, also after two writes');
+    System.assertEquals(1, byKey.size(), 'Key match ignores case');
+    System.assert(byId[0].isTruncated(), 'One of two steps was read');
+    System.assertEquals(3000L, byId[0].steps[0].totalDurationMs(), 'Duration');
+    System.assert(!byId[0].steps[0].isCompensation(), 'Not a compensation');
+    System.assertEquals(
+      null,
+      WorkflowArchive.getArchivedHistory(null),
+      'A null Id is not archived'
+    );
+    System.assert(
+      WorkflowArchive.findArchivedHistory(' ').isEmpty(),
+      'A blank key finds nothing'
+    );
+  }
+
   @IsTest
   static void startSignalAndOneHopReachCompleted() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
