@@ -620,4 +620,51 @@ private class WorkflowBoundedHistoryReadTest {
       Assert.areEqual('Running', run.stepExec.Status__c, 'Attempt runs');
     }
   }
+
+  @IsTest
+  static void largeOffloadedWaitStateIsNotRead() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      ContentVersion cv = new ContentVersion(
+        Title = 'BigState',
+        PathOnClient = 'state.json',
+        VersionData = Blob.valueOf(
+          '{"waitingForApproval":true,"approvalKey":"k1","pad":"' +
+            'X'.repeat(WorkflowWaitDescriptorService.MAX_STATE_BYTES) +
+            '"}'
+        )
+      );
+      insert cv;
+      Id docId = [
+        SELECT ContentDocumentId
+        FROM ContentVersion
+        WHERE Id = :cv.Id
+      ]
+      .ContentDocumentId;
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Suspended'
+      );
+      insert inst;
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = 'Park.Step',
+        Status__c = 'Pending',
+        Output__c = '{"$attachmentId":"' + docId + '"}'
+      );
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+
+      Map<String, Object> descriptor = (Map<String, Object>) details.get(
+        'waitDescriptor'
+      );
+      Assert.isNotNull(descriptor, 'The wait is still shown');
+      Assert.areEqual(
+        WorkflowWaitDescriptorService.TYPE_GENERIC,
+        descriptor.get('type'),
+        'The large state is not read, so the wait is generic'
+      );
+    }
+  }
 }

@@ -108,6 +108,39 @@ public inherited sharing class WorkflowPayloadOffload {
   }
 
   /**
+   * @description Like {@link #resolveControlPayload}, but it does not read an
+   * offloaded body above `maxBytes`. The size comes from `ContentSize`, before the
+   * read. It returns the marker text for such a body. Operator views use this to
+   * keep the heap small.
+   * @param textValue the raw stored value
+   * @param maxBytes the largest body to read, in bytes
+   * @return the resolved control payload, the marker text for a large body, or
+   * null for an encoded value
+   */
+  public static String resolveControlPayloadWithin(
+    String textValue,
+    Integer maxBytes
+  ) {
+    Set<Id> docIds = collectOffloadMarkers(
+      new List<String>{ textValue },
+      new Map<Integer, Id>()
+    );
+    if (!docIds.isEmpty()) {
+      for (ContentVersion cv : [
+        SELECT ContentSize
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :docIds AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        if (cv.ContentSize != null && cv.ContentSize > maxBytes) {
+          return textValue;
+        }
+      }
+    }
+    return resolveControlPayload(textValue);
+  }
+
+  /**
    * @description Bulk variant of {@link #resolveControlPayload}. It uses one
    * ContentVersion query. It never calls the codec, so a value that cannot be
    * decoded does not stop the batch.

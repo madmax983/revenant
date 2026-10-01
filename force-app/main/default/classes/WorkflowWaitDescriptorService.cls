@@ -39,6 +39,11 @@
  * SOQL runs WITH SYSTEM_MODE.
  */
 public inherited sharing class WorkflowWaitDescriptorService {
+  /**
+   * Largest offloaded wait state (bytes) the detail view reads. A larger state
+   * gives the generic descriptor (issue #261).
+   */
+  public static final Integer MAX_STATE_BYTES = 500000;
   /** Descriptor type for an approval (WAIT_FOR_APPROVAL) wait. */
   public static final String TYPE_APPROVAL = 'approval';
   /** Descriptor type for a child-completion (START_CHILD / START_CHILDREN) wait. */
@@ -210,7 +215,10 @@ public inherited sharing class WorkflowWaitDescriptorService {
   ) {
     String stepName = pending.Step_Name__c;
     Map<String, Object> state = parseState(
-      WorkflowPayloadOffload.resolveControlPayload(pending.Output__c)
+      WorkflowPayloadOffload.resolveControlPayloadWithin(
+        pending.Output__c,
+        MAX_STATE_BYTES
+      )
     );
     Map<String, Object> approval = approvalDescriptor(stepName, state);
     if (approval != null) {
