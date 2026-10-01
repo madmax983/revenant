@@ -19,8 +19,7 @@ The codec does not need Shield Platform Encryption.
 - A large payload goes to a `ContentVersion` file. The file holds the encoded
   text.
 - A copied value keeps the kind of its first encode. For example, a step input
-  is a copy of the previous output. A child-completion signal keeps the child
-  output (`STEP_OUTPUT`).
+  is a copy of the previous output.
 
 ## What stays plaintext
 
@@ -140,12 +139,11 @@ With a codec, the engine changes `\nfailureData: ` in a failure reason to
 `\n failureData: `. Then only the engine can write a stored form after the
 separator, and `getStepError` does not decode copied ciphertext.
 
-Read child results with `ctx.signals().getChildOutcome(key)`. A direct
-`getSignal('ChildCompleted:<key>')` read gives the marker text for an offloaded
-child output, because the child owns the file. With a codec, a
-raw `getSignal('ChildCompleted:<key>').payload` gives the child's stored
-(encoded) output. `getChildOutcome` decodes it only after it checks that the
-value is the output of a child of this instance.
+Read child results with `ctx.signals().getChildOutcome(key)`. A child signal
+only wakes the parent. `getChildOutcome` reads status, error and output from
+the child record of this instance. The engine never reads a payload of a
+`ChildCompleted:` or `ChildFailed:` signal, and `getSignal` returns no payload
+for these names.
 
 ## Stored form
 
@@ -161,9 +159,10 @@ The engine wraps codec output in an envelope:
 - The engine encodes all external input, also input that looks like an
   envelope. If a user copies ciphertext into a signal or a start input, the
   step gets the copied text, not the plaintext.
-- A signal name gives no trust. A forged `ChildCompleted:<key>` signal with
-  copied ciphertext or a copied file marker is not decoded, because the value
-  is not the output of a child of the reading instance.
+- A signal name gives no trust. A forged `ChildCompleted:<key>` or
+  `ChildFailed:<key>` signal cannot set an outcome. It cannot make the engine
+  decode or resolve data. The outcome comes from the child record. See
+  `docs/payload-ingress-threat-model.md`.
 - With a codec, the engine encodes input that starts with `{"$codec":` or
   `{"$attachmentId":` like any other input, so input cannot point the engine
   at a stored value or a file.
