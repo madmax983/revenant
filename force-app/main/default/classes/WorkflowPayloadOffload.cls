@@ -140,10 +140,14 @@ public inherited sharing class WorkflowPayloadOffload {
     )[0];
   }
 
+  // The heap limit (bytes) that resolveControlPayloadWithin uses. A test sets it.
+  @TestVisible
+  private static Integer heapLimit = Limits.getLimitHeapSize();
+
   /**
    * @description Like {@link #resolveControlPayload}, but it does not read an
-   * offloaded body above `maxBytes`. The size comes from `ContentSize`, before the
-   * read. It returns the marker text for such a body. Operator views use this to
+   * offloaded body above `maxBytes`, or a body that does not fit in the heap. The
+   * size comes from `ContentSize`, before the read. It returns the marker text for such a body. Operator views use this to
    * keep the heap small.
    * @param textValue the raw stored value
    * @param ownerId the instance that owns the value
@@ -164,7 +168,13 @@ public inherited sharing class WorkflowPayloadOffload {
         WHERE ContentDocumentId = :docId AND IsLatest = TRUE
         WITH SYSTEM_MODE
       ]) {
-        if (cv.ContentSize != null && cv.ContentSize > maxBytes) {
+        Integer size = cv.ContentSize == null ? 0 : cv.ContentSize;
+        // The read holds the body and its string (about three times the size).
+        // It does not start when that would pass three quarters of the heap.
+        if (
+          size > maxBytes ||
+          Limits.getHeapSize() + 3 * size > heapLimit * 3 / 4
+        ) {
           return textValue;
         }
       }

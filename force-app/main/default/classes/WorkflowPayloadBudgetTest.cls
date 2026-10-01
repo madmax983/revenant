@@ -193,4 +193,25 @@ private class WorkflowPayloadBudgetTest {
       );
     }
   }
+
+  @IsTest
+  static void waitStateIsNotReadWhenItDoesNotFitTheHeap() {
+    Workflow_Instance__c inst = seedAndLoad(1, 100);
+    String marker = stepsOf(inst.Id)[0].Output__c;
+
+    String read = WorkflowPayloadOffload.resolveControlPayloadWithin(
+      marker,
+      inst.Id,
+      WorkflowWaitDescriptorService.MAX_STATE_BYTES
+    );
+    WorkflowPayloadOffload.heapLimit = 1;
+    String skipped = WorkflowPayloadOffload.resolveControlPayloadWithin(
+      marker,
+      inst.Id,
+      WorkflowWaitDescriptorService.MAX_STATE_BYTES
+    );
+
+    Assert.areEqual('X'.repeat(100), read, 'The body fits, so it is read');
+    Assert.areEqual(marker, skipped, 'No heap is left, so the marker stays');
+  }
 }
