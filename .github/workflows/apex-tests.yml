@@ -112,6 +112,17 @@ jobs:
         with:
           path: .ci-org
           key: ci-org-v2-${{ github.run_id }}-${{ github.run_attempt }}
+      # actions/cache/save only warns when it fails, and it has no output. Look the entry
+      # up. A miss fails the job here, and the last step deletes the new org.
+      - name: Check that the shared CI org was cached
+        id: cached
+        if: steps.org.outputs.save == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .ci-org
+          key: ci-org-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          lookup-only: true
+          fail-on-cache-miss: true
       - name: Deploy
         run: sf project deploy start --target-org ci --wait 60
       - name: Run all local Apex tests
@@ -150,7 +161,11 @@ jobs:
           name: apex-test-results
           path: test-results/
           if-no-files-found: ignore
-      # Only a one-off org is deleted. The shared org lives until the next keeper run.
-      - name: Delete the one-off scratch org
-        if: always() && steps.org.outputs.source == 'oneoff'
+      # A one-off org is deleted. So is a new keeper org that is not in the cache (the save
+      # failed, or the run was cancelled before it): nobody could borrow it, and it would
+      # hold one of the 3 active slots. The shared org lives until the next keeper run.
+      - name: Delete a scratch org that nobody can reuse
+        if: >-
+          always() && (steps.org.outputs.source == 'oneoff' ||
+          (steps.org.outputs.save == 'true' && steps.cached.outcome != 'success'))
         run: sf org delete scratch --target-org ci --no-prompt || true

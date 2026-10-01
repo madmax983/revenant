@@ -36,6 +36,14 @@ org per run. Runs share one CI org. `scripts/ci-org/ci-org.mjs` does the work.
   `DEVHUB_SFDX_AUTH_URL`, and the log masks it. A fork pull request has no secret, so it
   cannot decrypt the cache. If you change `DEVHUB_SFDX_AUTH_URL`, the old cache cannot be
   read. The next run makes a one-off org, and the next keeper run replaces the cache.
+- **The keeper asks the Dev Hub, not the login.** It saves the org id with the URL. Next
+  night it asks the Dev Hub (`ActiveScratchOrg`) whether that org is still active, and
+  deletes the record if it is. A failed login cannot hide a live org. If the Dev Hub does
+  not answer, or the delete fails, the keeper stops and keeps the old cache, so it does not
+  strand an org.
+- **No org is stranded by the cache.** The job looks up the new cache entry after the
+  save. If the entry is missing (the save only warns on failure), or the run was cancelled
+  before it, the last step deletes the new org.
 - **The expiry is saved with the URL.** A login from an auth URL does not restore the scratch org's expiry date, so `sf org display` may show none. The keeper saves the expiry in the encrypted file, and a borrower uses it when `sf` shows none. With no expiry from either, the borrower does not trust the org and makes a one-off org.
 - **Only `main` can share.** The cache is per branch. A pull request can read the cache
   that `main` saved, but a cache that a pull request saves is not visible to `main`

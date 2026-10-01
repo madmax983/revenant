@@ -145,7 +145,7 @@ function login(authUrl, { run, log }) {
 }
 
 /**
- * Reads the cached credential: { authUrl, expirationDate }. Returns null when there is no
+ * Reads the cached credential: { authUrl, expirationDate, orgId }. Returns null when there is no
  * file, the secret is wrong, or the content is not a credential. The expiry is saved
  * with the URL because a login from an auth URL does not restore it: `sf org display`
  * can then show no expirationDate.
@@ -155,7 +155,11 @@ export function readAuthFile(authFile, secret) {
   try {
     const payload = JSON.parse(decrypt(readFileSync(authFile, "utf8"), secret));
     if (typeof payload?.authUrl !== "string" || !payload.authUrl.trim()) return null;
-    return { authUrl: payload.authUrl.trim(), expirationDate: payload.expirationDate };
+    return {
+      authUrl: payload.authUrl.trim(),
+      expirationDate: payload.expirationDate,
+      orgId: typeof payload.orgId === "string" ? payload.orgId : undefined,
+    };
   } catch {
     return null;
   }
@@ -170,15 +174,11 @@ export function withExpiry(display, savedExpiration) {
 }
 
 /**
- * Deletes the CI org (alias `ci`). `sf org delete scratch` can fail for an org that the
- * CLI knows only from an auth URL. Then the Dev Hub deletes it: removing the
- * ActiveScratchOrg record ends the org. Returns true when the org is gone.
+ * Asks the Dev Hub whether an org is still active. Returns { ok, recordId }. ok is false
+ * when the Dev Hub did not answer. recordId is the ActiveScratchOrg Id, or undefined
+ * when the org is not active (it expired or it was deleted).
  */
-export function deleteOrg({ run }) {
-  const orgId = run(["org", "display", "--target-org", ALIAS, "--json"]).json?.result?.id;
-  const deleted = run(["org", "delete", "scratch", "--target-org", ALIAS, "--no-prompt", "--json"]);
-  if (deleted.status === 0) return true;
-  if (!orgId) return false;
+function findActiveOrg(orgId, { run }) {
   const found = run([
     "data",
     "query",
@@ -188,8 +188,12 @@ export function deleteOrg({ run }) {
     "devhub",
     "--json",
   ]);
-  const recordId = found.json?.result?.records?.[0]?.Id;
-  if (!recordId) return false;
+  if (found.status !== 0) return { ok: false };
+  return { ok: true, recordId: found.json?.result?.records?.[0]?.Id };
+}
+
+/** Deletes an ActiveScratchOrg record through the Dev Hub. That ends the org. */
+function deleteActiveOrg(recordId, { run }) {
   return (
     run([
       "data",
@@ -204,6 +208,45 @@ export function deleteOrg({ run }) {
       "--json",
     ]).status === 0
   );
+}
+
+/**
+ * Deletes the CI org that is logged in under the alias `ci`. `sf org delete scratch` can
+ * fail for an org that the CLI knows only from an auth URL. Then the Dev Hub deletes it.
+ * Returns true when the org is gone.
+ */
+export function deleteOrg({ run }) {
+  const orgId = run(["org", "display", "--target-org", ALIAS, "--json"]).json?.result?.id;
+  const deleted = run(["org", "delete", "scratch", "--target-org", ALIAS, "--no-prompt", "--json"]);
+  if (deleted.status === 0) return true;
+  if (!orgId) return false;
+  const found = findActiveOrg(orgId, { run });
+  return found.ok && found.recordId ? deleteActiveOrg(found.recordId, { run }) : false;
+}
+
+/**
+ * Ends the previous shared org before the keeper makes a new one. The Dev Hub is the
+ * authority on whether the org is still active, so the saved org id decides, not a
+ * login: a failed login does not show that the org is gone. It stops (throws) when the
+ * Dev Hub does not answer or the org stays. The old cache stays, and the next run retries.
+ */
+function retireOldOrg(cached, ctx) {
+  if (!cached) return;
+  const keep = (why) =>
+    new CiOrgError(`${why} The old org stays in the cache, and the next keeper run tries again.`);
+  if (cached.orgId) {
+    const found = findActiveOrg(cached.orgId, ctx);
+    if (!found.ok) throw keep("The Dev Hub did not answer about the previous shared CI org.");
+    if (!found.recordId) return; // It expired or was deleted.
+    if (!deleteActiveOrg(found.recordId, ctx)) {
+      throw keep("The previous shared CI org could not be deleted.");
+    }
+    return;
+  }
+  // A cache without an org id: the login is all that is left to find the org.
+  if (login(cached.authUrl, ctx) && !deleteOrg(ctx)) {
+    throw keep("The previous shared CI org could not be deleted.");
+  }
 }
 
 function createOrg(durationDays, { run }) {
@@ -264,15 +307,7 @@ export function prepare({
   }
 
   // keeper: free the active slot first, then make a new org.
-  if (cached && login(cached.authUrl, ctx)) {
-    // Stop when the old org stays. A new org would take a second active slot, and the
-    // cache would lose the only auth URL that can still reach the old one.
-    if (!deleteOrg(ctx)) {
-      throw new CiOrgError(
-        "The previous shared CI org could not be deleted. It stays in the cache, and the next keeper run tries again.",
-      );
-    }
-  }
+  retireOldOrg(cached, ctx);
   createOrg(durationDays, ctx);
   const shown = run([
     "org",
@@ -294,7 +329,9 @@ export function prepare({
     shown.json?.result?.expirationDate ??
     new Date(now + durationDays * DAY_MS).toISOString().slice(0, 10);
   mkdirSync(dirname(authFile), { recursive: true });
-  writeFileSync(authFile, encrypt(JSON.stringify({ authUrl, expirationDate }), secret), {
+  // Keep the org id too: the next keeper run asks the Dev Hub about this org by id.
+  const orgId = shown.json?.result?.id;
+  writeFileSync(authFile, encrypt(JSON.stringify({ authUrl, expirationDate, orgId }), secret), {
     mode: 0o600,
   });
   return { source: "created", save: true };

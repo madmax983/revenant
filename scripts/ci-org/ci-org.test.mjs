@@ -51,8 +51,9 @@ function tmpAuthFile() {
 }
 
 /** The cache text that the keeper writes: the auth URL and its expiry, encrypted. */
-function cacheText(authUrl, expirationDate = "2026-10-04", secret = SECRET) {
-  return encrypt(JSON.stringify({ authUrl, expirationDate }), secret);
+const ORG_ID = "00DgL00000KS7MPUA1";
+function cacheText(authUrl, expirationDate = "2026-10-04", secret = SECRET, orgId = ORG_ID) {
+  return encrypt(JSON.stringify({ authUrl, expirationDate, orgId }), secret);
 }
 
 /** Writes an auth file, and its folder. */
@@ -176,7 +177,7 @@ test("keeper: with no old org it creates an org and writes an encrypted auth fil
   const lines = [];
   const sf = fakeSf({
     "org create scratch": { status: 0, json: {} },
-    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL } } },
+    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL, id: ORG_ID } } },
   });
   const result = prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: (l) => lines.push(l), now: NOW } });
   assert.deepEqual(result, { source: "created", save: true });
@@ -185,55 +186,90 @@ test("keeper: with no old org it creates an org and writes an encrypted auth fil
   assert.ok(!onDisk.includes("scratch-refresh-token"), "the file is encrypted");
   const saved = JSON.parse(decrypt(onDisk, SECRET));
   assert.equal(saved.authUrl, ORG_URL);
+  assert.equal(saved.orgId, ORG_ID, "the org id is saved for the next keeper run");
   assert.equal(saved.expirationDate, "2026-10-04", "3 days after the creation time, when sf shows none");
   assert.ok(lines.includes(`::add-mask::${ORG_URL}`), "the URL is masked in the log");
   assert.ok(!sf.calls.some((c) => c[1] === "delete"), "there is no old org to delete");
 });
 
-test("keeper: it deletes the old org before it creates a new one", () => {
+const NEW_ORG_PLAN = {
+  "org create scratch": { status: 0, json: {} },
+  "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL, id: "00DgL00000NEW0000A" } } },
+};
+const ACTIVE = { status: 0, json: { result: { records: [{ Id: "2SRxx0000004CAFGA2" }] } } };
+
+test("keeper: the Dev Hub ends the old org by its saved id, with no login, before the new org", () => {
   const authFile = tmpAuthFile();
   seed(authFile, cacheText("force://old"));
   const sf = fakeSf({
+    ...NEW_ORG_PLAN,
+    "data query --query": ACTIVE,
+    "data delete record": { status: 0, json: {} },
+  });
+  const result = prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
+  assert.equal(result.source, "created");
+  const names = sf.calls.map((c) => c.slice(0, 3).join(" "));
+  assert.ok(names.indexOf("data delete record") !== -1);
+  assert.ok(names.indexOf("data delete record") < names.indexOf("org create scratch"));
+  assert.ok(!names.includes("org login sfdx-url"), "a failing login cannot block the keeper");
+  assert.ok(sf.calls.find((c) => c[1] === "query").some((a) => a.includes("ScratchOrg = '00DgL00000KS7MP'")));
+  assert.equal(readAuthFile(authFile, SECRET).orgId, "00DgL00000NEW0000A", "the cache now holds the new org");
+});
+
+test("keeper: it stops, creates nothing and keeps the cache when the Dev Hub cannot answer or the delete fails", () => {
+  for (const plan of [
+    { "data query --query": { status: 1, json: { message: "network" } } },
+    { "data query --query": ACTIVE, "data delete record": { status: 1, json: {} } },
+  ]) {
+    const authFile = tmpAuthFile();
+    const before = cacheText("force://old");
+    seed(authFile, before);
+    const sf = fakeSf({ ...NEW_ORG_PLAN, ...plan });
+    assert.throws(
+      () => prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } }),
+      /next keeper run tries again/,
+    );
+    assert.ok(!sf.calls.some((c) => c[1] === "create"), "no new org is created");
+    assert.equal(readFileSync(authFile, "utf8"), before, "the cache file is unchanged");
+  }
+});
+
+test("keeper: it creates an org when the Dev Hub shows the old one is gone", () => {
+  const authFile = tmpAuthFile();
+  seed(authFile, cacheText("force://old"));
+  const sf = fakeSf({
+    ...NEW_ORG_PLAN,
+    "data query --query": { status: 0, json: { result: { records: [] } } },
+  });
+  const result = prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
+  assert.equal(result.source, "created");
+  assert.ok(!sf.calls.some((c) => c[1] === "delete"), "there is nothing to delete");
+});
+
+test("keeper: a cache from before the org id was saved uses the login and the sf delete", () => {
+  const authFile = tmpAuthFile();
+  seed(authFile, cacheText("force://old", "2026-10-04", SECRET, null));
+  const sf = fakeSf({
+    ...NEW_ORG_PLAN,
     "org login sfdx-url": { status: 0, json: {} },
+    "org display --target-org": { status: 0, json: { result: { id: ORG_ID } } },
     "org delete scratch": { status: 0, json: {} },
-    "org create scratch": { status: 0, json: {} },
-    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL } } },
   });
   prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
   const names = sf.calls.map((c) => c.slice(0, 3).join(" "));
   assert.ok(names.indexOf("org delete scratch") < names.indexOf("org create scratch"));
-  assert.equal(readAuthFile(authFile, SECRET).authUrl, ORG_URL);
-});
 
-test("keeper: it stops, creates nothing and keeps the cache when the old org cannot be deleted", () => {
-  const authFile = tmpAuthFile();
-  const before = cacheText("force://old");
-  seed(authFile, before);
-  const sf = fakeSf({
+  // Stop when that delete fails.
+  seed(authFile, cacheText("force://old", "2026-10-04", SECRET, null));
+  const stuck = fakeSf({
+    ...NEW_ORG_PLAN,
     "org login sfdx-url": { status: 0, json: {} },
-    "org display --target-org": { status: 0, json: { result: { id: "00DgL00000KS7MPUA1" } } },
     "org delete scratch": { status: 1, json: {} },
-    "data query --query": { status: 0, json: { result: { records: [] } } },
-    "org create scratch": { status: 0, json: {} },
   });
   assert.throws(
-    () => prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } }),
+    () => prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: stuck.run, log: quiet, now: NOW } }),
     /could not be deleted/,
   );
-  assert.ok(!sf.calls.some((c) => c[1] === "create"), "no new org is created");
-  assert.equal(readFileSync(authFile, "utf8"), before, "the cache file is unchanged");
-});
-
-test("keeper: it still creates an org when the old one is gone", () => {
-  const authFile = tmpAuthFile();
-  seed(authFile, cacheText("force://old"));
-  const sf = fakeSf({
-    "org login sfdx-url": { status: 1, json: {} },
-    "org create scratch": { status: 0, json: {} },
-    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL } } },
-  });
-  const result = prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
-  assert.equal(result.source, "created");
 });
 
 test("keeper: it fails when the new org has no auth URL, and keeps no file", () => {
@@ -255,10 +291,10 @@ test("keeper: it saves the expiry that sf shows", () => {
   const authFile = tmpAuthFile();
   const sf = fakeSf({
     "org create scratch": { status: 0, json: {} },
-    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL, expirationDate: "2026-10-09" } } },
+    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL, expirationDate: "2026-10-09", id: ORG_ID } } },
   });
   prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } });
-  assert.deepEqual(readAuthFile(authFile, SECRET), { authUrl: ORG_URL, expirationDate: "2026-10-09" });
+  assert.deepEqual(readAuthFile(authFile, SECRET), { authUrl: ORG_URL, expirationDate: "2026-10-09", orgId: ORG_ID });
 });
 
 test("borrow: sf shows no expirationDate after an auth URL login, so the saved expiry counts", () => {
@@ -322,23 +358,6 @@ test("deleteOrg: sf delete works, or the Dev Hub deletes the ActiveScratchOrg re
   assert.equal(deleteOrg({ run: noRecord.run }), false);
   const noId = fakeSf({ "org delete scratch": { status: 1, json: {} } });
   assert.equal(deleteOrg({ run: noId.run }), false);
-});
-
-test("keeper: it falls back to the Dev Hub when sf cannot delete the old org", () => {
-  const authFile = tmpAuthFile();
-  seed(authFile, cacheText("force://old"));
-  const sf = fakeSf({
-    "org login sfdx-url": { status: 0, json: {} },
-    "org display --target-org": { status: 0, json: { result: { id: "00DgL00000KS7MPUA1" } } },
-    "org delete scratch": { status: 1, json: {} },
-    "data query --query": { status: 0, json: { result: { records: [{ Id: "2SRxx0000004CAFGA2" }] } } },
-    "data delete record": { status: 0, json: {} },
-    "org create scratch": { status: 0, json: {} },
-    "org display --verbose": { status: 0, json: { result: { sfdxAuthUrl: ORG_URL } } },
-  });
-  assert.equal(prepare({ mode: "keeper", authFile, secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } }).source, "created");
-  const names = sf.calls.map((c) => c.slice(0, 3).join(" "));
-  assert.ok(names.indexOf("data delete record") !== -1 && names.indexOf("data delete record") < names.indexOf("org create scratch"));
 });
 
 test("an unknown mode throws, and the alias is ci", () => {
