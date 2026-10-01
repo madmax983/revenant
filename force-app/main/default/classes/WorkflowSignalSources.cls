@@ -232,14 +232,8 @@ public inherited sharing class WorkflowSignalSources {
     }
 
     private List<StepContext.Signal> toSignals(List<Workflow_Signal__c> rows) {
-      List<String> rawPayloads = new List<String>();
-      for (Workflow_Signal__c c : rows) {
-        rawPayloads.add(c.Payload__c);
-      }
       // Resolve offloaded payloads in one bulk query rather than one per row.
-      List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-        rawPayloads
-      );
+      List<String> resolvedPayloads = WorkflowSignalPayloads.readPayloads(rows);
 
       List<StepContext.Signal> out = new List<StepContext.Signal>();
       for (Integer i = 0; i < rows.size(); i++) {
@@ -424,19 +418,17 @@ public inherited sharing class WorkflowSignalSources {
       Set<Id> claimedIds
     ) {
       List<Workflow_Signal__c> claimedRows = new List<Workflow_Signal__c>();
-      List<String> rawPayloads = new List<String>();
       for (Workflow_Signal__c c : candidates) {
         if (claimedIds.contains(c.Id)) {
           claimedRows.add(c);
-          rawPayloads.add(c.Payload__c);
         }
       }
       // Resolve any offloaded payloads with a single bulk query (not one per
       // row), matching the read-only list path: a claimed page of offloaded
       // child-completion signals would otherwise run one ContentVersion query
       // each and could exhaust SOQL.
-      List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-        rawPayloads
+      List<String> resolvedPayloads = WorkflowSignalPayloads.readPayloads(
+        claimedRows
       );
       List<StepContext.Signal> result = new List<StepContext.Signal>();
       for (Integer i = 0; i < claimedRows.size(); i++) {
@@ -492,7 +484,7 @@ public inherited sharing class WorkflowSignalSources {
           return new StepContext.Signal(
               c.Id,
               c.Signal_Name__c,
-              WorkflowPayloadOffload.resolvePayload(c.Payload__c)
+              WorkflowSignalPayloads.readPayload(c.Signal_Name__c, c.Payload__c)
             )
             .withCreatedDate(c.CreatedDate);
         }
@@ -555,7 +547,10 @@ public inherited sharing class WorkflowSignalSources {
       return new StepContext.Signal(
           cand.Id,
           cand.Signal_Name__c,
-          WorkflowPayloadOffload.resolvePayload(cand.Payload__c)
+          WorkflowSignalPayloads.readPayload(
+            cand.Signal_Name__c,
+            cand.Payload__c
+          )
         )
         .withCreatedDate(cand.CreatedDate)
         .asClaimed();
@@ -625,7 +620,10 @@ public inherited sharing class WorkflowSignalSources {
     return new StepContext.Signal(
         records[0].Id,
         records[0].Signal_Name__c,
-        WorkflowPayloadOffload.resolvePayload(records[0].Payload__c)
+        WorkflowSignalPayloads.readPayload(
+          records[0].Signal_Name__c,
+          records[0].Payload__c
+        )
       )
       .withCreatedDate(records[0].CreatedDate);
   }
@@ -677,13 +675,9 @@ public inherited sharing class WorkflowSignalSources {
       ];
     }
 
-    List<String> rawPayloads = new List<String>();
-    for (Workflow_Signal__c sig : records) {
-      rawPayloads.add(sig.Payload__c);
-    }
     // Resolve any offloaded payloads with a single bulk query (not one per row).
-    List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-      rawPayloads
+    List<String> resolvedPayloads = WorkflowSignalPayloads.readPayloads(
+      records
     );
 
     List<StepContext.Signal> signals = new List<StepContext.Signal>();

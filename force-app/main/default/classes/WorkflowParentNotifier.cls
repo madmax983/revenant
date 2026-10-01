@@ -34,7 +34,7 @@ public inherited sharing class WorkflowParentNotifier {
 
     // Query child instances to ensure all fields are loaded (avoids SObjectException)
     List<Workflow_Instance__c> freshChildren = [
-      SELECT Parent_Instance__c, Correlation_Key__c, Status__c, Output__c
+      SELECT Parent_Instance__c, Correlation_Key__c, Status__c
       FROM Workflow_Instance__c
       WHERE Id IN :childInstances
       WITH SYSTEM_MODE
@@ -109,12 +109,11 @@ public inherited sharing class WorkflowParentNotifier {
       ? parent.Correlation_Key__c
       : parent.Id;
 
-    // The event wakes the parent. The engine never reads its payload, so the
-    // payload is untrusted. A completed child keeps its stored output there
-    // for raw signal readers (compatibility). A failed child sends no payload,
-    // so the event stays small.
-    Boolean completed = child.Status__c == 'Completed';
-    String signalName = completed ? 'ChildCompleted' : 'ChildFailed';
+    // The event only wakes the parent. It has no payload. The parent reads
+    // the outcome from the child record.
+    String signalName = child.Status__c == 'Completed'
+      ? 'ChildCompleted'
+      : 'ChildFailed';
 
     signalName += String.isNotBlank(child.Correlation_Key__c)
       ? ':' + child.Correlation_Key__c
@@ -122,8 +121,7 @@ public inherited sharing class WorkflowParentNotifier {
 
     return new Workflow_Event__e(
       Workflow_Instance_Id__c = targetKey,
-      Event_Type__c = 'SIGNAL:' + signalName,
-      Payload__c = completed ? child.Output__c : null
+      Event_Type__c = 'SIGNAL:' + signalName
     );
   }
 

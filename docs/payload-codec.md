@@ -132,8 +132,9 @@ separator, and `getStepError` does not decode copied ciphertext.
 
 Read child results with `ctx.signals().getChildOutcome(key)`. A child signal
 only wakes the parent. `getChildOutcome` reads status, error and output from
-the child record of this instance. It never reads the signal payload. A raw
-`getSignal('ChildCompleted:<key>').payload` is an untrusted copy. Do not use it.
+the child record of this instance. The engine never reads a payload of a
+`ChildCompleted:` or `ChildFailed:` signal, and `getSignal` returns no payload
+for these names.
 
 ## Stored form
 
@@ -150,8 +151,8 @@ The engine wraps codec output in an envelope:
   envelope. If a user copies ciphertext into a signal or a start input, the
   step gets the copied text, not the plaintext.
 - A signal name gives no trust. A forged `ChildCompleted:<key>` or
-  `ChildFailed:<key>` signal cannot set an outcome or make the engine decode or
-  resolve data. The outcome comes from the child record. See
+  `ChildFailed:<key>` signal cannot set an outcome. It cannot make the engine
+  decode or resolve data. The outcome comes from the child record. See
   `docs/payload-ingress-threat-model.md`.
 - With a codec, the engine encodes input that starts with `{"$codec":` or
   `{"$attachmentId":` like any other input, so input cannot point the engine

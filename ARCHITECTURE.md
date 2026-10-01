@@ -161,6 +161,9 @@ rehydrates and decodes. Control data (markers, status, keys) is not encoded. See
 - `WorkflowPayloadCodecs` (config, fail-closed encode/decode),
   `WorkflowPayloadEnvelope` (stored form), `WorkflowSignalPayloads` (signal
   encode and bulk offload)
+- Child outcomes: `StepChildOutcomes` reads the child record. A child signal
+  only wakes the parent. See [ADR 0021](docs/adr/0021-engine-provenance-child-outcomes.md)
+  and [the threat model](docs/payload-ingress-threat-model.md).
 - `PayloadCodec`, `CodecContext`, `IdentityPayloadCodec` (public API)
 - Rehydrators that also decode: `WorkflowStatusProjection`,
   `WorkflowStatusPayloadRehydrator`; `WorkflowPayloadService` redacts

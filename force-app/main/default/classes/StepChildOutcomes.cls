@@ -121,9 +121,10 @@ public inherited sharing class StepChildOutcomes {
     return woken;
   }
 
-  // Loads the children of the reading instance that have a final status, by
-  // normalized key. A child key is its correlation key, or its Id when the key
-  // is blank. A later child wins when two children share a key.
+  // Loads the children of the reading instance by normalized key. A child key
+  // is its correlation key, or its Id when the key is blank. The newest child
+  // of a key wins, then the status filter applies: a running child hides an
+  // older finished child with the same key. An Id match wins over a key match.
   private Map<String, Workflow_Instance__c> finishedChildren(
     Map<String, String> woken
   ) {
@@ -132,20 +133,24 @@ public inherited sharing class StepChildOutcomes {
       return byKey;
     }
     Set<String> keys = woken.keySet();
-    for (Workflow_Instance__c child : childRecords(woken.values())) {
-      if (!OUTCOME_STATUSES.contains(child.Status__c)) {
-        continue;
+    List<Workflow_Instance__c> children = childRecords(woken.values());
+    for (Workflow_Instance__c child : children) {
+      String corrKey = WorkflowKeys.normalizeKey(child.Correlation_Key__c);
+      if (String.isNotBlank(corrKey) && keys.contains(corrKey)) {
+        byKey.put(corrKey, child);
       }
-      if (
-        child.Id != null && keys.contains(WorkflowKeys.normalizeKey(child.Id))
-      ) {
-        byKey.put(WorkflowKeys.normalizeKey(child.Id), child);
+    }
+    for (Workflow_Instance__c child : children) {
+      String idKey = child.Id == null
+        ? null
+        : WorkflowKeys.normalizeKey(String.valueOf(child.Id));
+      if (idKey != null && keys.contains(idKey)) {
+        byKey.put(idKey, child);
       }
-      if (
-        String.isNotBlank(child.Correlation_Key__c) &&
-        keys.contains(WorkflowKeys.normalizeKey(child.Correlation_Key__c))
-      ) {
-        byKey.put(WorkflowKeys.normalizeKey(child.Correlation_Key__c), child);
+    }
+    for (String key : new List<String>(byKey.keySet())) {
+      if (!OUTCOME_STATUSES.contains(byKey.get(key).Status__c)) {
+        byKey.remove(key);
       }
     }
     return byKey;

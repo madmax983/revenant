@@ -352,25 +352,16 @@ public class WorkflowEngineMocksBTest {
    */
   public class ParentStep implements WorkflowStep {
     /**
-     * @description Starts a child workflow and, once the child-completed signal is received, consumes it and completes with the child's result.
+     * @description Starts a child workflow and, once the child-completed signal wakes it, reads the child outcome and completes with the child's result.
      * @param ctx The durable per-step execution context.
      * @return The StepResult describing the outcome of this step.
      */
     public StepResult execute(StepContext ctx) {
-      List<Workflow_Signal__c> signals = [
-        SELECT Payload__c
-        FROM Workflow_Signal__c
-        WHERE
-          Workflow_Instance__c = :ctx.workflowInstanceId
-          AND Signal_Name__c = 'ChildCompleted:SubKey'
-          AND Status__c = 'Received'
-        LIMIT 1
-      ];
-      if (!signals.isEmpty()) {
-        signals[0].Status__c = 'Consumed';
-        update signals[0];
+      StepContext.ChildOutcome outcome = ctx.signals()
+        .getChildOutcome('SubKey');
+      if (outcome.isPresent()) {
         String childResult = (String) JSON.deserialize(
-          signals[0].Payload__c,
+          outcome.output,
           String.class
         );
         return StepResult.complete(null, 'ParentResult_' + childResult);

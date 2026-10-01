@@ -83,7 +83,7 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
    * Launcher + resume handler in one idempotent step.
    *
    * Resume run — ChildCompleted:<childKey> signal is present → read the child's
-   *              credit score from the payload, decide the branch, and return
+   *              credit score from the child outcome, decide the branch, and return
    *              COMPLETE.  The COMPLETE transition marks every Received signal of
    *              the observed name Consumed, so at-least-once redelivered duplicates
    *              cannot cause a second advance.
@@ -112,11 +112,9 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
 
       if (outcome.isPresent()) {
         if (outcome.isSuccess()) {
-          // Resume: the child completed.  Its serialised output is the signal payload.
-          // For large child outputs the payload may be a blob reference; resolve it.
-          String childOutputJson = WorkflowPayloadOffload.resolvePayload(
-            outcome.output
-          );
+          // Resume: the child completed.  The engine read its output from the
+          // child record and resolved it.
+          String childOutputJson = outcome.output;
           Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
             childOutputJson
           );
