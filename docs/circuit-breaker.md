@@ -83,6 +83,9 @@ unbounded.
   within one heartbeat cadence with zero traffic. A bounded number of trial probes are
   admitted; a probe **success** closes the breaker (restoring normal admission and
   resetting the failure count), a probe **failure** re-opens it for another open window.
+- **Sweep order.** Each heartbeat reads up to 2,000 Open rows, oldest first. It flips
+  up to 200 due rows. Open rows that are not due do not fill the batch, and the sweep
+  does not lock them.
 - **Only a probe closes.** Each Half-Open phase has a number (`Half_Open_Epoch__c`).
   A probe step stores that number on its `Workflow_Step_Execution__c` row
   (`Breaker_Probe_Epoch__c`). A success closes the breaker only if the number is the

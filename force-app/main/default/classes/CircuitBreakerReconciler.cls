@@ -12,17 +12,23 @@
  * lands within one watchdog cadence even with no calls. Heavy enough to live on the
  * watchdog sweep, never on the admission hot path.
  *
- * The per-row open duration is NOT stored on the state row; it is resolved from
- * `Circuit_Breaker_Config__mdt` per row (via `CircuitBreakerConfigResolver`, which
- * is governor-free). The bounded, restrictive `Status__c = 'Open'` query runs
- * `WITH SYSTEM_MODE FOR UPDATE`; the flip is a partial-success update so one bad row
- * cannot sink the sweep.
+ * The open duration is not on the state row. The resolver gets it from
+ * `Circuit_Breaker_Config__mdt` (governor-free). Thus SOQL cannot select only
+ * due rows (issue #236). SOQL also does not allow `ORDER BY` with `FOR UPDATE`.
+ * The sweep has two steps:
+ * 1. Find: an unlocked read of Open rows, oldest first. Keep only due rows.
+ * 2. Lock: read the due rows `FOR UPDATE`. Check again, then flip.
+ * Rows that are not due do not fill the batch, and the sweep does not lock them.
+ * The flip is a partial-success update, so one bad row cannot stop the sweep.
  */
 public inherited sharing class CircuitBreakerReconciler {
-  // Max Open breakers a single heartbeat flips, bounding the sweep's governor usage.
-  // A backlog drains on subsequent heartbeats.
+  // Max rows that one heartbeat flips. A backlog drains on later heartbeats.
   @TestVisible
   private static Integer sweepBatchSize = 200;
+
+  // Max Open rows that one heartbeat reads to find due rows.
+  @TestVisible
+  private static Integer sweepScanLimit = 2000;
 
   /**
    * @description Flips every eligible Open breaker (open duration elapsed) to
@@ -33,39 +39,95 @@ public inherited sharing class CircuitBreakerReconciler {
   public static void sweepHalfOpen(
     Map<String, Circuit_Breaker_Config__mdt> mockConfigs
   ) {
-    List<Circuit_Breaker_State__c> openRows = [
-      SELECT
-        Dependency_Key__c,
-        Status__c,
-        Opened_At__c,
-        Half_Open_Probes_Admitted__c,
-        Half_Open_Epoch__c
-      FROM Circuit_Breaker_State__c
-      WHERE Status__c = 'Open'
-      WITH SYSTEM_MODE
-      LIMIT :sweepBatchSize
-      FOR UPDATE
-    ];
-    if (openRows.isEmpty()) {
+    Datetime now = Datetime.now();
+    List<Id> dueIds = findDueIds(now, mockConfigs);
+    if (dueIds.isEmpty()) {
       return;
     }
 
-    Datetime now = Datetime.now();
-    List<Circuit_Breaker_State__c> toUpdate = new List<Circuit_Breaker_State__c>();
-    for (Circuit_Breaker_State__c row : openRows) {
-      if (isEligibleForHalfOpen(row, now, mockConfigs)) {
-        row.Status__c = 'HalfOpen';
-        row.Half_Open_Probes_Admitted__c = 0;
-        row.Half_Open_Epoch__c =
-          CircuitBreakerStateStore.intOf(row.Half_Open_Epoch__c) + 1;
-        toUpdate.add(row);
-      }
+    List<Circuit_Breaker_State__c> toUpdate = lockDueRows(
+      dueIds,
+      now,
+      mockConfigs
+    );
+    for (Circuit_Breaker_State__c row : toUpdate) {
+      row.Status__c = 'HalfOpen';
+      row.Half_Open_Probes_Admitted__c = 0;
+      row.Half_Open_Epoch__c =
+        CircuitBreakerStateStore.intOf(row.Half_Open_Epoch__c) + 1;
     }
     if (!toUpdate.isEmpty()) {
       // Partial-success update: a per-row fault is isolated so the rest of the sweep
       // still lands. The heartbeat also wraps this call in a best-effort try/catch.
       Database.update(toUpdate, false, AccessLevel.SYSTEM_MODE);
     }
+  }
+
+  /**
+   * @description Finds the Ids of due Open rows, oldest first. Reads up to
+   * `sweepScanLimit` rows without a lock. Keeps up to `sweepBatchSize` due rows.
+   * @param now The time to compare with each open duration.
+   * @param mockConfigs Test-injected configs.
+   * @return The due row Ids, ordered by `Opened_At__c` (nulls first), then `Id`.
+   */
+  @TestVisible
+  private static List<Id> findDueIds(
+    Datetime now,
+    Map<String, Circuit_Breaker_Config__mdt> mockConfigs
+  ) {
+    List<Id> ids = new List<Id>();
+    for (Circuit_Breaker_State__c row : [
+      SELECT Id, Dependency_Key__c, Opened_At__c
+      FROM Circuit_Breaker_State__c
+      WHERE Status__c = 'Open'
+      WITH SYSTEM_MODE
+      ORDER BY Opened_At__c ASC NULLS FIRST, Id ASC
+      LIMIT :sweepScanLimit
+    ]) {
+      if (ids.size() >= sweepBatchSize) {
+        break;
+      }
+      if (isEligibleForHalfOpen(row, now, mockConfigs)) {
+        ids.add(row.Id);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * @description Locks the found rows and reads them again. A row that is not
+   * Open now, or that opened again and is not due, is skipped.
+   * @param ids The Ids from `findDueIds`.
+   * @param now The time to compare with each open duration.
+   * @param mockConfigs Test-injected configs.
+   * @return The locked rows that are still Open and due.
+   */
+  @TestVisible
+  private static List<Circuit_Breaker_State__c> lockDueRows(
+    List<Id> ids,
+    Datetime now,
+    Map<String, Circuit_Breaker_Config__mdt> mockConfigs
+  ) {
+    List<Circuit_Breaker_State__c> locked = [
+      SELECT
+        Id,
+        Dependency_Key__c,
+        Status__c,
+        Opened_At__c,
+        Half_Open_Probes_Admitted__c,
+        Half_Open_Epoch__c
+      FROM Circuit_Breaker_State__c
+      WHERE Id IN :ids AND Status__c = 'Open'
+      WITH SYSTEM_MODE
+      FOR UPDATE
+    ];
+    List<Circuit_Breaker_State__c> due = new List<Circuit_Breaker_State__c>();
+    for (Circuit_Breaker_State__c row : locked) {
+      if (isEligibleForHalfOpen(row, now, mockConfigs)) {
+        due.add(row);
+      }
+    }
+    return due;
   }
 
   // True when an Open breaker's configured open duration has elapsed. A row whose

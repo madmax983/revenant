@@ -16,27 +16,27 @@ The half-open sweep must not skip a due Open breaker because other Open rows fil
 
 ## Brainstorm
 
-| #   | Idea                                                                         | Keep?                                                                     |
-| --- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| B1  | Add `ORDER BY Opened_At__c ASC` to the locked query.                         | No. SOQL rejects `ORDER BY` with `FOR UPDATE`.                            |
-| B2  | Find: unlocked read, oldest first, more rows. Filter due rows in Apex.       | Yes. One cheap read. No schema change.                                    |
-| B3  | Lock: read the due Ids `FOR UPDATE`. Check again under the lock.             | Yes. Locks only rows that change. Safe against a race with `tryAdmit`.    |
-| B4  | Store a "due at" time on the row. Filter in SOQL.                            | No. Schema change. A config edit makes the stored value wrong.            |
-| B5  | Build a SOQL filter per open duration from the config.                       | No. The `Default` fallback and the name mapping cannot go into SOQL.      |
-| B6  | Seek cursor across heartbeats.                                               | No. Needs a durable store. B2 is sufficient for the risk.                 |
-| B7  | Close or delete Open rows that have no config.                               | No. Behavior change. A config that comes back must see the row.           |
+| #   | Idea                                                                   | Keep?                                                                  |
+| --- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| B1  | Add `ORDER BY Opened_At__c ASC` to the locked query.                   | No. SOQL rejects `ORDER BY` with `FOR UPDATE`.                         |
+| B2  | Find: unlocked read, oldest first, more rows. Filter due rows in Apex. | Yes. One cheap read. No schema change.                                 |
+| B3  | Lock: read the due Ids `FOR UPDATE`. Check again under the lock.       | Yes. Locks only rows that change. Safe against a race with `tryAdmit`. |
+| B4  | Store a "due at" time on the row. Filter in SOQL.                      | No. Schema change. A config edit makes the stored value wrong.         |
+| B5  | Build a SOQL filter per open duration from the config.                 | No. The `Default` fallback and the name mapping cannot go into SOQL.   |
+| B6  | Seek cursor across heartbeats.                                         | No. Needs a durable store. B2 is sufficient for the risk.              |
+| B7  | Close or delete Open rows that have no config.                         | No. Behavior change. A config that comes back must see the row.        |
 
 ## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                                       | Prevention                                                                 |
-| ----------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| A due row stays behind more than 200 rows that are not due.       | Find reads up to 2,000 rows. It keeps only due rows, up to 200. Test.      |
-| The batch takes new due rows and skips old due rows.              | Find sorts by `Opened_At__c`, then `Id`. Test.                             |
-| A row changes between find and lock (`tryAdmit` flips it).        | Lock reads only `Open` rows and checks "due" again. Test.                  |
-| A row opens again between find and lock (new `Opened_At__c`).     | The check under the lock uses the locked value. Test.                      |
-| More SOQL in the heartbeat.                                       | One more query only when a row is due. Test pins 1 and 2 queries.          |
-| A null `Opened_At__c`.                                            | Null sorts first and is due (same as now). Existing helper.                |
-| More than 2,000 Open rows that are not due.                       | Accepted. Needs 2,000 open dependencies. Traffic still flips a row.        |
+| Way to fail                                                   | Prevention                                                            |
+| ------------------------------------------------------------- | --------------------------------------------------------------------- |
+| A due row stays behind more than 200 rows that are not due.   | Find reads up to 2,000 rows. It keeps only due rows, up to 200. Test. |
+| The batch takes new due rows and skips old due rows.          | Find sorts by `Opened_At__c`, then `Id`. Test.                        |
+| A row changes between find and lock (`tryAdmit` flips it).    | Lock reads only `Open` rows and checks "due" again. Test.             |
+| A row opens again between find and lock (new `Opened_At__c`). | The check under the lock uses the locked value. Test.                 |
+| More SOQL in the heartbeat.                                   | One more query only when a row is due. Test pins 1 and 2 queries.     |
+| A null `Opened_At__c`.                                        | Null sorts first and is due (same as now). Existing helper.           |
+| More than 2,000 Open rows that are not due.                   | Accepted. Needs 2,000 open dependencies. Traffic still flips a row.   |
 
 ## Six Hats
 
