@@ -61,7 +61,7 @@ Show one row for each workflow definition with instances in a rolling window. Ea
 
 - `WorkflowFleetHealthController.getFleetHealth(String windowKey)` calls `WorkflowFleetHealthService.fleetHealth`.
 - Windows: `1h`, `24h`, `7d`. A blank or unknown key gives `24h`.
-- Result: `windowKey`, `windowHours`, `countCap`, `countsCapped`, `sampleCap`, `isSampled`, `rows`.
+- Result: `windowKey`, `windowHours`, `countCap`, `countsCapped`, `definitionCap`, `definitionsCapped`, `sampleCap`, `isSampled`, `rows`.
 - Row: `workflowName`, `started`, `completed`, `failed`, `inFlight`, `successRate`, `avgDurationMs`, `maxDurationMs`, `durationSampleSize`, `durationSampled`.
 - LWC: "Fleet Health" button, window selector, threshold input, table, row deep link, error state.
 

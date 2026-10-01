@@ -411,6 +411,137 @@ private class WorkflowFleetHealthServiceTest {
   }
 
   /**
+   * @description #263: more names than the cap give exactly the cap in rows, and the flag. The
+   * aggregate path and the row path give the same result.
+   */
+  @IsTest
+  static void testDefinitionCapLimitsRows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      for (Integer i = 1; i <= 4; i++) {
+        seed('CapDef' + i, 'Running', now.addMinutes(-i), null);
+      }
+      WorkflowFleetHealthService.maxDefinitionsOverride = 3;
+
+      Test.startTest();
+      Map<String, Object> aggregate = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      WorkflowFleetHealthService.aggregateMaxOverride = 3;
+      Map<String, Object> byRows = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      for (
+        Map<String, Object> result : new List<Map<String, Object>>{
+          aggregate,
+          byRows
+        }
+      ) {
+        System.assertEquals(3, rowsOf(result).size(), 'Rows stop at the cap');
+        System.assertEquals(true, result.get('definitionsCapped'));
+        System.assertEquals(3, result.get('definitionCap'));
+      }
+      System.assertNotEquals(null, findRow(byRows, 'CapDef1'), 'Newest kept');
+      System.assertEquals(1, findRow(byRows, 'CapDef1').get('started'));
+      System.assertEquals(null, findRow(byRows, 'CapDef4'), 'Oldest dropped');
+    }
+  }
+
+  /**
+   * @description #263: a name past the cap gets no row from the duration query. A kept name
+   * still gets its durations.
+   */
+  @IsTest
+  static void testDefinitionCapAppliesToDurations() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      seed('DurA', 'Running', now, null);
+      seed('DurB', 'Running', now.addMinutes(-1), null);
+      seed('DurC', 'Completed', now.addDays(-3), now);
+      seed('DurA', 'Completed', now, now.addSeconds(5));
+      WorkflowFleetHealthService.maxDefinitionsOverride = 2;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      System.assertEquals(2, rowsOf(result).size());
+      System.assertEquals(true, result.get('definitionsCapped'));
+      System.assertEquals(null, findRow(result, 'DurC'));
+      System.assertEquals(1, findRow(result, 'DurA').get('durationSampleSize'));
+    }
+  }
+
+  /**
+   * @description #263: a name that only has a finished instance takes a free slot.
+   */
+  @IsTest
+  static void testDurationOnlyNameTakesFreeSlot() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      seed('SlotA', 'Running', now, null);
+      seed('SlotB', 'Completed', now.addDays(-3), now);
+      WorkflowFleetHealthService.maxDefinitionsOverride = 2;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      System.assertEquals(2, rowsOf(result).size());
+      System.assertEquals(0, findRow(result, 'SlotB').get('started'));
+      System.assertEquals(false, result.get('definitionsCapped'));
+    }
+  }
+
+  /**
+   * @description #263: the default cap is 500.
+   */
+  @IsTest
+  static void testDefaultDefinitionCap() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      seed('DefaultCapA', 'Running', baseTime(), null);
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      System.assertEquals(500, result.get('definitionCap'));
+      System.assertEquals(false, result.get('definitionsCapped'));
+    }
+  }
+
+  /**
+   * @description #263: names equal to the cap are not capped. A repeat name never uses a slot.
+   */
+  @IsTest
+  static void testDefinitionCountAtCapIsNotCapped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Datetime now = baseTime();
+      seed('AtCapA', 'Running', now, null);
+      seed('AtCapA', 'Completed', now, now);
+      seed('AtCapB', 'Running', now, null);
+      WorkflowFleetHealthService.maxDefinitionsOverride = 2;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowFleetHealthController.getFleetHealth(
+        '24h'
+      );
+      Test.stopTest();
+
+      System.assertEquals(2, rowsOf(result).size());
+      System.assertEquals(false, result.get('definitionsCapped'));
+    }
+  }
+
+  /**
    * @description AC2 and AC6: above the aggregate limit and under the count cap, the row
    * query gives the same exact counts as the aggregate query.
    */
