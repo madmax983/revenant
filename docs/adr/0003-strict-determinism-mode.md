@@ -22,8 +22,9 @@ decision.
    reads it in the existing static config query.
 2. When the mode is on, digest the step inputs before `execute()`: the
    stored step input, previous output and step state, the attempt, the
-   timeout-resume flag, the live signals (Id and status) and the child
-   statuses. Two SOQL queries.
+   timeout-resume flag, the live signals (Id, status, stored name and stored
+   payload) and the child count for each status. Two SOQL queries (three over 20 live
+   signals).
 3. Build a decision text from routing data only. Each value is JSON. Sort
    split and child targets.
 4. Record a wait decision and its inputs digest in the new field
@@ -33,8 +34,7 @@ decision.
    decisions: keep the record. Clear the record when the inputs changed and
    the decision is not a wait.
 6. Before a divergence, read the inputs again. An input that arrived during
-   the run makes the new decision legal. Over 2000 live signals or children,
-   the inputs are unknown: no compare, keep the record.
+   the run makes the new decision legal.
 7. Handle a divergence in the outcome seam, after the re-lock and the stale
    guard, before the dispatch. Fail the step row, write an Error log row
    (`StepNonDeterminism`) and call `failWorkflowInstance` with the new
@@ -71,3 +71,36 @@ decision.
   Side effects are out of scope.
 - **Store the record in a reserved capture key:** couples to the capture
   codec and persistence.
+
+## Hardening (issue #256)
+
+Fixed:
+
+- A live signal edit is a new input. The digest holds the stored name and
+  payload. A trigger that blocks edits was rejected: it blocks a legal admin
+  edit.
+- Children use one aggregate query. No cap, no unknown inputs.
+- Over 20 live signals, the digest holds the first rows (by Id) and the
+  total count. `SystemModstamp` is not used: a claim changes it.
+- The cap of 20 signals bounds the payload heap (a payload has max 131,072
+  characters). A byte budget was rejected: it runs after the query loads
+  the rows.
+
+Kept, with a reason:
+
+| Item | Reason |
+|------|--------|
+| Wait bookkeeping in the inputs | A wait writes step state. To leave it out, the engine must separate it from author state. No proof of "no false positive" without an org. A false negative is cheaper than a false positive. |
+| Payload codec: new ciphertext each wait | The digest uses the stored form on purpose (no plaintext digest). |
+| Offloaded step state (over 100,000 characters) | The marker changes on each wait. A digest of the attachment costs one query and heap. The case is rare. |
+| Blank `Failure_Category__c` after compensation | The category is not set by the compensation path (unchanged behavior). The log row records it. |
+| `$timeoutResume` marker removed on the first fallback run | Engine behavior from before #102. Not a strict-mode defect. |
+| `CursorFanoutWorkflowExample`, `BatchFanoutWorkflowExample` | Examples. A change needs a tested org run. Docs mark them as not replay-safe. |
+| Full re-check of the live-signal set | A narrow re-check needs the matched Ids of `StepSignals`. It also needs name probes. It is a new design. File a new issue. |
+| Dashboard count of log rows | A UI change. Not a determinism fix. |
+
+An existing record has the old digest. The first run after the deploy reads
+new inputs and records again. This gives no false positive.
+
+Open (needs an org): the full Apex suite with the mode off and on, the count
+of `STEP_NON_DETERMINISM` failures, and the SOQL cost per run.
