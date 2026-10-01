@@ -272,4 +272,27 @@ private class WorkflowPayloadOffloadTest {
 
     System.assertEquals(marker, out[0], 'A child of another parent stays text');
   }
+
+  @IsTest
+  static void testPrefetchedLinksNeedNoLinkQuery() {
+    Workflow_Instance__c a = newInstance();
+    Workflow_Instance__c b = childOf(a);
+    String markerA = offload(a.Id, '{"a":1}');
+    String markerB = offload(b.Id, '{"b":1}');
+    List<String> raw = new List<String>{ markerA, markerB };
+    List<Id> owners = new List<Id>{ a.Id, a.Id };
+    Map<Id, Set<Id>> links = WorkflowPayloadOffload.linksFor(raw);
+
+    Integer before = Limits.getQueries();
+    List<String> out = WorkflowPayloadOffload.resolvePayloads(
+      raw,
+      owners,
+      links
+    );
+    Integer used = Limits.getQueries() - before;
+
+    System.assert(out[0].startsWith('{"a":1}'), 'Own file resolves');
+    System.assertEquals(markerB, out[1], 'A foreign file stays marker');
+    System.assertEquals(1, used, 'Only the file query runs: ' + used);
+  }
 }

@@ -100,6 +100,12 @@ public inherited sharing class WorkflowPatchAdoptionScan {
     List<Workflow_Step_Execution__c> execs
   ) {
     Integer offloadBatchSize = 40;
+    List<String> allRaw = new List<String>();
+    for (Workflow_Step_Execution__c exec : execs) {
+      allRaw.add(exec.Captured_Values__c);
+    }
+    // One link query for the whole chunk, not one per batch.
+    Map<Id, Set<Id>> links = WorkflowPayloadOffload.linksFor(allRaw);
     List<String> resolvedCaptures = new List<String>();
     for (Integer k = 0; k < execs.size(); k += offloadBatchSize) {
       List<String> batchRaw = new List<String>();
@@ -109,7 +115,7 @@ public inherited sharing class WorkflowPatchAdoptionScan {
         batchOwners.add(execs[m].Workflow_Instance__c);
       }
       resolvedCaptures.addAll(
-        WorkflowPayloadOffload.resolvePayloads(batchRaw, batchOwners)
+        WorkflowPayloadOffload.resolvePayloads(batchRaw, batchOwners, links)
       );
     }
     return resolvedCaptures;

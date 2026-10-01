@@ -35,6 +35,8 @@ public inherited sharing class StepExecutionParse {
       ownerIds.add(exec.Workflow_Instance__c);
     }
     Integer batchSize = 40;
+    // One link query for all executions, not one per batch.
+    Map<Id, Set<Id>> links = WorkflowPayloadOffload.linksFor(rawCaptures);
     List<String> resolvedCaptures = new List<String>();
     for (Integer i = 0; i < rawCaptures.size(); i += batchSize) {
       List<String> batchRaw = new List<String>();
@@ -44,7 +46,7 @@ public inherited sharing class StepExecutionParse {
         batchOwners.add(ownerIds[j]);
       }
       resolvedCaptures.addAll(
-        WorkflowPayloadOffload.resolvePayloads(batchRaw, batchOwners)
+        WorkflowPayloadOffload.resolvePayloads(batchRaw, batchOwners, links)
       );
     }
     return resolvedCaptures;

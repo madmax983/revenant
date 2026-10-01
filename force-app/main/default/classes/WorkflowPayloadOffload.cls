@@ -221,12 +221,63 @@ public inherited sharing class WorkflowPayloadOffload {
     return out;
   }
 
+  /**
+   * @description Reads the links of every file that the values name, with one
+   * query. Give the result to
+   * {@link #resolvePayloads(List, List, Map)} to resolve the values in batches
+   * with no more link queries.
+   * @param rawValues the raw (possibly marker) payload strings
+   * @return the linked entity Ids by ContentDocument Id
+   */
+  public static Map<Id, Set<Id>> linksFor(List<String> rawValues) {
+    Set<Id> docs = new Set<Id>();
+    for (String raw : rawValues) {
+      docs.add(markerDocId(raw));
+    }
+    docs.remove(null);
+    return docs.isEmpty() ? new Map<Id, Set<Id>>() : linkedEntitiesByDoc(docs);
+  }
+
+  /**
+   * @description Like {@link #resolvePayloads(List, List)}, but it uses links
+   * that {@link #linksFor} read before. It runs no link query.
+   * @param rawValues the raw (possibly marker) payload strings
+   * @param ownerIds the instance that reads each value, index-aligned
+   * @param linksByDoc the links from {@link #linksFor}
+   * @return the resolved payloads, index-aligned with rawValues
+   */
+  public static List<String> resolvePayloads(
+    List<String> rawValues,
+    List<Id> ownerIds,
+    Map<Id, Set<Id>> linksByDoc
+  ) {
+    List<String> out = resolveStoredForms(
+      rawValues,
+      ownerIds,
+      false,
+      linksByDoc
+    );
+    for (Integer i = 0; i < out.size(); i++) {
+      out[i] = WorkflowPayloadCodecs.decode(out[i]);
+    }
+    return out;
+  }
+
+  private static List<String> resolveStoredForms(
+    List<String> rawValues,
+    List<Id> ownerIds,
+    Boolean includeChildren
+  ) {
+    return resolveStoredForms(rawValues, ownerIds, includeChildren, null);
+  }
+
   // Replaces each owned marker with its file text. It does not decode. Values
   // stay index-aligned with the input.
   private static List<String> resolveStoredForms(
     List<String> rawValues,
     List<Id> ownerIds,
-    Boolean includeChildren
+    Boolean includeChildren,
+    Map<Id, Set<Id>> knownLinks
   ) {
     List<Id> docIds = new List<Id>();
     for (String raw : rawValues) {
@@ -235,7 +286,8 @@ public inherited sharing class WorkflowPayloadOffload {
     Map<String, String> textByKey = loadOwned(
       docIds,
       ownerIds,
-      includeChildren
+      includeChildren,
+      knownLinks
     );
     List<String> out = new List<String>();
     for (Integer i = 0; i < rawValues.size(); i++) {
@@ -267,13 +319,24 @@ public inherited sharing class WorkflowPayloadOffload {
     List<Id> ownerIds,
     Boolean includeChildren
   ) {
+    return loadOwned(docIds, ownerIds, includeChildren, null);
+  }
+
+  private static Map<String, String> loadOwned(
+    List<Id> docIds,
+    List<Id> ownerIds,
+    Boolean includeChildren,
+    Map<Id, Set<Id>> knownLinks
+  ) {
     Map<String, String> textByKey = new Map<String, String>();
     Set<Id> docs = new Set<Id>(docIds);
     docs.remove(null);
     if (docs.isEmpty() || allNull(ownerIds)) {
       return textByKey;
     }
-    Map<Id, Set<Id>> linksByDoc = linkedEntitiesByDoc(docs);
+    Map<Id, Set<Id>> linksByDoc = knownLinks != null
+      ? knownLinks
+      : linkedEntitiesByDoc(docs);
     List<Integer> owned = new List<Integer>();
     List<Integer> childCandidates = new List<Integer>();
     for (Integer i = 0; i < docIds.size(); i++) {
