@@ -78,6 +78,26 @@ private class WorkflowDeterminismGuardTest {
     );
   }
 
+  private static List<Workflow_Signal__c> insertSignals(
+    Workflow_Instance__c inst,
+    Integer count
+  ) {
+    List<Workflow_Signal__c> sigs = new List<Workflow_Signal__c>();
+    for (Integer i = 0; i < count; i++) {
+      sigs.add(
+        new Workflow_Signal__c(
+          Workflow_Instance__c = inst.Id,
+          Correlation_Key__c = inst.Correlation_Key__c,
+          Signal_Name__c = 'Go' + i,
+          Payload__c = '{"i":' + i + '}',
+          Status__c = 'Received'
+        )
+      );
+    }
+    insert sigs;
+    return sigs;
+  }
+
   private static WorkflowStepRunner.RunStepContext runContext(String record) {
     WorkflowStepRunner.RunStepContext ctx = new WorkflowStepRunner.RunStepContext();
     ctx.stepInstance = new PlainStep();
@@ -240,18 +260,17 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
-  static void captureInputsGivesUnknownOverTheChildCap() {
+  static void captureInputsCountsManyChildrenByStatus() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
-      WorkflowDeterminismGuard.maxChildren = 1;
       Workflow_Instance__c parent = insertInstance();
       List<Workflow_Instance__c> children = new List<Workflow_Instance__c>();
-      for (Integer i = 0; i < 2; i++) {
+      for (Integer i = 0; i < 3; i++) {
         children.add(
           new Workflow_Instance__c(
             Workflow_Name__c = 'GuardTestChild',
             Status__c = 'Running',
-            Correlation_Key__c = 'GuardCap-' +
+            Correlation_Key__c = 'GuardMany-' +
               i +
               '-' +
               Crypto.getRandomInteger(),
@@ -260,10 +279,28 @@ private class WorkflowDeterminismGuardTest {
         );
       }
       insert children;
-      Assert.areEqual(
+      String before = digestOf(rowContext(parent.Id), contextFor(parent.Id));
+      Assert.areNotEqual(
         WorkflowDeterminismGuard.UNKNOWN_INPUTS,
+        before,
+        'Children have no cap'
+      );
+
+      children[0].Status__c = 'Completed';
+      update children[0];
+      Assert.areNotEqual(
+        before,
         digestOf(rowContext(parent.Id), contextFor(parent.Id)),
-        'Children over the cap give unknown inputs'
+        'A status count change changes the inputs'
+      );
+      Assert.areEqual(
+        2,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Parent_Instance__c = :parent.Id AND Status__c = 'Running'
+        ],
+        'The fixture has two Running children and one Completed child'
       );
     }
   }
@@ -331,27 +368,173 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
-  static void captureInputsGivesUnknownOverTheSignalCap() {
+  static void captureInputsKnowsTheBacklogOverTheSignalCap() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
       WorkflowDeterminismGuard.maxLiveSignals = 1;
       Workflow_Instance__c inst = insertInstance();
-      List<Workflow_Signal__c> sigs = new List<Workflow_Signal__c>();
-      for (Integer i = 0; i < 2; i++) {
-        sigs.add(
-          new Workflow_Signal__c(
-            Workflow_Instance__c = inst.Id,
-            Correlation_Key__c = inst.Correlation_Key__c,
-            Signal_Name__c = 'Go' + i,
-            Status__c = 'Received'
-          )
-        );
-      }
-      insert sigs;
+      insertSignals(inst, 2);
+      String before = digestOf(rowContext(inst.Id), contextFor(inst.Id));
+      Assert.areNotEqual(
+        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
+        before,
+        'A backlog over the cap still gives a digest'
+      );
+
+      insertSignals(inst, 1);
+      Assert.areNotEqual(
+        before,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'An arrival over the cap changes the inputs'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsChangesOnALiveSignalNameEdit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c sig = insertSignals(inst, 1)[0];
+      String before = digestOf(rowContext(inst.Id), contextFor(inst.Id));
+
+      sig.Signal_Name__c = 'Renamed';
+      update sig;
+      Assert.areNotEqual(
+        before,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'A name edit is a new input'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsChangesOnALiveSignalPayloadEdit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c sig = insertSignals(inst, 1)[0];
+      String before = digestOf(rowContext(inst.Id), contextFor(inst.Id));
+
+      sig.Payload__c = '{"route":"B"}';
+      update sig;
+      Assert.areNotEqual(
+        before,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'A payload edit is a new input'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsGivesUnknownOverThePayloadBudget() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      WorkflowDeterminismGuard.maxPayloadChars = 10;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c sig = insertSignals(inst, 1)[0];
+      sig.Payload__c = '{"big":"0123456789"}';
+      update sig;
       Assert.areEqual(
         WorkflowDeterminismGuard.UNKNOWN_INPUTS,
         digestOf(rowContext(inst.Id), contextFor(inst.Id)),
-        'A backlog over the cap gives unknown inputs'
+        'Payloads over the budget give unknown inputs'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsChangesOnAClaimedSignalPayloadEdit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c sig = insertSignals(inst, 1)[0];
+      StepContext context = contextFor(inst.Id)
+        .signalSource(
+          new WorkflowSignalSources.ParallelBranchSignalSource(inst.Id)
+        )
+        .build();
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      String before = WorkflowDeterminismGuard.captureInputs(
+        ctx,
+        context,
+        '{"p":1}'
+      );
+      Assert.isTrue(
+        context.signals().getSignal('Go0').isPresent(),
+        'The branch claims the signal'
+      );
+
+      sig.Payload__c = '{"route":"B"}';
+      update sig;
+      Assert.areNotEqual(
+        before,
+        WorkflowDeterminismGuard.captureInputs(ctx, context, '{"p":1}'),
+        'A payload edit of a claimed signal is a new input'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsTellsNullFromTheTextNullInASignal() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c sig = insertSignals(inst, 1)[0];
+      sig.Payload__c = null;
+      update sig;
+      String nullPayload = digestOf(rowContext(inst.Id), contextFor(inst.Id));
+
+      sig.Payload__c = 'null';
+      update sig;
+      Assert.areNotEqual(
+        nullPayload,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'A null payload and the text "null" are different inputs'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsChangesOnAForeignClaim() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c sig = insertSignals(inst, 1)[0];
+      String before = digestOf(rowContext(inst.Id), contextFor(inst.Id));
+
+      sig.Status__c = 'Processing';
+      update sig;
+      Assert.areNotEqual(
+        before,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'A claim by another branch is a new input'
+      );
+    }
+  }
+
+  @IsTest
+  static void captureInputsAddsThePayloadsOfAllSignalsToTheBudget() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      List<Workflow_Signal__c> sigs = insertSignals(inst, 2);
+      for (Workflow_Signal__c sig : sigs) {
+        sig.Payload__c = '0123456789';
+      }
+      update sigs;
+
+      WorkflowDeterminismGuard.maxPayloadChars = 20;
+      Assert.areNotEqual(
+        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'A total equal to the budget gives a digest'
+      );
+      WorkflowDeterminismGuard.maxPayloadChars = 19;
+      Assert.areEqual(
+        WorkflowDeterminismGuard.UNKNOWN_INPUTS,
+        digestOf(rowContext(inst.Id), contextFor(inst.Id)),
+        'The budget covers the total of all rows'
       );
     }
   }

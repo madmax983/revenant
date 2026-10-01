@@ -6,9 +6,9 @@
  * dispatch writes the decision. When the mode is off, the guard does no work.
  *
  * The inputs digest holds: the stored step input, previous output and step
- * state, the attempt, the timeout-resume flag, the live signals, and the
- * child status counts. The guard digests stored forms,
- * so no decoded payload goes into the digest. Captures are not inputs:
+ * state, the attempt, the timeout-resume flag, the live signals (Id, status,
+ * name and payload), and the child status counts. The guard digests stored
+ * forms, so no decoded payload goes into the digest. Captures are not inputs:
  * once() values are stable by contract.
  */
 public inherited sharing class WorkflowDeterminismGuard {
@@ -22,13 +22,15 @@ public inherited sharing class WorkflowDeterminismGuard {
    */
   public static final String UNKNOWN_INPUTS = 'unknown';
 
-  // Max live signals the guard reads. More rows give UNKNOWN_INPUTS, so a
-  // large backlog cannot use up the query-row limit.
+  // Max live signals the guard reads. Over it, the guard digests the oldest
+  // rows and the total count, so a backlog cannot use up the query-row limit.
   @TestVisible
-  private static Integer maxLiveSignals = 2000;
-  // Max child instances the guard reads, for the same reason.
+  private static Integer maxLiveSignals = 200;
+  // Max payload characters the guard digests. Over it, the inputs are
+  // unknown. The query loads the payloads first, so this limits digest work.
+  // The heap cost equals the cost of the step read of the same signals.
   @TestVisible
-  private static Integer maxChildren = 2000;
+  private static Integer maxPayloadChars = 1000000;
 
   /**
    * @description Digests the inputs of a step run. Call before execute(), so
@@ -36,8 +38,8 @@ public inherited sharing class WorkflowDeterminismGuard {
    * @param ctx The run context with the step row.
    * @param context The hydrated step context.
    * @param prevOutput The stored previous step output.
-   * @return The inputs digest, UNKNOWN_INPUTS for live signals or children
-   * over the cap, or null when strict mode is off.
+   * @return The inputs digest, UNKNOWN_INPUTS when the live signal payloads
+   * are over the budget, or null when strict mode is off.
    */
   public static String captureInputs(
     WorkflowStepRunner.RunStepContext ctx,
@@ -64,7 +66,7 @@ public inherited sharing class WorkflowDeterminismGuard {
     // not count query rows.
     Integer rowCap = maxLiveSignals + 1;
     List<Workflow_Signal__c> live = [
-      SELECT Id, Status__c
+      SELECT Id, Status__c, Signal_Name__c, Payload__c
       FROM Workflow_Signal__c
       WHERE
         Workflow_Instance__c = :instanceId
@@ -73,31 +75,46 @@ public inherited sharing class WorkflowDeterminismGuard {
       ORDER BY Id
       LIMIT :rowCap
     ];
-    if (live.size() > maxLiveSignals) {
-      return UNKNOWN_INPUTS;
-    }
     // A parallel branch claims what it reads (Received to Processing). Count
     // the claims of this run as Received, so a re-check after the run sees
     // the same inputs.
     Set<Id> ownClaims = context.signals().getClaimedSignalIds();
-    for (Workflow_Signal__c sig : live) {
+    Integer payloadChars = 0;
+    for (Integer i = 0; i < live.size() && i < maxLiveSignals; i++) {
+      Workflow_Signal__c sig = live[i];
+      payloadChars += sig.Payload__c?.length() ?? 0;
+      if (payloadChars > maxPayloadChars) {
+        return UNKNOWN_INPUTS;
+      }
       String status = ownClaims.contains(sig.Id) ? 'Received' : sig.Status__c;
-      parts.add(sig.Id + '|' + status);
+      // A name or payload edit changes the digest: a legal route change.
+      parts.add(
+        sig.Id +
+          '|' +
+          status +
+          '|' +
+          WorkflowDecisionFingerprint.digest(
+            JSON.serialize(new List<Object>{ sig.Signal_Name__c, sig.Payload__c })
+          )
+      );
     }
-    Integer childCap = maxChildren + 1;
-    List<Workflow_Instance__c> children = [
-      SELECT Status__c
+    if (live.size() > maxLiveSignals) {
+      // The oldest rows are digested. The total count shows an arrival.
+      parts.add('liveCount|' + [SELECT COUNT() FROM Workflow_Signal__c
+        WHERE Workflow_Instance__c = :instanceId
+          AND Status__c IN ('Received', 'Processing')
+        WITH SYSTEM_MODE]);
+    }
+    // One aggregate row for each status: no row cap, no heap cost.
+    for (AggregateResult agg : [
+      SELECT Status__c status, COUNT(Id) total
       FROM Workflow_Instance__c
       WHERE Parent_Instance__c = :instanceId
       WITH SYSTEM_MODE
+      GROUP BY Status__c
       ORDER BY Status__c
-      LIMIT :childCap
-    ];
-    if (children.size() > maxChildren) {
-      return UNKNOWN_INPUTS;
-    }
-    for (Workflow_Instance__c child : children) {
-      parts.add('child|' + child.Status__c);
+    ]) {
+      parts.add('child|' + agg.get('status') + '|' + agg.get('total'));
     }
     // JSON keeps each part apart: no part can look like two parts.
     return WorkflowDecisionFingerprint.digest(JSON.serialize(parts));
