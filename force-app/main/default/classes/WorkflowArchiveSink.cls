@@ -4,7 +4,7 @@
  * methods through {@link WorkflowArchive}.
  *
  * Select the sink in `Revenant_Config__mdt.Archive_Sink__c`. Blank selects
- * {@link BigObjectArchiveSink}. {@link CsvArchiveSink} is also shipped.
+ * `BigObjectArchiveSink`. `CsvArchiveSink` is also shipped.
  *
  * Rules for an implementation:
  * - `write` must be idempotent for each instance Id. A second write of the
@@ -15,7 +15,8 @@
  * - `write` can make callouts. Both sweep steps are `CalloutStep`s, and the
  *   sweep does no DML before `write`. Each batch calls `write` once.
  * - Read methods must not do DML. Return steps in `sequence` order.
- * - Use a public class with a public no-argument constructor.
+ * - Use a top-level public class with a public no-argument constructor. The
+ *   engine loads it by name.
  */
 global interface WorkflowArchiveSink {
   /**

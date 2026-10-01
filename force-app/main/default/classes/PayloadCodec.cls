@@ -17,7 +17,8 @@
  * - Throw an exception when the data cannot be decoded. Do not return
  *   ciphertext as plaintext. The engine replaces the message, so the message
  *   does not go into error fields.
- * - Use a public class with a public no-argument constructor.
+ * - Use a top-level public class with a public no-argument constructor. The
+ *   engine loads it by name.
  */
 global interface PayloadCodec {
   /**

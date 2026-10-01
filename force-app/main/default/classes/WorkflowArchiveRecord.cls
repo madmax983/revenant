@@ -4,7 +4,7 @@
  * it from {@link WorkflowArchive}.
  *
  * Each {@link Step} holds the same facts as
- * {@link WorkflowEngine.StepHistoryEntry}.
+ * the engine step history entry.
  *
  * Payload policy: `input`, `output` and `Step.errorDetails` hold the stored
  * form (codec ciphertext stays ciphertext). An offloaded payload is not
@@ -89,7 +89,7 @@ global inherited sharing class WorkflowArchiveRecord {
 
     /**
      * @description Returns true for a compensation step. Same rule as
-     * {@link WorkflowEngine.StepHistoryEntry#isCompensation}.
+     * the engine step history.
      * @return true when the step name ends in `_Compensate`
      */
     global Boolean isCompensation() {

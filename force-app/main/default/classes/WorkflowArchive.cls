@@ -15,8 +15,8 @@
  */
 global inherited sharing class WorkflowArchive {
   /**
-   * @description Blocks construction. Without an explicit constructor, a
-   * global class gets a global default constructor.
+   * @description Blocks construction. Apex adds a global constructor when
+   * a global class has none.
    */
   private WorkflowArchive() {
     // Static facade. No state.
@@ -77,6 +77,7 @@ global inherited sharing class WorkflowArchive {
    * @description Returns the archived history of one instance. One sink read.
    * @param instanceId the instance Id
    * @return the record, or null when the instance is not archived
+   * @throws ArchiveException when the config or the sink class is not valid
    */
   global static WorkflowArchiveRecord getArchivedHistory(Id instanceId) {
     if (instanceId == null) {
@@ -93,6 +94,7 @@ global inherited sharing class WorkflowArchive {
    * @param correlationKey the correlation key. Case does not matter, as in
    *        `Correlation_Key__c`.
    * @return the records, at most {@link #MAX_READ_RECORDS}
+   * @throws ArchiveException when the config or the sink class is not valid
    */
   global static List<WorkflowArchiveRecord> findArchivedHistory(
     String correlationKey
@@ -117,7 +119,8 @@ global inherited sharing class WorkflowArchive {
    * where an index cannot hold the full key. `Correlation_Key__c` is not
    * case-sensitive, so the hash uses the lower-case key.
    * @param correlationKey the key. Null hashes as blank.
-   * @return the SHA-256 hex, 64 characters
+   * @return the SHA-256 hex, 64 characters. This algorithm is part of the
+   * contract. Do not change it.
    */
   global static String hashCorrelationKey(String correlationKey) {
     return EncodingUtil.convertToHex(

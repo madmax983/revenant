@@ -1,4 +1,4 @@
-/** Calls each subscriber-facing API. Throws when a call fails. */
+/** Calls the global API from subscriber code. Throws when a call fails. */
 public class SmokeRun {
   public static String run() {
     String key = 'pkg-smoke-' + String.valueOf(Datetime.now().getTime());

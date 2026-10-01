@@ -62,7 +62,8 @@ The codec also does not cover these fields. Do not put sensitive data in them:
 
 Implement `PayloadCodec`. Use a public class with a public no-argument
 constructor. `PayloadCodec` and `CodecContext` are `global`. A subscriber org
-uses the package namespace, for example `implements rvn.PayloadCodec`. See
+uses the package namespace, for example `implements <namespace>.PayloadCodec`, where `<namespace>` is the package
+namespace. See
 [global-api.md](global-api.md).
 
 ```apex

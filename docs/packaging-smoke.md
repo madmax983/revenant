@@ -6,24 +6,27 @@ This test installs a 2GP beta in a scratch org. Then subscriber Apex uses the
 ## Needs
 
 - A Dev Hub with the package namespace linked.
-- A package named `revenant` (`sf package create`) and a scratch org.
+- A managed 2GP package from `sf package create`. Use its 0Ho Id.
+- A scratch org.
 - `sf` CLI and `node`.
 
 ## Run
 
 ```sh
-scripts/packaging/smoke.sh <devhub-alias> <scratch-alias> <namespace>
+scripts/packaging/smoke.sh <devhub> <scratch-org> <namespace> <package-id>
 ```
 
 The script does these steps:
 
-1. Creates a beta package version.
+1. Makes a temporary project with the namespace. It creates a beta package
+   version from it.
 2. Installs it in the scratch org.
 3. Deploys `scripts/packaging/subscriber/`. `__NS__` becomes the namespace.
 4. Runs `SmokeRun.run()`. It throws when a call fails.
 
 `SmokeRun` starts and signals a workflow, reads its status, round-trips a
-`PayloadCodec`, and uses a `WorkflowArchiveSink` and `WorkflowArchive`. The
+`PayloadCodec`, and calls a `WorkflowArchiveSink`, `hashCorrelationKey` and
+`getArchivedHistory(null)`. The
 subscriber classes implement `WorkflowDefinition`, `WorkflowStep`,
 `PayloadCodec` and `WorkflowArchiveSink`.
 

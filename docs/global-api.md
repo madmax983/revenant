@@ -21,7 +21,7 @@ Decision records: [ADR 0006](adr/0006-frozen-global-api.md) (issue #122) and [AD
 - **Debounced start:** `WorkflowDebouncer.startDebounced` and `DebounceRequest` (issue #140). See [debounce.md](debounce.md).
 - **Flow:** the Start, Signal, and Get Workflow Status invocable actions.
 - **Payload codec:** `PayloadCodec` and `CodecContext`. See [payload-codec.md](payload-codec.md).
-- **Archive:** `WorkflowArchiveSink`, `WorkflowArchive` (reads and sink helpers) and `WorkflowArchiveRecord`. See [archive.md](archive.md).
+- **Archive:** `WorkflowArchiveSink`, `WorkflowArchive` (two reads, `hashCorrelationKey`, `MAX_READ_RECORDS`, `ArchiveException`) and `WorkflowArchiveRecord`. See [archive.md](archive.md).
 
 `getStatus` is on `WorkflowStatusRead`, not on `WorkflowEngine`. It moved there on 2026-07-15, before this release. The README names `WorkflowStatusRead.getStatus` as the read contract.
 

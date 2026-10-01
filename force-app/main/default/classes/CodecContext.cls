@@ -11,6 +11,8 @@ global inherited sharing class CodecContext {
    * - STEP_OUTPUT: a step output and the workflow output.
    * - STEP_STATE: step state: suspend state, captures and progress.
    * - SIGNAL_PAYLOAD: a signal payload or a resume payload.
+   *
+   * This list is fixed. A new value breaks a subscriber `switch`.
    */
   global enum PayloadKind {
     WORKFLOW_INPUT,
