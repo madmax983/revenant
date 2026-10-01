@@ -174,8 +174,8 @@ public inherited sharing class WorkflowBulkResumeService {
 
   /**
    * @description Applies the resume mutation to a matched step execution: marks it
-   * Running, persists the resume payload as its output, and (re)arms its step
-   * timeout.
+   * Running, sets the encoded resume payload as its output, and (re)arms its
+   * step timeout. {@link #offloadOutputs} moves large outputs to files.
    * @param stepExec the step execution to mutate
    * @param inst the owning instance (for id, current step and namespace)
    * @param payload the resume payload to persist
@@ -186,13 +186,9 @@ public inherited sharing class WorkflowBulkResumeService {
     String payload
   ) {
     stepExec.Status__c = 'Running';
-    stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-      inst.Id,
-      WorkflowPayloadCodecs.encode(
-        payload,
-        CodecContext.PayloadKind.SIGNAL_PAYLOAD
-      ),
-      'Resume_' + stepExec.Id
+    stepExec.Output__c = WorkflowPayloadCodecs.encode(
+      payload,
+      CodecContext.PayloadKind.SIGNAL_PAYLOAD
     );
     Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
       inst.Current_Step__c,
@@ -237,7 +233,28 @@ public inherited sharing class WorkflowBulkResumeService {
         updates.stepsToUpdate.add(stepExec);
       }
     }
+    offloadOutputs(updates.stepsToUpdate);
     return updates;
+  }
+
+  // Moves large encoded outputs to files in one bulk call.
+  private static void offloadOutputs(List<Workflow_Step_Execution__c> steps) {
+    List<WorkflowBulkOffload.Item> items = new List<WorkflowBulkOffload.Item>();
+    for (Workflow_Step_Execution__c step : steps) {
+      items.add(
+        new WorkflowBulkOffload.Item(
+          step.Workflow_Instance__c,
+          step.Output__c,
+          'Resume_' + step.Id
+        )
+      );
+      // Drop this reference. The item holds the text until the file exists.
+      step.Output__c = null;
+    }
+    List<String> stored = WorkflowBulkOffload.save(items);
+    for (Integer i = 0; i < steps.size(); i++) {
+      steps[i].Output__c = stored[i];
+    }
   }
 
   /**

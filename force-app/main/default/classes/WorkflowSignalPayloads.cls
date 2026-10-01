@@ -75,7 +75,7 @@ public inherited sharing class WorkflowSignalPayloads {
         new Map<String, String>{ '$attachmentId' => docId }
       );
     }
-    insertLinks(links);
+    WorkflowBulkOffload.insertLinks(links);
   }
 
   /**
@@ -124,26 +124,5 @@ public inherited sharing class WorkflowSignalPayloads {
     }
     Database.insert(files, true, AccessLevel.SYSTEM_MODE);
     return files;
-  }
-
-  // Same visibility rule as WorkflowPayloadOffload: retry a rejected link with
-  // AllUsers visibility.
-  private static void insertLinks(List<ContentDocumentLink> links) {
-    Database.SaveResult[] results = Database.insert(
-      links,
-      false,
-      AccessLevel.SYSTEM_MODE
-    );
-    List<ContentDocumentLink> retry = new List<ContentDocumentLink>();
-    for (Integer i = 0; i < results.size(); i++) {
-      if (!results[i].isSuccess()) {
-        ContentDocumentLink link = links[i].clone(false, true);
-        link.Visibility = 'AllUsers';
-        retry.add(link);
-      }
-    }
-    if (!retry.isEmpty()) {
-      Database.insert(retry, true, AccessLevel.SYSTEM_MODE);
-    }
   }
 }

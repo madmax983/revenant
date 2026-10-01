@@ -14,7 +14,7 @@ A `ContentDocumentLink` filter needs all instance ids. That query exceeds the
 ## Decision
 
 1. `ContentVersion.Revenant_Payload_Offload__c` (checkbox) marks an offloaded
-   file. `WorkflowPayloadOffload.savePayloadIfNeeded` and
+   file. `WorkflowBulkOffload` (used by `savePayloadIfNeeded`) and
    `WorkflowSignalPayloads` set it in system mode. `CsvArchiveSink` does not:
    archive files were never in this total.
 2. The panel sums `ContentSize` where `IsLatest = TRUE` and the flag is true.

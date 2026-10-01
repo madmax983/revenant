@@ -475,29 +475,11 @@ public inherited sharing class WorkflowPayloadOffload {
     String textValue,
     String title
   ) {
-    if (String.isNotBlank(textValue) && textValue.length() > 100000) {
-      ContentVersion cv = new ContentVersion();
-      cv.Title = title;
-      cv.PathOnClient = title + '.json';
-      cv.VersionData = Blob.valueOf(textValue);
-      cv.Revenant_Payload_Offload__c = true;
-      Database.insert(cv, true, AccessLevel.SYSTEM_MODE);
-
-      Id docId = [
-        SELECT ContentDocumentId
-        FROM ContentVersion
-        WHERE Id = :cv.Id
-        WITH SYSTEM_MODE
-      ]
-      .ContentDocumentId;
-
-      linkToOwner(docId, instanceId);
-
-      return JSON.serialize(
-        new Map<String, String>{ '$attachmentId' => docId }
-      );
-    }
-    return textValue;
+    return WorkflowBulkOffload.save(
+      new List<WorkflowBulkOffload.Item>{
+        new WorkflowBulkOffload.Item(instanceId, textValue, title)
+      }
+    )[0];
   }
 
   /**

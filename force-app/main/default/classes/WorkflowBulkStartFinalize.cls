@@ -3,8 +3,9 @@
  * start pipeline ({@link WorkflowBulkStartService}). Persists search-attribute
  * rows for freshly-inserted instances, fills the remaining (intra-batch /
  * concurrent-loser) results from a resolved key->Id map, and resolves/persists
- * the input payloads. Extracted from `WorkflowStartService` so the bulk pipeline
- * keeps the mutable `StartOrGetRun` accumulator private to
+ * the input payloads with one bulk offload. Extracted from
+ * `WorkflowStartService` so the bulk pipeline keeps the mutable `StartOrGetRun`
+ * accumulator private to
  * `WorkflowBulkStartService`; these helpers receive the specific collections
  * they need rather than the accumulator. All DML runs in system mode with the
  * original all-or-none semantics preserved.
@@ -88,20 +89,27 @@ public inherited sharing class WorkflowBulkStartFinalize {
     List<Integer> insertedReqIndexes,
     List<WorkflowEngine.StartRequest> requests
   ) {
+    List<WorkflowBulkOffload.Item> items = new List<WorkflowBulkOffload.Item>();
     for (Integer j = 0; j < insertedInstances.size(); j++) {
       WorkflowEngine.StartRequest req = requests[insertedReqIndexes[j]];
       Workflow_Instance__c instance = insertedInstances[j];
       String inputJson = (req.inputJson != null)
         ? req.inputJson
         : ((req.input != null) ? JSON.serialize(req.input) : null);
-      instance.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-        instance.Id,
-        WorkflowPayloadCodecs.encode(
-          inputJson,
-          CodecContext.PayloadKind.WORKFLOW_INPUT
-        ),
-        'Input_' + instance.Id
+      items.add(
+        new WorkflowBulkOffload.Item(
+          instance.Id,
+          WorkflowPayloadCodecs.encode(
+            inputJson,
+            CodecContext.PayloadKind.WORKFLOW_INPUT
+          ),
+          'Input_' + instance.Id
+        )
       );
+    }
+    List<String> stored = WorkflowBulkOffload.save(items);
+    for (Integer j = 0; j < insertedInstances.size(); j++) {
+      insertedInstances[j].Input__c = stored[j];
     }
     if (!insertedInstances.isEmpty()) {
       Database.update(insertedInstances, true, AccessLevel.SYSTEM_MODE);

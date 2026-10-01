@@ -142,19 +142,25 @@ public inherited sharing class WorkflowChildBulkService {
   private static List<Workflow_Instance__c> applyChildInputPayloads(
     ChildStartPlan plan
   ) {
-    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    List<WorkflowBulkOffload.Item> items = new List<WorkflowBulkOffload.Item>();
     for (Integer i = 0; i < plan.instances.size(); i++) {
       Workflow_Instance__c inst = plan.instances[i];
-      StepResult.ChildRequest req = plan.requests[i];
-      inst.Input__c = WorkflowPayloadOffload.savePayloadIfNeeded(
-        inst.Id,
-        WorkflowPayloadCodecs.encode(
-          req.inputJson,
-          CodecContext.PayloadKind.WORKFLOW_INPUT
-        ),
-        'Input_Child_' + inst.Id
+      items.add(
+        new WorkflowBulkOffload.Item(
+          inst.Id,
+          WorkflowPayloadCodecs.encode(
+            plan.requests[i].inputJson,
+            CodecContext.PayloadKind.WORKFLOW_INPUT
+          ),
+          'Input_Child_' + inst.Id
+        )
       );
-      instancesToUpdate.add(inst);
+    }
+    List<String> stored = WorkflowBulkOffload.save(items);
+    List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < plan.instances.size(); i++) {
+      plan.instances[i].Input__c = stored[i];
+      instancesToUpdate.add(plan.instances[i]);
     }
     Database.update(instancesToUpdate, true, AccessLevel.SYSTEM_MODE);
     return instancesToUpdate;
