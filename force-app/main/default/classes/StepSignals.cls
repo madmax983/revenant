@@ -48,6 +48,19 @@ global inherited sharing class StepSignals {
   }
 
   /**
+   * @description Binds the reading instance for child outcomes. A child
+   * outcome comes from a child record of this instance, never from a signal.
+   * @param instanceId The reading instance Id.
+   * @param seededChildren In-memory child records for tests, or null.
+   */
+  public void bindChildren(
+    Id instanceId,
+    List<Workflow_Instance__c> seededChildren
+  ) {
+    this.childOutcomes.bindChildren(instanceId, seededChildren);
+  }
+
+  /**
    * @description Pre-loads the full pending set (without marking) so a bulk
    * child-outcome resolution avoids N+1 queries. Used by StepChildOutcomes.
    */
@@ -215,7 +228,8 @@ global inherited sharing class StepSignals {
 
   /**
    * @description Resolves the outcome of a single child (sub-workflow) by its key
-   * from the pending ChildCompleted/ChildFailed signals.
+   * from the child record. A pending ChildCompleted/ChildFailed signal wakes
+   * the parent. Its name and payload do not set the outcome.
    * @param childKey The child key to look up.
    * @return The child's outcome, or an empty (not-present) outcome when none is
    * pending.

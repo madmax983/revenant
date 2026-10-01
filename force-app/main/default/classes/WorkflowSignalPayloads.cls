@@ -15,8 +15,7 @@ public inherited sharing class WorkflowSignalPayloads {
   /**
    * @description Encodes a signal payload for storage. Every signal payload is
    * external input, so it is always encoded, also when it looks like an
-   * envelope. A child-completion payload is the child's stored output. The
-   * parent decodes it again only after it checks the child record (see
+   * envelope. A child outcome never comes from a signal payload (see
    * StepChildOutcomes), so a forged signal cannot decrypt ciphertext.
    * @param payload the signal payload
    * @return the stored form

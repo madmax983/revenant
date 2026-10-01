@@ -926,58 +926,6 @@ public class WorkflowPayloadCodecE2ETest {
   }
 
   @IsTest
-  static void largeFailedChildWrapperResolvesInOnePass() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowPayloadCodecs.setCodec(new ReverseCodec());
-      WorkflowEngine.disableQueueableInTest = true;
-      Workflow_Instance__c parent = new Workflow_Instance__c(
-        Workflow_Name__c = 'WorkflowPayloadCodecE2ETest.SecretWorkflow',
-        Correlation_Key__c = 'codec-parent-failed',
-        Active_Correlation_Key__c = 'codec-parent-failed',
-        Status__c = 'Suspended'
-      );
-      insert as system parent;
-      // The child output stays inline, but the wrapper around it is longer
-      // than the offload limit.
-      Workflow_Instance__c child = new Workflow_Instance__c(
-        Workflow_Name__c = 'WorkflowPayloadCodecE2ETest.ChildWorkflow',
-        Correlation_Key__c = 'codec-child-failed',
-        Status__c = 'Failed',
-        Error_Message__c = 'Child failed',
-        Parent_Instance__c = parent.Id,
-        Output__c = WorkflowPayloadCodecs.encode(
-          'a'.repeat(99950),
-          CodecContext.PayloadKind.STEP_OUTPUT
-        )
-      );
-      insert as system child;
-
-      Test.startTest();
-      WorkflowParentNotifier.notifyParentCompletion(child);
-      Test.stopTest();
-
-      Workflow_Signal__c sig = [
-        SELECT Payload__c
-        FROM Workflow_Signal__c
-        WHERE Signal_Name__c = 'ChildFailed:codec-child-failed'
-      ];
-      System.assert(
-        sig.Payload__c.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX),
-        'The engine offloads the encoded wrapper'
-      );
-      Map<String, Object> wrapper = (Map<String, Object>) JSON.deserializeUntyped(
-        WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
-      );
-      System.assertEquals('Failed', wrapper.get('status'));
-      System.assertEquals(
-        child.Output__c,
-        wrapper.get('output'),
-        'The wrapper carries the child stored output'
-      );
-    }
-  }
-
-  @IsTest
   static void failureDetailsFitTheField() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowPayloadCodecs.setCodec(new AesCodec());

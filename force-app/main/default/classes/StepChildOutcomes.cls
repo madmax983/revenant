@@ -1,13 +1,30 @@
 /**
  * @description Child (sub-workflow) outcome resolution for a step execution,
- * split out of StepSignals. Resolves ChildCompleted/ChildFailed signals for one
- * or many child keys, bulk-resolving offloaded payloads to avoid N+1 queries.
- * Holds a back-reference to its owning StepSignals for the signal reads and the
- * matched/observed bookkeeping those reads drive.
+ * split out of StepSignals. A `ChildCompleted:<key>` or `ChildFailed:<key>`
+ * signal only wakes the parent. Any caller can send these names, so the signal
+ * name and payload prove nothing. The outcome comes from the child record of
+ * the reading instance: its status gives the type, and its stored output is
+ * resolved and decoded. One query serves all keys. Holds a back-reference to
+ * its owning StepSignals for the signal reads and the matched bookkeeping.
  */
 public inherited sharing class StepChildOutcomes {
+  // A child in one of these statuses has a final result to read.
+  private static final Set<String> OUTCOME_STATUSES = new Set<String>{
+    'Completed',
+    'Failed',
+    'Compensated',
+    'Cancelled',
+    'ContinuedAsNew',
+    'CompensationFailed'
+  };
+  private static final Integer ERROR_LIMIT = 10000;
+
   /** The owning signal accessor, for signal reads and match bookkeeping. */
   private final StepSignals signals;
+  /** The reading instance. Its children are the only trusted source. */
+  private Id instanceId;
+  /** In-memory children for unit tests. Null means read the records. */
+  private List<Workflow_Instance__c> seededChildren;
 
   /**
    * @description Constructs the child-outcome resolver bound to its signal
@@ -19,11 +36,24 @@ public inherited sharing class StepChildOutcomes {
   }
 
   /**
-   * @description Resolves the outcome of a single child (sub-workflow) by its key
-   * from the pending ChildCompleted/ChildFailed signals.
+   * @description Binds the reading instance. A seeded list replaces the child
+   * query (unit tests: 0 DML, 0 SOQL).
+   * @param instanceId The reading instance Id.
+   * @param seededChildren In-memory child records, or null to query.
+   */
+  public void bindChildren(
+    Id instanceId,
+    List<Workflow_Instance__c> seededChildren
+  ) {
+    this.instanceId = instanceId;
+    this.seededChildren = seededChildren;
+  }
+
+  /**
+   * @description Resolves the outcome of a single child (sub-workflow) by its key.
    * @param childKey The child key to look up.
-   * @return The child's outcome, or an empty (not-present) outcome when none is
-   * pending.
+   * @return The child's outcome, or an empty (not-present) outcome when the
+   * child has no final result for this instance.
    */
   public StepContext.ChildOutcome getChildOutcome(String childKey) {
     List<StepContext.ChildOutcome> outcomes = this.getChildOutcomes(
@@ -36,8 +66,9 @@ public inherited sharing class StepChildOutcomes {
   }
 
   /**
-   * @description Resolves the outcomes of several children in one pass, bulk-
-   * resolving their payloads to avoid N+1 signal queries.
+   * @description Resolves the outcomes of several children in one pass. A key
+   * has an outcome only when a child signal is pending for it and a child of
+   * this instance has a final status.
    * @param childKeys The child keys to resolve, in order.
    * @return A list of outcomes aligned to childKeys; blank/unknown keys yield an
    * empty (not-present) outcome.
@@ -50,208 +81,140 @@ public inherited sharing class StepChildOutcomes {
     if (childKeys == null || childKeys.isEmpty()) {
       return outcomes;
     }
-    ChildResolution res = new ChildResolution();
-    // Step 1: probe each key's signals and collect raw payloads to resolve.
-    for (Integer i = 0; i < childKeys.size(); i++) {
-      collectChildPayloads(i, childKeys[i], res);
-    }
-    // Step 2: bulk-resolve the collected payloads and index them by key.
-    resolveChildPayloads(res);
-    // Step 3: construct the ChildOutcome list.
-    for (Integer i = 0; i < childKeys.size(); i++) {
-      outcomes.add(buildChildOutcome(i, childKeys[i], res));
+    Map<String, String> woken = wokenKeys(childKeys);
+    Map<String, Workflow_Instance__c> children = finishedChildren(woken);
+    Map<String, String> outputs = resolveOutputs(children);
+    for (String childKey : childKeys) {
+      String normKey = WorkflowKeys.normalizeKey(childKey);
+      Workflow_Instance__c child = woken.containsKey(normKey)
+        ? children.get(normKey)
+        : null;
+      outcomes.add(
+        child == null
+          ? new StepContext.ChildOutcome()
+          : toOutcome(child, outputs.get(normKey))
+      );
     }
     return outcomes;
   }
 
-  // Mutable accumulator for the three phases of getChildOutcomes so no phase
-  // helper needs a long parameter list.
-  private class ChildResolution {
-    List<String> rawPayloads = new List<String>();
-    List<Id> signalIds = new List<Id>();
-    List<String> childKeys = new List<String>();
-    List<Integer> targetKeyIndex = new List<Integer>();
-    List<String> targetType = new List<String>(); // 'completed' or 'failedOutput'
-    // Pre-deserialized maps for failed signals so we don't deserialize twice.
-    Map<Integer, Map<String, Object>> failedDataMap = new Map<Integer, Map<String, Object>>();
-    Map<Integer, String> resolvedCompleted = new Map<Integer, String>();
-    Map<Integer, String> resolvedFailedOutput = new Map<Integer, String>();
-
-    // The signal name gives the child key and the payload type.
-    void addRawPayload(
-      String payload,
-      StepContext.Signal sig,
-      Integer keyIndex
-    ) {
-      Boolean completed = sig.name.startsWith('ChildCompleted:');
-      this.rawPayloads.add(payload);
-      this.signalIds.add(sig.signalId);
-      this.childKeys.add(sig.name.substringAfter(':'));
-      this.targetKeyIndex.add(keyIndex);
-      this.targetType.add(completed ? 'completed' : 'failedOutput');
-    }
-  }
-
-  /**
-   * @description Probes a single child key's completed/failed signals, marking
-   * them observed and collecting their raw payloads for bulk resolution.
-   * @param i The child key index.
-   * @param childKey The child key to probe.
-   * @param res The shared resolution accumulator.
-   */
-  private void collectChildPayloads(
-    Integer i,
-    String childKey,
-    ChildResolution res
-  ) {
-    if (String.isBlank(childKey)) {
-      return;
-    }
-    String completedName = 'ChildCompleted:' + childKey;
-    String failedName = 'ChildFailed:' + childKey;
-    StepContext.Signal completedSig = signals.getSignal(completedName);
-    StepContext.Signal failedSig = signals.getSignal(failedName);
-
-    if (completedSig.isPresent() || failedSig.isPresent()) {
-      signals.markMatched(new StepContext.Signal(null, completedName, null));
-      signals.markMatched(new StepContext.Signal(null, failedName, null));
-    }
-
-    if (completedSig.isPresent()) {
-      if (String.isNotBlank(completedSig.payload)) {
-        res.addRawPayload(completedSig.payload, completedSig, i);
+  // Probes the wake signals of each key and marks them matched. Returns the
+  // keys that have a pending signal (normalized key to given key). The signal
+  // payload is not read.
+  private Map<String, String> wokenKeys(List<String> childKeys) {
+    Map<String, String> woken = new Map<String, String>();
+    for (String childKey : childKeys) {
+      if (String.isBlank(childKey)) {
+        continue;
       }
-    } else if (failedSig.isPresent() && String.isNotBlank(failedSig.payload)) {
-      collectFailedPayload(i, failedSig, res);
-    }
-  }
-
-  /**
-   * @description Deserializes a failed child signal's payload and, when its
-   * output is a String, queues that output for bulk resolution.
-   * @param i The child key index.
-   * @param failedSig The failed child signal.
-   * @param res The shared resolution accumulator.
-   */
-  private void collectFailedPayload(
-    Integer i,
-    StepContext.Signal failedSig,
-    ChildResolution res
-  ) {
-    try {
-      Map<String, Object> data = (Map<String, Object>) JSON.deserializeUntyped(
-        failedSig.payload
-      );
-      res.failedDataMap.put(i, data);
-      Object outputObj = data.get('output');
-      if (outputObj instanceof String) {
-        res.addRawPayload((String) outputObj, failedSig, i);
+      String completedName = 'ChildCompleted:' + childKey;
+      String failedName = 'ChildFailed:' + childKey;
+      if (
+        signals.getSignal(completedName).isPresent() ||
+        signals.getSignal(failedName).isPresent()
+      ) {
+        woken.put(WorkflowKeys.normalizeKey(childKey), childKey);
+        signals.markMatched(new StepContext.Signal(null, completedName, null));
+        signals.markMatched(new StepContext.Signal(null, failedName, null));
       }
-    } catch (Exception ignored) {
-      // Deserialization failure will be handled during outcome construction
     }
+    return woken;
   }
 
-  /**
-   * @description Bulk-resolves the collected child payloads and indexes them by
-   * key index and type. An encoded payload is decoded only when it is the
-   * verified child's own output (see WorkflowChildPayloadProvenance).
-   * @param res The shared resolution accumulator to populate.
-   */
-  private void resolveChildPayloads(ChildResolution res) {
-    if (res.rawPayloads.isEmpty()) {
-      return;
+  // Loads the children of the reading instance that have a final status, by
+  // normalized key. A child key is its correlation key, or its Id when the key
+  // is blank. A later child wins when two children share a key.
+  private Map<String, Workflow_Instance__c> finishedChildren(
+    Map<String, String> woken
+  ) {
+    Map<String, Workflow_Instance__c> byKey = new Map<String, Workflow_Instance__c>();
+    if (woken.isEmpty()) {
+      return byKey;
     }
-    List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-      WorkflowChildPayloadProvenance.trustedOnly(
-        res.rawPayloads,
-        res.signalIds,
-        res.childKeys
-      )
+    Set<String> keys = woken.keySet();
+    for (Workflow_Instance__c child : childRecords(woken.values())) {
+      if (!OUTCOME_STATUSES.contains(child.Status__c)) {
+        continue;
+      }
+      if (
+        child.Id != null && keys.contains(WorkflowKeys.normalizeKey(child.Id))
+      ) {
+        byKey.put(WorkflowKeys.normalizeKey(child.Id), child);
+      }
+      if (
+        String.isNotBlank(child.Correlation_Key__c) &&
+        keys.contains(WorkflowKeys.normalizeKey(child.Correlation_Key__c))
+      ) {
+        byKey.put(WorkflowKeys.normalizeKey(child.Correlation_Key__c), child);
+      }
+    }
+    return byKey;
+  }
+
+  // The given keys keep their case: an Id key is case-sensitive.
+  private List<Workflow_Instance__c> childRecords(List<String> keys) {
+    if (seededChildren != null) {
+      return seededChildren;
+    }
+    if (instanceId == null) {
+      return new List<Workflow_Instance__c>();
+    }
+    Set<Id> idKeys = new Set<Id>();
+    for (String key : keys) {
+      if (key instanceof Id) {
+        idKeys.add(key);
+      }
+    }
+    return [
+      SELECT Id, Correlation_Key__c, Status__c, Error_Message__c, Output__c
+      FROM Workflow_Instance__c
+      WHERE
+        Parent_Instance__c = :instanceId
+        AND (Correlation_Key__c IN :keys
+        OR Id IN :idKeys)
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate ASC, Id ASC
+    ];
+  }
+
+  // Resolves offload markers and decodes the stored outputs of the verified
+  // children in one pass. Only a verified child record gives a stored value.
+  private static Map<String, String> resolveOutputs(
+    Map<String, Workflow_Instance__c> children
+  ) {
+    List<String> keys = new List<String>();
+    List<String> stored = new List<String>();
+    for (String key : children.keySet()) {
+      if (String.isNotBlank(children.get(key).Output__c)) {
+        keys.add(key);
+        stored.add(children.get(key).Output__c);
+      }
+    }
+    Map<String, String> outputs = new Map<String, String>();
+    if (stored.isEmpty()) {
+      return outputs;
+    }
+    List<String> resolved = WorkflowPayloadOffload.resolvePayloads(stored);
+    for (Integer i = 0; i < keys.size(); i++) {
+      outputs.put(keys[i], resolved[i]);
+    }
+    return outputs;
+  }
+
+  // The status of the record decides the outcome type.
+  private static StepContext.ChildOutcome toOutcome(
+    Workflow_Instance__c child,
+    String output
+  ) {
+    if (child.Status__c == 'Completed') {
+      return new StepContext.ChildOutcome('Completed', null, output);
+    }
+    return new StepContext.ChildOutcome(
+      child.Status__c,
+      child.Error_Message__c == null
+        ? null
+        : child.Error_Message__c.left(ERROR_LIMIT),
+      output
     );
-    for (Integer j = 0; j < resolvedPayloads.size(); j++) {
-      // An untrusted stored form stays as the text that was sent.
-      if (resolvedPayloads[j] == null) {
-        resolvedPayloads[j] = res.rawPayloads[j];
-      }
-    }
-    for (Integer j = 0; j < resolvedPayloads.size(); j++) {
-      Integer keyIdx = res.targetKeyIndex[j];
-      String type = res.targetType[j];
-      if (type == 'completed') {
-        res.resolvedCompleted.put(keyIdx, resolvedPayloads[j]);
-      } else if (type == 'failedOutput') {
-        res.resolvedFailedOutput.put(keyIdx, resolvedPayloads[j]);
-      }
-    }
-  }
-
-  /**
-   * @description Constructs the ChildOutcome for one child key from its probed
-   * signals and the bulk-resolved payloads.
-   * @param i The child key index.
-   * @param childKey The child key.
-   * @param res The shared resolution accumulator.
-   * @return The resolved child outcome, or an empty outcome when absent.
-   */
-  private StepContext.ChildOutcome buildChildOutcome(
-    Integer i,
-    String childKey,
-    ChildResolution res
-  ) {
-    if (String.isBlank(childKey)) {
-      return new StepContext.ChildOutcome();
-    }
-    StepContext.Signal completedSig = signals.getSignal(
-      'ChildCompleted:' + childKey
-    );
-    StepContext.Signal failedSig = signals.getSignal('ChildFailed:' + childKey);
-
-    if (completedSig.isPresent()) {
-      String resolvedVal = res.resolvedCompleted.containsKey(i)
-        ? res.resolvedCompleted.get(i)
-        : completedSig.payload;
-      return new StepContext.ChildOutcome('Completed', null, resolvedVal);
-    }
-    if (!failedSig.isPresent()) {
-      return new StepContext.ChildOutcome();
-    }
-    if (String.isBlank(failedSig.payload)) {
-      return new StepContext.ChildOutcome('Failed', null, null);
-    }
-    if (!res.failedDataMap.containsKey(i)) {
-      return new StepContext.ChildOutcome('Failed', failedSig.payload, null);
-    }
-    return buildFailedOutcome(i, res);
-  }
-
-  /**
-   * @description Builds a failed ChildOutcome from the pre-deserialized failure
-   * data, resolving its output payload when present.
-   * @param i The child key index.
-   * @param res The shared resolution accumulator.
-   * @return The failed child outcome.
-   */
-  private StepContext.ChildOutcome buildFailedOutcome(
-    Integer i,
-    ChildResolution res
-  ) {
-    Map<String, Object> data = res.failedDataMap.get(i);
-    String status = data.get('status') != null
-      ? String.valueOf(data.get('status'))
-      : null;
-    String errorMessage = data.get('errorMessage') != null
-      ? String.valueOf(data.get('errorMessage'))
-      : null;
-    Object outputObj = data.get('output');
-    String outputVal = null;
-    if (outputObj instanceof String) {
-      outputVal = res.resolvedFailedOutput.containsKey(i)
-        ? res.resolvedFailedOutput.get(i)
-        : (String) outputObj;
-    } else if (outputObj != null) {
-      outputVal = JSON.serialize(outputObj);
-    }
-    return new StepContext.ChildOutcome(status, errorMessage, outputVal);
   }
 }
