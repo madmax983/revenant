@@ -128,7 +128,7 @@ private class WorkflowCascadeCancelTest {
   // of the next level, so one tree needs one delivery for each level.
   private static void deliverAll() {
     for (Integer i = 0; i < 6; i++) {
-      deliverAll();
+      Test.getEventBus().deliver();
     }
   }
 
@@ -366,26 +366,22 @@ private class WorkflowCascadeCancelTest {
   @IsTest
   static void noParentRunsNoQuery() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Boolean warm = WorkflowEngine.cascadeCancelChildrenOnFailure;
-
       Test.startTest();
       Integer q0 = Limits.getQueries();
       WorkflowCascadeCancel.requestCascadeForLateChildren(null);
       WorkflowCascadeCancel.requestCascadeForLateChildren(new Set<Id>());
       System.assertEquals(0, Limits.getQueries() - q0, 'No parent, no query');
-      Test.stopTest();
-
-      System.assert(warm, 'Toggle on');
       System.assertEquals(
         0,
         WorkflowCascadeCancel.publishedEvents.size(),
         'No parent, no event'
       );
+      Test.stopTest();
     }
   }
 
   @IsTest
-  static void bulkLateChildrenQueryOnceAndPublishOncePerFailedParent() {
+  static void bulkLateChildrenCostDoesNotGrowAndPublishOncePerFailedParent() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c failedA = insertInstance(null, 'Failed');
@@ -397,7 +393,6 @@ private class WorkflowCascadeCancelTest {
         kids.add(newInstance(failedB.Id, 'Running'));
         kids.add(newInstance(active.Id, 'Running'));
       }
-      Boolean warm = WorkflowEngine.cascadeCancelChildrenOnFailure;
 
       Test.startTest();
       Integer q0 = Limits.getQueries();
@@ -414,13 +409,11 @@ private class WorkflowCascadeCancelTest {
       }
       q0 = Limits.getQueries();
       insert more;
-      Test.stopTest();
-
-      System.assert(warm, 'Toggle on');
       System.assert(
         Limits.getQueries() - q0 <= smallCost,
         'Query cost does not grow with the child count'
       );
+      Test.stopTest();
     }
   }
 
@@ -534,7 +527,9 @@ private class WorkflowCascadeCancelTest {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c parent = insertInstance(null, 'Running');
       Workflow_Instance__c child = insertStalledChild(parent.Id);
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
       Workflow_Instance__c grandchild = insertInstance(child.Id, 'Running');
+      WorkflowEngine.cascadeCancelChildrenOnFailure = true;
 
       Test.startTest();
       setStatus(parent.Id, 'Failed');

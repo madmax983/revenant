@@ -5,12 +5,13 @@
  * Flow:
  * 1. `WorkflowInstanceTrigger` (after update) calls {@link requestCascade} for
  *    each instance that enters `Failed`, `Compensated` or `CompensationFailed`.
- *    (After insert) it calls {@link requestCascadeForLateChildren} for the
- *    parents of new children. A parent that already failed gets an event, so a
- *    child that commits after the pass is cancelled too (issue #241).
+ *    After insert, it calls {@link requestCascadeForLateChildren} for the
+ *    parents of the new children. It requests a cascade for a parent that
+ *    already failed. The pass then cancels a child that commits late
+ *    (issue #241).
  * 2. {@link requestCascade} publishes one `CASCADE_CANCEL` `Workflow_Event__e`
- *    for each such parent. It runs no query. The event is `PublishAfterCommit`: a rolled-back failure sends
- *    no event.
+ *    for each such parent. It runs no query. The event is `PublishAfterCommit`:
+ *    a rolled-back failure sends no event.
  * 3. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
  *    transaction with its own governor limits.
  * 4. Each pass walks one page of the cancel traversal: the active children of a
@@ -104,8 +105,8 @@ public inherited sharing class WorkflowCascadeCancel {
   /**
    * @description Requests a cascade for each parent that is already in a
    * failure state. A child was linked to it after its cascade pass (issue
-   * #241). It runs one query, and none when `parentIds` is empty. The paged
-   * pass then cancels the child.
+   * #241). It runs one query, and none when `parentIds` is empty or the SOQL
+   * budget is spent. The paged pass then cancels the child.
    * @param parentIds parents of the new children
    */
   public static void requestCascadeForLateChildren(Set<Id> parentIds) {
@@ -114,6 +115,13 @@ public inherited sharing class WorkflowCascadeCancel {
       parentIds.isEmpty() ||
       !WorkflowEngine.cascadeCancelChildrenOnFailure
     ) {
+      return;
+    }
+    if (Limits.getQueries() >= Limits.getLimitQueries()) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Late child cascade check skipped: SOQL budget spent'
+      );
       return;
     }
     try {

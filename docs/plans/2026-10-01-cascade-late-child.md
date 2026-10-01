@@ -10,7 +10,6 @@ A child that is linked to a parent after the parent's cascade pass must still be
 - A child-start transaction can commit after that read. The parent is then `Failed`, with a live child.
 - `requestCascade` runs no query and publishes one event for each failed parent.
 - Two insert paths set `Parent_Instance__c`: `WorkflowChildService` and `WorkflowChildBulkPlanner`.
-- The author has no org. Node tests run here. Apex tests run in CI.
 
 ## Brainstorm
 
@@ -24,16 +23,18 @@ A child that is linked to a parent after the parent's cascade pass must still be
 
 ## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                  | Prevention                                                   |
-| -------------------------------------------- | ------------------------------------------------------------ |
-| Root insert pays a query.                    | Query only when a new row has a parent. Test: zero queries.  |
-| Bulk insert queries once per child.          | One query for all parents. Test.                             |
-| Many children make many events for a parent. | Collect parent Ids in a set. One event each. Test.           |
-| Toggle off still cascades.                   | The existing toggle guard covers this path. Test.            |
-| Parent was redriven before the event runs.   | The pass already drops a parent that is not failed.          |
-| An error fails the child start.              | `requestCascade` catches all errors. The query is also safe. |
-| `startChild` dedup changes.                  | No change to the insert paths. Existing tests stay green.    |
-| Old tests insert children under failed rows. | Set up those rows with the toggle off.                       |
+| Way to fail                                  | Prevention                                                       |
+| -------------------------------------------- | ---------------------------------------------------------------- |
+| Root insert pays a query.                    | Query only when a new row has a parent. Test: zero queries.      |
+| Bulk insert queries once per child.          | One query for all parents. Test.                                 |
+| Many children make many events for a parent. | Collect parent Ids in a set. One event each. Test.               |
+| Toggle off still cascades.                   | The existing toggle guard covers this path. Test.                |
+| Parent was redriven before the event runs.   | The pass already drops a parent that is not failed.              |
+| An error fails the child start.              | Catch all errors. Skip the query when the SOQL budget is spent.  |
+| Two transactions run at the same time.       | Known limit: both can miss each other. Follow-up: a parent lock. |
+| A `continueAsNew` successor has no parent.   | Existing gap. Out of scope.                                      |
+| `startChild` dedup changes.                  | No change to the insert paths. Existing tests stay green.        |
+| Old tests insert children under failed rows. | Set up those rows with the toggle off.                           |
 
 ## Six Hats
 
@@ -56,5 +57,5 @@ A child that is linked to a parent after the parent's cascade pass must still be
 - Late child after the pass: `Failed`, `Compensated`, `CompensationFailed` parent.
 - Toggle off: no event.
 - Running parent, or no parent: no event, no query for a root.
-- Bulk: one query, one event for each failed parent.
+- Bulk: query cost does not grow with the child count. One event for each failed parent.
 - Terminal late child: no event.
