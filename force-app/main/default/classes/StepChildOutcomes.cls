@@ -119,10 +119,10 @@ public inherited sharing class StepChildOutcomes {
       }
       String completedName = 'ChildCompleted:' + childKey;
       String failedName = 'ChildFailed:' + childKey;
-      if (
-        signals.getSignal(completedName).isPresent() ||
-        signals.getSignal(failedName).isPresent()
-      ) {
+      // Read both names, so a branch tracks every row that it claimed.
+      Boolean completedPresent = signals.getSignal(completedName).isPresent();
+      Boolean failedPresent = signals.getSignal(failedName).isPresent();
+      if (completedPresent || failedPresent) {
         woken.put(WorkflowKeys.normalizeKey(childKey), childKey);
         signals.markMatched(new StepContext.Signal(null, completedName, null));
         signals.markMatched(new StepContext.Signal(null, failedName, null));

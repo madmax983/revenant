@@ -281,6 +281,26 @@ private class StepChildOutcomesProvenanceTest {
   }
 
   @IsTest
+  static void bothWakeSignalsOfAKeyAreTracked() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      StepContext.Signal done = sig('ChildCompleted:k1', null);
+      StepContext.Signal failed = sig('ChildFailed:k1', null);
+      StepContext ctx = memContext(
+        new List<Workflow_Instance__c>{
+          memChild('k1', 'Completed', null, null)
+        },
+        new List<StepContext.Signal>{ done, failed }
+      );
+
+      ctx.signals().getChildOutcome('k1');
+
+      Set<Id> ids = ctx.signals().getConsumedSignalIds();
+      System.assert(ids.contains(done.signalId), 'Completed row is tracked');
+      System.assert(ids.contains(failed.signalId), 'Failed row is tracked');
+    }
+  }
+
+  @IsTest
   static void everyFinalStatusGivesAnOutcomeAndOthersGiveNone() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       for (
