@@ -1,0 +1,435 @@
+/**
+ * @description Tests for the bounded history reads (issue #261). The detail pane
+ * reads a bounded window of rows. The first compensation step uses the last
+ * Completed visit of the forward step.
+ */
+@IsTest
+private class WorkflowBoundedHistoryReadTest {
+  private static final String FWD = 'Fwd.Step';
+  private static final String COMP = 'Fwd.Step_Compensate';
+  private static final String CAN_START = 'Test.Workflow';
+
+  @TestSetup
+  static void seedLongHistory() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = CAN_START,
+      Status__c = 'Running',
+      Correlation_Key__c = 'long-history'
+    );
+    insert inst;
+    insertRows(inst.Id, 'Loop.Step', 'Completed', 5000, 0);
+  }
+
+  private static Workflow_Instance__c longInstance() {
+    return [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = 'long-history'
+    ];
+  }
+
+  // Inserts `count` rows in chunks. Input/Output carry the row number.
+  private static void insertRows(
+    Id instanceId,
+    String stepName,
+    String status,
+    Integer count,
+    Integer firstNumber
+  ) {
+    List<Workflow_Step_Execution__c> chunk = new List<Workflow_Step_Execution__c>();
+    for (Integer i = 0; i < count; i++) {
+      chunk.add(
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = instanceId,
+          Step_Name__c = stepName,
+          Status__c = status,
+          Input__c = 'in-' + (firstNumber + i),
+          Output__c = 'out-' + (firstNumber + i)
+        )
+      );
+      if (chunk.size() == 500) {
+        insert chunk;
+        chunk = new List<Workflow_Step_Execution__c>();
+      }
+    }
+    if (!chunk.isEmpty()) {
+      insert chunk;
+    }
+  }
+
+  private static Workflow_Instance__c compensatingInstance() {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = CAN_START,
+      Status__c = 'Compensating',
+      Compensation_Stack__c = JSON.serialize(new List<String>{ FWD })
+    );
+    insert inst;
+    return inst;
+  }
+
+  // Two visits of the forward step: a Completed one, then a Failed one.
+  private static void seedLoopedForwardStep(Id instanceId) {
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = FWD,
+      Status__c = 'Completed',
+      Input__c = 'in-done',
+      Output__c = 'out-done'
+    );
+    insert new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = FWD,
+      Status__c = 'Failed',
+      Input__c = 'in-failed',
+      Output__c = 'out-failed'
+    );
+  }
+
+  private static Workflow_Step_Execution__c compensationRow(Id instanceId) {
+    return [
+      SELECT Input__c, Output__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :COMP
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+  }
+
+  // ============================================================
+  // Finding 1: the detail pane
+  // ============================================================
+
+  @IsTest
+  static void detailPaneOpensWithTenThousandRows() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = longInstance();
+      insertRows(inst.Id, 'Loop.Step', 'Completed', 5000, 5000);
+      Assert.areEqual(
+        10000,
+        [
+          SELECT COUNT()
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c = :inst.Id
+        ],
+        'The fixture has 10,000 rows'
+      );
+
+      Test.startTest();
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+      Test.stopTest();
+
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Assert.areEqual(
+        WorkflowInstanceDetailService.MAX_STEP_ROWS,
+        steps.size(),
+        'The pane returns a bounded window'
+      );
+      Assert.areEqual(
+        true,
+        details.get('stepsTruncated'),
+        'The pane says the window is partial'
+      );
+      Assert.areEqual(
+        10000,
+        details.get('stepCount'),
+        'The pane reports the row count'
+      );
+    }
+  }
+
+  @IsTest
+  static void detailWindowHoldsTheNewestRowsInOrder() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = longInstance();
+      insertRows(inst.Id, 'Loop.Step', 'Completed', 1000, 5000);
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Workflow_Step_Execution__c last = steps[steps.size() - 1];
+      Assert.areEqual(
+        'in-5999',
+        last.Input__c,
+        'The newest row is last (ascending order)'
+      );
+      Assert.areEqual(
+        'in-5950',
+        steps[steps.size() - WorkflowInstanceDetailService.LONG_TEXT_ROWS].Input__c,
+        'The rows keep ascending order'
+      );
+      Assert.isNull(steps[0].Input__c, 'The oldest row has no long text');
+    }
+  }
+
+  @IsTest
+  static void longTextIsReadForTheNewestRowsOnly() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = longInstance();
+      insertRows(inst.Id, 'Loop.Step', 'Completed', 600, 5000);
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Integer withText = 0;
+      for (Workflow_Step_Execution__c step : steps) {
+        if (step.Input__c != null || step.Output__c != null) {
+          withText++;
+        }
+      }
+      Assert.areEqual(
+        WorkflowInstanceDetailService.LONG_TEXT_ROWS,
+        withText,
+        'Only the newest rows carry Input and Output'
+      );
+      Assert.isNotNull(
+        steps[steps.size() - 1].Output__c,
+        'The newest row carries its Output'
+      );
+      Assert.isNull(
+        steps[0].Output__c,
+        'An older row of the window has no Output'
+      );
+    }
+  }
+
+  @IsTest
+  static void shortHistoryIsNotTruncated() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Running'
+      );
+      insert inst;
+      insertRows(inst.Id, 'Short.Step', 'Completed', 3, 0);
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Assert.areEqual(3, steps.size(), 'All rows are returned');
+      Assert.areEqual(false, details.get('stepsTruncated'), 'Not partial');
+      Assert.areEqual(3, details.get('stepCount'), 'Row count');
+      Assert.areEqual('in-0', steps[0].Input__c, 'Ascending order');
+      Assert.areEqual('out-2', steps[2].Output__c, 'Long text is present');
+    }
+  }
+
+  @IsTest
+  static void parkedStepOutsideTheWindowStillGivesTheWaitDescriptor() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Suspended'
+      );
+      insert inst;
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = 'Park.Step',
+        Status__c = 'Pending',
+        Output__c = '{"waitingForApproval":true,"approvalKey":"k1","approvalRole":"r1"}'
+      );
+      insertRows(inst.Id, 'Loop.Step', 'Completed', 700, 0);
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+      Map<String, Object> descriptor = (Map<String, Object>) details.get(
+        'waitDescriptor'
+      );
+      Assert.isNotNull(descriptor, 'The parked step is still read');
+      Assert.areEqual(
+        WorkflowWaitDescriptorService.TYPE_APPROVAL,
+        descriptor.get('type'),
+        'The wait is an approval'
+      );
+    }
+  }
+
+  // ============================================================
+  // Finding 2: seed from the last Completed visit
+  // ============================================================
+
+  @IsTest
+  static void singlePathSeedsFromTheLastCompletedVisit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      seedLoopedForwardStep(inst.Id);
+
+      WorkflowCompensation.preCreateFirstCompensationStep(inst);
+
+      Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
+      Assert.areEqual('in-done', seeded.Input__c, 'Input of Completed visit');
+      Assert.areEqual('out-done', seeded.Output__c, 'Output of Completed');
+    }
+  }
+
+  @IsTest
+  static void bulkPathSeedsFromTheLastCompletedVisit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c first = compensatingInstance();
+      Workflow_Instance__c second = compensatingInstance();
+      seedLoopedForwardStep(first.Id);
+      seedLoopedForwardStep(second.Id);
+
+      WorkflowCompensation.preCreateFirstCompensationSteps(
+        new List<Workflow_Instance__c>{ first, second }
+      );
+
+      for (Workflow_Instance__c inst : new List<Workflow_Instance__c>{ first, second }) {
+        Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
+        Assert.areEqual('in-done', seeded.Input__c, 'Input of Completed');
+        Assert.areEqual('out-done', seeded.Output__c, 'Output of Completed');
+      }
+    }
+  }
+
+  @IsTest
+  static void laterCompletedVisitWinsOverAnEarlierOne() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = FWD,
+        Status__c = 'Completed',
+        Input__c = 'in-1',
+        Output__c = 'out-1'
+      );
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = FWD,
+        Status__c = 'Completed',
+        Input__c = 'in-2',
+        Output__c = 'out-2'
+      );
+
+      WorkflowCompensation.preCreateFirstCompensationStep(inst);
+
+      Assert.areEqual('in-2', compensationRow(inst.Id).Input__c, 'Last visit');
+    }
+  }
+
+  @IsTest
+  static void noCompletedVisitSeedsNothing() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = FWD,
+        Status__c = 'Failed',
+        Input__c = 'in-failed',
+        Output__c = 'out-failed'
+      );
+
+      WorkflowCompensation.preCreateFirstCompensationStep(inst);
+
+      Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
+      Assert.isNull(seeded.Input__c, 'A failed visit does not seed Input');
+      Assert.isNull(seeded.Output__c, 'A failed visit does not seed Output');
+    }
+  }
+
+  @IsTest
+  static void retryPathSeedsFromTheLastCompletedVisit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      seedLoopedForwardStep(inst.Id);
+
+      WorkflowCompensationStepLog.appendCompensationRetryStep(
+        inst,
+        new List<String>{ FWD }
+      );
+
+      Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
+      Assert.areEqual('Pending', seeded.Status__c, 'A new attempt');
+      Assert.areEqual('in-done', seeded.Input__c, 'Input of Completed');
+      Assert.areEqual('out-done', seeded.Output__c, 'Output of Completed');
+    }
+  }
+
+  @IsTest
+  static void bulkRetryPathSeedsFromTheLastCompletedVisit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      seedLoopedForwardStep(inst.Id);
+
+      WorkflowCompensationStepLog.appendCompensationRetrySteps(
+        new List<Workflow_Instance__c>{ inst }
+      );
+
+      Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
+      Assert.areEqual('in-done', seeded.Input__c, 'Input of Completed');
+      Assert.areEqual('out-done', seeded.Output__c, 'Output of Completed');
+    }
+  }
+
+  @IsTest
+  static void retryKeepsTheCheckpointOfTheFailedCompensation() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      seedLoopedForwardStep(inst.Id);
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = COMP,
+        Status__c = 'Failed',
+        Input__c = 'in-comp',
+        Output__c = 'out-checkpoint'
+      );
+
+      WorkflowCompensationStepLog.appendCompensationRetryStep(
+        inst,
+        new List<String>{ FWD }
+      );
+
+      Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
+      Assert.areEqual('Pending', seeded.Status__c, 'A new attempt');
+      Assert.areEqual('in-comp', seeded.Input__c, 'The checkpoint input stays');
+      Assert.areEqual('out-checkpoint', seeded.Output__c, 'Checkpoint stays');
+    }
+  }
+
+  // ============================================================
+  // Finding 3: the visit read of the _Compensate rows
+  // ============================================================
+
+  @IsTest
+  static void visitCountAndReuseStillWorkAfterTheLightRead() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = compensatingInstance();
+      insertRows(inst.Id, COMP, 'Compensated', 2, 0);
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = COMP,
+        Status__c = 'Pending',
+        Input__c = 'in-pending',
+        Output__c = 'out-pending'
+      );
+      WorkflowCompensationRunner.CompensationRun run = new WorkflowCompensationRunner.CompensationRun();
+      run.instance = inst;
+      run.compensationStepLogName = COMP;
+      run.activeStepName = FWD;
+      run.forwardSourceInstanceId = inst.Id;
+
+      Boolean ready = WorkflowCompensationStepLog.prepareCompensationStepExec(
+        run
+      );
+
+      Assert.isTrue(ready, 'The pending attempt is reused');
+      Assert.areEqual(2, run.compensateVisit, 'Two prior visits');
+      Assert.areEqual('in-pending', run.stepExec.Input__c, 'Input is read');
+      Assert.areEqual('out-pending', run.stepExec.Output__c, 'Output is read');
+      Assert.areEqual('Running', run.stepExec.Status__c, 'Attempt runs');
+    }
+  }
+}
