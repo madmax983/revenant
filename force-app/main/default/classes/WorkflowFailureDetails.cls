@@ -86,6 +86,23 @@ public inherited sharing class WorkflowFailureDetails {
    * @return the value with plaintext failure data
    */
   public static String resolve(String details) {
+    return resolveWith(details, null);
+  }
+
+  /**
+   * @description Like {@link #resolve}, but checks record access first. The
+   * failure data is decoded only when the user can read the instance. Else it
+   * is the redaction placeholder (issue #243).
+   * @param details the stored Error_Details__c value
+   * @param instanceId the owner instance of the step execution
+   * @return the value with plaintext failure data, or the placeholder
+   */
+  public static String resolveForUser(String details, Id instanceId) {
+    return resolveWith(details, instanceId);
+  }
+
+  // A non-null instanceId turns on the record-access check.
+  private static String resolveWith(String details, Id instanceId) {
     Integer at = details == null ? -1 : details.lastIndexOf(SEPARATOR);
     if (at < 0) {
       return details;
@@ -96,6 +113,15 @@ public inherited sharing class WorkflowFailureDetails {
       stored.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX);
     if (!storedForm || WorkflowPayloadCodecs.isIdentity()) {
       return details;
+    }
+    if (
+      instanceId != null &&
+      !WorkflowPayloadAccess.readableIds(new Set<Id>{ instanceId })
+        .contains(instanceId)
+    ) {
+      return details.left(at) +
+        SEPARATOR +
+        WorkflowPayloadAccess.DENIED_PAYLOAD;
     }
     return details.left(at) +
       SEPARATOR +

@@ -26,7 +26,7 @@ public inherited sharing class WorkflowPayloadAccess {
      * @param instanceIds the instances whose payloads the call can decode
      */
     public Gate(Set<Id> instanceIds) {
-      this.instanceIds = instanceIds;
+      this.instanceIds = instanceIds == null ? new Set<Id>() : instanceIds;
     }
 
     /**

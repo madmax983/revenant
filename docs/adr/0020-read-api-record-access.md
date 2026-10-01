@@ -6,7 +6,7 @@
 
 ## Context
 
-`getStatus`, `getCausationLineage` and the status Flow action query in system mode. With a payload codec they return decoded payloads. Any user who can call them could read plaintext without record access.
+`getStatus`, `getCausationLineage`, `getStepError` and the status Flow action query in system mode. With a payload codec they return decoded payloads. Any user who can call them can read plaintext without record access.
 
 ## Options
 
@@ -20,13 +20,13 @@
 ## Decision
 
 1. `WorkflowPayloadAccess.Gate` checks read access one time for each call, on the first encoded value.
-2. Without access, the API returns `DENIED_PAYLOAD` (valid JSON) for output and progress.
+2. Without access, the API returns `DENIED_PAYLOAD` (valid JSON) for output, progress and `failureData`.
 3. The check runs on the text after file rehydration, so offloaded values are covered.
-4. Plaintext values and the identity codec skip the check. No new query.
+4. Plaintext values and the identity codec skip the check. No new query. The check protects decode only. This is the scope of the issue.
 5. No `global` change.
 
 ## Consequences
 
-- Each 200 instances cost one extra query, only with a codec.
+- The check costs one extra query for each 200 instances. It runs only with a codec.
 - An admin can limit access with sharing and object permission.
 - Status, error text and keys stay visible. They are not codec-protected.

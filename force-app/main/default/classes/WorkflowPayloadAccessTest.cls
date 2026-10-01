@@ -7,6 +7,14 @@ public class WorkflowPayloadAccessTest {
   private static final String SECRET = WorkflowPayloadCodecE2ETest.SECRET;
 
   private static User makeUser(String permSet) {
+    User u;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      u = insertUser(permSet);
+    }
+    return u;
+  }
+
+  private static User insertUser(String permSet) {
     Profile p = [SELECT Id FROM Profile WHERE Name = 'Standard User' LIMIT 1];
     String uniq = String.valueOf(Crypto.getRandomLong());
     User u = new User(
@@ -102,8 +110,11 @@ public class WorkflowPayloadAccessTest {
     Test.startTest();
     Integer before = Limits.getQueries();
     WorkflowStatusRead.getStatus(ids);
-    // Instance query + access query. No offload query.
-    System.assertEquals(2, Limits.getQueries() - before);
+    System.assertEquals(
+      2,
+      Limits.getQueries() - before,
+      'Instance query and one access query'
+    );
     Test.stopTest();
   }
 
@@ -242,5 +253,34 @@ public class WorkflowPayloadAccessTest {
     System.assert(
       JSON.deserializeUntyped(WorkflowPayloadAccess.DENIED_PAYLOAD) != null
     );
+  }
+
+  // ─── step error ─────────────────────────────────────────────────────────
+
+  @IsTest
+  static void stepErrorRedactsFailureDataWithoutAccess() {
+    useCodec();
+    Id instId = completedInstance('"x"');
+    Workflow_Step_Execution__c exec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instId,
+      Step_Name__c = 'S',
+      Status__c = 'Failed',
+      Retry_Count__c = 0,
+      Error_Details__c = 'boom\nfailureData: ' + encoded(SECRET)
+    );
+    insert exec;
+    System.assertEquals(
+      'boom\nfailureData: ' + SECRET,
+      WorkflowHistoryRead.getStepError(exec.Id),
+      'Admin reads plaintext'
+    );
+    User u = makeUser(null);
+    System.runAs(u) {
+      String text = WorkflowHistoryRead.getStepError(exec.Id);
+      System.assertEquals(
+        'boom\nfailureData: ' + WorkflowPayloadAccess.DENIED_PAYLOAD,
+        text
+      );
+    }
   }
 }

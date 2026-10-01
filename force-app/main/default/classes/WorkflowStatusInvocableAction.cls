@@ -151,8 +151,7 @@ global inherited sharing class WorkflowStatusInvocableAction {
       resolved
     );
 
-    // 5. Assemble correspondingly-ordered results. The gate redacts encoded
-    // payloads of instances that the user cannot read (issue #243).
+    // 5. Assemble correspondingly-ordered results.
     return assembleResults(resolved, dataByAttachment);
   }
 
@@ -358,6 +357,8 @@ global inherited sharing class WorkflowStatusInvocableAction {
     List<Workflow_Instance__c> resolved,
     Map<Id, String> dataByAttachment
   ) {
+    // The gate redacts encoded payloads of instances that the user cannot read
+    // (issue #243).
     List<StatusResult> results = new List<StatusResult>();
     Set<Id> ids = new Set<Id>();
     for (Workflow_Instance__c inst : resolved) {

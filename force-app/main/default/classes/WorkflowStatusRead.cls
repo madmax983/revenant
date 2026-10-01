@@ -5,8 +5,8 @@
  * {@link WorkflowStatusWinnerResolver} (preferring live/active runs and following
  * ContinuedAsNew chains) and projecting DTOs via {@link WorkflowStatusProjection}
  * (which rehydrates any offloaded `Output__c`). A user without read access to an
- * instance gets a redacted placeholder for its encoded output (issue #243). Read-only: a small constant number
- * of SOQL queries and zero DML. Extracted from `WorkflowEngine`; returns the
+ * instance gets a placeholder for its encoded output (issue #243). Read-only: a
+ * small constant number of SOQL queries and zero DML. Extracted from `WorkflowEngine`; returns the
  * resident public DTO `WorkflowEngine.WorkflowStatus`.
  */
 global inherited sharing class WorkflowStatusRead {

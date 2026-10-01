@@ -34,14 +34,15 @@
 | Lineage ancestor leaks.                             | Gate every ancestor Id. Test lineage.                   |
 | A user with access gets redacted.                   | Test with `Revenant_Operator`.                          |
 | More than 200 Ids break the query.                  | Chunk by 200.                                           |
-| The check adds SOQL when no codec is set.           | Lazy gate. Test: no extra query with identity codec.   |
+| The check adds SOQL when no codec is set.           | Lazy gate. Test: no extra query with identity codec.    |
 | Placeholder breaks a JSON parser.                   | Valid JSON, like the operator placeholder.              |
 | A cached result leaks to the next user.             | No static cache. The gate lives for one call.           |
+| `getStepError` decodes `failureData` without a check. | `resolveForUser` checks the parent instance. Test.     |
 
 ## Six Hats
 
 - **White:** Facts above. No `global` change. The manifest stays.
-- **Red:** An admin wants a hard guarantee, not advice.
+- **Red:** An admin needs a hard control, not advice.
 - **Black:** Extra SOQL cost. A user who cannot read status payloads gets a placeholder.
 - **Yellow:** One check point. Works with sharing changes. No new setup.
 - **Green:** Option B1 + B4 + B6 + B7.
