@@ -357,19 +357,20 @@ public class WorkflowParkedOutcomeTest {
     }
   }
 
+  // The sweep cannot start a worker per branch. Release drives the branches.
   @IsTest
-  static void testReleaseParallelKeepsTimer() {
+  static void testReleaseParallelRunsBranches() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      Datetime wake = futureWake();
-      Workflow_Instance__c inst = newInstance('DefinitionChanged', wake);
+      Workflow_Instance__c inst = newInstance(
+        'DefinitionChanged',
+        futureWake()
+      );
       inst.Current_Step__c = STEP + ',' + STEP_B;
       update inst;
       newStepExec(inst.Id);
       WorkflowDefinitionChangeService.release(inst.Id);
-      Workflow_Instance__c after = load(inst.Id);
-      System.assertEquals('Suspended', after.Status__c);
-      System.assertEquals(wake, after.Sleep_Until__c);
+      System.assertEquals('Running', load(inst.Id).Status__c);
     }
   }
 

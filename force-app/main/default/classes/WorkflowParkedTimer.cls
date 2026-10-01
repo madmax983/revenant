@@ -10,8 +10,9 @@
 public inherited sharing class WorkflowParkedTimer {
   /**
    * @description Sets the status of an instance that leaves a park: `Suspended`
-   * when it has a timer and no buffered signal, else `Running`.
-   * @param instance The parked instance, with Sleep_Until__c loaded.
+   * when it is serial, has a timer and no buffered signal, else `Running`.
+   * @param instance The parked instance, with Sleep_Until__c and
+   * Current_Step__c loaded.
    * @return True when the instance waits for its timer, so no step may run now.
    */
   public static Boolean settle(Workflow_Instance__c instance) {
@@ -23,13 +24,16 @@ public inherited sharing class WorkflowParkedTimer {
    * @description Sets the status of each instance that leaves a park. A signal
    * that arrived in the park stays `Received`, so the step must run and read
    * it. Costs one SOQL for all instances.
-   * @param instances The parked instances, with Sleep_Until__c loaded.
-   * @return The Ids of the instances that wait for their timer.
+   * @param instances The parked instances, with Sleep_Until__c and
+   * Current_Step__c loaded.
+   * @return The Ids of the serial instances that wait for their timer.
    */
   public static Set<Id> settleAll(List<Workflow_Instance__c> instances) {
     Set<Id> timed = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
-      if (inst.Sleep_Until__c != null) {
+      // A parallel instance has no worker that the sweep can start per branch.
+      // Release drives its open branches.
+      if (inst.Sleep_Until__c != null && !isParallel(inst)) {
         timed.add(inst.Id);
       }
     }
@@ -50,5 +54,10 @@ public inherited sharing class WorkflowParkedTimer {
       inst.Status__c = timed.contains(inst.Id) ? 'Suspended' : 'Running';
     }
     return timed;
+  }
+
+  private static Boolean isParallel(Workflow_Instance__c inst) {
+    return String.isNotBlank(inst.Current_Step__c) &&
+      inst.Current_Step__c.contains(',');
   }
 }

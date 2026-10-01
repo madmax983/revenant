@@ -51,7 +51,7 @@ A step can finish after its instance parks (`DefinitionChanged`, `Paused`). A wa
 ## Decision
 
 - FAIL from the parallel verdict ends the instance. A failed branch has no delivery. Release could not drive it. The test pins this choice.
-- A parallel sibling can delay a branch that the park stopped. A timer is one field for all branches. A later change can add a timer for each branch.
+- Only a serial instance waits for its timer on release. The sweep cannot start a worker for each branch of a parallel instance. Release drives the open branches, so a parallel sleep can end early. A later change can add a timer for each branch.
 - Hold has the same release gap. It uses the same helper.
 
 ## Steps
