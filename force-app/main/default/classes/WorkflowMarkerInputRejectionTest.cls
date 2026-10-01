@@ -383,7 +383,7 @@ public class WorkflowMarkerInputRejectionTest {
         new List<Workflow_Event__e>{
           new Workflow_Event__e(
             Workflow_Instance_Id__c = inst.Correlation_Key__c,
-            Event_Type__c = 'SIGNAL:ChildCompleted',
+            Event_Type__c = 'SIGNAL:ChildCompleted:k1',
             Payload__c = MARKER
           )
         }
@@ -400,8 +400,8 @@ public class WorkflowMarkerInputRejectionTest {
   }
 
   @IsTest
-  static void eventPathStillResumesWithMarkerPayload() {
-    Workflow_Instance__c inst = suspended('MarkerEventResume');
+  static void eventPathDropsMarkerResumeAndOrdinarySignal() {
+    Workflow_Instance__c inst = suspended('MarkerEventDrop');
     WorkflowEngine.disableQueueableInTest = true;
     Test.startTest();
     new WorkflowEventTriggerHandler(
@@ -410,16 +410,26 @@ public class WorkflowMarkerInputRejectionTest {
             Workflow_Instance_Id__c = String.valueOf(inst.Id),
             Event_Type__c = 'RESUME',
             Payload__c = MARKER
+          ),
+          new Workflow_Event__e(
+            Workflow_Instance_Id__c = inst.Correlation_Key__c,
+            Event_Type__c = 'SIGNAL:Approve',
+            Payload__c = MARKER
           )
         }
       )
       .handleAfterInsert();
     Test.stopTest();
-    Assert.areNotEqual(
+    Assert.areEqual(
       'Suspended',
       [SELECT Status__c FROM Workflow_Instance__c WHERE Id = :inst.Id]
       .Status__c,
-      'The event path must resume the instance.'
+      'A caller-published marker resume is dropped.'
+    );
+    Assert.areEqual(
+      0,
+      [SELECT COUNT() FROM Workflow_Signal__c],
+      'A caller-published marker signal is dropped.'
     );
   }
 }

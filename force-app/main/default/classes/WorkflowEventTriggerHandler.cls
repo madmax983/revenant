@@ -69,7 +69,23 @@ public inherited sharing class WorkflowEventTriggerHandler {
     }
   }
 
+  // Callers can publish events. Only an engine child completion event may
+  // carry an offload marker. The handler drops any other marker payload.
+  private static Boolean carriesForeignMarker(Workflow_Event__e event) {
+    String type = event.Event_Type__c;
+    Boolean childEvent =
+      type != null &&
+      (type.startsWith('SIGNAL:ChildCompleted:') ||
+      type.startsWith('SIGNAL:ChildFailed:'));
+    return !childEvent &&
+      String.isNotBlank(event.Payload__c) &&
+      event.Payload__c.startsWith(WorkflowPayloadCodecs.OFFLOAD_PREFIX);
+  }
+
   private void routeResume(Workflow_Event__e event) {
+    if (carriesForeignMarker(event)) {
+      return;
+    }
     if (processedResumeSignals >= MAX_RESUME_SIGNALS) {
       throttledEvents.add(
         new Workflow_Event__e(
@@ -103,6 +119,9 @@ public inherited sharing class WorkflowEventTriggerHandler {
   }
 
   private void routeSignal(Workflow_Event__e event) {
+    if (carriesForeignMarker(event)) {
+      return;
+    }
     if (processedResumeSignals >= MAX_RESUME_SIGNALS) {
       throttledEvents.add(
         new Workflow_Event__e(

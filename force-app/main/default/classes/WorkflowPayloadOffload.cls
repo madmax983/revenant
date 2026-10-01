@@ -428,23 +428,33 @@ public inherited sharing class WorkflowPayloadOffload {
       ]
       .ContentDocumentId;
 
-      ContentDocumentLink cdl = new ContentDocumentLink();
-      cdl.ContentDocumentId = docId;
-      cdl.LinkedEntityId = instanceId;
-      cdl.ShareType = 'V';
-      cdl.Visibility = 'InternalUsers';
-      try {
-        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
-      } catch (DmlException ignored) {
-        // Default visibility rejected; retry the link with AllUsers visibility.
-        cdl.Visibility = 'AllUsers';
-        Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
-      }
+      linkToOwner(docId, instanceId);
 
       return JSON.serialize(
         new Map<String, String>{ '$attachmentId' => docId }
       );
     }
     return textValue;
+  }
+
+  /**
+   * @description Links an offloaded file to an instance, so the instance can
+   * read it. Use it when a new instance inherits a marker.
+   * @param docId the ContentDocument Id of the file
+   * @param ownerId the instance that gets the link
+   */
+  public static void linkToOwner(Id docId, Id ownerId) {
+    ContentDocumentLink cdl = new ContentDocumentLink();
+    cdl.ContentDocumentId = docId;
+    cdl.LinkedEntityId = ownerId;
+    cdl.ShareType = 'V';
+    cdl.Visibility = 'InternalUsers';
+    try {
+      Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
+    } catch (DmlException ignored) {
+      // Default visibility rejected; retry the link with AllUsers visibility.
+      cdl.Visibility = 'AllUsers';
+      Database.insert(cdl, true, AccessLevel.SYSTEM_MODE);
+    }
   }
 }

@@ -108,7 +108,11 @@ public inherited sharing class WorkflowCompensationContext {
         )
       )
       .workflowInputJson(
-        WorkflowPayloadOffload.resolvePayload(instance.Input__c, instance.Id)
+        resolveEitherOwner(
+          instance.Input__c,
+          run.forwardSourceInstanceId,
+          instance.Id
+        )
       )
       .workflowVersion(
         instance.Definition_Version__c != null

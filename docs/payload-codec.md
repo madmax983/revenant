@@ -166,8 +166,9 @@ The engine wraps codec output in an envelope:
   at a stored value or a file.
 - The public start, signal, signal-or-start, resume, invocable and dashboard
   entry points reject input that starts with `{"$attachmentId":`. The
-  engine event path does not, because a child completion event carries a
-  marker. The link check on read protects that path.
+  `Workflow_Event__e` handler drops a marker payload, except on the engine
+  `SIGNAL:ChildCompleted:` and `SIGNAL:ChildFailed:` events. The link check on
+  read also protects that path.
 - With the identity codec, do not start a payload with `{"$codec":`. The engine
   reads it as a stored form.
 

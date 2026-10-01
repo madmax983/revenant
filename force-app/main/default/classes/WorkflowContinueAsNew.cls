@@ -218,6 +218,13 @@ public inherited sharing class WorkflowContinueAsNew {
     // The successor starts from the initial step, so it takes the live shape.
     WorkflowDefinitionFingerprint.stamp(nextInstance, successorDef);
     insertSuccessorRecord(nextInstance, newKey);
+    // The successor inherits Progress__c. Link its file to the successor.
+    Id progressDocId = WorkflowPayloadOffload.markerDocId(
+      nextInstance.Progress__c
+    );
+    if (progressDocId != null) {
+      WorkflowPayloadOffload.linkToOwner(progressDocId, nextInstance.Id);
+    }
     copyPredecessorSearchAttributes(instance.Id, nextInstance.Id);
     finalizeSuccessorInstance(nextInstance, result, initialStep);
   }
