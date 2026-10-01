@@ -106,7 +106,9 @@ public inherited sharing class WorkflowCascadeCancel {
    * @description Requests a cascade for each parent that is already in a
    * failure state. A child was linked to it after its cascade pass (issue
    * #241). It runs one query, and none when `parentIds` is empty or the SOQL
-   * budget is spent. The paged pass then cancels the child.
+   * budget is spent. The query locks the parents. A parent that fails at the
+   * same time then waits for this transaction, or this one sees the failure.
+   * The paged pass then cancels the child.
    * @param parentIds parents of the new children
    */
   public static void requestCascadeForLateChildren(Set<Id> parentIds) {
@@ -125,7 +127,7 @@ public inherited sharing class WorkflowCascadeCancel {
       return;
     }
     try {
-      requestCascade(stillFailedParents(parentIds));
+      requestCascade(lockedFailedParents(parentIds));
     } catch (Exception ex) {
       // Fire-and-forget: a late-child check must never fail the child start.
       System.debug(
@@ -263,6 +265,25 @@ public inherited sharing class WorkflowCascadeCancel {
     // The rest of the tree is reachable only through these events: a publish
     // failure must fail the pass, so the rollback and retry path runs.
     publishOrThrow(next);
+  }
+
+  // Same read as stillFailedParents, with a row lock (issue #241). Id order
+  // keeps the lock order stable.
+  private static Set<Id> lockedFailedParents(Set<Id> parentIds) {
+    Set<Id> failed = new Set<Id>();
+    for (Workflow_Instance__c parent : [
+      SELECT Id, Status__c
+      FROM Workflow_Instance__c
+      WHERE Id IN :parentIds
+      WITH SYSTEM_MODE
+      ORDER BY Id
+      FOR UPDATE
+    ]) {
+      if (FAILURE_STATUSES.contains(parent.Status__c)) {
+        failed.add(parent.Id);
+      }
+    }
+    return failed;
   }
 
   private static Set<Id> stillFailedParents(Set<Id> parentIds) {
