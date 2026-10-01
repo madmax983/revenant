@@ -348,7 +348,7 @@ public inherited sharing class WorkflowWaitDescriptorService {
     // non-empty list is its only marker (no companion key is written), so require an actual
     // list of >=1 element before this reads as a candidate bulk child join. Presence alone is
     // NOT sufficient to classify: opaque author state can carry a `childCorrelationKeys` array
-    // too, so childDescriptor additionally corroborates these keys against real spawned children
+    // too, so childDescriptor additionally corroborates these keys against live spawned children
     // (WorkflowWaitChildCorroboration) before treating them as a child-completion wait. An opaque
     // author state whose `childCorrelationKeys` is absent, empty, or not a list stays a generic wait.
     Object raw = state.get('childCorrelationKeys');

@@ -1329,6 +1329,12 @@
 
                                             <!-- Slowest-step ranking -->
                                             <div class="slds-text-title_caps slds-m-bottom_small">Steps ranked by median wall-clock (slowest first)</div>
+                                            <template if:true={latencyStepsApproximate}>
+                                                <p class="slds-text-color_weak slds-m-bottom_small" role="status">
+                                                    <lightning-badge label="Approximate"></lightning-badge>
+                                                    Parallel steps cannot be timed one by one, so the ranking leaves them out.
+                                                </p>
+                                            </template>
                                             <template if:true={hasLatencySteps}>
                                                 <table class="slds-table slds-table_cell-buffer slds-table_bordered">
                                                     <thead>
@@ -2521,6 +2527,17 @@
                         <p class="slds-text-body_regular slds-m-bottom_medium">
                             Inject a named signal directly into this stuck instance. The signal will follow the standard at-least-once routing and idempotency guarantees.
                         </p>
+                        <template if:true={hasChildKeyOptions}>
+                            <lightning-combobox
+                                label="Outstanding child key"
+                                options={childKeyOptions}
+                                value={signalName}
+                                onchange={handleChildKeySelect}
+                                field-level-help="Picking a key fills Signal Name."
+                                class="slds-m-bottom_small"
+                                data-id="child-key-select">
+                            </lightning-combobox>
+                        </template>
                         <lightning-input
                             label="Signal Name"
                             value={signalName}

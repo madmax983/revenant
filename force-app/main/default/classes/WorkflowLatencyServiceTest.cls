@@ -115,9 +115,9 @@ public class WorkflowLatencyServiceTest {
   static void ranksStepsByMedianWallClockWithSlowestMiddleStep() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // Four terminal instances, each with StepA -> StepB (middle) -> StepC. StepA's
-      // consecutive delta is a constant 1s; StepB's delta grows per instance (10/12/14/16s)
-      // so its four-sample median averages the two distinct middles (12s, 14s) = 13s. StepC
-      // is the final step and contributes no delta.
+      // delta is a constant 1s; StepB's delta grows per instance (10/12/14/16s) so its
+      // four-sample median averages the two middles (12s, 14s) = 13s. Terminal_At__c is
+      // before the step rows, so StepC (final) has a negative delta and gets no sample.
       List<Workflow_Instance__c> insts = seedTerminalInstances(
         'LatencyTest.StepFlow',
         new List<Integer>{ 30, 30, 30, 30 }
@@ -139,7 +139,7 @@ public class WorkflowLatencyServiceTest {
       List<Map<String, Object>> steps = (List<Map<String, Object>>) result.get(
         'steps'
       );
-      // Only StepA and StepB have consecutive deltas; StepC (final) is excluded.
+      // Only StepA and StepB have deltas; StepC (final) is excluded.
       System.assertEquals(2, steps.size(), 'Two ranked steps expected');
 
       Map<String, Object> slowest = steps[0];
@@ -165,6 +165,258 @@ public class WorkflowLatencyServiceTest {
         1000L,
         (Long) fastest.get('medianMs'),
         'StepA median is a constant 1s'
+      );
+    }
+  }
+
+  // Sets each instance's Terminal_At__c to STEP_BASE + terminalOffsetSeconds so the final
+  // step's delta to the terminal time is measurable.
+  private static void alignTerminalToSteps(
+    List<Workflow_Instance__c> insts,
+    Integer terminalOffsetSeconds
+  ) {
+    for (Workflow_Instance__c inst : insts) {
+      inst.Terminal_At__c = STEP_BASE.addSeconds(terminalOffsetSeconds);
+    }
+    update insts;
+  }
+
+  // Returns the ranked row for a step name, or null when the step is not ranked.
+  private static Map<String, Object> rowFor(
+    Map<String, Object> result,
+    String stepName
+  ) {
+    for (
+      Map<String, Object> row : (List<Map<String, Object>>) result.get('steps')
+    ) {
+      if (stepName == (String) row.get('stepName')) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  @IsTest
+  static void finalStepIsMeasuredToTerminalAt() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> insts = seedTerminalInstances(
+        'LatencyTest.FinalFlow',
+        new List<Integer>{ 30 }
+      );
+      // StepA @0s, StepB @2s, terminal @12s: StepA 2s, StepB (final) 10s.
+      seedSteps(
+        insts[0].Id,
+        new List<String>{ 'StepA', 'StepB' },
+        new List<Integer>{ 0, 2 }
+      );
+      alignTerminalToSteps(insts, 12);
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowLatencyService.definitionLatency(
+        'LatencyTest.FinalFlow',
+        'all'
+      );
+      Test.stopTest();
+
+      List<Map<String, Object>> steps = (List<Map<String, Object>>) result.get(
+        'steps'
+      );
+      System.assertEquals(2, steps.size(), 'Final step must get a sample');
+      System.assertEquals('StepB', (String) steps[0].get('stepName'), 'rank');
+      System.assertEquals(10000L, (Long) steps[0].get('medianMs'), 'final');
+      System.assertEquals(2000L, (Long) steps[1].get('medianMs'), 'first');
+      System.assertEquals(
+        false,
+        (Boolean) result.get('stepsApproximate'),
+        'Serial run is exact'
+      );
+    }
+  }
+
+  @IsTest
+  static void singleStepWorkflowGetsOneSample() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> insts = seedTerminalInstances(
+        'LatencyTest.SingleFlow',
+        new List<Integer>{ 30 }
+      );
+      seedSteps(
+        insts[0].Id,
+        new List<String>{ 'Only' },
+        new List<Integer>{ 0 }
+      );
+      alignTerminalToSteps(insts, 7);
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowLatencyService.definitionLatency(
+        'LatencyTest.SingleFlow',
+        'all'
+      );
+      Test.stopTest();
+
+      List<Map<String, Object>> steps = (List<Map<String, Object>>) result.get(
+        'steps'
+      );
+      System.assertEquals(1, steps.size(), 'Single step is ranked');
+      System.assertEquals(7000L, (Long) steps[0].get('medianMs'), 'median');
+    }
+  }
+
+  @IsTest
+  static void fanOutSiblingsAreExcludedAndFlaggedApproximate() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> insts = seedTerminalInstances(
+        'LatencyTest.FanFlow',
+        new List<Integer>{ 30 }
+      );
+      // Start @0s; BranchA and BranchB inserted together @3s; Join @20s; terminal @25s.
+      seedSteps(
+        insts[0].Id,
+        new List<String>{ 'Start', 'BranchA', 'BranchB', 'Join' },
+        new List<Integer>{ 0, 3, 3, 20 }
+      );
+      alignTerminalToSteps(insts, 25);
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowLatencyService.definitionLatency(
+        'LatencyTest.FanFlow',
+        'all'
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        true,
+        (Boolean) result.get('stepsApproximate'),
+        'Fan-out must flag the ranking approximate'
+      );
+      System.assertEquals(
+        null,
+        rowFor(result, 'BranchA'),
+        'Sibling must not get a serial delta'
+      );
+      System.assertEquals(
+        null,
+        rowFor(result, 'BranchB'),
+        'Sibling must not get a serial delta'
+      );
+      System.assertEquals(
+        3000L,
+        (Long) rowFor(result, 'Start').get('medianMs'),
+        'Step before the fan-out stays measured'
+      );
+      System.assertEquals(
+        5000L,
+        (Long) rowFor(result, 'Join').get('medianMs'),
+        'Step after the join stays measured'
+      );
+      System.assertEquals(
+        2,
+        ((List<Object>) result.get('steps')).size(),
+        'Only Start and Join are ranked'
+      );
+    }
+  }
+
+  @IsTest
+  static void negativeFinalDeltaIsIgnored() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Terminal_At__c (Jan 1) is before the step rows (Feb 1): no final sample.
+      List<Workflow_Instance__c> insts = seedTerminalInstances(
+        'LatencyTest.NegFlow',
+        new List<Integer>{ 30 }
+      );
+      seedSteps(
+        insts[0].Id,
+        new List<String>{ 'Only' },
+        new List<Integer>{ 0 }
+      );
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowLatencyService.definitionLatency(
+        'LatencyTest.NegFlow',
+        'all'
+      );
+      Test.stopTest();
+
+      System.assert(
+        ((List<Object>) result.get('steps')).isEmpty(),
+        'A negative delta must not be sampled'
+      );
+    }
+  }
+
+  @IsTest
+  static void finalStepsPoolAcrossInstancesWithOwnTerminalTimes() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> insts = seedTerminalInstances(
+        'LatencyTest.PoolFlow',
+        new List<Integer>{ 30, 30 }
+      );
+      // Both: Only @0s. Terminal @4s and @10s. Median of 4s and 10s = 7s.
+      seedSteps(
+        insts[0].Id,
+        new List<String>{ 'Only' },
+        new List<Integer>{ 0 }
+      );
+      seedSteps(
+        insts[1].Id,
+        new List<String>{ 'Only' },
+        new List<Integer>{ 0 }
+      );
+      insts[0].Terminal_At__c = STEP_BASE.addSeconds(4);
+      insts[1].Terminal_At__c = STEP_BASE.addSeconds(10);
+      update insts;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowLatencyService.definitionLatency(
+        'LatencyTest.PoolFlow',
+        'all'
+      );
+      Test.stopTest();
+
+      Map<String, Object> row = rowFor(result, 'Only');
+      System.assertEquals(7000L, (Long) row.get('medianMs'), 'median');
+      System.assertEquals(2, (Integer) row.get('sampleCount'), 'samples');
+      System.assertEquals(
+        false,
+        (Boolean) result.get('stepsApproximate'),
+        'Rows of different instances are not siblings'
+      );
+    }
+  }
+
+  @IsTest
+  static void cappedScanGivesTheCutInstanceNoFinalSample() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> insts = seedTerminalInstances(
+        'LatencyTest.CutFlow',
+        new List<Integer>{ 30 }
+      );
+      seedSteps(
+        insts[0].Id,
+        new List<String>{ 'StepA', 'StepB', 'StepC' },
+        new List<Integer>{ 0, 5, 60 }
+      );
+      alignTerminalToSteps(insts, 100);
+      // The scan keeps StepA and StepB only. StepB is not the real final step.
+      WorkflowLatencyService.stepScanCapOverride = 2;
+
+      Test.startTest();
+      Map<String, Object> result = WorkflowLatencyService.definitionLatency(
+        'LatencyTest.CutFlow',
+        'all'
+      );
+      Test.stopTest();
+
+      System.assertEquals(
+        null,
+        rowFor(result, 'StepB'),
+        'A cut instance must not time its last kept row to Terminal_At__c'
+      );
+      System.assertEquals(
+        5000L,
+        (Long) rowFor(result, 'StepA').get('medianMs'),
+        'StepA stays measured'
       );
     }
   }
@@ -355,6 +607,11 @@ public class WorkflowLatencyServiceTest {
         3,
         (Integer) result.get('sampleSize'),
         'Controller endpoint returns the service result'
+      );
+      System.assertEquals(
+        false,
+        (Boolean) result.get('stepsApproximate'),
+        'Payload carries the stepsApproximate key'
       );
       // Durations 5s,10s,15s sorted -> nearest-rank p50 = rank2 = 10000ms.
       System.assertEquals(

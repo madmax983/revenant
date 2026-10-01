@@ -691,6 +691,49 @@ describe("c-workflow-dashboard latency panel", () => {
     });
   });
 
+  async function openLatency(stepsApproximate) {
+    getDefinitionLatency.mockResolvedValue({
+      workflowName: "BillingWorkflow",
+      windowKey: "24h",
+      isCapped: false,
+      capLimit: 2000,
+      sampleSize: 1,
+      p50Ms: 10000,
+      p95Ms: 10000,
+      p99Ms: 10000,
+      maxMs: 10000,
+      stepsApproximate,
+      steps: [{ stepName: "ChargeCard", medianMs: 1000, sampleCount: 1 }],
+    });
+    const element = createComponent();
+    await flushPromises();
+    element.shadowRoot
+      .querySelector('[data-id="workflow-filter"]')
+      .dispatchEvent(
+        new CustomEvent("change", { detail: { value: "BillingWorkflow" } }),
+      );
+    findButton(element, (btn) => btn.label === "Latency").dispatchEvent(
+      new CustomEvent("click"),
+    );
+    await flushPromises();
+    await flushPromises();
+    return element;
+  }
+
+  it("shows an approximate badge on the step ranking when fan-out is detected", async () => {
+    const element = await openLatency(true);
+    expect(element.shadowRoot.textContent).toContain(
+      "cannot be timed one by one",
+    );
+  });
+
+  it("hides the approximate badge for a serial run", async () => {
+    const element = await openLatency(false);
+    expect(element.shadowRoot.textContent).not.toContain(
+      "cannot be timed one by one",
+    );
+  });
+
   it("renders percentile tiles, the slowest-step ranking and the truncation badge", async () => {
     getDefinitionLatency.mockResolvedValue({
       workflowName: "BillingWorkflow",
@@ -2378,6 +2421,151 @@ describe("c-workflow-dashboard awaited-signal descriptor (#84)", () => {
       'lightning-input[data-id="signal-name-input"]',
     );
     expect(nameInput.value).toBe("");
+    // A single-name or generic wait has no key choices.
+    expect(
+      element.shadowRoot.querySelector(
+        'lightning-combobox[data-id="child-key-select"]',
+      ),
+    ).toBeNull();
+  });
+
+  describe("multi-child START_CHILDREN wait (#231)", () => {
+    const KEYS = ["ChildCompleted:a", "ChildCompleted:b"];
+
+    function mockMultiChild(childSignalNames = KEYS, signalName = null) {
+      getFilteredInstances.mockResolvedValue([
+        {
+          Id: "a0G000000000001",
+          Name: "WI-0001",
+          Workflow_Name__c: "TestWorkflow",
+          Status__c: "Suspended",
+        },
+      ]);
+      getInstanceDetails.mockResolvedValue({
+        instance: {
+          Id: "a0G000000000001",
+          Name: "WI-0001",
+          Workflow_Name__c: "TestWorkflow",
+          Status__c: "Suspended",
+        },
+        steps: [],
+        children: [],
+        payloadFiles: {},
+        waitDescriptor: {
+          type: "child-completion",
+          signalName,
+          label: "Awaiting child completion — choose the outstanding child key",
+          stepName: "JoinStep",
+          childSignalNames,
+        },
+      });
+    }
+
+    const getSelect = (element) =>
+      element.shadowRoot.querySelector(
+        'lightning-combobox[data-id="child-key-select"]',
+      );
+    const getNameInput = (element) =>
+      element.shadowRoot.querySelector(
+        'lightning-input[data-id="signal-name-input"]',
+      );
+
+    it("lists every awaited key and leaves the name blank", async () => {
+      mockMultiChild();
+      const element = await openSignalModal();
+
+      const select = getSelect(element);
+      expect(select).not.toBeNull();
+      expect(select.options).toEqual([
+        { label: "ChildCompleted:a", value: "ChildCompleted:a" },
+        { label: "ChildCompleted:b", value: "ChildCompleted:b" },
+      ]);
+      expect(select.value).toBe("");
+      expect(getNameInput(element).value).toBe("");
+    });
+
+    it("fills the name and sends the chosen key", async () => {
+      mockMultiChild();
+      injectSignal.mockResolvedValue({ success: true });
+      const element = await openSignalModal();
+
+      getSelect(element).dispatchEvent(
+        new CustomEvent("change", { detail: { value: "ChildCompleted:b" } }),
+      );
+      await flushPromises();
+      expect(getNameInput(element).value).toBe("ChildCompleted:b");
+      expect(
+        element.shadowRoot.querySelector(
+          'lightning-button[data-id="confirm-signal-btn"]',
+        ).disabled,
+      ).toBe(false);
+
+      element.shadowRoot
+        .querySelector('lightning-button[data-id="confirm-signal-btn"]')
+        .dispatchEvent(new CustomEvent("click"));
+      await flushPromises();
+
+      expect(injectSignal).toHaveBeenCalledWith(
+        expect.objectContaining({ signalName: "ChildCompleted:b" }),
+      );
+    });
+
+    it("clears the choice when the modal reopens", async () => {
+      mockMultiChild();
+      const element = await openSignalModal();
+      getSelect(element).dispatchEvent(
+        new CustomEvent("change", { detail: { value: "ChildCompleted:a" } }),
+      );
+      await flushPromises();
+      expect(getNameInput(element).value).toBe("ChildCompleted:a");
+
+      element.shadowRoot
+        .querySelector('lightning-button[data-id="cancel-signal-btn"]')
+        .dispatchEvent(new CustomEvent("click"));
+      await flushPromises();
+      element.shadowRoot
+        .querySelector('lightning-button[data-id="send-signal-btn"]')
+        .dispatchEvent(new CustomEvent("click"));
+      await flushPromises();
+
+      expect(getNameInput(element).value).toBe("");
+      expect(getSelect(element).value).toBe("");
+    });
+
+    it.each([
+      ["one key", ["ChildCompleted:a"], "ChildCompleted:a"],
+      ["no key", [], ""],
+      ["duplicate keys", ["ChildCompleted:a", "ChildCompleted:a"], ""],
+    ])("hides the key list for %s", async (_label, keys, signalName) => {
+      mockMultiChild(keys, signalName);
+      const element = await openSignalModal();
+      expect(getSelect(element)).toBeNull();
+      expect(getNameInput(element).value).toBe(signalName);
+    });
+
+    it("sends a typed name that replaces the chosen key", async () => {
+      mockMultiChild();
+      injectSignal.mockResolvedValue({ success: true });
+      const element = await openSignalModal();
+      getSelect(element).dispatchEvent(
+        new CustomEvent("change", { detail: { value: "ChildCompleted:a" } }),
+      );
+      await flushPromises();
+
+      const input = getNameInput(element);
+      input.value = "custom";
+      input.dispatchEvent(new CustomEvent("change"));
+      await flushPromises();
+      expect(getSelect(element).value).toBe("custom");
+
+      element.shadowRoot
+        .querySelector('lightning-button[data-id="confirm-signal-btn"]')
+        .dispatchEvent(new CustomEvent("click"));
+      await flushPromises();
+      expect(injectSignal).toHaveBeenCalledWith(
+        expect.objectContaining({ signalName: "custom" }),
+      );
+    });
   });
 
   // Issue #233: a generic send has no decision payload and skips the role check.
