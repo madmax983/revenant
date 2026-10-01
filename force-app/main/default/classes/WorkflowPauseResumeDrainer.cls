@@ -60,6 +60,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
         continue;
       }
       toRun.add(inst);
+      markAwaitingAdmission(inst);
 
       if (
         String.isNotBlank(inst.Current_Step__c) &&
@@ -84,6 +85,18 @@ public inherited sharing class WorkflowPauseResumeDrainer {
     return moreRemain;
   }
 
+  // Issue #275: a bounded start that the pause parked has no marker. Set it
+  // before the update, so the trigger queues the row before its worker runs.
+  private static void markAwaitingAdmission(Workflow_Instance__c inst) {
+    if (
+      inst.Concurrency_Parked__c != true &&
+      inst.Concurrency_Slot_Held__c != true &&
+      ConcurrencyGate.isConfigured(inst.Workflow_Name__c)
+    ) {
+      inst.Concurrency_Parked__c = true;
+    }
+  }
+
   // Selects up to resumeChunkSize still-Paused instances for the scope, locking them so
   // concurrent drains don't double-resume.
   /**
@@ -102,7 +115,10 @@ public inherited sharing class WorkflowPauseResumeDrainer {
           Current_Step__c,
           Status__c,
           Compensation_Stack__c,
-          Sleep_Until__c
+          Sleep_Until__c,
+          Workflow_Name__c,
+          Concurrency_Parked__c,
+          Concurrency_Slot_Held__c
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused'
         WITH SYSTEM_MODE
@@ -116,7 +132,10 @@ public inherited sharing class WorkflowPauseResumeDrainer {
         Current_Step__c,
         Status__c,
         Compensation_Stack__c,
-        Sleep_Until__c
+        Sleep_Until__c,
+        Workflow_Name__c,
+        Concurrency_Parked__c,
+        Concurrency_Slot_Held__c
       FROM Workflow_Instance__c
       WHERE Status__c = 'Paused' AND Workflow_Name__c = :workflowName
       WITH SYSTEM_MODE

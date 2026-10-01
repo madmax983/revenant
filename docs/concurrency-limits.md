@@ -162,6 +162,9 @@ the older instances are admitted. The engine does not re-rank the queue.
   the budget is spent.
 - An instance that enters `Compensating` or `Cancelling` loses the
   awaiting-admission marker. A rollback never waits in the queue.
+- A pause can park a bounded start before it gets the marker. The resume
+  sets the marker on such an instance that holds no slot. This is done before
+  the worker runs. The instance is then in the queue at once.
 - An admit or a park aborts the old retry timer of the candidate. Thus an
   old timer cannot re-drive an admitted instance.
 - When a slot becomes free, the head of the queue gets it within one
