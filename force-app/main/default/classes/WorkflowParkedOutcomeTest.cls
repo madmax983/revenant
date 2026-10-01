@@ -453,4 +453,19 @@ public class WorkflowParkedOutcomeTest {
       );
     }
   }
+
+  // A delivery with an old status must not clear a timer that a wait stored
+  // after the row became Paused.
+  @IsTest
+  static void testPausePark_keepsTimerWhenRowAlreadyPaused() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPauseGate.pauseDefinition(WF, 'test');
+      Datetime wake = futureWake();
+      Workflow_Instance__c inst = newInstance('Paused', wake);
+      Workflow_Instance__c stale = load(inst.Id);
+      stale.Status__c = 'Suspended';
+      System.assert(WorkflowStepAdmission.parkIfPaused(stale));
+      System.assertEquals(wake, load(inst.Id).Sleep_Until__c);
+    }
+  }
 }

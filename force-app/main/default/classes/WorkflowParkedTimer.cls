@@ -34,13 +34,16 @@ public inherited sharing class WorkflowParkedTimer {
       }
     }
     if (!timed.isEmpty()) {
-      for (Workflow_Signal__c sig : [
-        SELECT Workflow_Instance__c
+      // One grouped row per instance, so a signal backlog cannot reach the row
+      // limit.
+      for (AggregateResult row : [
+        SELECT Workflow_Instance__c instId
         FROM Workflow_Signal__c
         WHERE Workflow_Instance__c IN :timed AND Status__c = 'Received'
         WITH SYSTEM_MODE
+        GROUP BY Workflow_Instance__c
       ]) {
-        timed.remove(sig.Workflow_Instance__c);
+        timed.remove((Id) row.get('instId'));
       }
     }
     for (Workflow_Instance__c inst : instances) {
