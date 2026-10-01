@@ -47,8 +47,10 @@ public inherited sharing class WorkflowNotifierSweep {
       return 0;
     }
     Datetime cutoff = now.addMinutes(-STALE_MINUTES);
-    List<Workflow_Log__c> stale = [
-      SELECT Id, Fire_Key__c, Message__c, Workflow_Instance__c
+    // A locking query cannot have an ORDER BY. So the oldest rows come from a
+    // plain query. Then a locking query reads them again, with the same filter.
+    List<Workflow_Log__c> oldest = [
+      SELECT Id
       FROM Workflow_Log__c
       WHERE
         Log_Type__c = :WorkflowNotifier.LOG_TYPE
@@ -57,6 +59,16 @@ public inherited sharing class WorkflowNotifierSweep {
       WITH SYSTEM_MODE
       ORDER BY Fire_Time__c
       LIMIT :MAX_ROWS
+    ];
+    List<Workflow_Log__c> stale = [
+      SELECT Id, Fire_Key__c, Message__c, Workflow_Instance__c
+      FROM Workflow_Log__c
+      WHERE
+        Id IN :oldest
+        AND Log_Type__c = :WorkflowNotifier.LOG_TYPE
+        AND Outcome__c = :WorkflowNotifier.OUTCOME_REQUESTED
+        AND Fire_Time__c < :cutoff
+      WITH SYSTEM_MODE
       FOR UPDATE
     ];
     List<Workflow_Log__c> retry = new List<Workflow_Log__c>();

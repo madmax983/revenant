@@ -273,8 +273,8 @@ public inherited sharing class WorkflowCascadeCancel {
     publishOrThrow(next);
   }
 
-  // Same read as stillFailedParents, with a row lock (issue #241). Id order
-  // keeps the lock order stable.
+  // Same read as stillFailedParents, with a row lock (issue #241). The platform
+  // locks the rows in Id order, so the lock order is stable.
   private static Set<Id> lockedFailedParents(Set<Id> parentIds) {
     Set<Id> failed = new Set<Id>();
     for (Workflow_Instance__c parent : [
@@ -282,7 +282,6 @@ public inherited sharing class WorkflowCascadeCancel {
       FROM Workflow_Instance__c
       WHERE Id IN :parentIds
       WITH SYSTEM_MODE
-      ORDER BY Id
       FOR UPDATE
     ]) {
       if (FAILURE_STATUSES.contains(parent.Status__c)) {

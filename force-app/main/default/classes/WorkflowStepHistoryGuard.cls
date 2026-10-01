@@ -131,12 +131,12 @@ public inherited sharing class WorkflowStepHistoryGuard {
       WITH SYSTEM_MODE
       LIMIT :cap
     ];
-    Verdict verdict = evaluate(count, t);
-    if (verdict == Verdict.HALT) {
+    Verdict outcome = evaluate(count, t);
+    if (outcome == Verdict.HALT) {
       halt(ctx, t.ceiling);
       return true;
     }
-    if (verdict == Verdict.WARN) {
+    if (outcome == Verdict.WARN) {
       ctx.stepHistoryWarning = warningMessage(count, t.ceiling);
     }
     return false;

@@ -689,19 +689,19 @@ public class WorkflowAutoRetryTest {
       Assert.areEqual('Compensated', result.status, 'Saga compensates at end');
       Assert.areEqual(lifo(), result.compensatedSteps, 'Compensation is LIFO');
       Assert.areEqual(3, runsOf(CHARGE), 'Charge runs maximumAttempts times');
-      Workflow_Step_Execution__c charge = latestExec(CHARGE);
-      Assert.areEqual('Failed', charge.Status__c, 'Charge row fails');
+      Workflow_Step_Execution__c chargeRow = latestExec(CHARGE);
+      Assert.areEqual('Failed', chargeRow.Status__c, 'Charge row fails');
       Assert.areEqual(3, retryCount(CHARGE), 'Retry count equals attempts');
       Assert.areEqual(1, execCount(CHARGE), 'Terminal failure is written once');
       Assert.isTrue(
-        charge.Error_Details__c.startsWith(
+        chargeRow.Error_Details__c.startsWith(
           'Auto-retry exhausted after 3 attempts: ' + BLIP_MESSAGE
         ),
-        'Details show auto-retry exhaustion: ' + charge.Error_Details__c
+        'Details show auto-retry exhaustion: ' + chargeRow.Error_Details__c
       );
       Assert.isTrue(
-        charge.Error_Details__c.contains('WorkflowAutoRetryTest.ChargeStep'),
-        'Details keep the original stack trace: ' + charge.Error_Details__c
+        chargeRow.Error_Details__c.contains('WorkflowAutoRetryTest.ChargeStep'),
+        'Details keep the original stack trace: ' + chargeRow.Error_Details__c
       );
       Assert.isTrue(
         loadInstance().Error_Message__c.contains('Auto-retry exhausted'),
@@ -721,15 +721,15 @@ public class WorkflowAutoRetryTest {
       Assert.areEqual('Compensated', result.status, 'No policy: fail fast');
       Assert.areEqual(lifo(), result.compensatedSteps, 'Compensation is LIFO');
       Assert.areEqual(1, runsOf(CHARGE), 'No auto-retry without a policy');
-      Workflow_Step_Execution__c charge = latestExec(CHARGE);
-      Assert.areEqual('Failed', charge.Status__c, 'Charge row fails');
+      Workflow_Step_Execution__c chargeRow = latestExec(CHARGE);
+      Assert.areEqual('Failed', chargeRow.Status__c, 'Charge row fails');
       Assert.areEqual(0, retryCount(CHARGE), 'No retry is counted');
       Assert.isTrue(
-        charge.Error_Details__c.startsWith(BLIP_MESSAGE),
-        'Crash details keep the message: ' + charge.Error_Details__c
+        chargeRow.Error_Details__c.startsWith(BLIP_MESSAGE),
+        'Crash details keep the message: ' + chargeRow.Error_Details__c
       );
       Assert.isFalse(
-        charge.Error_Details__c.contains('Auto-retry'),
+        chargeRow.Error_Details__c.contains('Auto-retry'),
         'Fail-fast is not labeled as auto-retry'
       );
       Assert.isTrue(
