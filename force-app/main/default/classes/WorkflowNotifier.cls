@@ -14,6 +14,9 @@
  *    publishes the rest again. It sets each row to `Sent`, `Failed` or
  *    `Skipped`.
  *
+ * A row that no event reaches stays `Requested`: WorkflowNotifierSweep
+ * publishes its request again.
+ *
  * Fire-and-forget: a notification error never stops the SUSPEND or the
  * engine. See docs/approver-notifications.md.
  */
@@ -339,7 +342,13 @@ public inherited sharing class WorkflowNotifier {
     }
   }
 
-  private static Workflow_Event__e notifyEvent(String key, String instanceId) {
+  /**
+   * @description Builds the NOTIFY event of a key. It holds only the key.
+   * @param key Fire_Key__c of the anchor row.
+   * @param instanceId Instance Id text, or null.
+   * @return The event.
+   */
+  public static Workflow_Event__e notifyEvent(String key, String instanceId) {
     return new Workflow_Event__e(
       Event_Type__c = EVENT_TYPE,
       Workflow_Instance_Id__c = instanceId,
@@ -464,7 +473,8 @@ public inherited sharing class WorkflowNotifier {
   }
 
   // Nothing is sent yet: ask the platform to deliver the batch again. After
-  // MAX_RETRIES, stop: the rows stay Requested (see issue #274).
+  // MAX_RETRIES, stop: the rows stay Requested. WorkflowNotifierSweep
+  // publishes them again.
   private static void retryOrGiveUp(String reason) {
     Integer retries;
     try {
@@ -674,7 +684,12 @@ public inherited sharing class WorkflowNotifier {
     return unclaimed;
   }
 
-  private static Map<String, Object> readRequest(Workflow_Log__c anchor) {
+  /**
+   * @description Reads the request of an anchor row.
+   * @param anchor Row with Fire_Key__c and Message__c.
+   * @return The request, or null when it is not readable or has another key.
+   */
+  public static Map<String, Object> readRequest(Workflow_Log__c anchor) {
     try {
       Map<String, Object> req = (Map<String, Object>) JSON.deserializeUntyped(
         anchor.Message__c
@@ -982,14 +997,24 @@ public inherited sharing class WorkflowNotifier {
       : truncate(result + '\n' + anchor.Message__c);
   }
 
-  // Returns the request JSON with a result key.
-  private static String withResult(Map<String, Object> req, String result) {
+  /**
+   * @description Returns the request JSON with a result key.
+   * @param req The request.
+   * @param result The result text.
+   * @return The JSON, cut at the length of Message__c.
+   */
+  public static String withResult(Map<String, Object> req, String result) {
     Map<String, Object> message = new Map<String, Object>(req);
     message.put('result', result);
     return truncate(JSON.serialize(message));
   }
 
-  private static String truncate(String text) {
+  /**
+   * @description Cuts a text at the length of Message__c.
+   * @param text The text.
+   * @return The text, or its first part.
+   */
+  public static String truncate(String text) {
     return text != null &&
       text.length() > MAX_MESSAGE_LENGTH
       ? text.substring(0, MAX_MESSAGE_LENGTH)

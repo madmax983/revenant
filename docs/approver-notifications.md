@@ -115,12 +115,25 @@ A step that waits again on the same row with a new notification (for example, a 
 | `Requested` | The SUSPEND published the request. The trigger did not run yet. |
 | `Sending` | The trigger claimed the row, then the send or the result update stopped. The engine never reads the row again, so it never sends it two times. |
 | `Sent` | The platform accepted the send. It does not prove delivery. |
-| `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, too many recipients, a request that is not readable, or the error. |
+| `Failed` | The publish or the send failed. `Message__c` has the reason: type not found, no recipient, too many recipients, a request that is not readable, 3 publish attempts gave no delivery, or the error. |
 | `Skipped` | `Send_Notifications__c` was off at send time, or the wait ended before the send. |
 
-`Message__c` holds the request as JSON. After the send, it also has a `result` key.
+`Message__c` holds the request as JSON. After the send, it also has a `result` key. The sweep adds an `attempts` key.
 
 To see the notification state of an instance, query `Workflow_Log__c` where `Log_Type__c = 'Notification'`.
+
+## Lost requests
+
+Issue #274. The watchdog heartbeat runs `WorkflowNotifierSweep` (step 7c). It finds `Requested` anchor rows that no event reached.
+
+1. It reads max 10 rows with `Fire_Time__c` older than 15 minutes (oldest first). It locks them (`FOR UPDATE`).
+2. For each row, it adds 1 to `attempts` in `Message__c`, sets `Fire_Time__c` to now, and saves the row.
+3. It publishes one `NOTIFY` event for each saved row. The trigger sends as usual.
+4. A row with 3 attempts, or with an unreadable `Message__c`, is `Failed` (`Level__c = Error`).
+
+The sweep never sends. The trigger reads only `Requested` rows and claims each row, so a row is never sent twice. A row that becomes `Sent` is not read again.
+
+Limits of one heartbeat: 1 SOQL, 2 DML statements, max 20 DML rows, 0 send calls. The sweep stops when fewer than 13 DML statements or 31 DML rows are free. It keeps the reserve of the liveness stamp. It does not throw.
 
 ## Configuration
 
@@ -163,7 +176,7 @@ These members are `@TestVisible private`. In your own tests, read `result.direct
 
 - A signal can arrive after the SUSPEND commits and before the send. When the step did not run again yet, the approver still gets the notification. It opens the instance, which shows the new state.
 
-- In rare cases a row stays `Requested` with no event (for example, a platform publish error after the commit). No sweep sends it again yet. See issue #274.
+- In rare cases no event reaches a row (for example, a platform publish error after the commit). The row stays `Requested` until the sweep publishes it again. See [Lost requests](#lost-requests).
 
 - The notification opens the instance or the target record, not a decision screen. Use a Flow screen, a quick action or the Signal Workflow invocable action to publish the decision.
 - A send to more than 500 recipients uses more than one call. When a later call fails, the row is `Failed`, but the earlier recipients got the notification.
