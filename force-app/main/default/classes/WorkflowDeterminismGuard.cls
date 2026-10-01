@@ -23,10 +23,6 @@ public inherited sharing class WorkflowDeterminismGuard {
    */
   public static final String UNKNOWN_INPUTS = 'unknown';
 
-  // Prefix of a file checksum in the digest. It sets the text apart from a
-  // stored value.
-  private static final String CHECKSUM_PREFIX = '$checksum|';
-
   // Max live signals the guard reads. Each payload can hold 131,072
   // characters, so the cap bounds the heap (about 2.6 million characters).
   // Over it, the guard digests the first rows and the total count.
@@ -179,11 +175,14 @@ public inherited sharing class WorkflowDeterminismGuard {
     List<Object> parts = new List<Object>();
     for (String text : stored) {
       Id docId = WorkflowPayloadOffload.markerDocId(text);
-      parts.add(
-        docId != null && checksums.containsKey(docId)
-          ? CHECKSUM_PREFIX + checksums.get(docId)
-          : text
-      );
+      // A map, not text: no stored text can look like a checksum entry.
+      if (docId != null && checksums.containsKey(docId)) {
+        parts.add(
+          new Map<String, Object>{ 'fileChecksum' => checksums.get(docId) }
+        );
+      } else {
+        parts.add(text);
+      }
     }
     parts.add(context.attempt);
     parts.add(context.retry().isTimeoutResume());

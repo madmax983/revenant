@@ -964,6 +964,28 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
+  static void aStoredTextCannotCopyAChecksumEntry() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Id instId = insertInstance().Id;
+      String marker = offload(instId, 'x'.repeat(100001));
+      Id docId = WorkflowPayloadOffload.markerDocId(marker);
+      String checksum = [
+        SELECT Checksum
+        FROM ContentVersion
+        WHERE ContentDocumentId = :docId AND IsLatest = TRUE
+      ]
+      .Checksum;
+
+      Assert.areNotEqual(
+        digestWithState(instId, marker),
+        digestWithState(instId, '$checksum|' + checksum),
+        'An inline state that looks like a checksum entry is a new input'
+      );
+    }
+  }
+
+  @IsTest
   static void aMarkerOfAnotherInstanceKeepsTheMarkerText() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
