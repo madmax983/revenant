@@ -398,6 +398,23 @@ public class WorkflowAlertManagerTest {
     );
     System.assertEquals(
       false,
+      WorkflowAlertEmailBuilder.isValidAddress('a'.repeat(65) + '@example.com'),
+      'A long local part is invalid'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.isValidAddress('a@' + 'b'.repeat(64) + '.com'),
+      'A long domain label is invalid'
+    );
+    System.assertEquals(
+      true,
+      WorkflowAlertEmailBuilder.isValidAddress(
+        'a'.repeat(64) + '@' + 'b'.repeat(63) + '.com'
+      ),
+      'The limits are inclusive'
+    );
+    System.assertEquals(
+      false,
       WorkflowAlertEmailBuilder.isValidAddress('a@' + 'b'.repeat(250) + '.com'),
       'A long address is invalid'
     );
