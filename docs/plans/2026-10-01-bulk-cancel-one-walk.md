@@ -11,11 +11,11 @@ limit and rolls back.
 
 ## Brainstorm
 
-| Option                                        | Result                                                       |
-| --------------------------------------------- | ------------------------------------------------------------ |
-| A. Walk all roots in one pass. Split by mode. | Walk cost = depth, not depth x modes. No new async path.     |
+| Option                                          | Result                                                            |
+| ----------------------------------------------- | ----------------------------------------------------------------- |
+| A. Walk all roots in one pass. Split by mode.   | Walk cost = depth, not depth x modes. No new async path.          |
 | B. Bound the walk by the SOQL budget. Go async. | Needs state, a new event, and a status for a part-cancelled tree. |
-| C. Raise no limit. Tell users to split batches. | Flow cannot split a batch. Rejected.                         |
+| C. Raise no limit. Tell users to split batches. | Flow cannot split a batch. Rejected.                              |
 
 Choice: A. It meets all three acceptance criteria and adds no schema.
 

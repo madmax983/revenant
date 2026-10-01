@@ -28,6 +28,10 @@ the cancel phase through a resumed rollback.
    `cancelWithCompensationsInstances`. They use the same `collectActiveTree`
    and `cancelNodes` as `WorkflowEngine.cancel`. The rollback entry skips
    nodes in `Cancelling` or `Compensating`.
+   Issue #264 adds `cancelInstancesByMode`. The action calls it one time. It
+   walks the trees of both modes in one pass, so the walk costs one query for
+   each level, not for each level and mode. A node under a hard-stop root is
+   hard stopped.
 4. A keyed row writes the claim tombstone of `claimKeyedCancel` (shared
    `WorkflowSignalBatchCancel.buildCancelClaim`). All claims go in one DML.
 5. Keep the engine terminal state. A cancel with rollback goes `Cancelling`,
@@ -38,7 +42,7 @@ the cancel phase through a resumed rollback.
 7. A row is a candidate when its instance is live and, for a rollback row, not
    already rolling back. The action writes the claims first. The first
    candidate row per instance whose key is not a duplicate is the owner.
-8. The hard-stop call runs before the rollback call. `cancelled` is true only
+8. The hard-stop pass runs before the rollback pass. `cancelled` is true only
    when the row's own group call cancelled its root.
 
 ## Consequences
@@ -57,6 +61,9 @@ the cancel phase through a resumed rollback.
 - If the instance continues as new between the read and the lock, the row
   returns `cancelled=false` and status `ContinuedAsNew`. A retry finds the
   successor.
+- The walk uses one query for each tree level. A tree deeper than about 80
+  levels can still go over the SOQL limit. A later change can bound the walk
+  and continue it asynchronously.
 - The action runs in system mode with no custom-permission check, the same as
   Signal Workflow. Apex class access controls use.
 - The invocable contract is permanent. Change it only by adding fields.
