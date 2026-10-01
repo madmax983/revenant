@@ -27,7 +27,8 @@ public inherited sharing class WorkflowRetryScheduling {
     Map<String, Object> captures = new Map<String, Object>();
     if (String.isNotBlank(stepExec.Captured_Values__c)) {
       String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
-        stepExec.Captured_Values__c
+        stepExec.Captured_Values__c,
+        instance.Id
       );
       if (String.isNotBlank(resolvedCaptures)) {
         try {

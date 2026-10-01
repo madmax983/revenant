@@ -151,7 +151,9 @@ detects stalled/orphaned instances, reclaims them, and raises stall alerts.
 ## Payload persistence & codec
 
 The payload seam. Callers encode, then save. Save offloads. Resolve
-rehydrates and decodes. Control data (markers, status, keys) is not encoded. See
+rehydrates and decodes. Resolve reads a file only when it links to the owner
+instance. Public entry points reject marker input. Control data (markers,
+status, keys) is not encoded. See
 [docs/payload-codec.md](docs/payload-codec.md).
 
 - `WorkflowPayloadOffload` (save / resolve seam)

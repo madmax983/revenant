@@ -36,7 +36,8 @@ public inherited sharing class WorkflowStepContext {
     // path. Strip it before passing inputJson to the context so the author step
     // never sees the engine-internal key.
     String resolvedInput = WorkflowPayloadOffload.resolvePayload(
-      stepExec.Input__c
+      stepExec.Input__c,
+      instance.Id
     );
     Boolean isTimeoutResume =
       String.isNotBlank(resolvedInput) &&
@@ -72,10 +73,12 @@ public inherited sharing class WorkflowStepContext {
       .workflowName(instance.Workflow_Name__c)
       .stepName(ctx.activeStepName)
       .inputJson(resolvedInput)
-      .previousStepOutput(WorkflowPayloadOffload.resolvePayload(prevOutput))
-      .stepStateJson(resolveStepStateJson(stepExec))
+      .previousStepOutput(
+        WorkflowPayloadOffload.resolvePayload(prevOutput, instance.Id)
+      )
+      .stepStateJson(resolveStepStateJson(stepExec, instance.Id))
       .workflowInputJson(
-        WorkflowPayloadOffload.resolvePayload(instance.Input__c)
+        WorkflowPayloadOffload.resolvePayload(instance.Input__c, instance.Id)
       )
       .workflowVersion(resolveWorkflowVersion(instance))
       .stepVisit(ctx.stepVisit)
@@ -119,10 +122,12 @@ public inherited sharing class WorkflowStepContext {
   // persisted in Output__c, so a signal-win resume that re-runs the wait step does
   // not surface the reserved key to the author via stepStateJson.
   private static String resolveStepStateJson(
-    Workflow_Step_Execution__c stepExec
+    Workflow_Step_Execution__c stepExec,
+    Id ownerId
   ) {
     String resolvedState = WorkflowPayloadOffload.resolvePayload(
-      stepExec.Output__c
+      stepExec.Output__c,
+      ownerId
     );
     if (
       String.isNotBlank(resolvedState) && resolvedState.contains('$timeoutStep')
@@ -173,7 +178,7 @@ public inherited sharing class WorkflowStepContext {
     // last retry, so it wins over RetryConfigurable (issue #101).
     Boolean usePersisted =
       !(stepInstance instanceof RetryConfigurable) || autoRetryPolicy != null;
-    applyCapturedValues(cc, usePersisted, ctx.stepExec);
+    applyCapturedValues(cc, usePersisted, ctx.stepExec, ctx.instance.Id);
     // A persisted cap from a fromConfig() auto-retry policy can be stale. Read
     // the record again (issue #103).
     if (
@@ -204,17 +209,20 @@ public inherited sharing class WorkflowStepContext {
    * @param cc the capture context to populate
    * @param usePersisted true to adopt a persisted __maxAttempts
    * @param stepExec the step execution row carrying Captured_Values__c
+   * @param ownerId the instance that owns the step execution
    */
   private static void applyCapturedValues(
     CaptureContext cc,
     Boolean usePersisted,
-    Workflow_Step_Execution__c stepExec
+    Workflow_Step_Execution__c stepExec,
+    Id ownerId
   ) {
     if (String.isBlank(stepExec.Captured_Values__c)) {
       return;
     }
     String resolvedCaptures = WorkflowPayloadOffload.resolvePayload(
-      stepExec.Captured_Values__c
+      stepExec.Captured_Values__c,
+      ownerId
     );
     if (String.isBlank(resolvedCaptures)) {
       return;

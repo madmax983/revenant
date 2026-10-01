@@ -413,7 +413,7 @@ public inherited sharing class WorkflowHistoryRead {
       return null;
     }
     List<Workflow_Step_Execution__c> rows = [
-      SELECT Id, Error_Details__c
+      SELECT Id, Workflow_Instance__c, Error_Details__c
       FROM Workflow_Step_Execution__c
       WHERE Id = :executionId
       WITH SYSTEM_MODE
@@ -421,6 +421,9 @@ public inherited sharing class WorkflowHistoryRead {
     ];
     return rows.isEmpty()
       ? null
-      : WorkflowFailureDetails.resolve(rows[0].Error_Details__c);
+      : WorkflowFailureDetails.resolve(
+          rows[0].Error_Details__c,
+          rows[0].Workflow_Instance__c
+        );
   }
 }

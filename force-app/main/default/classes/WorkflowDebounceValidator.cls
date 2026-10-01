@@ -93,6 +93,7 @@ public inherited sharing class WorkflowDebounceValidator {
   private static void validateRequestPayloadSize(
     WorkflowDebouncer.DebounceRequest req
   ) {
+    WorkflowPayloadOffload.rejectOffloadMarker(req.inputJson, 'Input');
     if (String.isNotBlank(req.inputJson) && req.inputJson.length() > 131072) {
       throw new WorkflowEngine.WorkflowException(
         'Input JSON payload exceeds maximum size limit of 131,072 characters.'

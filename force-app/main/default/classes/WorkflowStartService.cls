@@ -23,10 +23,9 @@ public inherited sharing class WorkflowStartService {
     String correlationKey,
     Object input
   ) {
-    return WorkflowScalarStartService.doStartGetOrStart(
-        new WorkflowEngine.StartRequest(workflowName, correlationKey, input)
-      )
-      .instanceId;
+    return startOne(
+      new WorkflowEngine.StartRequest(workflowName, correlationKey, input)
+    );
   }
 
   /**
@@ -35,7 +34,7 @@ public inherited sharing class WorkflowStartService {
    * @return Id of the new or deduplicated existing instance
    */
   public static Id startOne(WorkflowEngine.StartRequest request) {
-    return WorkflowScalarStartService.doStartGetOrStart(request).instanceId;
+    return startOrGetOne(request).instanceId;
   }
 
   /**
@@ -51,7 +50,7 @@ public inherited sharing class WorkflowStartService {
     String correlationKey,
     Object input
   ) {
-    return WorkflowScalarStartService.doStartGetOrStart(
+    return startOrGetOne(
       new WorkflowEngine.StartRequest(workflowName, correlationKey, input)
     );
   }
@@ -64,6 +63,7 @@ public inherited sharing class WorkflowStartService {
   public static WorkflowEngine.StartResult startOrGetOne(
     WorkflowEngine.StartRequest request
   ) {
+    WorkflowStartValidation.rejectOffloadMarkerInput(request);
     return WorkflowScalarStartService.doStartGetOrStart(request);
   }
 
@@ -113,6 +113,11 @@ public inherited sharing class WorkflowStartService {
   public static List<WorkflowEngine.StartResult> startOrGetBulk(
     List<WorkflowEngine.StartRequest> requests
   ) {
+    if (requests != null) {
+      for (WorkflowEngine.StartRequest req : requests) {
+        WorkflowStartValidation.rejectOffloadMarkerInput(req);
+      }
+    }
     return WorkflowBulkStartService.startOrGetBulk(requests);
   }
 

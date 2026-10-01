@@ -238,7 +238,8 @@ public inherited sharing class WorkflowSignalSources {
       }
       // Resolve offloaded payloads in one bulk query rather than one per row.
       List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-        rawPayloads
+        rawPayloads,
+        instanceId
       );
 
       List<StepContext.Signal> out = new List<StepContext.Signal>();
@@ -436,7 +437,8 @@ public inherited sharing class WorkflowSignalSources {
       // child-completion signals would otherwise run one ContentVersion query
       // each and could exhaust SOQL.
       List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-        rawPayloads
+        rawPayloads,
+        instanceId
       );
       List<StepContext.Signal> result = new List<StepContext.Signal>();
       for (Integer i = 0; i < claimedRows.size(); i++) {
@@ -492,7 +494,7 @@ public inherited sharing class WorkflowSignalSources {
           return new StepContext.Signal(
               c.Id,
               c.Signal_Name__c,
-              WorkflowPayloadOffload.resolvePayload(c.Payload__c)
+              WorkflowPayloadOffload.resolvePayload(c.Payload__c, instanceId)
             )
             .withCreatedDate(c.CreatedDate);
         }
@@ -555,7 +557,7 @@ public inherited sharing class WorkflowSignalSources {
       return new StepContext.Signal(
           cand.Id,
           cand.Signal_Name__c,
-          WorkflowPayloadOffload.resolvePayload(cand.Payload__c)
+          WorkflowPayloadOffload.resolvePayload(cand.Payload__c, instanceId)
         )
         .withCreatedDate(cand.CreatedDate)
         .asClaimed();
@@ -625,7 +627,7 @@ public inherited sharing class WorkflowSignalSources {
     return new StepContext.Signal(
         records[0].Id,
         records[0].Signal_Name__c,
-        WorkflowPayloadOffload.resolvePayload(records[0].Payload__c)
+        WorkflowPayloadOffload.resolvePayload(records[0].Payload__c, instanceId)
       )
       .withCreatedDate(records[0].CreatedDate);
   }
@@ -683,7 +685,8 @@ public inherited sharing class WorkflowSignalSources {
     }
     // Resolve any offloaded payloads with a single bulk query (not one per row).
     List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
-      rawPayloads
+      rawPayloads,
+      instanceId
     );
 
     List<StepContext.Signal> signals = new List<StepContext.Signal>();

@@ -8,6 +8,8 @@
 public inherited sharing class StepChildOutcomes {
   /** The owning signal accessor, for signal reads and match bookkeeping. */
   private final StepSignals signals;
+  /** The instance that reads the outcomes. */
+  private final Id instanceId;
 
   /**
    * @description Constructs the child-outcome resolver bound to its signal
@@ -15,7 +17,19 @@ public inherited sharing class StepChildOutcomes {
    * @param signals The owning StepSignals used for signal reads and marking.
    */
   public StepChildOutcomes(StepSignals signals) {
+    this(signals, null);
+  }
+
+  /**
+   * @description Constructs the child-outcome resolver for one instance. It
+   * reads an offloaded child output only when a file links to this instance or
+   * to one of its children.
+   * @param signals The owning StepSignals used for signal reads and marking.
+   * @param instanceId The instance that reads the outcomes, or null for none.
+   */
+  public StepChildOutcomes(StepSignals signals, Id instanceId) {
     this.signals = signals;
+    this.instanceId = instanceId;
   }
 
   /**
@@ -162,12 +176,13 @@ public inherited sharing class StepChildOutcomes {
     if (res.rawPayloads.isEmpty()) {
       return;
     }
-    List<String> resolvedPayloads = WorkflowPayloadOffload.resolvePayloads(
+    List<String> resolvedPayloads = WorkflowPayloadOffload.resolveChildPayloads(
       WorkflowChildPayloadProvenance.trustedOnly(
         res.rawPayloads,
         res.signalIds,
         res.childKeys
-      )
+      ),
+      instanceId
     );
     for (Integer j = 0; j < resolvedPayloads.size(); j++) {
       // An untrusted stored form stays as the text that was sent.

@@ -261,7 +261,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
     // $timeoutStep key in its Output, the timer fired for a timed suspend/
     // approval wait. Route to the fallback step instead of re-running the
     // current step. Non-compensating, serial instances only.
-    String timedWaitTarget = extractTimedWaitTarget(latestStep);
+    String timedWaitTarget = extractTimedWaitTarget(latestStep, inst.Id);
     Boolean isSerial =
       String.isBlank(inst.Current_Step__c) ||
       !inst.Current_Step__c.contains(',');
@@ -291,7 +291,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
   // timed-wait state envelope (issue #35). Returns null for plain SLEEP state,
   // author-supplied JSON, null/blank, and any parse failure.
   private static String extractTimedWaitTarget(
-    Workflow_Step_Execution__c stepExec
+    Workflow_Step_Execution__c stepExec,
+    Id instanceId
   ) {
     if (stepExec == null || String.isBlank(stepExec.Output__c)) {
       return null;
@@ -304,7 +305,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
       return null;
     }
     return WorkflowPayloadOffload.readJsonMapKey(
-      WorkflowPayloadOffload.resolvePayload(stepExec.Output__c),
+      WorkflowPayloadOffload.resolvePayload(stepExec.Output__c, instanceId),
       '$timeoutStep'
     );
   }

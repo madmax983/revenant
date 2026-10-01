@@ -134,7 +134,10 @@ private class PayloadCodecRoundTripTest {
     for (Workflow_Step_Execution__c exec : execs) {
       raw.add(exec.Output__c);
     }
-    List<String> resolved = WorkflowPayloadOffload.resolvePayloads(raw);
+    List<String> resolved = WorkflowPayloadOffload.resolvePayloads(
+      raw,
+      instanceId
+    );
     List<String> lines = new List<String>{
       'input: ' + normalize(resolved[0], values, maskedKeys),
       'error: ' + normalize(inst.Error_Message__c, values, maskedKeys)

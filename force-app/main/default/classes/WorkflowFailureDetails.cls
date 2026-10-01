@@ -83,9 +83,10 @@ public inherited sharing class WorkflowFailureDetails {
    * after the last separator is decoded only when it is a stored form. Other
    * text does not change. With the identity codec, the value does not change.
    * @param details the stored Error_Details__c value
+   * @param instanceId the instance that owns the step execution
    * @return the value with plaintext failure data
    */
-  public static String resolve(String details) {
+  public static String resolve(String details, Id instanceId) {
     Integer at = details == null ? -1 : details.lastIndexOf(SEPARATOR);
     if (at < 0) {
       return details;
@@ -99,6 +100,6 @@ public inherited sharing class WorkflowFailureDetails {
     }
     return details.left(at) +
       SEPARATOR +
-      WorkflowPayloadOffload.resolvePayload(stored);
+      WorkflowPayloadOffload.resolvePayload(stored, instanceId);
   }
 }

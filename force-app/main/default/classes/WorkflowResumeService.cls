@@ -65,6 +65,7 @@ public inherited sharing class WorkflowResumeService {
    * @param payload resume payload delivered to the waiting step
    */
   public static void resume(String correlationKey, String payload) {
+    WorkflowPayloadOffload.rejectOffloadMarker(payload, 'Resume payload');
     List<Workflow_Instance__c> instances = [
       SELECT Id, Workflow_Name__c, Current_Step__c
       FROM Workflow_Instance__c
@@ -105,6 +106,7 @@ public inherited sharing class WorkflowResumeService {
    * @param payload resume payload delivered to the waiting step
    */
   public static void resumeInstance(Id instanceId, String payload) {
+    WorkflowPayloadOffload.rejectOffloadMarker(payload, 'Resume payload');
     List<Workflow_Instance__c> instances = [
       SELECT Id, Workflow_Name__c, Current_Step__c
       FROM Workflow_Instance__c

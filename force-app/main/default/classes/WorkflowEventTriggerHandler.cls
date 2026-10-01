@@ -155,10 +155,11 @@ public inherited sharing class WorkflowEventTriggerHandler {
 
   private void dispatchRequests() {
     if (!resumeRequests.isEmpty()) {
-      WorkflowBulkResumeService.resume(resumeRequests);
+      // Internal path: a child completion event can carry a marker.
+      WorkflowBulkResumeService.resumeFromEvent(resumeRequests);
     }
     if (!signalRequests.isEmpty()) {
-      WorkflowEngine.signal(signalRequests);
+      WorkflowSignalBatch.routeSignalBatch(signalRequests);
     }
   }
 

@@ -19,25 +19,33 @@ public inherited sharing class StepExecutionParse {
 
   /**
    * @description Resolves offloaded captured-values payloads in small batches to
-   * stay under Apex Heap Limits (synchronous cap is 6 MB).
+   * stay under Apex Heap Limits (synchronous cap is 6 MB). A file resolves only
+   * when it is linked to the owning instance of its execution.
    * @param executions The step executions whose Captured_Values__c to resolve.
+   * Each must select Workflow_Instance__c.
    * @return The resolved captured-values payloads, aligned to executions.
    */
   public static List<String> resolveCapturePayloads(
     List<Workflow_Step_Execution__c> executions
   ) {
     List<String> rawCaptures = new List<String>();
+    List<Id> ownerIds = new List<Id>();
     for (Workflow_Step_Execution__c exec : executions) {
       rawCaptures.add(exec.Captured_Values__c);
+      ownerIds.add(exec.Workflow_Instance__c);
     }
     Integer batchSize = 40;
     List<String> resolvedCaptures = new List<String>();
     for (Integer i = 0; i < rawCaptures.size(); i += batchSize) {
       List<String> batchRaw = new List<String>();
+      List<Id> batchOwners = new List<Id>();
       for (Integer j = i; j < i + batchSize && j < rawCaptures.size(); j++) {
         batchRaw.add(rawCaptures[j]);
+        batchOwners.add(ownerIds[j]);
       }
-      resolvedCaptures.addAll(WorkflowPayloadOffload.resolvePayloads(batchRaw));
+      resolvedCaptures.addAll(
+        WorkflowPayloadOffload.resolvePayloads(batchRaw, batchOwners)
+      );
     }
     return resolvedCaptures;
   }
