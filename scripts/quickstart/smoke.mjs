@@ -241,9 +241,19 @@ function errorText(res) {
   );
 }
 
+/**
+ * The message of a failed deploy. A root cause comes first. A dependent failure
+ * ("Dependent class is invalid") only repeats it and can fill the log.
+ */
 function deployProblems(res) {
   const failures = [res.json?.result?.details?.componentFailures ?? []].flat();
-  const lines = failures.map((f) => `${f.fullName}: ${f.problem}`);
+  const isDependent = (f) =>
+    /Dependent class is invalid/i.test(f.problem ?? "");
+  const ordered = [
+    ...failures.filter((f) => !isDependent(f)),
+    ...failures.filter(isDependent),
+  ];
+  const lines = ordered.map((f) => `${f.fullName}: ${f.problem}`);
   return lines.length ? lines.join("; ") : errorText(res);
 }
 
