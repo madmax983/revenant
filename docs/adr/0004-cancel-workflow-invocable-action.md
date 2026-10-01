@@ -30,8 +30,8 @@ the cancel phase through a resumed rollback.
    nodes in `Cancelling` or `Compensating`.
    Issue #264 adds `cancelInstancesByMode`. The action calls it one time. It
    walks the trees of both modes in one pass, so the walk costs one query for
-   each level, not for each level and mode. A node under a hard-stop root is
-   hard stopped.
+   each level, not for each level and mode. A node under a hard-stop root gets
+   a hard stop.
 4. A keyed row writes the claim tombstone of `claimKeyedCancel` (shared
    `WorkflowSignalBatchCancel.buildCancelClaim`). All claims go in one DML.
 5. Keep the engine terminal state. A cancel with rollback goes `Cancelling`,
@@ -62,7 +62,7 @@ the cancel phase through a resumed rollback.
   returns `cancelled=false` and status `ContinuedAsNew`. A retry finds the
   successor.
 - The walk uses one query for each tree level. A tree deeper than about 80
-  levels can still go over the SOQL limit. A later change can bound the walk
+  levels can exceed the SOQL limit (100 less the fixed queries of a cancel). A later change can bound the walk
   and continue it asynchronously.
 - The action runs in system mode with no custom-permission check, the same as
   Signal Workflow. Apex class access controls use.

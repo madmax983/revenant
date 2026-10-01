@@ -138,8 +138,8 @@ public inherited sharing class WorkflowCancellation {
    * @description Bulk cancel entry (issue #264). Cancels hard-stop roots and
    * rollback roots in one call. It walks the trees of both modes in one pass, so
    * the walk costs one query per level, not one per level and mode. A node that
-   * is, or sits under, a hard-stop root is hard stopped. The other nodes roll
-   * back. The hard-stop pass runs first, then the rollback pass.
+   * is, or sits under, a hard-stop root gets a hard stop. The other nodes
+   * start a saga rollback. The hard-stop pass runs first, then the rollback pass.
    * @param hardStopIds the roots to cancel with no rollback; null is empty
    * @param rollbackIds the roots to cancel with rollback; null is empty
    * @return the Ids that each pass cancelled
@@ -288,6 +288,12 @@ public inherited sharing class WorkflowCancellation {
     return walk;
   }
 
+  /**
+   * @description Adds a child Id under its parent in the edge map.
+   * @param childrenByParent the edge map
+   * @param parentId the parent Id
+   * @param childId the child Id
+   */
   private static void addEdge(
     Map<Id, List<Id>> childrenByParent,
     Id parentId,
@@ -318,7 +324,8 @@ public inherited sharing class WorkflowCancellation {
         queue.add(rootId);
       }
     }
-    // The queue grows while the loop reads it: breadth-first, no SOQL.
+    // The loop adds to the queue while it reads the queue. The walk is
+    // breadth-first and uses no SOQL.
     for (Integer i = 0; i < queue.size(); i++) {
       for (Id childId : childrenByParent.get(queue[i]) ?? new List<Id>()) {
         if (seen.add(childId)) {

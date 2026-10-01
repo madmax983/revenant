@@ -6,8 +6,8 @@ Issue: #264. Parent: #107, #260.
 
 `cancelOwners` calls the hard-stop entry and the rollback entry one time each.
 Each call walks its own trees with one SOQL query for each level. Two roots with
-49 descendants each use 100 walk queries. The batch goes over the 100-query
-limit and rolls back.
+49 descendants each use 100 walk queries. The batch exceeds the 100-query
+limit. The transaction fails.
 
 ## Brainstorm
 
@@ -23,7 +23,7 @@ Choice: A. It meets all three acceptance criteria and adds no schema.
 
 - Give a node the mode of the first root that reaches it. A rollback root under
   a hard-stop root then rolls back. The old behavior was a hard stop.
-- Walk one more time for each mode "to be safe". The cost returns.
+- Walk again for each mode as a precaution. The cost returns.
 - Return one merged result set. A rollback root that a hard stop cancelled then
   shows `cancelled=true`.
 - Change the order of the passes. A rollback pass first starts a rollback that
@@ -36,7 +36,7 @@ root. The hard-stop pass runs first. The result keeps one set for each mode.
 
 - White (facts): the walk is the only part that grows with depth. Lock, step and
   status queries are constant.
-- Red (feel): users fear a lost cancel more than a slow one.
+- Red (feel): users accept a slow cancel. They do not accept a lost cancel.
 - Black (risk): a wrong mode on a node starts or skips a rollback. Tests cover
   both overlap cases.
 - Yellow (gain): a mixed batch costs the same walk as a single-mode batch.
@@ -60,7 +60,7 @@ root. The hard-stop pass runs first. The result keeps one set for each mode.
 
 - Walk queries do not grow with the number of modes (same depth, two trees).
 - Two disjoint 50-level trees, one for each mode, pass under the SOQL limit.
-- A rollback root under a hard-stop root is hard stopped.
-- A hard-stop root under a rollback root is hard stopped. The rollback root
+- A rollback root under a hard-stop root gets a hard stop.
+- A hard-stop root under a rollback root gets a hard stop. The rollback root
   still rolls back.
 - An empty group runs no pass. An empty call uses no SOQL.

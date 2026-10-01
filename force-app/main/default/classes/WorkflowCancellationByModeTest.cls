@@ -106,6 +106,17 @@ private class WorkflowCancellationByModeTest {
 
       Assert.isTrue(results[0].cancelled, 'The hard-stop root must cancel');
       Assert.isTrue(results[1].cancelled, 'The rollback root must cancel');
+      Set<Id> allIds = new Set<Id>(chains[0]);
+      allIds.addAll(chains[1]);
+      Assert.areEqual(
+        99,
+        [
+          SELECT COUNT()
+          FROM Workflow_Instance__c
+          WHERE Id IN :allIds AND Status__c = 'Cancelled'
+        ],
+        'All nodes but the rolling-back root must be Cancelled'
+      );
       Assert.areEqual('Cancelled', statusOf(chains[0][49]), 'Deep hard stop');
       Assert.areEqual('Cancelling', statusOf(chains[1][0]), 'Root rolls back');
       Assert.areEqual('Cancelled', statusOf(chains[1][49]), 'Deep child');
