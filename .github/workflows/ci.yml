@@ -2,6 +2,7 @@
 # format:        Prettier check of every Apex class and trigger.
 # lwc:           LWC Jest tests.
 # global-api:    the frozen global API manifest and the packaged-view compile.
+# ci-org:        tests for the shared CI scratch org script (scripts/ci-org). No org.
 # code-analyzer: Salesforce Code Analyzer (PMD, ESLint, regex, retire-js, CPD, flow).
 #                The job fails on High (severity 2) or worse. The full report is an artifact.
 # The Code Analyzer graph engine (SFGE) is slow. It has its own workflow, sfge.yml.
@@ -86,6 +87,18 @@ jobs:
         env:
           REQUIRE_APEX_LS: "1"
 
+  ci-org:
+    name: CI org script
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tests
+        run: npm run test:ci-org
+
   code-analyzer:
     name: Code Analyzer
     runs-on: ubuntu-latest
@@ -125,7 +138,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [format, lwc, global-api, code-analyzer]
+    needs: [format, lwc, global-api, ci-org, code-analyzer]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed

@@ -1,13 +1,23 @@
 # Apex tests on a scratch org.
 # Deploys every package folder, runs all local Apex tests with coverage, and fails when
-# the org-wide coverage is below APEX_MIN_COVERAGE. The org is always deleted.
+# the org-wide coverage is below APEX_MIN_COVERAGE.
 # Needs the DEVHUB_SFDX_AUTH_URL secret. Without it (a fork pull request), the job skips.
-# The Dev Hub allows only 6 scratch org signups a day, so this workflow must not run on
-# every push. It runs:
+#
+# The Dev Hub allows only 6 scratch org signups a day, so runs share one CI org:
+#   - The nightly run on main is the keeper. It deletes the old CI org, makes a new one,
+#     and keeps its auth URL in the Actions cache, encrypted with a key from
+#     DEVHUB_SFDX_AUTH_URL. That is the only secret. Nothing to renew by hand.
+#   - Every other run borrows that org. If the cache is empty or the org is gone or near
+#     its end, the run makes a one-off org and deletes it after the tests.
+#   - Runs on the shared org go one at a time (the job concurrency group).
+# See scripts/ci-org/ci-org.mjs and docs/ci.md.
+#
+# It runs:
 #   - on a pull request that has the label "run-org-tests" (add it when the change needs
 #     Apex tests; it runs again on each push while the label stays)
-#   - every night on main (one org)
-#   - on demand (Actions > Apex Tests > Run workflow)
+#   - every night on main (the keeper, one signup)
+#   - on demand (Actions > Apex Tests > Run workflow). "recreate" on main makes a new
+#     shared org now.
 name: Apex Tests
 
 on:
@@ -16,13 +26,14 @@ on:
   schedule:
     - cron: "43 4 * * *"
   workflow_dispatch:
+    inputs:
+      recreate:
+        description: Make a new shared CI org now (only on main)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-
-concurrency:
-  group: apex-tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   APEX_MIN_COVERAGE: "85"
@@ -58,6 +69,11 @@ jobs:
     if: needs.gate.result == 'success' && needs.gate.outputs.devhub == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # One run at a time on the shared org. A waiting run is not cancelled by a newer
+    # one that is already running. A newer waiting run replaces an older waiting run.
+    concurrency:
+      group: apex-tests-ci-org
+      cancel-in-progress: false
     steps:
       # One package folder is a submodule.
       - uses: actions/checkout@v4
@@ -69,8 +85,33 @@ jobs:
       - uses: ./.github/actions/sf-devhub
         with:
           auth-url: ${{ secrets.DEVHUB_SFDX_AUTH_URL }}
-      - name: Create a scratch org
-        run: sf org create scratch --definition-file config/project-scratch-def.json --alias ci --duration-days 1 --wait 30
+      # The newest cache that starts with the restore key. A pull request can read a
+      # cache that main saved. It cannot save one that main can read.
+      - name: Restore the shared CI org
+        uses: actions/cache/restore@v4
+        with:
+          path: .ci-org
+          key: ci-org-v1-none
+          restore-keys: ci-org-v1-
+      - name: Get the CI org
+        id: org
+        env:
+          DEVHUB_SFDX_AUTH_URL: ${{ secrets.DEVHUB_SFDX_AUTH_URL }}
+          RECREATE: ${{ inputs.recreate }}
+        run: |
+          mode=borrow
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$RECREATE" = "true" ]; }; then
+            mode=keeper
+          fi
+          echo "Mode: $mode"
+          node scripts/ci-org/ci-org.mjs prepare --mode "$mode" --auth-file .ci-org/auth.enc
+      # Save before the tests, so that a failing test run does not lose the new org.
+      - name: Keep the new shared CI org
+        if: steps.org.outputs.save == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ci-org
+          key: ci-org-v1-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Deploy
         run: sf project deploy start --target-org ci --wait 60
       - name: Run all local Apex tests
@@ -79,7 +120,7 @@ jobs:
           mkdir -p test-results
           sf apex run test --target-org ci --test-level RunLocalTests --code-coverage \
             --result-format json --output-dir test-results --wait 60
-      # Run after test failures too, but not when the org was never created.
+      # Run after test failures too, but not when the org was never ready.
       - name: Check the coverage
         if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         run: |
@@ -92,6 +133,7 @@ jobs:
             const min = parseFloat(process.env.APEX_MIN_COVERAGE);
             const lines = [
               "### Apex tests",
+              `CI org: ${process.env.CI_ORG_SOURCE}`,
               `Outcome: ${s.outcome}`,
               `Passing: ${s.passing} of ${s.testsRan}, failing: ${s.failing}`,
               `Org-wide coverage: ${s.orgWideCoverage} (minimum ${min}%)`,
@@ -99,6 +141,8 @@ jobs:
             require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n\n") + "\n");
             if (!(cov >= min)) { console.error(`::error::Coverage ${s.orgWideCoverage} is below ${min}%.`); process.exit(1); }
           ' "$f"
+        env:
+          CI_ORG_SOURCE: ${{ steps.org.outputs.source }}
       - name: Keep the test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -106,6 +150,7 @@ jobs:
           name: apex-test-results
           path: test-results/
           if-no-files-found: ignore
-      - name: Delete the scratch org
-        if: always()
+      # Only a one-off org is deleted. The shared org lives until the next keeper run.
+      - name: Delete the one-off scratch org
+        if: always() && steps.org.outputs.source == 'oneoff'
         run: sf org delete scratch --target-org ci --no-prompt || true

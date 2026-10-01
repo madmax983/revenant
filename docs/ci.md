@@ -7,9 +7,10 @@ Every check runs in GitHub Actions. Each one also runs on your machine.
 | `ci.yml` | Apex format | `prettier --check` of all Apex classes and triggers | No |
 | `ci.yml` | LWC Jest | `npm run test:unit:coverage` | No |
 | `ci.yml` | Global API | `npm run test:global-api`, with the packaged-view compile (`REQUIRE_APEX_LS=1`) | No |
+| `ci.yml` | CI org script | `npm run test:ci-org`: tests for `scripts/ci-org` with a fake `sf` | No |
 | `ci.yml` | Code Analyzer | `sf code-analyzer run`, rule selector `recommended` (PMD, ESLint, regex, retire-js, CPD, flow). Fails at High or worse | No |
 | `ci.yml` | CI | One job that needs all of the above. Require this one in branch protection | No |
-| `apex-tests.yml` | Apex tests and coverage (label `run-org-tests`, nightly, on demand) | A new scratch org, deploy, all local Apex tests, org-wide coverage of at least `APEX_MIN_COVERAGE` (85) | Yes |
+| `apex-tests.yml` | Apex tests and coverage (label `run-org-tests`, nightly, on demand) | The shared CI org (or a one-off org), deploy, all local Apex tests, org-wide coverage of at least `APEX_MIN_COVERAGE` (85) | Yes |
 | `sfge.yml` | SFGE | The Code Analyzer graph engine (data-flow rules). Weekly, on main and on demand. Not on pull requests: it takes more than 10 minutes | No |
 | `determinism-lint.yml` | Rust core, sf plugin | See `docs/determinism-lint.md` | No |
 | `report-types.yml` | Static checks | See `docs/report-types.md` | No |
@@ -18,13 +19,38 @@ Every check runs in GitHub Actions. Each one also runs on your machine.
 ## The secret
 
 `apex-tests.yml` and the quickstart smoke use the repository secret `DEVHUB_SFDX_AUTH_URL`.
-Without it (for example on a fork pull request) those jobs skip with a warning. The shared
-login step is `.github/actions/sf-devhub`. Each run uses one scratch org from the daily
-Dev Hub limit, and that limit is **6 a day**. So:
+It is the only secret. Without it (for example on a fork pull request) those jobs skip
+with a warning. The shared login step is `.github/actions/sf-devhub`.
 
-- `apex-tests.yml` does not run on every push. It runs on a PR with the label `run-org-tests`, every night on main, and on demand.
-- The quickstart smoke still runs on each PR that touches the engine. Count it in the 6.
-- A new push to a pull request cancels the old run, but a cancelled run may already have used its org.
+## The shared CI org
+
+The Dev Hub allows **6 scratch org signups a day**, so `apex-tests.yml` does not make one
+org per run. Runs share one CI org. `scripts/ci-org/ci-org.mjs` does the work.
+
+| Run | Mode | What it does |
+|-----|------|--------------|
+| Nightly on `main`, or "Run workflow" on `main` with `recreate` | keeper | Deletes the old CI org, makes a new one (3 days), saves its auth URL in the Actions cache. One signup. |
+| Pull request with the label `run-org-tests`, or "Run workflow" on another branch | borrow | Restores the cache, logs in to the shared org, and checks it is connected with at least 1 day left. If it is not, the run makes a one-off org and deletes it after the tests. |
+
+- **No secret to renew.** The auth URL is encrypted (AES-256-GCM) with a key derived from
+  `DEVHUB_SFDX_AUTH_URL`, and the log masks it. A fork pull request has no secret, so it
+  cannot decrypt the cache. If you change `DEVHUB_SFDX_AUTH_URL`, the old cache cannot be
+  read. The next run makes a one-off org, and the next keeper run replaces the cache.
+- **Only `main` can share.** The cache is per branch. A pull request can read the cache
+  that `main` saved, but a cache that a pull request saves is not visible to `main`
+  or to other pull requests. So only the keeper saves.
+- **One run at a time** on the shared org (the job concurrency group `apex-tests-ci-org`).
+  A waiting run that a newer run replaces shows as cancelled.
+- **The org drifts during the day.** A deploy does not delete a removed class, and a PR
+  leaves its new classes in the org. The keeper makes a new org every night, so the
+  drift lasts at most a day. To get a clean org now, run the workflow on `main` with
+  `recreate`.
+- **First run, a cache miss and an evicted cache** all work. The run makes a one-off org.
+  GitHub removes a cache after 7 days without a read, and the nightly run reads it.
+- **Cost.** About 1 signup a day for the keeper. A one-off org adds 1 for each run that
+  finds no shared org. The quickstart smoke still makes 1 org for each PR push that
+  touches the engine. Count it in the 6.
+- A Dev Hub allows 3 active scratch orgs. The shared org uses 1. The keeper deletes the old org first. If `sf org delete scratch` cannot (the CLI knows the org only from an auth URL), it deletes the `ActiveScratchOrg` record through the Dev Hub.
 
 ## Run the checks locally
 
@@ -33,6 +59,7 @@ npm ci
 npx prettier --check --plugin=prettier-plugin-apex "force-app/**/*.{cls,trigger}" "examples/**/*.{cls,trigger}"
 npm run test:unit
 npm run test:global-api
+npm run test:ci-org
 sf plugins install code-analyzer@5.16.0
 sf code-analyzer run --workspace force-app --workspace examples --rule-selector recommended --severity-threshold 2
 ```
