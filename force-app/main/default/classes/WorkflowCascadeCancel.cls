@@ -5,9 +5,11 @@
  * Flow:
  * 1. `WorkflowInstanceTrigger` (after update) calls {@link requestCascade} for
  *    each instance that enters `Failed`, `Compensated` or `CompensationFailed`.
+ *    (After insert) it calls {@link requestCascadeForLateChildren} for the
+ *    parents of new children. A parent that already failed gets an event, so a
+ *    child that commits after the pass is cancelled too (issue #241).
  * 2. {@link requestCascade} publishes one `CASCADE_CANCEL` `Workflow_Event__e`
- *    for each such parent. It runs no query, so it also covers a child that is
- *    linked later. The event is `PublishAfterCommit`: a rolled-back failure sends
+ *    for each such parent. It runs no query. The event is `PublishAfterCommit`: a rolled-back failure sends
  *    no event.
  * 3. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
  *    transaction with its own governor limits.
@@ -95,6 +97,32 @@ public inherited sharing class WorkflowCascadeCancel {
       System.debug(
         LoggingLevel.WARN,
         'Cascade cancel request failed: ' + ex.getMessage()
+      );
+    }
+  }
+
+  /**
+   * @description Requests a cascade for each parent that is already in a
+   * failure state. A child was linked to it after its cascade pass (issue
+   * #241). It runs one query, and none when `parentIds` is empty. The paged
+   * pass then cancels the child.
+   * @param parentIds parents of the new children
+   */
+  public static void requestCascadeForLateChildren(Set<Id> parentIds) {
+    if (
+      parentIds == null ||
+      parentIds.isEmpty() ||
+      !WorkflowEngine.cascadeCancelChildrenOnFailure
+    ) {
+      return;
+    }
+    try {
+      requestCascade(stillFailedParents(parentIds));
+    } catch (Exception ex) {
+      // Fire-and-forget: a late-child check must never fail the child start.
+      System.debug(
+        LoggingLevel.WARN,
+        'Late child cascade check failed: ' + ex.getMessage()
       );
     }
   }

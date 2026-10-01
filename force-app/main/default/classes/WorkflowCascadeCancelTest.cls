@@ -276,6 +276,172 @@ private class WorkflowCascadeCancelTest {
   }
 
   // ============================================================
+  // Issue #241 — a child linked after the cascade pass
+  // ============================================================
+
+  // The pass ran and found no child. A child then commits. It must be reaped.
+  private static void assertLateChildReaped(String parentStatus) {
+    WorkflowEngine.disableQueueableInTest = true;
+    Workflow_Instance__c parent = insertInstance(null, 'Running');
+
+    Test.startTest();
+    setStatus(parent.Id, parentStatus);
+    deliverAll();
+    WorkflowCascadeCancel.publishedEvents.clear();
+    Workflow_Instance__c late = insertInstance(parent.Id, 'Running');
+    System.assertEquals(
+      1,
+      WorkflowCascadeCancel.publishedEvents.size(),
+      'A late child requests one cascade'
+    );
+    deliverAll();
+    Test.stopTest();
+
+    System.assertEquals(parentStatus, statusOf(parent.Id), 'Parent unchanged');
+    System.assertEquals('Cancelled', statusOf(late.Id), 'Late child reaped');
+  }
+
+  @IsTest
+  static void childAfterPassUnderFailedParentIsReaped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      assertLateChildReaped('Failed');
+    }
+  }
+
+  @IsTest
+  static void childAfterPassUnderCompensatedParentIsReaped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      assertLateChildReaped('Compensated');
+    }
+  }
+
+  @IsTest
+  static void childAfterPassUnderCompensationFailedParentIsReaped() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      assertLateChildReaped('CompensationFailed');
+    }
+  }
+
+  @IsTest
+  static void lateChildWithToggleOffIsKept() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
+      Workflow_Instance__c parent = insertInstance(null, 'Failed');
+
+      Test.startTest();
+      Workflow_Instance__c late = insertInstance(parent.Id, 'Running');
+      deliverAll();
+      Test.stopTest();
+
+      System.assertEquals(
+        0,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'Toggle off: no event for a late child'
+      );
+      System.assertEquals('Running', statusOf(late.Id), 'Child kept');
+    }
+  }
+
+  @IsTest
+  static void childOfActiveParentPublishesNothing() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c parent = insertInstance(null, 'Running');
+
+      Test.startTest();
+      Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+      deliverAll();
+      Test.stopTest();
+
+      System.assertEquals(
+        0,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'An active parent needs no cascade'
+      );
+      System.assertEquals('Running', statusOf(child.Id), 'Child keeps running');
+    }
+  }
+
+  @IsTest
+  static void noParentRunsNoQuery() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Boolean warm = WorkflowEngine.cascadeCancelChildrenOnFailure;
+
+      Test.startTest();
+      Integer q0 = Limits.getQueries();
+      WorkflowCascadeCancel.requestCascadeForLateChildren(null);
+      WorkflowCascadeCancel.requestCascadeForLateChildren(new Set<Id>());
+      System.assertEquals(0, Limits.getQueries() - q0, 'No parent, no query');
+      Test.stopTest();
+
+      System.assert(warm, 'Toggle on');
+      System.assertEquals(
+        0,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'No parent, no event'
+      );
+    }
+  }
+
+  @IsTest
+  static void bulkLateChildrenQueryOnceAndPublishOncePerFailedParent() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c failedA = insertInstance(null, 'Failed');
+      Workflow_Instance__c failedB = insertInstance(null, 'Compensated');
+      Workflow_Instance__c active = insertInstance(null, 'Running');
+      List<Workflow_Instance__c> kids = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 3; i++) {
+        kids.add(newInstance(failedA.Id, 'Running'));
+        kids.add(newInstance(failedB.Id, 'Running'));
+        kids.add(newInstance(active.Id, 'Running'));
+      }
+      Boolean warm = WorkflowEngine.cascadeCancelChildrenOnFailure;
+
+      Test.startTest();
+      Integer q0 = Limits.getQueries();
+      insert kids;
+      System.assertEquals(
+        2,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'One event for each failed parent'
+      );
+      Integer smallCost = Limits.getQueries() - q0;
+      List<Workflow_Instance__c> more = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 30; i++) {
+        more.add(newInstance(failedA.Id, 'Running'));
+      }
+      q0 = Limits.getQueries();
+      insert more;
+      Test.stopTest();
+
+      System.assert(warm, 'Toggle on');
+      System.assert(
+        Limits.getQueries() - q0 <= smallCost,
+        'Query cost does not grow with the child count'
+      );
+    }
+  }
+
+  @IsTest
+  static void terminalLateChildPublishesNothing() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c parent = insertInstance(null, 'Failed');
+
+      Test.startTest();
+      insertInstance(parent.Id, 'Completed');
+      Test.stopTest();
+
+      System.assertEquals(
+        0,
+        WorkflowCascadeCancel.publishedEvents.size(),
+        'A finished child needs no cascade'
+      );
+    }
+  }
+
+  // ============================================================
   // AC2 — saga semantics
   // ============================================================
 
@@ -563,9 +729,11 @@ private class WorkflowCascadeCancelTest {
   static void cascadeErrorNeverFailsParentAndRetries() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
-      // Insert publishes no event, so only the retry job can reap the child.
+      // Toggle off in setup: only the retry job can reap the child.
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
       Workflow_Instance__c parent = insertInstance(null, 'Failed');
       Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+      WorkflowEngine.cascadeCancelChildrenOnFailure = true;
 
       Test.startTest();
       WorkflowCascadeCancel.throwTestException = true;
@@ -594,8 +762,10 @@ private class WorkflowCascadeCancelTest {
   @IsTest
   static void cascadeStopsRetryAfterMaxAttempts() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
       Workflow_Instance__c parent = insertInstance(null, 'Failed');
       Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+      WorkflowEngine.cascadeCancelChildrenOnFailure = true;
       Workflow_Event__e last = WorkflowCascadeCancel.buildParentEvent(
         parent.Id
       );
@@ -674,7 +844,9 @@ private class WorkflowCascadeCancelTest {
         parents.add(newInstance(null, 'Failed'));
       }
       insert parents;
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
       insertChildren(parents, 1, 'Running');
+      WorkflowEngine.cascadeCancelChildrenOnFailure = true;
       List<Workflow_Event__e> events = new List<Workflow_Event__e>();
       for (Workflow_Instance__c p : parents) {
         events.add(WorkflowCascadeCancel.buildParentEvent(p.Id));
@@ -703,8 +875,10 @@ private class WorkflowCascadeCancelTest {
   static void failedContinuationPublishRetries() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
       Workflow_Instance__c parent = insertInstance(null, 'Failed');
       Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+      WorkflowEngine.cascadeCancelChildrenOnFailure = true;
 
       Test.startTest();
       WorkflowCascadeCancel.failContinuationPublish = true;
