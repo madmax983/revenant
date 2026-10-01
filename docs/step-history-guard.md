@@ -65,6 +65,8 @@ A parked, paused or stale delivery does not pay: the guard runs after these gate
 
 The detail pane does not read all step rows. It reads the newest 500 rows without long text. Then it reads `Input__c`, `Output__c` and `Error_Details__c` for the newest 50 rows only. It reads two rows for each query. It stops when these reads add 2 MB of heap. The note gives the number of rows that have text. It also reads the latest parked (`Pending`) row first, so the wait descriptor stays correct. Older rows show no long text. The pane shows a note when rows are hidden or when more than 50 rows exist. The note gives the window size and the row count. The row count stops at 50,000 and then shows "50000+".
 
+The pane reads the attachment bodies of offloaded payloads five at a time. It keeps only the display text (50,000 characters at most) and the full length. It stops when these reads add 2 MB of heap. A body that is not read shows its marker text.
+
 The first compensation step uses `Input__c` and `Output__c` of the last `Completed` visit of the forward step. A later `Failed` or halted visit does not supply them. The retry path, the bulk pre-create path and the bulk retry path use the same rule. When the forward step has no `Completed` visit, the compensation step starts with no input and no output.
 
 The visit count of a `_Compensate` step reads no long text. The locked requery reads the long text of the latest row only.

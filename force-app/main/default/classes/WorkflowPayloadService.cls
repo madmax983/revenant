@@ -11,6 +11,14 @@ public inherited sharing class WorkflowPayloadService {
   @TestVisible
   private static final Integer PAYLOAD_DISPLAY_LIMIT = 50000;
 
+  // Heap the attachment reads may add (bytes). The read stops at the budget. An
+  // attachment not read shows its marker text.
+  @TestVisible
+  private static Integer attachmentHeapBudget = 2000000;
+
+  // Attachments per ContentVersion query. A small chunk keeps one read small.
+  private static final Integer ATTACHMENT_CHUNK = 5;
+
   /** @description Display text for an encoded payload. */
   public static final String REDACTED_PAYLOAD = WorkflowPayloadCodecs.REDACTED_PAYLOAD;
 
@@ -36,16 +44,23 @@ public inherited sharing class WorkflowPayloadService {
     return val;
   }
 
+  // The display form of one attachment body. The full body is not kept.
+  private class AttachmentBody {
+    String display;
+    Integer fullLength;
+    Boolean encoded;
+  }
+
   /**
    * Carries the resolved attachment bodies plus the download descriptors accumulated
    * while resolving an instance's payload fields, so resolveAndRecordPayload can take a
    * single context object instead of a long parameter list.
    */
   private class PayloadResolution {
-    Map<Id, String> attachmentIdToData;
+    Map<Id, AttachmentBody> attachmentIdToData;
     Map<String, Object> payloadFiles;
 
-    PayloadResolution(Map<Id, String> attachmentIdToData) {
+    PayloadResolution(Map<Id, AttachmentBody> attachmentIdToData) {
       this.attachmentIdToData = attachmentIdToData;
       this.payloadFiles = new Map<String, Object>();
     }
@@ -67,22 +82,22 @@ public inherited sharing class WorkflowPayloadService {
     if (
       attachmentId != null && res.attachmentIdToData.containsKey(attachmentId)
     ) {
-      String full = res.attachmentIdToData.get(attachmentId);
-      if (WorkflowPayloadCodecs.isEncoded(full)) {
+      AttachmentBody body = res.attachmentIdToData.get(attachmentId);
+      if (body.encoded) {
         return REDACTED_PAYLOAD;
       }
-      if (full != null && full.length() > PAYLOAD_DISPLAY_LIMIT) {
+      if (body.fullLength > PAYLOAD_DISPLAY_LIMIT) {
         res.payloadFiles.put(
           fieldKey,
           new Map<String, Object>{
             'contentDocumentId' => attachmentId,
             'downloadUrl' => '/sfc/servlet.shepherd/document/download/' +
             attachmentId,
-            'fullLength' => full.length()
+            'fullLength' => body.fullLength
           }
         );
       }
-      return truncatePayload(full);
+      return body.display;
     }
     if (WorkflowPayloadCodecs.isEncoded(textValue)) {
       return REDACTED_PAYLOAD;
@@ -130,32 +145,57 @@ public inherited sharing class WorkflowPayloadService {
     return verifiedAttachmentIds;
   }
 
-  private static Map<Id, String> loadAttachmentData(
+  // Reads the verified attachment bodies in small chunks. It keeps the display text
+  // only. It stops when the reads used the heap budget (the first chunk always runs).
+  private static Map<Id, AttachmentBody> loadAttachmentData(
     Set<Id> attachmentIds,
     Id linkedEntityId
   ) {
-    Map<Id, String> attachmentIdToData = new Map<Id, String>();
+    Map<Id, AttachmentBody> attachmentIdToData = new Map<Id, AttachmentBody>();
     if (attachmentIds.isEmpty()) {
       return attachmentIdToData;
     }
-    Set<Id> verifiedAttachmentIds = verifyAttachmentLinks(
-      attachmentIds,
-      linkedEntityId
+    List<Id> verifiedAttachmentIds = new List<Id>(
+      verifyAttachmentLinks(attachmentIds, linkedEntityId)
     );
-    if (verifiedAttachmentIds.isEmpty()) {
-      return attachmentIdToData;
-    }
-    for (ContentVersion cv : [
-      SELECT ContentDocumentId, VersionData
-      FROM ContentVersion
-      WHERE ContentDocumentId IN :verifiedAttachmentIds AND IsLatest = TRUE
-      WITH SYSTEM_MODE
-    ]) {
-      if (cv.VersionData != null) {
-        attachmentIdToData.put(cv.ContentDocumentId, cv.VersionData.toString());
+    Integer heapLimit = Limits.getHeapSize() + attachmentHeapBudget;
+    for (
+      Integer i = 0; i < verifiedAttachmentIds.size(); i += ATTACHMENT_CHUNK
+    ) {
+      if (i > 0 && Limits.getHeapSize() > heapLimit) {
+        break;
+      }
+      List<Id> chunk = new List<Id>();
+      for (
+        Integer j = i;
+        j < Math.min(i + ATTACHMENT_CHUNK, verifiedAttachmentIds.size());
+        j++
+      ) {
+        chunk.add(verifiedAttachmentIds[j]);
+      }
+      for (ContentVersion cv : [
+        SELECT ContentDocumentId, VersionData
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :chunk AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        if (cv.VersionData != null) {
+          attachmentIdToData.put(
+            cv.ContentDocumentId,
+            toDisplayBody(cv.VersionData.toString())
+          );
+        }
       }
     }
     return attachmentIdToData;
+  }
+
+  private static AttachmentBody toDisplayBody(String full) {
+    AttachmentBody body = new AttachmentBody();
+    body.encoded = WorkflowPayloadCodecs.isEncoded(full);
+    body.fullLength = full.length();
+    body.display = body.encoded ? null : truncatePayload(full);
+    return body;
   }
 
   /**
@@ -171,7 +211,7 @@ public inherited sharing class WorkflowPayloadService {
     List<Workflow_Step_Execution__c> steps
   ) {
     Set<Id> attachmentIds = collectPayloadAttachmentIds(instance, steps);
-    Map<Id, String> attachmentIdToData = loadAttachmentData(
+    Map<Id, AttachmentBody> attachmentIdToData = loadAttachmentData(
       attachmentIds,
       instance.Id
     );
