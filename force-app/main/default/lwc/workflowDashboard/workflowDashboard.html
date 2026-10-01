@@ -2527,6 +2527,17 @@
                         <p class="slds-text-body_regular slds-m-bottom_medium">
                             Inject a named signal directly into this stuck instance. The signal will follow the standard at-least-once routing and idempotency guarantees.
                         </p>
+                        <template if:true={hasChildKeyOptions}>
+                            <lightning-combobox
+                                label="Outstanding child key"
+                                options={childKeyOptions}
+                                value={signalName}
+                                onchange={handleChildKeySelect}
+                                field-level-help="Picking a key fills Signal Name."
+                                class="slds-m-bottom_small"
+                                data-id="child-key-select">
+                            </lightning-combobox>
+                        </template>
                         <lightning-input
                             label="Signal Name"
                             value={signalName}

@@ -996,6 +996,19 @@ export default class WorkflowDashboard extends LightningElement {
     return this.selectedInst && this.selectedInst.Status__c === "Suspended";
   }
 
+  // Key choices for a multi-child join. One key needs none.
+  get childKeyOptions() {
+    const raw = this.selectedInst && this.selectedInst.awaitedChildSignalNames;
+    const names = Array.isArray(raw) ? [...new Set(raw.filter(Boolean))] : [];
+    return names.length > 1
+      ? names.map((name) => ({ label: name, value: name }))
+      : [];
+  }
+
+  get hasChildKeyOptions() {
+    return this.childKeyOptions.length > 0;
+  }
+
   get isSendSignalDisabled() {
     return !this.signalName || !this.signalName.trim() || this.loadingDetails;
   }
@@ -1566,6 +1579,10 @@ export default class WorkflowDashboard extends LightningElement {
           awaitedSignalName: result.waitDescriptor
             ? result.waitDescriptor.signalName
             : null,
+          // Keys of a multi-child join (#231); the modal lists them.
+          awaitedChildSignalNames:
+            (result.waitDescriptor && result.waitDescriptor.childSignalNames) ||
+            [],
           isWatchdogWaiting: result.waitingOn === "Watchdog",
           waitingOnBadgeClass:
             result.waitingOn === "Watchdog"
@@ -3383,8 +3400,8 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleOpenSignalModal() {
     this.signalModalOpen = true;
-    // Pre-fill the awaited signal name (approval/child waits) so the operator can send it
-    // with no transformation; a generic/timer wait leaves it blank for manual entry.
+    // Pre-fill the awaited name (approval or single-child wait). A multi-child or generic
+    // wait stays blank: the operator picks a key from the list or types one.
     this.signalName =
       this.selectedInst && this.selectedInst.awaitedSignalName
         ? this.selectedInst.awaitedSignalName
@@ -3400,6 +3417,10 @@ export default class WorkflowDashboard extends LightningElement {
 
   handleSignalNameChange(event) {
     this.signalName = event.target.value;
+  }
+
+  handleChildKeySelect(event) {
+    this.signalName = event.detail.value;
   }
 
   handleSignalPayloadChange(event) {
