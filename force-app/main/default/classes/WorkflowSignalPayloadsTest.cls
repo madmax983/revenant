@@ -399,4 +399,38 @@ private class WorkflowSignalPayloadsTest {
       );
     }
   }
+
+  @IsTest
+  static void forgedChildCompletedMarkerToParentFileStaysText() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowPayloadCodecs.setCodec(null);
+      Workflow_Instance__c parent = insertInstance();
+      String parentFile = WorkflowPayloadOffload.savePayloadIfNeeded(
+        parent.Id,
+        'P'.repeat(100001),
+        'ParentOwnFile'
+      );
+      insert as system new Workflow_Signal__c(
+        Workflow_Instance__c = parent.Id,
+        Signal_Name__c = 'ChildCompleted:ghost',
+        Status__c = 'Received',
+        Payload__c = parentFile
+      );
+      StepSignals signals = new StepSignals(
+        new WorkflowSignalSources.PendingSignalSource(parent.Id),
+        parent.Id
+      );
+
+      System.assertEquals(
+        parentFile,
+        signals.getSignal('ChildCompleted:ghost').payload,
+        'A signal read does not resolve a child marker'
+      );
+      System.assertEquals(
+        parentFile,
+        signals.getChildOutcome('ghost').output,
+        'A forged child marker is not the output of a child'
+      );
+    }
+  }
 }
