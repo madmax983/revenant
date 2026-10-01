@@ -9,7 +9,7 @@ The half-open sweep must not skip a due Open breaker because other Open rows fil
 - `CircuitBreakerReconciler.sweepHalfOpen` reads `Status__c = 'Open'` rows with `LIMIT 200` and `FOR UPDATE`. The query has no order.
 - The open duration is on `Circuit_Breaker_Config__mdt`, not on the row. A key can resolve to the `Default` record. Thus SOQL cannot filter on "due".
 - Rows that are not due (long duration, or no config) can fill the batch. A due row after the limit can wait for many heartbeats.
-- SOQL does not allow `ORDER BY` with `FOR UPDATE`. The fix in the issue text (add `ORDER BY` to the query) does not compile.
+- SOQL does not allow `ORDER BY` with `FOR UPDATE`. SOQL rejects the fix in the issue text (add `ORDER BY` to the query).
 - The sweep locks all 200 rows, also rows that it does not change. `tryAdmit` must wait for these locks.
 - `tryAdmit` also flips a due row on demand. The sweep is the backstop for a key with no traffic.
 - The engine already uses "find, then lock" (`WorkflowDebounceSweeper`, `WorkflowSignalSources`).
@@ -28,22 +28,22 @@ The half-open sweep must not skip a due Open breaker because other Open rows fil
 
 ## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                                   | Prevention                                                            |
-| ------------------------------------------------------------- | --------------------------------------------------------------------- |
-| A due row stays behind more than 200 rows that are not due.   | Find reads up to 2,000 rows. It keeps only due rows, up to 200. Test. |
-| The batch takes new due rows and skips old due rows.          | Find sorts by `Opened_At__c`, then `Id`. Test.                        |
-| A row changes between find and lock (`tryAdmit` flips it).    | Lock reads only `Open` rows and checks "due" again. Test.             |
-| A row opens again between find and lock (new `Opened_At__c`). | The check under the lock uses the locked value. Test.                 |
-| More SOQL in the heartbeat.                                   | One more query only when a row is due. Test pins 1 and 2 queries.     |
-| A null `Opened_At__c`.                                        | Null sorts first and is due (same as now). Existing helper.           |
-| More than 2,000 Open rows that are not due.                   | Accepted. Needs 2,000 open dependencies. Traffic still flips a row.   |
+| Way to fail                                                   | Prevention                                                                                    |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| A due row stays behind more than 200 rows that are not due.   | Find reads up to 2,000 rows. It keeps only due rows, up to 200. Test.                         |
+| The batch takes new due rows and skips old due rows.          | Find sorts by `Opened_At__c`, then `Id`. Test.                                                |
+| A row changes between find and lock (`tryAdmit` flips it).    | Lock reads only `Open` rows and checks "due" again. Test.                                     |
+| A row opens again between find and lock (new `Opened_At__c`). | The check under the lock uses the locked value. Test.                                         |
+| More SOQL in the heartbeat.                                   | One more query only when a row is due. Tests check 1 and 2 queries.                           |
+| A null `Opened_At__c`.                                        | Null sorts first. `openDurationElapsed` returns true for null, if a config exists. No change. |
+| More than 2,000 Open rows that are not due.                   | Accepted. Needs 2,000 older Open rows that are not due. Traffic still flips the row.          |
 
 ## Six Hats
 
 - White: one class changes. One query becomes two. No schema change. No global API change.
 - Red: the issue is P2/P3. Keep the fix small. Do not add a store.
 - Yellow: due rows go first. The sweep locks fewer rows, so `tryAdmit` waits less.
-- Black: the simple fix in the issue does not compile. A race between find and lock. Both have a test.
+- Black: SOQL rejects the simple fix in the issue. A race between find and lock. Both have a test.
 - Green: a stored "due at" field or a cursor is possible later if 2,000 is not sufficient.
 - Blue: RED tests first, then GREEN, then REFACTOR, then review from many angles.
 
@@ -55,8 +55,10 @@ The half-open sweep must not skip a due Open breaker because other Open rows fil
 
 ## Tests
 
-- Due row after many rows that are not due: it flips (RED now).
-- Batch cap: the oldest due rows flip first (RED now).
+- Due row after many rows that are not due: it flips (failed before the fix).
+- Due row after many rows with no config: it flips.
+- Batch cap: the oldest due rows flip first (failed before the fix).
+- Null `Opened_At__c`: sorts first and flips.
 - No due row: one query. Due rows: two queries.
 - Lock skips a row that is no longer `Open`.
 - Lock skips a row that opened again (not due now).

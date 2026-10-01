@@ -66,8 +66,57 @@ private class CircuitBreakerReconcilerTest {
         statusOf('Due'),
         'A due row flips when rows that are not due fill the batch'
       );
-      System.assertEquals('Open', statusOf('NotDueA'));
-      System.assertEquals('Open', statusOf('NotDueB'));
+      System.assertEquals('Open', statusOf('NotDueA'), 'Not due: stays Open');
+      System.assertEquals('Open', statusOf('NotDueB'), 'Not due: stays Open');
+    }
+  }
+
+  @IsTest
+  static void testDueRowFlipsBehindFullBatchOfRowsWithNoConfig() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      CircuitBreakerReconciler.sweepBatchSize = 2;
+      // An open duration of 0 is not valid, so the key has no config.
+      insert new List<Circuit_Breaker_State__c>{
+        openRow('NoConfigA', 0, 600),
+        openRow('NoConfigB', 0, 600),
+        openRow('Due', SHORT_SECONDS, 60)
+      };
+      Test.startTest();
+      CircuitBreakerGate.sweepHalfOpen();
+      Test.stopTest();
+      System.assertEquals(
+        'HalfOpen',
+        statusOf('Due'),
+        'A due row flips when rows with no config fill the batch'
+      );
+      System.assertEquals('Open', statusOf('NoConfigA'), 'No config: no flip');
+      System.assertEquals('Open', statusOf('NoConfigB'), 'No config: no flip');
+    }
+  }
+
+  @IsTest
+  static void testNullOpenedAtIsFirstAndDue() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      CircuitBreakerReconciler.sweepBatchSize = 1;
+      Circuit_Breaker_State__c noTime = openRow('NoTime', LONG_SECONDS, 0);
+      noTime.Opened_At__c = null;
+      insert new List<Circuit_Breaker_State__c>{
+        openRow('Due', SHORT_SECONDS, 60),
+        noTime
+      };
+      Test.startTest();
+      CircuitBreakerGate.sweepHalfOpen();
+      Test.stopTest();
+      System.assertEquals(
+        'HalfOpen',
+        statusOf('NoTime'),
+        'A null Opened_At__c sorts first and is due'
+      );
+      System.assertEquals(
+        'Open',
+        statusOf('Due'),
+        'The batch of 1 is full, so this row waits'
+      );
     }
   }
 
@@ -84,8 +133,8 @@ private class CircuitBreakerReconcilerTest {
       Test.startTest();
       CircuitBreakerGate.sweepHalfOpen();
       Test.stopTest();
-      System.assertEquals('HalfOpen', statusOf('DueOld'));
-      System.assertEquals('HalfOpen', statusOf('DueMid'));
+      System.assertEquals('HalfOpen', statusOf('DueOld'), 'Oldest: flips');
+      System.assertEquals('HalfOpen', statusOf('DueMid'), 'Second: flips');
       System.assertEquals(
         'Open',
         statusOf('DueNew'),
@@ -95,7 +144,7 @@ private class CircuitBreakerReconcilerTest {
   }
 
   @IsTest
-  static void testNoDueRowUsesOneQueryAndNoLock() {
+  static void testNoDueRowUsesOneQuery() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       insert openRow('NotDue', LONG_SECONDS, 600);
       Test.startTest();
@@ -105,11 +154,11 @@ private class CircuitBreakerReconcilerTest {
       System.assertEquals(
         q0 + 1,
         Limits.getQueries(),
-        'No due row: one find query, no lock query'
+        'No due row: one find query only'
       );
       System.assertEquals(d0, Limits.getDmlStatements(), 'No due row: 0 DML');
       Test.stopTest();
-      System.assertEquals('Open', statusOf('NotDue'));
+      System.assertEquals('Open', statusOf('NotDue'), 'Not due: stays Open');
     }
   }
 
@@ -126,7 +175,7 @@ private class CircuitBreakerReconcilerTest {
         'Due row: one find query and one lock query'
       );
       Test.stopTest();
-      System.assertEquals('HalfOpen', statusOf('Due'));
+      System.assertEquals('HalfOpen', statusOf('Due'), 'Due: flips');
     }
   }
 
@@ -143,7 +192,7 @@ private class CircuitBreakerReconcilerTest {
         CircuitBreakerGate.mockConfigs
       );
       Test.stopTest();
-      System.assert(locked.isEmpty(), 'A row that left Open is not locked');
+      System.assert(locked.isEmpty(), 'A row that is not Open is not returned');
     }
   }
 
@@ -160,8 +209,8 @@ private class CircuitBreakerReconcilerTest {
         CircuitBreakerGate.mockConfigs
       );
       Test.stopTest();
-      System.assertEquals(1, locked.size(), 'Only the due row is locked');
-      System.assertEquals(due.Id, locked[0].Id);
+      System.assertEquals(1, locked.size(), 'Only the due row is returned');
+      System.assertEquals(due.Id, locked[0].Id, 'The due row is returned');
     }
   }
 

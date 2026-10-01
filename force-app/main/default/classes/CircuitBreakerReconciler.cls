@@ -12,8 +12,8 @@
  * lands within one watchdog cadence even with no calls. Heavy enough to live on the
  * watchdog sweep, never on the admission hot path.
  *
- * The open duration is not on the state row. The resolver gets it from
- * `Circuit_Breaker_Config__mdt` (governor-free). Thus SOQL cannot select only
+ * The open duration is not on the state row. `CircuitBreakerConfigResolver` gets
+ * it from `Circuit_Breaker_Config__mdt` (governor-free). Thus SOQL cannot select only
  * due rows (issue #236). SOQL also does not allow `ORDER BY` with `FOR UPDATE`.
  * The sweep has two steps:
  * 1. Find: an unlocked read of Open rows, oldest first. Keep only due rows.
@@ -22,11 +22,12 @@
  * The flip is a partial-success update, so one bad row cannot stop the sweep.
  */
 public inherited sharing class CircuitBreakerReconciler {
-  // Max rows that one heartbeat flips. A backlog drains on later heartbeats.
+  // Maximum number of rows that one heartbeat flips. Later heartbeats flip the
+  // remaining rows.
   @TestVisible
   private static Integer sweepBatchSize = 200;
 
-  // Max Open rows that one heartbeat reads to find due rows.
+  // Maximum number of Open rows that one heartbeat reads to find due rows.
   @TestVisible
   private static Integer sweepScanLimit = 2000;
 
@@ -57,8 +58,8 @@ public inherited sharing class CircuitBreakerReconciler {
         CircuitBreakerStateStore.intOf(row.Half_Open_Epoch__c) + 1;
     }
     if (!toUpdate.isEmpty()) {
-      // Partial-success update: a per-row fault is isolated so the rest of the sweep
-      // still lands. The heartbeat also wraps this call in a best-effort try/catch.
+      // Partial-success update: one bad row does not stop the other rows. The
+      // heartbeat also catches all exceptions from this call.
       Database.update(toUpdate, false, AccessLevel.SYSTEM_MODE);
     }
   }
@@ -95,8 +96,8 @@ public inherited sharing class CircuitBreakerReconciler {
   }
 
   /**
-   * @description Locks the found rows and reads them again. A row that is not
-   * Open now, or that opened again and is not due, is skipped.
+   * @description Locks the found rows and reads them again. Skips a row that is
+   * not Open now, or that opened again and is not due.
    * @param ids The Ids from `findDueIds`.
    * @param now The time to compare with each open duration.
    * @param mockConfigs Test-injected configs.
