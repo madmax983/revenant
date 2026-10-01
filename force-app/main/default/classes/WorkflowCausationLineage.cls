@@ -58,9 +58,13 @@ public inherited sharing class WorkflowCausationLineage {
     Map<Id, String> resolvedOutputByDocId = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
       ancestors
     );
+    Set<Id> ancestorIds = new Map<Id, Workflow_Instance__c>(ancestors).keySet();
+    WorkflowPayloadAccess.Gate gate = new WorkflowPayloadAccess.Gate(
+      ancestorIds
+    );
     for (Workflow_Instance__c inst : ancestors) {
       lineage.add(
-        WorkflowStatusProjection.buildStatus(inst, resolvedOutputByDocId)
+        WorkflowStatusProjection.buildStatus(inst, resolvedOutputByDocId, gate)
       );
     }
     return lineage;

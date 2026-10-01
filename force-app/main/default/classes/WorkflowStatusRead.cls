@@ -4,9 +4,11 @@
  * bulk), resolving key lookups to the winning generation via
  * {@link WorkflowStatusWinnerResolver} (preferring live/active runs and following
  * ContinuedAsNew chains) and projecting DTOs via {@link WorkflowStatusProjection}
- * (which rehydrates any offloaded `Output__c`). Read-only: a small constant number
- * of SOQL queries and zero DML. Extracted from `WorkflowEngine`; returns the
- * resident public DTO `WorkflowEngine.WorkflowStatus`.
+ * (which rehydrates any offloaded `Output__c`). A user without read access to an
+ * instance gets a placeholder for its encoded output (issue #243). Read-only: a
+ * small constant number of SOQL queries and zero DML. Extracted from
+ * `WorkflowEngine`; returns the resident public DTO
+ * `WorkflowEngine.WorkflowStatus`.
  */
 global inherited sharing class WorkflowStatusRead {
   /**
@@ -45,7 +47,8 @@ global inherited sharing class WorkflowStatusRead {
   /**
    * Returns the current status and rehydrated output for a workflow instance by Id,
    * or null if no instance with that Id exists.
-   * Costs at most 2 SOQL queries and zero DML.
+   * Costs at most 2 SOQL queries and zero DML. With a payload codec, add one
+   * query for each 200 instances (record-access check, issue #243).
    * @param instanceId Id of the workflow instance to read
    * @return the instance status DTO, or null when no such instance exists
    */
@@ -75,6 +78,8 @@ global inherited sharing class WorkflowStatusRead {
    * Bulk variant — accepts a list of instance Ids and returns a correspondingly
    * ordered list of WorkflowStatus DTOs (null where an Id was not found).
    * Costs at most 2 SOQL queries total regardless of list size, and zero DML.
+   * With a payload codec, add one query for each 200 instances (record-access
+   * check, issue #243).
    * @param instanceIds instance Ids to read
    * @return status DTOs positionally aligned with instanceIds (null per missing Id)
    */
@@ -109,12 +114,19 @@ global inherited sharing class WorkflowStatusRead {
       instById.values()
     );
 
+    WorkflowPayloadAccess.Gate gate = new WorkflowPayloadAccess.Gate(
+      instById.keySet()
+    );
     for (Id reqId : instanceIds) {
       Workflow_Instance__c inst = instById.get(reqId);
       out.add(
         inst == null
           ? null
-          : WorkflowStatusProjection.buildStatus(inst, resolvedOutputByDocId)
+          : WorkflowStatusProjection.buildStatus(
+              inst,
+              resolvedOutputByDocId,
+              gate
+            )
       );
     }
     return out;
@@ -150,7 +162,9 @@ global inherited sharing class WorkflowStatusRead {
    * Winners are resolved from metadata only (Output__c is fetched solely for the
    * winners), per key (no single hot key can crowd out others or exhaust the heap).
    * Costs a small constant number of SOQL queries regardless of list size, and zero
-   * DML. (The Id-based overloads remain bounded at <= 2 SOQL.)
+   * DML. (The Id-based overloads remain bounded at <= 2 SOQL.) With a payload
+   * codec, add one query for each 200 instances (record-access check, issue
+   * #243).
    * @param correlationKeys correlation keys to resolve
    * @return status DTOs positionally aligned with correlationKeys (null per blank
    * or unmatched key)
@@ -184,6 +198,9 @@ global inherited sharing class WorkflowStatusRead {
       instById.values()
     );
 
+    WorkflowPayloadAccess.Gate gate = new WorkflowPayloadAccess.Gate(
+      instById.keySet()
+    );
     for (String k : correlationKeys) {
       if (String.isBlank(k)) {
         out.add(null);
@@ -196,7 +213,11 @@ global inherited sharing class WorkflowStatusRead {
       out.add(
         inst == null
           ? null
-          : WorkflowStatusProjection.buildStatus(inst, resolvedOutputByDocId)
+          : WorkflowStatusProjection.buildStatus(
+              inst,
+              resolvedOutputByDocId,
+              gate
+            )
       );
     }
     return out;

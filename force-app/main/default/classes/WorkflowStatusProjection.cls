@@ -5,7 +5,7 @@
  * instance's `Output__c`, and assembles the resident `WorkflowEngine.WorkflowStatus`
  * DTO. Extracted from `WorkflowEngine`; consumed by {@link WorkflowStatusRead} and
  * {@link WorkflowCausationLineage}. Read-only (zero DML); all SOQL runs in system
- * mode.
+ * mode. Decoding goes through {@link WorkflowPayloadAccess}.
  */
 public inherited sharing class WorkflowStatusProjection {
   /**
@@ -46,18 +46,25 @@ public inherited sharing class WorkflowStatusProjection {
    * @param inst the queried instance row to project
    * @param resolvedOutputByDocId the pre-resolved offloaded-output map keyed by
    *        ContentDocumentId
+   * @param gate the record-access gate that decodes or redacts the output
    * @return the assembled status DTO
    */
   public static WorkflowEngine.WorkflowStatus buildStatus(
     Workflow_Instance__c inst,
-    Map<Id, String> resolvedOutputByDocId
+    Map<Id, String> resolvedOutputByDocId,
+    WorkflowPayloadAccess.Gate gate
   ) {
     Boolean terminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
       inst.Status__c
     );
     String output = null;
     if (terminal) {
-      output = rehydrateFromMap(inst.Output__c, resolvedOutputByDocId);
+      output = rehydrateFromMap(
+        inst.Output__c,
+        resolvedOutputByDocId,
+        gate,
+        inst.Id
+      );
       // A terminal instance has definitively produced its output, so surface an
       // empty result as '' rather than null. (Salesforce coerces an empty text
       // field to null on insert.) This keeps output == null meaning exactly "not
@@ -121,15 +128,17 @@ public inherited sharing class WorkflowStatusProjection {
   }
 
   // Rehydrates a single output string using the pre-fetched resolved map, then
-  // decodes it with the payload codec.
+  // decodes it through the record-access gate.
   private static String rehydrateFromMap(
     String textValue,
-    Map<Id, String> resolvedOutputByDocId
+    Map<Id, String> resolvedOutputByDocId,
+    WorkflowPayloadAccess.Gate gate,
+    Id instanceId
   ) {
     Id docId = getOffloadDocId(textValue);
-    if (docId != null && resolvedOutputByDocId.containsKey(docId)) {
-      return WorkflowPayloadCodecs.decode(resolvedOutputByDocId.get(docId));
-    }
-    return WorkflowPayloadCodecs.decode(textValue);
+    String stored = (docId != null && resolvedOutputByDocId.containsKey(docId))
+      ? resolvedOutputByDocId.get(docId)
+      : textValue;
+    return gate.decode(stored, instanceId);
   }
 }
