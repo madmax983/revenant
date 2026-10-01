@@ -413,6 +413,7 @@ global inherited sharing class StepContext {
       this.workflowInstanceId
     );
     applyPendingSignals(b);
+    this.stepSignals.bindChildren(this.workflowInstanceId, b.childRecordsVal);
     if (b.timeoutResumeVal == true) {
       this.stepRetry.markTimeoutResume();
     }
@@ -475,6 +476,7 @@ global inherited sharing class StepContext {
     private SignalSource signalSourceVal;
     private List<Signal> pendingSignalsVal;
     private Boolean pendingSignalsProvided = false;
+    private List<Workflow_Instance__c> childRecordsVal;
     private Map<String, Object> capturedValuesMapVal;
     private String capturedValuesJsonVal;
     private Boolean capturesJsonProvided = false;
@@ -597,6 +599,17 @@ global inherited sharing class StepContext {
     public Builder pendingSignals(List<Signal> val) {
       this.pendingSignalsVal = val;
       this.pendingSignalsProvided = true;
+      return this;
+    }
+
+    /**
+     * @description Supplies the child records of this instance (used by tests)
+     * so child outcomes need no query.
+     * @param val The child instance records.
+     * @return This builder, for chaining.
+     */
+    public Builder childRecords(List<Workflow_Instance__c> val) {
+      this.childRecordsVal = val;
       return this;
     }
 
@@ -787,13 +800,13 @@ global inherited sharing class StepContext {
     global String status { get; private set; }
     /** The child's error message when it failed, else null. */
     global String errorMessage { get; private set; }
-    /** The child's output payload, resolved from its completion signal. */
+    /** The child's output payload, read from the child record. */
     global String output { get; private set; }
     private Boolean present = false;
 
     /**
-     * @description Constructs an empty (not-present) outcome, used when no child
-     * result signal is pending for the key.
+     * @description Constructs an empty (not-present) outcome, used when no verified child
+     * result exists for the key.
      */
     public ChildOutcome() {
       this.present = false;

@@ -13,8 +13,9 @@
  *
  * 2. When the child reaches Completed the engine publishes a
  *    ChildCompleted:<childCorrelationKey> Platform Event targeting the parent.  The
- *    parent step reads the child's output with ctx.signals().getSignal(...).payload — no
- *    hand-rolled SOQL against Workflow_Signal__c.
+ *    parent step reads the child's output with
+ *    ctx.signals().getChildOutcome(childKey).output.  The signal only wakes the
+ *    parent.  The engine reads the output from the child record.
  *
  * 3. Returning StepResult.complete() from the resuming step triggers engine-managed
  *    signal consumption: every Received signal of the observed name is marked
@@ -25,9 +26,8 @@
  *    active descendants (root-first traversal over Parent_Instance__c), so
  *    explicitly cancelling a parent reaps its in-flight children.  A parent that
  *    FAILS also cancels its in-flight children (issue #94, README section 6).  A
- *    child that fails or times out never publishes ChildCompleted, so its parent
- *    stays Suspended.  A production composite would add its own
- *    child-failure/timeout signal to cover that path.
+ *    child that fails publishes ChildFailed, and the step reads the failure with
+ *    getChildOutcome.  A child that times out to Failed does the same.
  */
 public inherited sharing class ChildWorkflowCompositionExample implements WorkflowDefinition {
   /** Minimum credit score required to approve the loan. */
@@ -83,7 +83,7 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
    * Launcher + resume handler in one idempotent step.
    *
    * Resume run — ChildCompleted:<childKey> signal is present → read the child's
-   *              credit score from the payload, decide the branch, and return
+   *              credit score from the child outcome, decide the branch, and return
    *              COMPLETE.  The COMPLETE transition marks every Received signal of
    *              the observed name Consumed, so at-least-once redelivered duplicates
    *              cannot cause a second advance.
@@ -112,12 +112,9 @@ public inherited sharing class ChildWorkflowCompositionExample implements Workfl
 
       if (outcome.isPresent()) {
         if (outcome.isSuccess()) {
-          // Resume: the child completed.  Its serialised output is the signal payload.
-          // For large child outputs the payload may be a blob reference; resolve it.
-          String childOutputJson = WorkflowPayloadOffload.resolvePayload(
-            outcome.output,
-            ctx.workflowInstanceId
-          );
+          // Resume: the child completed.  The engine read its output from the
+          // child record and resolved it.
+          String childOutputJson = outcome.output;
           Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
             childOutputJson
           );

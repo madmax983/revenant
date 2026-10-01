@@ -60,6 +60,9 @@ is the concurrency gate that decides whether a step may run now.
   in its own transaction. It reads the `Requested` anchor rows and sends the
   Custom Notification. `WorkflowEventTrigger` ignores `NOTIFY`.
   Toggle: `Revenant_Config__mdt.Send_Notifications__c`.
+  `WorkflowNotifierSweep` (issue #274, heartbeat step 7c) publishes the
+  request again when a row stays `Requested` for 15 minutes. After 3
+  attempts the row is `Failed`.
 - `WorkflowStepTimeoutConfig`, `WorkflowTimeoutArming`, `WorkflowTimeoutReArm`
 - `ConcurrencyGate` (facade) + `ConcurrencyConfigResolver`,
   `ConcurrencyReconciler`, `ConcurrencyReleaseProcessor`
@@ -163,6 +166,9 @@ status, keys) is not encoded. See
 - `WorkflowPayloadCodecs` (config, fail-closed encode/decode),
   `WorkflowPayloadEnvelope` (stored form), `WorkflowSignalPayloads` (signal
   encode and bulk offload)
+- Child outcomes: `StepChildOutcomes` reads the child record. A child signal
+  only wakes the parent. See [ADR 0022](docs/adr/0022-engine-provenance-child-outcomes.md)
+  and [the threat model](docs/payload-ingress-threat-model.md).
 - `PayloadCodec`, `CodecContext`, `IdentityPayloadCodec` (public API)
 - Rehydrators that also decode: `WorkflowStatusProjection`,
   `WorkflowStatusPayloadRehydrator`; `WorkflowPayloadService` redacts

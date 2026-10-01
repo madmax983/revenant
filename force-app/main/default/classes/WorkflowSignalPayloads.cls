@@ -13,10 +13,58 @@ public inherited sharing class WorkflowSignalPayloads {
   private static Set<Id> createdDocIds = new Set<Id>();
 
   /**
+   * @description True for a child-completion signal name. These signals only
+   * wake the parent. The engine never reads or resolves their payload, because
+   * any caller can send them (see StepChildOutcomes).
+   * @param signalName the signal name
+   * @return true when the signal is wake-only
+   */
+  public static Boolean isWakeOnly(String signalName) {
+    return signalName != null &&
+      (signalName.startsWithIgnoreCase('ChildCompleted:') ||
+      signalName.startsWithIgnoreCase('ChildFailed:'));
+  }
+
+  /**
+   * @description Resolves and decodes the stored payload of one signal row. A
+   * wake-only signal gives null and is not resolved.
+   * @param signalName the signal name
+   * @param stored the stored payload
+   * @param ownerId the instance that reads the signal
+   * @return the payload text, or null for a wake-only signal
+   */
+  public static String readPayload(
+    String signalName,
+    String stored,
+    Id ownerId
+  ) {
+    return isWakeOnly(signalName)
+      ? null
+      : WorkflowPayloadOffload.resolvePayload(stored, ownerId);
+  }
+
+  /**
+   * @description Resolves and decodes the stored payloads of signal rows in
+   * one bulk pass. A wake-only signal gives null and is not resolved.
+   * @param rows the signal rows
+   * @param ownerId the instance that reads the signals
+   * @return the payload texts, index-aligned with the rows
+   */
+  public static List<String> readPayloads(
+    List<Workflow_Signal__c> rows,
+    Id ownerId
+  ) {
+    List<String> stored = new List<String>();
+    for (Workflow_Signal__c row : rows) {
+      stored.add(isWakeOnly(row.Signal_Name__c) ? null : row.Payload__c);
+    }
+    return WorkflowPayloadOffload.resolvePayloads(stored, ownerId);
+  }
+
+  /**
    * @description Encodes a signal payload for storage. Every signal payload is
    * external input, so it is always encoded, also when it looks like an
-   * envelope. A child-completion payload is the child's stored output. The
-   * parent decodes it again only after it checks the child record (see
+   * envelope. A child outcome never comes from a signal payload (see
    * StepChildOutcomes), so a forged signal cannot decrypt ciphertext.
    * @param payload the signal payload
    * @return the stored form
