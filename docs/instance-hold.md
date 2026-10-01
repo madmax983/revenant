@@ -24,7 +24,7 @@ Each call returns a `HoldResult` with an `Outcome` and a short `message`. For an
 | `release` | status `Held`                                                       | `RELEASED`                 | clear hold, `Running` (1), re-arm timeouts, enqueue, one log row |
 | `release` | held, not parked yet                                                | `RELEASED`                 | clear hold, one log row                                          |
 
-(1) A run that waits for a concurrency slot gets `Suspended`. The admission gate then decides.
+(1) A run that waits for a concurrency slot gets `Suspended`. The admission gate then decides. A timer (a wait that ended in the park) also gives `Suspended`. The sleep sweep wakes it.
 
 ## How the hold works
 

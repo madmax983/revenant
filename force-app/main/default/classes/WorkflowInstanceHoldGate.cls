@@ -45,14 +45,16 @@ public inherited sharing class WorkflowInstanceHoldGate {
 
   /**
    * @description The status for a step that waits (suspend, sleep, retry,
-   * child, approval). A park stays: a branch that ran before the park must not
-   * undo it, else release does not drive the sibling branch that the park
-   * stopped.
+   * child, approval). A park stays (`DefinitionChanged`, `Held`, `Paused`): an
+   * outcome that ran before the park must not undo it, else release does not
+   * drive the step that the park stopped.
    * @param instance The re-locked instance of the step outcome.
-   * @return `Held` when the instance is parked, else `Suspended`.
+   * @return The park status when the instance is parked, else `Suspended`.
    */
   public static String waitStatus(Workflow_Instance__c instance) {
-    return instance.Status__c == STATUS ? STATUS : 'Suspended';
+    return WorkflowOutcomePrepare.isParkedStatus(instance.Status__c)
+      ? instance.Status__c
+      : 'Suspended';
   }
 
   // Re-read the instance FOR UPDATE (instance lock first, matching admission

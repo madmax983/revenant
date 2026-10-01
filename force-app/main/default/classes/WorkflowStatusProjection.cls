@@ -5,7 +5,7 @@
  * instance's `Output__c`, and assembles the resident `WorkflowEngine.WorkflowStatus`
  * DTO. Extracted from `WorkflowEngine`; consumed by {@link WorkflowStatusRead} and
  * {@link WorkflowCausationLineage}. Read-only (zero DML); all SOQL runs in system
- * mode.
+ * mode. Decoding goes through {@link WorkflowPayloadAccess}.
  */
 public inherited sharing class WorkflowStatusProjection {
   /**
@@ -46,18 +46,20 @@ public inherited sharing class WorkflowStatusProjection {
    * @param inst the queried instance row to project
    * @param resolvedOutputByKey the owned file text, keyed by
    *        {@link WorkflowPayloadOffload#ownedKey}
+   * @param gate the record-access gate that decodes or redacts the output
    * @return the assembled status DTO
    */
   public static WorkflowEngine.WorkflowStatus buildStatus(
     Workflow_Instance__c inst,
-    Map<String, String> resolvedOutputByKey
+    Map<String, String> resolvedOutputByKey,
+    WorkflowPayloadAccess.Gate gate
   ) {
     Boolean terminal = WorkflowStatusRead.TERMINAL_GETSTATUS_STATUSES.contains(
       inst.Status__c
     );
     String output = null;
     if (terminal) {
-      output = rehydrateFromMap(inst, resolvedOutputByKey);
+      output = rehydrateFromMap(inst, resolvedOutputByKey, gate);
       // A terminal instance has definitively produced its output, so surface an
       // empty result as '' rather than null. (Salesforce coerces an empty text
       // field to null on insert.) This keeps output == null meaning exactly "not
@@ -94,18 +96,20 @@ public inherited sharing class WorkflowStatusProjection {
   }
 
   // Rehydrates the output of one instance from the owned map, then decodes it
-  // with the payload codec.
+  // through the record-access gate.
   private static String rehydrateFromMap(
     Workflow_Instance__c inst,
-    Map<String, String> resolvedOutputByKey
+    Map<String, String> resolvedOutputByKey,
+    WorkflowPayloadAccess.Gate gate
   ) {
+    String stored = inst.Output__c;
     Id docId = WorkflowPayloadOffload.markerDocId(inst.Output__c);
     if (docId != null) {
       String key = WorkflowPayloadOffload.ownedKey(inst.Id, docId);
       if (resolvedOutputByKey.containsKey(key)) {
-        return WorkflowPayloadCodecs.decode(resolvedOutputByKey.get(key));
+        stored = resolvedOutputByKey.get(key);
       }
     }
-    return WorkflowPayloadCodecs.decode(inst.Output__c);
+    return gate.decode(stored, inst.Id);
   }
 }

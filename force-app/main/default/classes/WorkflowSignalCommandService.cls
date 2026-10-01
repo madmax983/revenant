@@ -33,6 +33,11 @@ public inherited sharing class WorkflowSignalCommandService {
     if (String.isBlank(signalName)) {
       throw WorkflowDashboardSupport.auraError('Signal name is required.');
     }
+    if (isApprovalSignalName(signalName)) {
+      throw WorkflowDashboardSupport.auraError(
+        'Use Approve or Reject for approval signals.'
+      );
+    }
     requireInjectableInstance(instanceId);
 
     Map<String, Object> payloadMap = parseInjectionPayload(payloadJson);
@@ -67,6 +72,13 @@ public inherited sharing class WorkflowSignalCommandService {
     WorkflowDashboardSupport.checkOperatorAction();
     Boolean matched = WorkflowUnroutedSignals.redeliverCapturedSignal(signalId);
     return new Map<String, Object>{ 'matched' => matched };
+  }
+
+  // Only the approval action adds the decision payload and does the role check (#233).
+  // Remove zero-width characters so a hidden prefix cannot pass.
+  private static Boolean isApprovalSignalName(String signalName) {
+    String name = signalName.replaceAll('[\\u200B-\\u200D\\u2060\\uFEFF]', '');
+    return name.trim().toLowerCase().startsWith('approve:');
   }
 
   private static void validateSignalInjectionPermission() {

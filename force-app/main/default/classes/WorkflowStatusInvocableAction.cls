@@ -357,7 +357,16 @@ global inherited sharing class WorkflowStatusInvocableAction {
     List<Workflow_Instance__c> resolved,
     Map<String, String> dataByAttachment
   ) {
+    // The gate redacts encoded payloads of instances that the user cannot read
+    // (issue #243).
     List<StatusResult> results = new List<StatusResult>();
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Instance__c inst : resolved) {
+      if (inst != null) {
+        ids.add(inst.Id);
+      }
+    }
+    WorkflowPayloadAccess.Gate gate = new WorkflowPayloadAccess.Gate(ids);
     for (Workflow_Instance__c inst : resolved) {
       StatusResult res = new StatusResult();
       if (inst != null) {
@@ -370,12 +379,14 @@ global inherited sharing class WorkflowStatusInvocableAction {
         res.outputJson = WorkflowStatusPayloadRehydrator.rehydrate(
           inst.Output__c,
           inst.Id,
-          dataByAttachment
+          dataByAttachment,
+          gate
         );
         res.progressJson = WorkflowStatusPayloadRehydrator.rehydrate(
           inst.Progress__c,
           inst.Id,
-          dataByAttachment
+          dataByAttachment,
+          gate
         );
         res.causationId = WorkflowCausationParser.cleanCausationId(
           inst.Causation_Id__c
