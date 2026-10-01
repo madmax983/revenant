@@ -86,8 +86,8 @@ public inherited sharing class WorkflowFailureDetails {
    * @param instanceId the instance that owns the step execution
    * @return the value with plaintext failure data
    */
-  public static String resolve(String details) {
-    return resolveWith(details, null);
+  public static String resolve(String details, Id instanceId) {
+    return resolveWith(details, instanceId, false);
   }
 
   /**
@@ -99,11 +99,16 @@ public inherited sharing class WorkflowFailureDetails {
    * @return the value with plaintext failure data, or the placeholder
    */
   public static String resolveForUser(String details, Id instanceId) {
-    return resolveWith(details, instanceId);
+    return resolveWith(details, instanceId, true);
   }
 
-  // A non-null instanceId turns on the record-access check.
-  private static String resolveWith(String details, Id instanceId) {
+  // The owner decides which offload file the method may read. checkAccess
+  // turns on the record-access check.
+  private static String resolveWith(
+    String details,
+    Id instanceId,
+    Boolean checkAccess
+  ) {
     Integer at = details == null ? -1 : details.lastIndexOf(SEPARATOR);
     if (at < 0) {
       return details;
@@ -116,7 +121,7 @@ public inherited sharing class WorkflowFailureDetails {
       return details;
     }
     if (
-      instanceId != null &&
+      checkAccess &&
       !WorkflowPayloadAccess.readableIds(new Set<Id>{ instanceId })
         .contains(instanceId)
     ) {
