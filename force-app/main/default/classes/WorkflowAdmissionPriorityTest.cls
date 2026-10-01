@@ -10,6 +10,7 @@
  *  AC7 — one default class gives FIFO.
  *  AC8 — the dashboard concurrency view shows each waiting priority.
  *  AC9 — a yield adds no scheduled job beyond a normal park.
+ *  #275 — a resumed paused bounded start joins the queue before its worker.
  */
 @IsTest
 public class WorkflowAdmissionPriorityTest {
@@ -624,6 +625,7 @@ public class WorkflowAdmissionPriorityTest {
 
     Test.startTest();
     WorkflowPauseResumeDrainer.resumeParkedChunk(WF);
+    System.assertEquals(WF, load(high).Admission_Queue__c, 'High is queued');
     finish(holder);
     WorkflowEngine.runStep(low, null);
     Test.stopTest();
@@ -646,5 +648,37 @@ public class WorkflowAdmissionPriorityTest {
     System.assertEquals('Running', row.Status__c, 'Resumed');
     System.assertEquals(false, row.Concurrency_Parked__c, 'No marker');
     System.assertEquals(null, row.Admission_Queue__c, 'Not queued');
+  }
+
+  @IsTest
+  static void testResumedSlotHolderIsNotMarked() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(1, 60);
+    Id holder = fillSlot('h-holder');
+    update new Workflow_Instance__c(Id = holder, Status__c = 'Paused');
+
+    Test.startTest();
+    WorkflowPauseResumeDrainer.resumeParkedChunk(WF);
+    Test.stopTest();
+
+    Workflow_Instance__c row = load(holder);
+    System.assertEquals(null, row.Admission_Queue__c, 'A slot holder waits not');
+    System.assert(isAdmitted(holder), 'Slot kept');
+  }
+
+  @IsTest
+  static void testResumedMarkedStartStaysQueued() {
+    WorkflowEngine.disableQueueableInTest = true;
+    configure(1, 60);
+    Id marked = newWaiting('m-marked', 0);
+    update new Workflow_Instance__c(Id = marked, Status__c = 'Paused');
+
+    Test.startTest();
+    WorkflowPauseResumeDrainer.resumeParkedChunk(WF);
+    Test.stopTest();
+
+    Workflow_Instance__c row = load(marked);
+    System.assertEquals('Running', row.Status__c, 'Resumed');
+    System.assertEquals(WF, row.Admission_Queue__c, 'Still queued');
   }
 }

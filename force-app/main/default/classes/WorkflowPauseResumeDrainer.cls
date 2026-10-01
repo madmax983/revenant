@@ -15,11 +15,13 @@
  *   instances are naturally excluded with no offset paging.
  *
  * ORDERING (behavior-sensitive — drives parked-workflow resumption)
- *   Within a chunk: (1) flip rows to Running via a single update, (2) reserve the
+ *   Within a chunk: (1) set the awaiting-admission marker on each bounded start
+ *   that holds no slot, and flip the rows to Running with a single update, so
+ *   the trigger queues those rows before any worker runs, (2) reserve the
  *   queueable slot for the next drain continuation BEFORE re-arming timeouts,
  *   (3) re-arm step timeouts, (4) enqueue the resumed workers (serial via the
  *   engine bulk orchestrator enqueue, parallel via per-branch platform-event
- *   fan-out). This order is preserved exactly from the original gate.
+ *   fan-out). Steps (2) to (4) keep the order of the original gate.
  */
 public inherited sharing class WorkflowPauseResumeDrainer {
   // Max parked instances flipped back to Running per transaction on resume; the
@@ -85,8 +87,14 @@ public inherited sharing class WorkflowPauseResumeDrainer {
     return moreRemain;
   }
 
-  // Issue #275: a bounded start that the pause parked has no marker. Set it
-  // before the update, so the trigger queues the row before its worker runs.
+  // Issue #275: a pause can park a bounded start with no marker. Set the
+  // awaiting-admission marker before the update. The trigger then queues the
+  // row before its worker runs.
+  /**
+   * @description Sets the awaiting-admission marker on a resumed bounded start
+   * that holds no slot.
+   * @param inst The instance to resume. The method changes it in memory.
+   */
   private static void markAwaitingAdmission(Workflow_Instance__c inst) {
     if (
       inst.Concurrency_Parked__c != true &&
