@@ -104,7 +104,7 @@ jobs:
             mode=keeper
           fi
           echo "Mode: $mode"
-          node scripts/ci-org/ci-org.mjs prepare --mode "$mode" --auth-file .ci-org/auth.enc
+          node scripts/ci-org/ci-org.mjs prepare --mode "$mode" --auth-file .ci-org/auth.enc --marker-file .ci-org-creating
       # Save before the tests, so that a failing test run does not lose the new org.
       - name: Keep the new shared CI org
         if: steps.org.outputs.save == 'true'
@@ -164,8 +164,11 @@ jobs:
       # A one-off org is deleted. So is a new keeper org that is not in the cache (the save
       # failed, or the run was cancelled before it): nobody could borrow it, and it would
       # hold one of the 3 active slots. The shared org lives until the next keeper run.
+      # The marker file is left by a run that was killed while it made an org. The step
+      # outputs are not enough for that case: a killed step may write none.
       - name: Delete a scratch org that nobody can reuse
         if: >-
           always() && (steps.org.outputs.source == 'oneoff' ||
-          (steps.org.outputs.save == 'true' && steps.cached.outcome != 'success'))
+          (steps.org.outputs.save == 'true' && steps.cached.outcome != 'success') ||
+          hashFiles('.ci-org-creating') != '')
         run: sf org delete scratch --target-org ci --no-prompt || true

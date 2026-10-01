@@ -8,7 +8,7 @@
 //   borrow  (pull request, manual): log in with the cached auth file. If that fails, make
 //           a one-off org. The workflow deletes a one-off org after the tests.
 //
-// Run: node scripts/ci-org/ci-org.mjs prepare --mode keeper|borrow --auth-file <path>
+// Run: node scripts/ci-org/ci-org.mjs prepare --mode keeper|borrow --auth-file <path> [--marker-file <path>]
 // Env: DEVHUB_SFDX_AUTH_URL (the key), GITHUB_OUTPUT (optional).
 import { spawnSync } from "node:child_process";
 import {
@@ -249,6 +249,21 @@ function retireOldOrg(cached, ctx) {
   }
 }
 
+/**
+ * Runs `fn` with a marker file on disk. The marker exists from before `sf org create` until
+ * the org is accounted for (a result, or an error that cleaned up). A run that is
+ * killed in between leaves it, and the workflow deletes the org that the marker names.
+ * The workflow cannot use its step outputs for this: a killed step may write none.
+ */
+function withMarker(markerFile, fn) {
+  if (markerFile) writeFileSync(markerFile, `${ALIAS}\n`);
+  try {
+    return fn();
+  } finally {
+    if (markerFile) rmSync(markerFile, { force: true });
+  }
+}
+
 function createOrg(durationDays, { run }) {
   const created = run([
     "org",
@@ -280,6 +295,7 @@ export function prepare({
   mode,
   authFile,
   secret,
+  markerFile,
   durationDays = KEEPER_DURATION_DAYS,
   deps = {},
 }) {
@@ -302,46 +318,57 @@ export function prepare({
     } else {
       log("No usable shared CI org in the cache. Making a one-off org.");
     }
-    createOrg(durationDays, ctx);
+    withMarker(markerFile, () => createOrg(durationDays, ctx));
     return { source: "oneoff", save: false };
   }
 
   // keeper: free the active slot first, then make a new org.
   retireOldOrg(cached, ctx);
-  createOrg(durationDays, ctx);
-  const shown = run([
-    "org",
-    "display",
-    "--verbose",
-    "--target-org",
-    ALIAS,
-    "--json",
-  ]);
-  const authUrl = shown.json?.result?.sfdxAuthUrl;
-  if (shown.status !== 0 || !authUrl) {
-    // Do not leave an org that nobody can borrow. It would hold one of the 3 active slots.
-    deleteOrg(ctx);
-    throw new CiOrgError("The new org shows no sfdxAuthUrl, so it cannot be shared.");
-  }
-  log(maskLine(authUrl));
-  // Keep the expiry with the URL. Without the display value, count from the creation time.
-  const expirationDate =
-    shown.json?.result?.expirationDate ??
-    new Date(now + durationDays * DAY_MS).toISOString().slice(0, 10);
-  mkdirSync(dirname(authFile), { recursive: true });
-  // Keep the org id too: the next keeper run asks the Dev Hub about this org by id.
-  const orgId = shown.json?.result?.id;
-  writeFileSync(authFile, encrypt(JSON.stringify({ authUrl, expirationDate, orgId }), secret), {
-    mode: 0o600,
+  withMarker(markerFile, () => {
+    createOrg(durationDays, ctx);
+    const shown = run([
+      "org",
+      "display",
+      "--verbose",
+      "--target-org",
+      ALIAS,
+      "--json",
+    ]);
+    const authUrl = shown.json?.result?.sfdxAuthUrl;
+    if (shown.status !== 0 || !authUrl) {
+      // Do not leave an org that nobody can borrow. It would hold one of the 3 active slots.
+      deleteOrg(ctx);
+      throw new CiOrgError("The new org shows no sfdxAuthUrl, so it cannot be shared.");
+    }
+    log(maskLine(authUrl));
+    // Keep the expiry with the URL. Without the display value, count from the creation time.
+    const expirationDate =
+      shown.json?.result?.expirationDate ??
+      new Date(now + durationDays * DAY_MS).toISOString().slice(0, 10);
+    // Keep the org id too: the next keeper run asks the Dev Hub about this org by id.
+    const orgId = shown.json?.result?.id;
+    try {
+      mkdirSync(dirname(authFile), { recursive: true });
+      writeFileSync(authFile, encrypt(JSON.stringify({ authUrl, expirationDate, orgId }), secret), {
+        mode: 0o600,
+      });
+    } catch (error) {
+      deleteOrg(ctx); // An org that is not in the cache cannot be borrowed or retired.
+      throw error;
+    }
   });
   return { source: "created", save: true };
 }
 
 export function parseArgs(argv) {
   const [command, ...rest] = argv;
-  const out = { command, mode: undefined, authFile: undefined };
+  const out = { command, mode: undefined, authFile: undefined, markerFile: undefined };
   for (let i = 0; i < rest.length; i += 2) {
-    const key = { "--mode": "mode", "--auth-file": "authFile" }[rest[i]];
+    const key = {
+      "--mode": "mode",
+      "--auth-file": "authFile",
+      "--marker-file": "markerFile",
+    }[rest[i]];
     if (!key || rest[i + 1] === undefined) {
       throw new CiOrgError(`Bad argument: ${rest[i]}`);
     }
@@ -360,6 +387,7 @@ export function main(argv, env = process.env) {
   const result = prepare({
     mode: args.mode,
     authFile: args.authFile,
+    markerFile: args.markerFile,
     secret: env.DEVHUB_SFDX_AUTH_URL,
   });
   console.log(`CI org: ${result.source}${result.save ? " (to be cached)" : ""}`);

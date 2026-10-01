@@ -106,6 +106,7 @@ test("parseArgs", () => {
     command: "prepare",
     mode: "borrow",
     authFile: "x",
+    markerFile: undefined,
   });
   assert.throws(() => parseArgs(["prepare", "--nope", "1"]), CiOrgError);
   assert.throws(() => parseArgs(["prepare", "--mode"]), CiOrgError);
@@ -358,6 +359,51 @@ test("deleteOrg: sf delete works, or the Dev Hub deletes the ActiveScratchOrg re
   assert.equal(deleteOrg({ run: noRecord.run }), false);
   const noId = fakeSf({ "org delete scratch": { status: 1, json: {} } });
   assert.equal(deleteOrg({ run: noId.run }), false);
+});
+
+test("the marker file exists while the org is made and is gone after, on every path", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ci-org-marker-"));
+  const markerFile = join(dir, ".ci-org-creating");
+  const seen = [];
+  const watching = (plan) => (args) => {
+    if (args[1] === "create") seen.push(existsSync(markerFile));
+    return fakeSf(plan).run(args);
+  };
+
+  // One-off org (a borrower with no cache).
+  prepare({ mode: "borrow", authFile: tmpAuthFile(), markerFile, secret: SECRET, deps: { run: watching({ "org create scratch": { status: 0, json: {} } }), log: quiet, now: NOW } });
+  // Keeper.
+  prepare({ mode: "keeper", authFile: tmpAuthFile(), markerFile, secret: SECRET, deps: { run: watching(NEW_ORG_PLAN), log: quiet, now: NOW } });
+  assert.deepEqual(seen, [true, true], "the marker is there when sf creates the org");
+  assert.ok(!existsSync(markerFile), "and it is gone when the org is accounted for");
+
+  // A failed create, and a new org that cannot be shared, also remove it.
+  assert.throws(() => prepare({ mode: "borrow", authFile: tmpAuthFile(), markerFile, secret: SECRET, deps: { run: watching({ "org create scratch": { status: 1, json: {} } }), log: quiet, now: NOW } }));
+  assert.ok(!existsSync(markerFile));
+  assert.throws(() => prepare({ mode: "keeper", authFile: tmpAuthFile(), markerFile, secret: SECRET, deps: { run: watching({ "org create scratch": { status: 0, json: {} }, "org display --verbose": { status: 0, json: { result: {} } }, "org delete scratch": { status: 0, json: {} } }), log: quiet, now: NOW } }));
+  assert.ok(!existsSync(markerFile));
+
+  // A process that is killed leaves the marker (simulated: the run never returns).
+  class Killed extends Error {}
+  const killed = (args) => {
+    if (args[1] === "create") throw new Killed();
+    return { status: 0, json: {} };
+  };
+  assert.throws(() => prepare({ mode: "borrow", authFile: tmpAuthFile(), markerFile, secret: SECRET, deps: { run: killed, log: quiet, now: NOW } }), Killed);
+  assert.ok(!existsSync(markerFile), "an exception cleans up; only a killed process leaves the marker");
+});
+
+test("keeper: it deletes the new org when the auth file cannot be written", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ci-org-blocked-"));
+  const blocker = join(dir, "blocker");
+  writeFileSync(blocker, "a file, not a folder");
+  const sf = fakeSf({ ...NEW_ORG_PLAN, "org delete scratch": { status: 0, json: {} } });
+  assert.throws(() => prepare({ mode: "keeper", authFile: join(blocker, "auth.enc"), secret: SECRET, deps: { run: sf.run, log: quiet, now: NOW } }));
+  assert.ok(sf.calls.some((c) => c[1] === "delete"), "the org that cannot be cached is deleted");
+});
+
+test("parseArgs takes a marker file", () => {
+  assert.equal(parseArgs(["prepare", "--mode", "keeper", "--auth-file", "a", "--marker-file", "m"]).markerFile, "m");
 });
 
 test("an unknown mode throws, and the alias is ci", () => {
