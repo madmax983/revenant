@@ -23,18 +23,18 @@ A child that is linked to a parent after the parent's cascade pass must still be
 
 ## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                  | Prevention                                                                                                                  |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Root insert pays a query.                    | Query only when a new row has a parent. Test: zero queries.                                                                 |
-| Bulk insert queries once per child.          | One query for all parents. Test.                                                                                            |
-| Many children make many events for a parent. | Collect parent Ids in a set. One event each. Test.                                                                          |
-| Toggle off still cascades.                   | The existing toggle guard covers this path. Test.                                                                           |
-| Parent was redriven before the event runs.   | The pass already drops a parent that is not failed.                                                                         |
-| An error fails the child start.              | Catch all errors. If the query cannot run, request a cascade for every parent. The pass drops a parent that has not failed. |
-| Two transactions run at the same time.       | The late-child query locks the parents (`FOR UPDATE`, Id order). One side waits for the other.                              |
-| A `continueAsNew` successor has no parent.   | Existing gap. Out of scope.                                                                                                 |
-| `startChild` dedup changes.                  | No change to the insert paths. Existing tests stay green.                                                                   |
-| Old tests insert children under failed rows. | Set up those rows with the toggle off.                                                                                      |
+| Way to fail                                  | Prevention                                                                                                                                             |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Root insert pays a query.                    | Query only when a new row has a parent. Test: zero queries.                                                                                            |
+| Bulk insert queries once per child.          | One query for all parents. Test.                                                                                                                       |
+| Many children make many events for a parent. | Collect parent Ids in a set. One event each. Test.                                                                                                     |
+| Toggle off still cascades.                   | The existing toggle guard covers this path. Test.                                                                                                      |
+| Parent was redriven before the event runs.   | The pass already drops a parent that is not failed.                                                                                                    |
+| An error fails the child start.              | Catch all errors. If the query cannot run (query, row or lock limit), request a cascade for every parent. The pass drops a parent that has not failed. |
+| Two transactions run at the same time.       | The late-child query locks the parents (`FOR UPDATE`, Id order). One side waits for the other.                                                         |
+| A `continueAsNew` successor has no parent.   | Existing gap. Out of scope.                                                                                                                            |
+| `startChild` dedup changes.                  | No change to the insert paths. Existing tests stay green.                                                                                              |
+| Old tests insert children under failed rows. | Set up those rows with the toggle off.                                                                                                                 |
 
 ## Six Hats
 

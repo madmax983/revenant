@@ -107,8 +107,8 @@ public inherited sharing class WorkflowCascadeCancel {
    * failure state. A child was linked to it after its cascade pass (issue
    * #241). It runs one query, and none when `parentIds` is empty. The query
    * locks the parents: a parent that fails at the same time waits for this
-   * transaction, or this one sees the failure. If the query cannot run (SOQL
-   * budget spent, lock timeout), it requests a cascade for every parent. The
+   * transaction, or this one sees the failure. If the query cannot run (query
+   * or row budget spent, lock timeout), it requests a cascade for every parent. The
    * pass drops a parent that has not failed. The paged pass cancels the child.
    * @param parentIds parents of the new children
    */
@@ -120,10 +120,13 @@ public inherited sharing class WorkflowCascadeCancel {
     ) {
       return;
     }
-    if (Limits.getQueries() >= Limits.getLimitQueries()) {
+    if (
+      Limits.getQueries() >= Limits.getLimitQueries() ||
+      Limits.getQueryRows() + parentIds.size() > Limits.getLimitQueryRows()
+    ) {
       System.debug(
         LoggingLevel.ERROR,
-        'Late child cascade check skipped: SOQL budget spent'
+        'Late child cascade check skipped: query budget spent'
       );
       requestCascade(parentIds);
       return;
