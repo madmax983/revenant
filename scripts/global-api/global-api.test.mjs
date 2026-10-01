@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -487,6 +488,38 @@ test("packaged view: the subscriber fixture compiles in a foreign namespace", (t
       /No matching method found for 'runStep' on 'rvn\.WorkflowEngine'/i,
     );
     assert.match(probeErrors[1], /'Builder'.*'rvn\.StepContext'/i);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("packaged view: the 2GP smoke sources compile in a foreign namespace", (t) => {
+  const why = apexLsMissing();
+  if (why) {
+    if (process.env.REQUIRE_APEX_LS) assert.fail(why);
+    t.skip(why);
+    return;
+  }
+  const classpath = apexLsClasspath();
+  const work = mkdtempSync(join(tmpdir(), "revenant-smoke-src-"));
+  try {
+    const engineDir = join(work, ENGINE_NS);
+    const subscriberDir = join(work, SUBSCRIBER_NS);
+    writeProject(engineDir, ENGINE_NS, stubSources(model));
+    const srcDir = join(ROOT, "scripts/packaging/subscriber");
+    const files = {};
+    for (const f of readdirSync(srcDir).filter((n) => n.endsWith(".cls"))) {
+      files[f] = readFileSync(join(srcDir, f), "utf8").replaceAll(
+        "__NS__",
+        ENGINE_NS,
+      );
+    }
+    assert.ok(Object.keys(files).length >= 5, "smoke sources are missing");
+    writeProject(subscriberDir, SUBSCRIBER_NS, files, {
+      namespace: ENGINE_NS,
+      path: engineDir,
+    });
+    assert.deepEqual(apexLsErrors(classpath, subscriberDir), []);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

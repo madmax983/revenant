@@ -61,7 +61,10 @@ The codec also does not cover these fields. Do not put sensitive data in them:
 ## Write a codec
 
 Implement `PayloadCodec`. Use a public class with a public no-argument
-constructor.
+constructor. `PayloadCodec` and `CodecContext` are `global`. A subscriber org
+uses the package namespace, for example `implements <namespace>.PayloadCodec`, where `<namespace>` is the package
+namespace. See
+[global-api.md](global-api.md).
 
 ```apex
 public with sharing class AesPayloadCodec implements PayloadCodec {

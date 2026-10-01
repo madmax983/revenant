@@ -13,9 +13,17 @@
  * then purges nothing. When the `Default` record does not exist, archival is
  * off.
  */
-public inherited sharing class WorkflowArchive {
+global inherited sharing class WorkflowArchive {
+  /**
+   * @description Blocks construction. Apex adds a global constructor when
+   * a global class has none.
+   */
+  private WorkflowArchive() {
+    // Static facade. No state.
+  }
+
   /** @description Maximum number of records a correlation key read returns. */
-  public static final Integer MAX_READ_RECORDS = 10;
+  global static final Integer MAX_READ_RECORDS = 10;
   /** @description Default archive age in days. */
   public static final Integer DEFAULT_ARCHIVE_AFTER_DAYS = 30;
 
@@ -30,7 +38,7 @@ public inherited sharing class WorkflowArchive {
    * @description Thrown for an archive config error, a sink error or bad
    * archive data. The sweep purges nothing after this error.
    */
-  public class ArchiveException extends Exception {
+  global class ArchiveException extends Exception {
   }
 
   /**
@@ -69,8 +77,9 @@ public inherited sharing class WorkflowArchive {
    * @description Returns the archived history of one instance. One sink read.
    * @param instanceId the instance Id
    * @return the record, or null when the instance is not archived
+   * @throws ArchiveException when the config or the sink class is not valid
    */
-  public static WorkflowArchiveRecord getArchivedHistory(Id instanceId) {
+  global static WorkflowArchiveRecord getArchivedHistory(Id instanceId) {
     if (instanceId == null) {
       return null;
     }
@@ -85,8 +94,9 @@ public inherited sharing class WorkflowArchive {
    * @param correlationKey the correlation key. Case does not matter, as in
    *        `Correlation_Key__c`.
    * @return the records, at most {@link #MAX_READ_RECORDS}
+   * @throws ArchiveException when the config or the sink class is not valid
    */
-  public static List<WorkflowArchiveRecord> findArchivedHistory(
+  global static List<WorkflowArchiveRecord> findArchivedHistory(
     String correlationKey
   ) {
     List<WorkflowArchiveRecord> out = new List<WorkflowArchiveRecord>();
@@ -109,9 +119,10 @@ public inherited sharing class WorkflowArchive {
    * where an index cannot hold the full key. `Correlation_Key__c` is not
    * case-sensitive, so the hash uses the lower-case key.
    * @param correlationKey the key. Null hashes as blank.
-   * @return the SHA-256 hex, 64 characters
+   * @return the SHA-256 hex, 64 characters. This algorithm is part of the
+   * contract. Do not change it.
    */
-  public static String hashCorrelationKey(String correlationKey) {
+  global static String hashCorrelationKey(String correlationKey) {
     return EncodingUtil.convertToHex(
       Crypto.generateDigest(
         'SHA-256',
