@@ -65,7 +65,7 @@ A parked, paused or stale delivery does not pay: the guard runs after these gate
 
 The detail pane does not read all step rows. It reads the newest 500 rows without long text. Then it reads `Input__c`, `Output__c` and `Error_Details__c` for the newest 50 rows only. It reads two rows for each query. It stops when these reads add 2 MB of heap or when fewer than 40 SOQL queries remain. The note gives the number of rows that have text. It also reads the latest parked (`Pending`) row first, so the wait descriptor stays correct. Older rows show no long text. The pane shows a note when rows are hidden or when more than 50 rows exist. The note gives the number of rows shown (the newest rows and the parked row) and the row count. The row count stops at 50,000 and then shows "50000+".
 
-The pane does not read an offloaded wait state above 500,000 bytes. The wait shows as a generic wait.
+The pane does not read an offloaded wait state above 500,000 bytes. The wait shows as a generic wait when the park stored a wait type. A row parked before `Wait_Type__c` existed has no wait type. Such a row with a large state and an armed timer shows as a timer wait.
 
 The pane reads the attachment bodies of offloaded payloads in batches of at most five bodies and 500,000 bytes. The size comes from `ContentSize`, before the read. It keeps only the display text (50,000 characters at most) and the full length. It stops when these reads add 2 MB of heap or when fewer than 25 SOQL queries remain. A body above 500,000 bytes, or a body after the stop, shows its marker text and has no download link. The pane cannot tell if the body is encoded without a read.
 

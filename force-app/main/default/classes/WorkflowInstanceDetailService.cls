@@ -195,11 +195,13 @@ public inherited sharing class WorkflowInstanceDetailService {
       parkedId,
       newestTextIds
     );
+    // Count the newest rows read, with no gap. The parked row can add one more.
     textRowsRead = 0;
-    for (Id rowId : windowIds) {
-      if (withText.containsKey(rowId)) {
-        textRowsRead++;
+    for (Workflow_Step_Execution__c row : newest) {
+      if (!withText.containsKey(row.Id)) {
+        break;
       }
+      textRowsRead++;
     }
 
     List<Workflow_Step_Execution__c> steps = new List<Workflow_Step_Execution__c>();

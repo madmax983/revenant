@@ -233,6 +233,27 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   @IsTest
+  static void textCountSkipsAParkedRowThatIsNotNewest() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Suspended'
+      );
+      insert inst;
+      insertRows(inst.Id, 'Park.Step', 'Pending', 1, 0);
+      insertRows(inst.Id, 'Loop.Step', 'Completed', 5, 1);
+      WorkflowInstanceDetailService.textHeapBudget = 1;
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+
+      // One chunk: the parked row and the newest row. Only the newest counts.
+      Assert.areEqual(1, details.get('stepTextRows'), 'No gap in the count');
+    }
+  }
+
+  @IsTest
   static void longTextReadStopsWhenTheQueriesRunLow() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = new Workflow_Instance__c(
