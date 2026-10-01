@@ -149,6 +149,19 @@ public inherited sharing class WorkflowOutcomePrepare {
       status == 'ContinuedAsNew';
   }
 
+  /**
+   * @description True when a status is a park: `DefinitionChanged`, `Held` or
+   * `Paused`. An outcome that finishes after the park must not change it.
+   * Only release or resume moves a parked instance.
+   * @param status the instance status to test
+   * @return true when the instance is parked
+   */
+  public static Boolean isParkedStatus(String status) {
+    return status == WorkflowDefinitionChangeGate.STATUS ||
+      status == WorkflowInstanceHoldGate.STATUS ||
+      status == 'Paused';
+  }
+
   // Reaching handleStepResult means the instance lock cleared, so reset the
   // consecutive transient-retry counter on the step.
   private static void resetTransientRetryCounter(

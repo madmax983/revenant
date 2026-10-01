@@ -48,6 +48,8 @@ A match costs no SOQL and no DML. The gate reads the stored value from the insta
 
 A parallel branch that was running before the park can finish. Its result is kept. It does not undo the park. Release starts only the open branches.
 
+The same rule holds for a step that suspends, sleeps, starts a child or waits for approval after the park. The step row, state and wait type are saved. The park status stays (issue #240). A timer that the step set in the park stays too.
+
 A park does not change prior step rows. A park does not change `Compensation_Stack__c`. A parked instance keeps its correlation key. It keeps its concurrency slot, if it holds one. The watchdog does not time out its steps. The engine holds a signal to it until release.
 
 ## How to release an instance
@@ -56,7 +58,7 @@ A park does not change prior step rows. A park does not change `Compensation_Sta
 2. Open the instance on the dashboard. The panel shows the current step, the stored list and the live list. It shows added steps in green and removed steps with a line through them.
 3. Click **Release**. Or call `WorkflowDefinitionChangeService.release(instanceId)` from Apex.
 
-Release writes the live fingerprint and shape, sets `Running`, re-arms step timeouts and enqueues the current step. Release fails when a current step is not in the live list. In that case, restore the step or cancel the instance.
+Release writes the live fingerprint and shape, sets `Running`, re-arms step timeouts and enqueues the current step. A serial wait can end in the park and leave a timer. Then release sets `Suspended` and does not enqueue. The sleep sweep wakes the instance when the timer ends. A signal that arrived in the park keeps the instance `Running`, so the step reads it. Pause resume and hold release follow the same rule. A parallel instance always runs its open branches on release. Release fails when a current step is not in the live list. In that case, restore the step or cancel the instance.
 
 ## Limits
 

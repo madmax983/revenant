@@ -114,16 +114,40 @@ public inherited sharing class WorkflowStepAdmission {
     // already-Paused row is just a no-op until the drain flips it to Running.
     if (definitionPaused && instance.Status__c != 'Paused') {
       instance.Status__c = 'Paused';
-      // Write the status only. The instance was read with no lock, so a full
-      // write can put back stale slot fields (issue #136).
+      // The loaded status can be old. Lock the row. Only the delivery that
+      // moves it into Paused clears the timer. A wait that ended in the park
+      // may have stored a new timer already (issue #240).
+      if (isAlreadyPaused(instance.Id)) {
+        return true;
+      }
+      // A park clears the timer, so a later timer marks a wait that ended in
+      // the park (issue #240). Write these two fields only. The instance was
+      // read with no lock, so a full write can put back stale slot fields
+      // (issue #136).
       Database.update(
-        new Workflow_Instance__c(Id = instance.Id, Status__c = 'Paused'),
+        new Workflow_Instance__c(
+          Id = instance.Id,
+          Status__c = 'Paused',
+          Sleep_Until__c = null
+        ),
         true,
         AccessLevel.SYSTEM_MODE
       );
     }
 
     return true;
+  }
+
+  // Locks the row and tells if another delivery already parked it.
+  private static Boolean isAlreadyPaused(Id instanceId) {
+    return [
+        SELECT Status__c
+        FROM Workflow_Instance__c
+        WHERE Id = :instanceId
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]
+      .Status__c == 'Paused';
   }
 
   /**
