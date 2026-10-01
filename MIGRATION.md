@@ -11,6 +11,10 @@ before the 1.0 API freeze. Behavior is byte-identical; only the shapes external
 **step authors** and **dashboard/LWC callers** compile against have changed. This
 document is the old→new map for updating your code.
 
+> The PR #193–#214 changes keep behavior identical. Later sections record
+> other changes, including behavior changes such as #316 (child signals have
+> no payload). Read every section that applies to your upgrade.
+
 > Symbols and arities below are quoted verbatim from the current `main` source.
 > Where the source contradicts an earlier informal description, the source wins
 > and the difference is called out inline.
