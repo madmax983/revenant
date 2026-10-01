@@ -497,6 +497,398 @@ private class WorkflowDeterminismGuardTest {
   }
 
   // ============================================================
+  // inputsChangedDuringRun (the re-check)
+  // ============================================================
+
+  // A context that reads the pending signals of the instance. It does not
+  // claim them.
+  private static StepContext readerFor(Id instanceId) {
+    return contextFor(instanceId)
+      .signalSource(new WorkflowSignalSources.PendingSignalSource(instanceId))
+      .build();
+  }
+
+  private static WorkflowDeterminismGuard.InputSnapshot snapshotOf(
+    WorkflowStepRunner.RunStepContext ctx,
+    StepContext context
+  ) {
+    return WorkflowDeterminismGuard.capture(ctx, context, '{"p":1}');
+  }
+
+  private static Boolean changedDuringRun(
+    WorkflowDeterminismGuard.InputSnapshot before,
+    WorkflowStepRunner.RunStepContext ctx,
+    StepContext context
+  ) {
+    return WorkflowDeterminismGuard.inputsChangedDuringRun(
+      before,
+      ctx,
+      context,
+      '{"p":1}'
+    );
+  }
+
+  private static Workflow_Signal__c newSignal(
+    Workflow_Instance__c inst,
+    String name
+  ) {
+    Workflow_Signal__c sig = new Workflow_Signal__c(
+      Workflow_Instance__c = inst.Id,
+      Correlation_Key__c = inst.Correlation_Key__c,
+      Signal_Name__c = name,
+      Payload__c = 'v1',
+      Status__c = 'Received'
+    );
+    insert sig;
+    return sig;
+  }
+
+  @IsTest
+  static void snapshotDigestEqualsTheCaptureDigest() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      insertSignals(inst, 2);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      Assert.areEqual(
+        digestOf(ctx, contextFor(inst.Id)),
+        snapshotOf(ctx, readerFor(inst.Id)).digest,
+        'The snapshot keeps the digest format'
+      );
+    }
+  }
+
+  @IsTest
+  static void snapshotIsNullWhenOff() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = false;
+      Id instId = insertInstance().Id;
+      Assert.isNull(
+        snapshotOf(rowContext(instId), readerFor(instId)),
+        'Off gives no snapshot'
+      );
+    }
+  }
+
+  @IsTest
+  static void anUnreadSignalDoesNotCountInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c old = newSignal(inst, 'Old');
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      // The step reads nothing. A new signal and an edit happen in the run.
+      newSignal(inst, 'Late');
+      old.Payload__c = 'v2';
+      update old;
+      Assert.isFalse(
+        changedDuringRun(before, ctx, context),
+        'A change to a signal that the step did not read does not count'
+      );
+    }
+  }
+
+  @IsTest
+  static void aReadSignalCountsInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c cfg = newSignal(inst, 'Cfg');
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isTrue(
+        context.signals().getSignal('Cfg').isPresent(),
+        'The step reads Cfg'
+      );
+      cfg.Payload__c = 'v2';
+      update cfg;
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'An edit of a signal that the step read counts'
+      );
+    }
+  }
+
+  @IsTest
+  static void aRemovedReadSignalCountsInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c cfg = newSignal(inst, 'Cfg');
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isTrue(
+        context.signals().getSignal('Cfg').isPresent(),
+        'The step reads Cfg'
+      );
+      cfg.Status__c = 'Consumed';
+      update cfg;
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'A read signal that leaves the live set counts'
+      );
+    }
+  }
+
+  @IsTest
+  static void aProbedNameCountsInTheRecheckWhenItArrives() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isFalse(
+        context.signals().hasSignal('Go'),
+        'The step probes Go and sees none'
+      );
+      newSignal(inst, 'Other');
+      Assert.isFalse(
+        changedDuringRun(before, ctx, context),
+        'A signal with another name does not count'
+      );
+      newSignal(inst, 'GO');
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'A signal with a probed name counts, whatever the case'
+      );
+    }
+  }
+
+  @IsTest
+  static void everyArrivalCountsAfterAFullRead() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isTrue(
+        context.signals().getSignals().isEmpty(),
+        'The step reads all signals and sees none'
+      );
+      newSignal(inst, 'Anything');
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'A full read makes every arrival count'
+      );
+    }
+  }
+
+  @IsTest
+  static void aChildOutcomeProbeCountsAChildSignal() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isFalse(
+        context.signals().getChildOutcome('K1').isPresent(),
+        'The step probes the outcome of child K1'
+      );
+      newSignal(inst, 'ChildCompleted:K1');
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'The outcome signal of a probed child counts'
+      );
+    }
+  }
+
+  @IsTest
+  static void aClaimOfThisRunDoesNotCountInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      newSignal(inst, 'Go');
+      StepContext context = contextFor(inst.Id)
+        .signalSource(
+          new WorkflowSignalSources.ParallelBranchSignalSource(inst.Id)
+        )
+        .build();
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isTrue(
+        context.signals().getSignal('Go').isPresent(),
+        'The branch claims Go'
+      );
+      Assert.isFalse(
+        changedDuringRun(before, ctx, context),
+        'The claim of this run is not a change'
+      );
+    }
+  }
+
+  @IsTest
+  static void aChildChangeCountsInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      insert new Workflow_Instance__c(
+        Workflow_Name__c = 'GuardChild',
+        Status__c = 'Running',
+        Parent_Instance__c = inst.Id,
+        Correlation_Key__c = 'GuardChild-' + Crypto.getRandomInteger()
+      );
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'A new child counts: a step can read children with SOQL'
+      );
+    }
+  }
+
+  @IsTest
+  static void aChangeOverTheSignalCapCountsInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      WorkflowDeterminismGuard.maxLiveSignals = 1;
+      Workflow_Instance__c inst = insertInstance();
+      insertSignals(inst, 2);
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      newSignal(inst, 'Late');
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'Over the cap the guard cannot tell which signal changed'
+      );
+    }
+  }
+
+  @IsTest
+  static void nothingChangedIsNotAChange() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      insertSignals(inst, 2);
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isTrue(
+        context.signals().getSignal('Go0').isPresent(),
+        'The step reads Go0'
+      );
+      Assert.isFalse(
+        changedDuringRun(before, ctx, context),
+        'Equal inputs are not a change'
+      );
+    }
+  }
+
+  @IsTest
+  static void aNullSnapshotIsNotAChange() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = false;
+      Id instId = insertInstance().Id;
+      Assert.isFalse(
+        changedDuringRun(null, rowContext(instId), readerFor(instId)),
+        'No snapshot means no re-check'
+      );
+    }
+  }
+
+  // ============================================================
+  // Offloaded state (file checksum)
+  // ============================================================
+
+  private static String offload(Id instanceId, String text) {
+    String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
+      instanceId,
+      text,
+      'GuardState'
+    );
+    Assert.isNotNull(
+      WorkflowPayloadOffload.markerDocId(marker),
+      'The text is offloaded to a file'
+    );
+    return marker;
+  }
+
+  private static String digestWithState(Id instanceId, String state) {
+    WorkflowStepRunner.RunStepContext ctx = rowContext(instanceId);
+    ctx.stepExec.Output__c = state;
+    return digestOf(ctx, contextFor(instanceId));
+  }
+
+  @IsTest
+  static void equalOffloadedContentGivesAnEqualDigest() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Id instId = insertInstance().Id;
+      String first = offload(instId, 'x'.repeat(100001));
+      String second = offload(instId, 'x'.repeat(100001));
+      String other = offload(instId, 'y'.repeat(100001));
+      Assert.areNotEqual(first, second, 'Each save writes a new marker');
+
+      Assert.areEqual(
+        digestWithState(instId, first),
+        digestWithState(instId, second),
+        'Equal file content is an equal input'
+      );
+      Assert.areNotEqual(
+        digestWithState(instId, first),
+        digestWithState(instId, other),
+        'Different file content is a different input'
+      );
+    }
+  }
+
+  @IsTest
+  static void aMarkerOfAnotherInstanceKeepsTheMarkerText() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Id owner = insertInstance().Id;
+      Id reader = insertInstance().Id;
+      String first = offload(owner, 'x'.repeat(100001));
+      String second = offload(owner, 'x'.repeat(100001));
+
+      Assert.areNotEqual(
+        digestWithState(reader, first),
+        digestWithState(reader, second),
+        'A file that the instance does not own gives no checksum'
+      );
+    }
+  }
+
+  @IsTest
+  static void aMarkerCostsTwoQueriesAndNoMarkerCostsNone() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Id instId = insertInstance().Id;
+      String marker = offload(instId, 'x'.repeat(100001));
+
+      Integer before = Limits.getQueries();
+      digestWithState(instId, 'plain');
+      Integer plain = Limits.getQueries() - before;
+
+      before = Limits.getQueries();
+      digestWithState(instId, marker);
+      Assert.areEqual(
+        plain + 2,
+        Limits.getQueries() - before,
+        'A marker adds a link query and a checksum query'
+      );
+    }
+  }
+
+  // ============================================================
   // verify
   // ============================================================
 

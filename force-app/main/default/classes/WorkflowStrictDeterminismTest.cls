@@ -221,12 +221,20 @@ public class WorkflowStrictDeterminismTest {
         }
         when 'raceSignal' {
           // A signal arrives after the input snapshot, then the step sees it.
-          insert new Workflow_Signal__c(
-            Workflow_Instance__c = ctx.workflowInstanceId,
-            Signal_Name__c = 'Late',
-            Status__c = 'Received'
-          );
+          insertLateSignal(ctx);
+          return ctx.signals().hasSignal('Late')
+            ? StepResult.complete(OTHER, null)
+            : StepResult.suspend();
+        }
+        when 'insertUnread' {
+          // The step inserts a signal and does not read it. It routes anyway.
+          insertLateSignal(ctx);
           return StepResult.complete(OTHER, null);
+        }
+        when 'bigState' {
+          // A state over 100,000 characters: the engine offloads it to a file.
+          return StepResult.suspend()
+            .withStepState('"' + 'x'.repeat(100001) + '"');
         }
         when 'cfgRoute' {
           // The route depends on the payload of a live Cfg signal.
@@ -246,6 +254,14 @@ public class WorkflowStrictDeterminismTest {
           return StepResult.suspend();
         }
       }
+    }
+
+    private void insertLateSignal(StepContext ctx) {
+      insert new Workflow_Signal__c(
+        Workflow_Instance__c = ctx.workflowInstanceId,
+        Signal_Name__c = 'Late',
+        Status__c = 'Received'
+      );
     }
   }
 
@@ -381,7 +397,7 @@ public class WorkflowStrictDeterminismTest {
     String stepName
   ) {
     return [
-      SELECT Status__c, Error_Details__c, Decision_Record__c
+      SELECT Status__c, Error_Details__c, Decision_Record__c, Output__c
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :instId AND Step_Name__c = :stepName
       ORDER BY CreatedDate, Id
@@ -491,6 +507,40 @@ public class WorkflowStrictDeterminismTest {
         'Only the completed forward step is undone'
       );
       Assert.areEqual(1, divergenceLogCount(instId), 'One divergence log row');
+    }
+  }
+
+  @IsTest
+  static void compensatedDivergenceShowsInTheFailureBreakdown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRun(SagaWorkflow.class.getName(), 'wait');
+      WorkflowEngine.runStep(instId); // CompGate waits
+      mode = 'complete';
+      WorkflowEngine.runStep(instId); // Divergence, then rollback
+      new WorkflowTestHarness(instId).drive();
+      Test.stopTest();
+
+      Assert.isNull(
+        load(instId).Failure_Category__c,
+        'A compensated divergence keeps a blank category'
+      );
+      Map<String, Object> breakdown = WorkflowFailureBreakdownService.breakdown(
+        SagaWorkflow.class.getName(),
+        null
+      );
+      Set<String> failedSteps = new Set<String>();
+      for (
+        Map<String, Object> failure : (List<Map<String, Object>>) breakdown.get(
+          'steps'
+        )
+      ) {
+        failedSteps.add((String) failure.get('stepName'));
+      }
+      Assert.isTrue(
+        failedSteps.contains(COMP_GATE),
+        'The failure breakdown shows the divergent step: ' + failedSteps
+      );
     }
   }
 
@@ -704,6 +754,49 @@ public class WorkflowStrictDeterminismTest {
         'A resume payload lets the step make a new decision'
       );
       Assert.areEqual(0, divergenceLogCount(instId), 'No divergence');
+    }
+  }
+
+  @IsTest
+  static void unreadSignalDoesNotHideADivergence() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRun(GateWorkflow.class.getName(), 'wait');
+      mode = 'insertUnread';
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+
+      Assert.areEqual(
+        WorkflowEngine.CAT_STEP_NON_DETERMINISM,
+        load(instId).Failure_Category__c,
+        'A signal that the step inserts and does not read hides nothing'
+      );
+      Assert.areEqual(1, divergenceLogCount(instId), 'One divergence log row');
+    }
+  }
+
+  @IsTest
+  static void offloadedStateStillCompares() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Test.startTest();
+      Id instId = startAndRun(GateWorkflow.class.getName(), 'bigState');
+      Assert.areEqual('Suspended', load(instId).Status__c, 'The gate waits');
+      Assert.isTrue(
+        String.valueOf(rows(instId, GATE)[0].Output__c)
+          .startsWith('{"$attachmentId"'),
+        'The state is offloaded'
+      );
+      WorkflowEngine.runStep(instId); // Same wait. The state has a new marker.
+
+      mode = 'complete';
+      WorkflowEngine.runStep(instId);
+      Test.stopTest();
+
+      Assert.areEqual(
+        WorkflowEngine.CAT_STEP_NON_DETERMINISM,
+        load(instId).Failure_Category__c,
+        'A new marker with equal file content is not a new input'
+      );
     }
   }
 

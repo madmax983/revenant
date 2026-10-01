@@ -329,4 +329,54 @@ private class WorkflowPayloadOffloadTest {
       'The foreign file stays unreadable'
     );
   }
+
+  @IsTest
+  static void testOwnedChecksumsReadsOnlyOwnedFiles() {
+    Workflow_Instance__c owner = newInstance();
+    Workflow_Instance__c stranger = new Workflow_Instance__c(
+      Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
+      Status__c = 'Running',
+      Correlation_Key__c = 'ChecksumStrangerKey'
+    );
+    insert stranger;
+    String marker = offload(owner.Id, 'x'.repeat(100001));
+    Id docId = WorkflowPayloadOffload.markerDocId(marker);
+    ContentVersion cv = [
+      SELECT Checksum
+      FROM ContentVersion
+      WHERE ContentDocumentId = :docId AND IsLatest = TRUE
+    ];
+
+    Assert.areEqual(
+      cv.Checksum,
+      WorkflowPayloadOffload.ownedChecksums(
+          new List<String>{ marker, '{"a":1}', null },
+          owner.Id
+        )
+        .get(docId),
+      'The owner reads the checksum of its file'
+    );
+    Assert.isTrue(
+      WorkflowPayloadOffload.ownedChecksums(
+          new List<String>{ marker },
+          stranger.Id
+        )
+        .isEmpty(),
+      'A file that the instance does not own gives no checksum'
+    );
+  }
+
+  @IsTest
+  static void testOwnedChecksumsRunsNoQueryWithoutAMarker() {
+    Workflow_Instance__c inst = newInstance();
+    Integer before = Limits.getQueries();
+
+    Map<Id, String> checksums = WorkflowPayloadOffload.ownedChecksums(
+      new List<String>{ '{"a":1}', null, '' },
+      inst.Id
+    );
+
+    Assert.isTrue(checksums.isEmpty(), 'No marker gives no checksum');
+    Assert.areEqual(before, Limits.getQueries(), 'No marker costs no query');
+  }
 }

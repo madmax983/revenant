@@ -51,6 +51,7 @@ When the mode is on, each step run costs:
 - One query row for each live signal (`Received` or `Processing`). Max 21 rows. Over 20, one more `COUNT()` query.
 - The heap holds the stored name and payload of the first 20 live signals. A payload has max 131,072 characters, so the heap cost is bounded.
 - Before it reports a divergence, the engine reads the inputs again (two more SOQL queries, three over 20 live signals).
+- Two more queries when the step input, the previous output or the step state is an offloaded file: the link of the file, and its checksum. The engine does not load the file content.
 - One SHA-256 digest of the stored inputs.
 
 ## What the engine records
@@ -66,7 +67,7 @@ The engine records a wait decision in `Workflow_Step_Execution__c.Decision_Recor
 
 The step inputs are:
 
-- The stored step input, previous output and step state. A resume payload is step state. Stored forms are encoded or offloaded. The digest holds no decoded payload.
+- The stored step input, previous output and step state. A resume payload is step state. Stored forms are encoded or offloaded. The digest holds no decoded payload. For an offloaded value, it holds the checksum of the file. A new marker with equal file content is an equal input. The engine reads only a file that is linked to the instance. A file with no checksum keeps the marker text.
 - `ctx.attempt` and the timeout-resume flag.
 - The live signals of the instance (`Received` or `Processing`): Id, status, stored name and stored payload. Signals carry approvals and child outcomes. An edit of a live signal is a new input.
 - Each value is a typed JSON value. Thus a null value and the text `null` are different inputs.
@@ -149,7 +150,5 @@ Correct the step code before you retry. A deploy of changed step code can change
 - With a payload codec, each wait that writes step state writes new stored state. The engine then compares less often.
 - An approval, child or timed wait writes step state. The first duplicate run after it has new inputs. The engine compares from the second duplicate run.
 - Over 20 live signals, the engine digests the first 20 (by Id) and the total count. An edit of a newer signal does not change the digest.
-- The engine re-checks the full live-signal set. A change to a signal that the step did not read prevents the report. See [ADR 0003](adr/0003-strict-determinism-mode.md).
 - A compensated or error-routed divergence keeps a blank `Failure_Category__c`. Use the log query above.
-- Step state over 100,000 characters is offloaded. Each wait writes a new marker, so the engine does not compare that step.
-- An input can arrive during the run. Before it reports a divergence, the engine reads the inputs again. When they changed, it does not report.
+- An input can arrive during the run. Before it reports a divergence, the engine reads the inputs again. It does not report when an input that the step read changed. The step read a live signal when it matched it, or probed its name, or read the full list. A change to another live signal does not stop the report: the step cannot see it. A change to the step state, the children or the count over the signal cap always stops the report.
