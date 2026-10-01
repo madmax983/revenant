@@ -60,7 +60,12 @@ public class WorkflowPayloadAccessTest {
   static void getStatusRedactsWithoutAccess() {
     useCodec();
     Id id1 = completedInstance(encoded(SECRET));
-    String key = [SELECT Correlation_Key__c FROM Workflow_Instance__c WHERE Id = :id1].Correlation_Key__c;
+    String key = [
+      SELECT Correlation_Key__c
+      FROM Workflow_Instance__c
+      WHERE Id = :id1
+    ]
+    .Correlation_Key__c;
     User u = makeUser(null);
     System.runAs(u) {
       WorkflowEngine.WorkflowStatus byId = WorkflowStatusRead.getStatus(id1);

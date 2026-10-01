@@ -179,9 +179,14 @@ The engine wraps codec output in an envelope:
 - **Dashboard.** The operator dashboard does not decode. It shows a redacted
   placeholder for encoded payloads. The operator-skip audit log also shows a
   redaction note.
-- **Read APIs.** `getStatus`, the status Flow action and `StepContext` return
-  decoded payloads. They run in system mode. Give these APIs only to users who
-  can see the payload.
+- **Read APIs.** `getStatus`, `getCausationLineage`, the status Flow action and
+  `StepContext` return decoded payloads. The read APIs query in system mode. Before
+  they decode an encoded payload, they check that the running user can read the
+  instance (`UserRecordAccess`: sharing and object permission). If the user
+  cannot, the API returns `WorkflowPayloadAccess.DENIED_PAYLOAD` in `output` and
+  `progressJson`. Status, error text and keys stay visible. With the identity
+  codec, the check does not run. The check uses one query for each 200 instances,
+  and only when an encoded payload is present. See [ADR 0020](adr/0020-read-api-record-access.md).
 - **Append-only.** The engine encodes a payload once, at its checkpoint.
   `decode` does not change a record.
 - **Confidentiality only.** The codec does not detect changes. A user who can

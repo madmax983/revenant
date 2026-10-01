@@ -4,7 +4,8 @@
  * bulk), resolving key lookups to the winning generation via
  * {@link WorkflowStatusWinnerResolver} (preferring live/active runs and following
  * ContinuedAsNew chains) and projecting DTOs via {@link WorkflowStatusProjection}
- * (which rehydrates any offloaded `Output__c`). Read-only: a small constant number
+ * (which rehydrates any offloaded `Output__c`). A user without read access to an
+ * instance gets a redacted placeholder for its encoded output (issue #243). Read-only: a small constant number
  * of SOQL queries and zero DML. Extracted from `WorkflowEngine`; returns the
  * resident public DTO `WorkflowEngine.WorkflowStatus`.
  */
@@ -109,12 +110,19 @@ global inherited sharing class WorkflowStatusRead {
       instById.values()
     );
 
+    WorkflowPayloadAccess.Gate gate = new WorkflowPayloadAccess.Gate(
+      instById.keySet()
+    );
     for (Id reqId : instanceIds) {
       Workflow_Instance__c inst = instById.get(reqId);
       out.add(
         inst == null
           ? null
-          : WorkflowStatusProjection.buildStatus(inst, resolvedOutputByDocId)
+          : WorkflowStatusProjection.buildStatus(
+              inst,
+              resolvedOutputByDocId,
+              gate
+            )
       );
     }
     return out;
@@ -184,6 +192,9 @@ global inherited sharing class WorkflowStatusRead {
       instById.values()
     );
 
+    WorkflowPayloadAccess.Gate gate = new WorkflowPayloadAccess.Gate(
+      instById.keySet()
+    );
     for (String k : correlationKeys) {
       if (String.isBlank(k)) {
         out.add(null);
@@ -196,7 +207,11 @@ global inherited sharing class WorkflowStatusRead {
       out.add(
         inst == null
           ? null
-          : WorkflowStatusProjection.buildStatus(inst, resolvedOutputByDocId)
+          : WorkflowStatusProjection.buildStatus(
+              inst,
+              resolvedOutputByDocId,
+              gate
+            )
       );
     }
     return out;
