@@ -128,4 +128,45 @@ private class WorkflowPayloadBudgetTest {
     }
     Assert.areEqual(5, resolved, 'One chunk is read');
   }
+
+  @IsTest
+  static void bodyAboveTheBatchSizeIsNotRead() {
+    Workflow_Instance__c inst = [
+      SELECT Id, Input__c, Output__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :seed(3, 1000).Id
+    ];
+    List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
+    WorkflowPayloadService.attachmentBatchBytes = 999;
+
+    WorkflowPayloadService.resolvePayloadsInBulk(inst, steps);
+
+    for (Workflow_Step_Execution__c step : steps) {
+      Assert.isTrue(
+        step.Output__c.startsWith('{"$attachmentId":'),
+        'A large body shows its marker'
+      );
+    }
+  }
+
+  @IsTest
+  static void batchesHoldAtMostTheBatchBytes() {
+    Workflow_Instance__c inst = [
+      SELECT Id, Input__c, Output__c, Progress__c
+      FROM Workflow_Instance__c
+      WHERE Id = :seed(4, 1000).Id
+    ];
+    List<Workflow_Step_Execution__c> steps = stepsOf(inst.Id);
+    WorkflowPayloadService.attachmentBatchBytes = 2500;
+
+    Integer before = Limits.getQueries();
+    WorkflowPayloadService.resolvePayloadsInBulk(inst, steps);
+    Integer used = Limits.getQueries() - before;
+
+    for (Workflow_Step_Execution__c step : steps) {
+      Assert.areEqual('X'.repeat(1000), step.Output__c, 'All are read');
+    }
+    // Links, sizes, and two batches of two bodies.
+    Assert.areEqual(4, used, 'Two bodies in each batch');
+  }
 }

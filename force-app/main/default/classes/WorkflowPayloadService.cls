@@ -16,7 +16,12 @@ public inherited sharing class WorkflowPayloadService {
   @TestVisible
   private static Integer attachmentHeapBudget = 2000000;
 
-  // Attachments per ContentVersion query. A small chunk keeps one read small.
+  // Max body bytes in one ContentVersion query. The size is known before the read
+  // (ContentSize). A body above this is not read and shows its marker text.
+  @TestVisible
+  private static Integer attachmentBatchBytes = 500000;
+
+  // Max attachments in one ContentVersion query.
   private static final Integer ATTACHMENT_CHUNK = 5;
 
   /** @description Display text for an encoded payload. */
@@ -145,8 +150,10 @@ public inherited sharing class WorkflowPayloadService {
     return verifiedAttachmentIds;
   }
 
-  // Reads the verified attachment bodies in small chunks. It keeps the display text
-  // only. It stops when the reads used the heap budget (the first chunk always runs).
+  // Reads the verified attachment bodies in batches. A batch holds at most
+  // attachmentBatchBytes of body (sizes come from ContentSize, with no blob read).
+  // A body above that size is skipped. It keeps the display text only. It stops
+  // when the reads used the heap budget (the first batch always runs).
   private static Map<Id, AttachmentBody> loadAttachmentData(
     Set<Id> attachmentIds,
     Id linkedEntityId
@@ -155,28 +162,21 @@ public inherited sharing class WorkflowPayloadService {
     if (attachmentIds.isEmpty()) {
       return attachmentIdToData;
     }
-    List<Id> verifiedAttachmentIds = new List<Id>(
-      verifyAttachmentLinks(attachmentIds, linkedEntityId)
-    );
+    Set<Id> verified = verifyAttachmentLinks(attachmentIds, linkedEntityId);
+    if (verified.isEmpty()) {
+      return attachmentIdToData;
+    }
     Integer heapLimit = Limits.getHeapSize() + attachmentHeapBudget;
-    for (
-      Integer i = 0; i < verifiedAttachmentIds.size(); i += ATTACHMENT_CHUNK
-    ) {
-      if (i > 0 && Limits.getHeapSize() > heapLimit) {
+    Boolean first = true;
+    for (List<Id> batch : planBatches(verified)) {
+      if (!first && Limits.getHeapSize() > heapLimit) {
         break;
       }
-      List<Id> chunk = new List<Id>();
-      for (
-        Integer j = i;
-        j < Math.min(i + ATTACHMENT_CHUNK, verifiedAttachmentIds.size());
-        j++
-      ) {
-        chunk.add(verifiedAttachmentIds[j]);
-      }
+      first = false;
       for (ContentVersion cv : [
         SELECT ContentDocumentId, VersionData
         FROM ContentVersion
-        WHERE ContentDocumentId IN :chunk AND IsLatest = TRUE
+        WHERE ContentDocumentId IN :batch AND IsLatest = TRUE
         WITH SYSTEM_MODE
       ]) {
         if (cv.VersionData != null) {
@@ -188,6 +188,39 @@ public inherited sharing class WorkflowPayloadService {
       }
     }
     return attachmentIdToData;
+  }
+
+  // Groups the attachments into batches by size. It reads sizes only, not bodies.
+  private static List<List<Id>> planBatches(Set<Id> documentIds) {
+    List<List<Id>> batches = new List<List<Id>>();
+    List<Id> batch = new List<Id>();
+    Integer batchBytes = 0;
+    for (ContentVersion cv : [
+      SELECT ContentDocumentId, ContentSize
+      FROM ContentVersion
+      WHERE ContentDocumentId IN :documentIds AND IsLatest = TRUE
+      WITH SYSTEM_MODE
+    ]) {
+      Integer size = cv.ContentSize == null ? 0 : cv.ContentSize;
+      if (size > attachmentBatchBytes) {
+        continue;
+      }
+      if (
+        !batch.isEmpty() &&
+        (batch.size() >= ATTACHMENT_CHUNK ||
+        batchBytes + size > attachmentBatchBytes)
+      ) {
+        batches.add(batch);
+        batch = new List<Id>();
+        batchBytes = 0;
+      }
+      batch.add(cv.ContentDocumentId);
+      batchBytes += size;
+    }
+    if (!batch.isEmpty()) {
+      batches.add(batch);
+    }
+    return batches;
   }
 
   private static AttachmentBody toDisplayBody(String full) {
