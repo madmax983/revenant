@@ -641,6 +641,50 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   @IsTest
+  static void largeTimedApprovalStateStaysASignalWait() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      ContentVersion cv = new ContentVersion(
+        Title = 'BigTimedState',
+        PathOnClient = 'timed.json',
+        VersionData = Blob.valueOf(
+          '{"waitingForApproval":true,"approvalKey":"k1","pad":"' +
+            'X'.repeat(WorkflowWaitDescriptorService.MAX_STATE_BYTES) +
+            '"}'
+        )
+      );
+      insert cv;
+      Id docId = [
+        SELECT ContentDocumentId
+        FROM ContentVersion
+        WHERE Id = :cv.Id
+      ]
+      .ContentDocumentId;
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Suspended',
+        Sleep_Until__c = System.now().addHours(1)
+      );
+      insert inst;
+      insert new Workflow_Step_Execution__c(
+        Workflow_Instance__c = inst.Id,
+        Step_Name__c = 'Park.Step',
+        Status__c = 'Pending',
+        Wait_Type__c = WorkflowWaitDescriptorService.TYPE_APPROVAL,
+        Output__c = '{"$attachmentId":"' + docId + '"}'
+      );
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+
+      Assert.isNotNull(
+        details.get('waitDescriptor'),
+        'A timed signal wait is not shown as a timer wait'
+      );
+    }
+  }
+
+  @IsTest
   static void largeOffloadedWaitStateIsNotRead() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       ContentVersion cv = new ContentVersion(

@@ -221,6 +221,11 @@ public inherited sharing class WorkflowWaitDescriptorService {
         MAX_STATE_BYTES
       )
     );
+    // A state above MAX_STATE_BYTES is not read. The park wrote Wait_Type__c for a
+    // signal wait, so the wait stays a generic signal wait, also with a timer armed.
+    if (state.containsKey('$attachmentId') && hasWaitType(pending)) {
+      return genericDescriptor(stepName);
+    }
     Map<String, Object> approval = approvalDescriptor(stepName, state);
     if (approval != null) {
       return approval;
@@ -251,6 +256,16 @@ public inherited sharing class WorkflowWaitDescriptorService {
   // state.get / state.containsKey marker checks would NPE, throwing the DETAIL endpoint instead of
   // showing a generic wait descriptor. Returning an empty map (never null) lets those marker checks
   // run uniformly: no marker key is present, so an opaque state falls through to a generic/timer wait.
+  // True when the park stored a signal wait type. A row read without the field
+  // has none.
+  private static Boolean hasWaitType(Workflow_Step_Execution__c step) {
+    try {
+      return String.isNotBlank(step.Wait_Type__c);
+    } catch (SObjectException ignored) {
+      return false;
+    }
+  }
+
   private static Map<String, Object> parseState(String resolvedOutput) {
     try {
       // Coerce the parsed value through the Map copy-constructor so EVERY non-object case funnels
