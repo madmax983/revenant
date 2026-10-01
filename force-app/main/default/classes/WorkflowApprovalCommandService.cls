@@ -84,6 +84,8 @@ public inherited sharing class WorkflowApprovalCommandService {
     Id instanceId,
     String approvalKey
   ) {
+    List<String> rawOutputs = new List<String>();
+    List<Id> ownerIds = new List<Id>();
     for (Workflow_Step_Execution__c se : [
       SELECT Output__c
       FROM Workflow_Step_Execution__c
@@ -92,11 +94,16 @@ public inherited sharing class WorkflowApprovalCommandService {
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 50
     ]) {
-      // Approval gates are plaintext control markers. Author state is not decoded.
-      String resolved = WorkflowPayloadOffload.resolveControlPayload(
-        se.Output__c,
-        instanceId
-      );
+      rawOutputs.add(se.Output__c);
+      ownerIds.add(instanceId);
+    }
+    // Approval gates are plaintext control markers. Author state is not
+    // decoded. One bulk read covers all pending steps.
+    List<String> resolvedOutputs = WorkflowPayloadOffload.resolveControlPayloads(
+      rawOutputs,
+      ownerIds
+    );
+    for (String resolved : resolvedOutputs) {
       if (
         String.isBlank(resolved) || !resolved.contains('waitingForApproval')
       ) {
