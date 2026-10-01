@@ -114,10 +114,16 @@ public inherited sharing class WorkflowStepAdmission {
     // already-Paused row is just a no-op until the drain flips it to Running.
     if (definitionPaused && instance.Status__c != 'Paused') {
       instance.Status__c = 'Paused';
-      // Write the status only. The instance was read with no lock, so a full
-      // write can put back stale slot fields (issue #136).
+      // A park clears the timer, so a later timer marks a wait that ended in
+      // the park (issue #240). Write these two fields only. The instance was
+      // read with no lock, so a full write can put back stale slot fields
+      // (issue #136).
       Database.update(
-        new Workflow_Instance__c(Id = instance.Id, Status__c = 'Paused'),
+        new Workflow_Instance__c(
+          Id = instance.Id,
+          Status__c = 'Paused',
+          Sleep_Until__c = null
+        ),
         true,
         AccessLevel.SYSTEM_MODE
       );

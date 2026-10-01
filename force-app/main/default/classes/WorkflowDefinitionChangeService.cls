@@ -9,7 +9,8 @@ public inherited sharing class WorkflowDefinitionChangeService {
   /**
    * @description Releases one DefinitionChanged instance. It re-stamps the live
    * fingerprint and shape, sets Running, re-arms step timeouts, and enqueues the
-   * current step (or each open parallel branch).
+   * current step (or each open parallel branch). A future timer from a wait that
+   * ended in the park gives Suspended and no enqueue.
    * @param instanceId The parked instance.
    * @throws WorkflowEngine.WorkflowException When the instance is not parked,
    * the live definition does not resolve, or a current step is not in the live
@@ -17,7 +18,7 @@ public inherited sharing class WorkflowDefinitionChangeService {
    */
   public static void release(Id instanceId) {
     List<Workflow_Instance__c> rows = [
-      SELECT Id, Status__c, Workflow_Name__c, Current_Step__c
+      SELECT Id, Status__c, Workflow_Name__c, Current_Step__c, Sleep_Until__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -62,7 +63,7 @@ public inherited sharing class WorkflowDefinitionChangeService {
     inst.Definition_Shape__c = WorkflowDefinitionFingerprint.shapeJson(
       liveSteps
     );
-    inst.Status__c = 'Running';
+    Boolean waiting = WorkflowParkedTimer.settle(inst);
     inst.Error_Message__c = null;
     Database.update(inst, true, AccessLevel.SYSTEM_MODE);
     // Strict determinism (issue #102): the live code can make a new decision.
@@ -73,6 +74,9 @@ public inherited sharing class WorkflowDefinitionChangeService {
       'Released onto the live definition by user ' + UserInfo.getUserId(),
       inst.Id
     );
+    if (waiting) {
+      return; // A wait that ended its step in the park. The sweep wakes it.
+    }
     // Re-arm before enqueue so a delayed worker still has a deadline.
     WorkflowTimeoutReArm.reArmTimeoutsForResume(
       new List<Workflow_Instance__c>{ inst }

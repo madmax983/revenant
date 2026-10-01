@@ -142,16 +142,14 @@ public inherited sharing class WorkflowInstanceHold {
     Boolean parked = inst.Status__c == WorkflowInstanceHoldGate.STATUS;
     inst.Held_At__c = null;
     inst.Hold_Reason__c = null;
-    if (parked) {
-      unpark(inst);
-    }
+    Boolean waiting = parked && unpark(inst);
     Database.update(inst, true, AccessLevel.SYSTEM_MODE);
     WorkflowLog.warn(
       'InstanceHeld',
       'Released by user ' + UserInfo.getUserId(),
       inst.Id
     );
-    if (parked) {
+    if (parked && !waiting) {
       // Re-arm before enqueue so a delayed worker still has a deadline.
       WorkflowTimeoutReArm.reArmTimeoutsForResume(
         new List<Workflow_Instance__c>{ inst }
@@ -190,13 +188,16 @@ public inherited sharing class WorkflowInstanceHold {
   // A run that waits for a concurrency slot must not be Running without one.
   // It goes back to Suspended and the admission gate takes it. Sleep_Until__c
   // lets the watchdog drive it again if the enqueue is lost.
-  private static void unpark(Workflow_Instance__c inst) {
+  // A future timer from a wait that ended in the park keeps the instance
+  // Suspended (issue #240). The sleep sweep wakes it.
+  // Returns true when the timer keeps the instance asleep, so no step may run.
+  private static Boolean unpark(Workflow_Instance__c inst) {
     if (inst.Concurrency_Parked__c && !inst.Concurrency_Slot_Held__c) {
       inst.Status__c = 'Suspended';
       inst.Sleep_Until__c = Datetime.now();
-      return;
+      return false;
     }
-    inst.Status__c = 'Running';
+    return WorkflowParkedTimer.settle(inst);
   }
 
   /**
@@ -226,7 +227,8 @@ public inherited sharing class WorkflowInstanceHold {
         Concurrency_Parked__c,
         Concurrency_Slot_Held__c,
         Held_At__c,
-        Hold_Reason__c
+        Hold_Reason__c,
+        Sleep_Until__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE

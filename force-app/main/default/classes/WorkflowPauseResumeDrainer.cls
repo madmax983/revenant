@@ -50,9 +50,15 @@ public inherited sharing class WorkflowPauseResumeDrainer {
     List<Id> serialIds = new List<Id>();
     List<Workflow_Instance__c> parallelInsts = new List<Workflow_Instance__c>();
 
+    List<Workflow_Instance__c> toRun = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c inst : parked) {
-      inst.Status__c = 'Running';
       toUpdate.add(inst);
+      // Issue #240: a future timer from a wait that ended in the park keeps the
+      // instance Suspended. The sleep sweep wakes it. No worker runs now.
+      if (WorkflowParkedTimer.settle(inst)) {
+        continue;
+      }
+      toRun.add(inst);
 
       if (
         String.isNotBlank(inst.Current_Step__c) &&
@@ -70,7 +76,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
 
     // Re-arm step timeouts BEFORE enqueueing the resumed workers, so a delayed worker
     // (or a step that defers its pre-exec DML) still has an enforced watchdog deadline.
-    WorkflowTimeoutReArm.reArmTimeoutsForResume(toUpdate);
+    WorkflowTimeoutReArm.reArmTimeoutsForResume(toRun);
 
     enqueueResumedWorkers(serialIds, parallelInsts);
 
@@ -90,7 +96,12 @@ public inherited sharing class WorkflowPauseResumeDrainer {
   ) {
     if (workflowName == '*') {
       return [
-        SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
+        SELECT
+          Id,
+          Current_Step__c,
+          Status__c,
+          Compensation_Stack__c,
+          Sleep_Until__c
         FROM Workflow_Instance__c
         WHERE Status__c = 'Paused'
         WITH SYSTEM_MODE
@@ -99,7 +110,12 @@ public inherited sharing class WorkflowPauseResumeDrainer {
       ];
     }
     return [
-      SELECT Id, Current_Step__c, Status__c, Compensation_Stack__c
+      SELECT
+        Id,
+        Current_Step__c,
+        Status__c,
+        Compensation_Stack__c,
+        Sleep_Until__c
       FROM Workflow_Instance__c
       WHERE Status__c = 'Paused' AND Workflow_Name__c = :workflowName
       WITH SYSTEM_MODE
