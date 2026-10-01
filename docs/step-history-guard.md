@@ -61,6 +61,14 @@ On each hop that continues:
 
 A parked, paused or stale delivery does not pay: the guard runs after these gates.
 
+## Bounded reads (issue #261)
+
+The detail pane does not read all step rows. It reads the newest 500 rows without long text. Then it reads `Input__c`, `Output__c` and `Error_Details__c` for the newest 50 rows only. It also reads the latest parked (`Pending`) row, so the wait descriptor stays correct. Older rows show no long text. The pane shows the note "Showing the newest N of M steps". `M` stops at 50,000.
+
+The first compensation step uses `Input__c` and `Output__c` of the last `Completed` visit of the forward step. A later `Failed` or halted visit does not supply them. The retry path and the set-based paths use the same rule. When the forward step has no `Completed` visit, the compensation step starts with no input and no output.
+
+The visit count of a `_Compensate` step reads status only. It reads the long text of the latest row only.
+
 ## Operator actions
 
 1. Filter the dashboard by the category **Step History Limit**. A saga that compensated has no category. Search its error message for `Step history reached`.

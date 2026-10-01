@@ -334,6 +334,8 @@ export default class WorkflowDashboard extends LightningElement {
   selectedInstanceId;
   selectedInst = {};
   steps = [];
+  stepsTruncated = false;
+  stepCount = 0;
   childInstances = [];
   loadingDetails = false;
   successor = null;
@@ -618,6 +620,16 @@ export default class WorkflowDashboard extends LightningElement {
 
   get hasSteps() {
     return this.steps.length > 0;
+  }
+
+  get stepsTruncatedMessage() {
+    return (
+      "Showing the newest " +
+      this.steps.length +
+      " of " +
+      this.stepCount +
+      " steps. Older steps are hidden."
+    );
   }
 
   get hasChildren() {
@@ -1642,6 +1654,8 @@ export default class WorkflowDashboard extends LightningElement {
           breadcrumbsByStep[key].push(b);
         }
 
+        this.stepsTruncated = result.stepsTruncated === true;
+        this.stepCount = result.stepCount || 0;
         this.steps = result.steps.map((step) => {
           let approvalInfo = null;
           let childWorkflowLink = null;

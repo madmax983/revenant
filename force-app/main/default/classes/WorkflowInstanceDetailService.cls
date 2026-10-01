@@ -6,6 +6,15 @@
  * WorkflowPayloadService.
  */
 public inherited sharing class WorkflowInstanceDetailService {
+  /** @description Max step rows in the detail window (newest first). */
+  public static final Integer MAX_STEP_ROWS = 500;
+
+  /** @description Newest rows that carry Input, Output and error text. */
+  public static final Integer LONG_TEXT_ROWS = 50;
+
+  // Upper bound of the step row count. COUNT() uses one query row.
+  private static final Integer STEP_COUNT_CAP = 50000;
+
   /**
    * @description Loads the full detail view for one instance.
    * @param instanceId The workflow instance to load details for.
@@ -22,24 +31,14 @@ public inherited sharing class WorkflowInstanceDetailService {
     }
     Workflow_Instance__c instance = loadInstanceDetailRecord(instanceId);
 
-    List<Workflow_Step_Execution__c> steps = [
-      SELECT
-        Id,
-        Step_Name__c,
-        Status__c,
-        Input__c,
-        Output__c,
-        Retry_Count__c,
-        Error_Details__c,
-        CPU_Time_Ms__c,
-        SOQL_Query_Count__c,
-        Heap_Size_Bytes__c,
-        CreatedDate
+    Integer stepCount = [
+      SELECT COUNT()
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :instanceId
       WITH SYSTEM_MODE
-      ORDER BY CreatedDate ASC
+      LIMIT :STEP_COUNT_CAP
     ];
+    List<Workflow_Step_Execution__c> steps = loadStepWindow(instanceId);
     // Derive the awaited-signal descriptor from the parked step state BEFORE payload
     // resolution mutates (and may truncate) the step Output fields for display; the
     // service rehydrates any offloaded output itself through WorkflowPayloadOffload.
@@ -109,6 +108,9 @@ public inherited sharing class WorkflowInstanceDetailService {
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
+      // The window holds the newest MAX_STEP_ROWS rows (issue #261).
+      'stepsTruncated' => stepCount > MAX_STEP_ROWS,
+      'stepCount' => stepCount,
       'children' => children,
       'successor' => successors.isEmpty() ? null : successors[0],
       'waitingOn' => computeDetailWaitingOn(instance),
@@ -127,6 +129,87 @@ public inherited sharing class WorkflowInstanceDetailService {
         instanceId
       )
     };
+  }
+
+  // Reads the newest MAX_STEP_ROWS rows without long text. Then reads the long
+  // text for the newest LONG_TEXT_ROWS rows and the latest parked (Pending) row.
+  // Returns the rows in ascending order. A row with no long text has null fields.
+  private static List<Workflow_Step_Execution__c> loadStepWindow(
+    Id instanceId
+  ) {
+    Integer maxRows = MAX_STEP_ROWS;
+    List<Workflow_Step_Execution__c> newest = [
+      SELECT
+        Id,
+        Step_Name__c,
+        Status__c,
+        Retry_Count__c,
+        CPU_Time_Ms__c,
+        SOQL_Query_Count__c,
+        Heap_Size_Bytes__c,
+        CreatedDate
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT :maxRows
+    ];
+    Set<Id> windowIds = new Set<Id>();
+    Set<Id> textIds = new Set<Id>();
+    for (Integer i = 0; i < newest.size(); i++) {
+      windowIds.add(newest[i].Id);
+      if (i < LONG_TEXT_ROWS) {
+        textIds.add(newest[i].Id);
+      }
+    }
+    // The wait descriptor needs the parked row, even when it is older.
+    List<Workflow_Step_Execution__c> parked = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+    Id parkedId = parked.isEmpty() ? null : parked[0].Id;
+    if (parkedId != null) {
+      textIds.add(parkedId);
+    }
+    Map<Id, Workflow_Step_Execution__c> withText = new Map<Id, Workflow_Step_Execution__c>(
+      [
+        SELECT
+          Id,
+          Step_Name__c,
+          Status__c,
+          Input__c,
+          Output__c,
+          Retry_Count__c,
+          Error_Details__c,
+          CPU_Time_Ms__c,
+          SOQL_Query_Count__c,
+          Heap_Size_Bytes__c,
+          CreatedDate
+        FROM Workflow_Step_Execution__c
+        WHERE Id IN :textIds
+        WITH SYSTEM_MODE
+      ]
+    );
+
+    List<Workflow_Step_Execution__c> steps = new List<Workflow_Step_Execution__c>();
+    if (parkedId != null && !windowIds.contains(parkedId)) {
+      steps.add(withText.get(parkedId));
+    }
+    for (Integer i = newest.size() - 1; i >= 0; i--) {
+      Workflow_Step_Execution__c row = withText.get(newest[i].Id);
+      if (row == null) {
+        row = newest[i];
+        row.Input__c = null;
+        row.Output__c = null;
+        row.Error_Details__c = null;
+      }
+      steps.add(row);
+    }
+    return steps;
   }
 
   private static Workflow_Instance__c loadInstanceDetailRecord(Id instanceId) {

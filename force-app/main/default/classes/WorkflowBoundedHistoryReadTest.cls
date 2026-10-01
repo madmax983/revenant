@@ -161,7 +161,8 @@ private class WorkflowBoundedHistoryReadTest {
       );
       Assert.areEqual(
         'in-5950',
-        steps[steps.size() - WorkflowInstanceDetailService.LONG_TEXT_ROWS].Input__c,
+        steps[steps.size() - WorkflowInstanceDetailService.LONG_TEXT_ROWS]
+          .Input__c,
         'The rows keep ascending order'
       );
       Assert.isNull(steps[0].Input__c, 'The oldest row has no long text');
@@ -287,7 +288,12 @@ private class WorkflowBoundedHistoryReadTest {
         new List<Workflow_Instance__c>{ first, second }
       );
 
-      for (Workflow_Instance__c inst : new List<Workflow_Instance__c>{ first, second }) {
+      for (
+        Workflow_Instance__c inst : new List<Workflow_Instance__c>{
+          first,
+          second
+        }
+      ) {
         Workflow_Step_Execution__c seeded = compensationRow(inst.Id);
         Assert.areEqual('in-done', seeded.Input__c, 'Input of Completed');
         Assert.areEqual('out-done', seeded.Output__c, 'Output of Completed');

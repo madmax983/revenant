@@ -3983,6 +3983,34 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     );
   }
 
+  it("shows how many steps the detail pane hides", async () => {
+    mockLongHistory(true, null);
+    getInstanceDetails.mockResolvedValue({
+      ...(await getInstanceDetails()),
+      steps: [{ Id: "s1", Step_Name__c: "A", Status__c: "Completed" }],
+      stepsTruncated: true,
+      stepCount: 10000,
+    });
+    const element = await openFirst();
+
+    const note = element.shadowRoot.querySelector(
+      '[data-id="steps-truncated"]',
+    );
+    expect(note).not.toBeNull();
+    expect(note.textContent).toBe(
+      "Showing the newest 1 of 10000 steps. Older steps are hidden.",
+    );
+  });
+
+  it("shows no step note when the history is complete", async () => {
+    mockLongHistory(true, null);
+    const element = await openFirst();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="steps-truncated"]'),
+    ).toBeNull();
+  });
+
   it("shows a LONG HISTORY badge on a flagged list row", async () => {
     mockLongHistory(true, null);
     const element = await mount();
