@@ -118,9 +118,10 @@ private class WorkflowPayloadBudgetTest {
       if (step.Output__c == 'X'.repeat(100)) {
         resolved++;
       } else {
-        Assert.isTrue(
-          step.Output__c.startsWith('{"$attachmentId":'),
-          'An unread body shows its marker'
+        Assert.areEqual(
+          WorkflowPayloadService.OMITTED_PAYLOAD,
+          step.Output__c,
+          'An unread body shows the placeholder'
         );
       }
     }
@@ -137,8 +138,8 @@ private class WorkflowPayloadBudgetTest {
 
     for (Workflow_Step_Execution__c step : steps) {
       Assert.isTrue(
-        step.Output__c.startsWith('{"$attachmentId":'),
-        'A large body shows its marker'
+        step.Output__c == WorkflowPayloadService.OMITTED_PAYLOAD,
+        'A large body shows the placeholder'
       );
     }
   }
@@ -187,7 +188,7 @@ private class WorkflowPayloadBudgetTest {
 
     for (Workflow_Step_Execution__c step : steps) {
       Assert.isTrue(
-        step.Output__c.startsWith('{"$attachmentId":'),
+        step.Output__c == WorkflowPayloadService.OMITTED_PAYLOAD,
         'No body is read above the ceiling'
       );
     }

@@ -35,6 +35,9 @@ public inherited sharing class WorkflowPayloadService {
   // Max attachments in one ContentVersion query.
   private static final Integer ATTACHMENT_CHUNK = 5;
 
+  /** @description Display text for an attachment that the view did not read. */
+  public static final String OMITTED_PAYLOAD = '(Payload not shown: it is too large to read here.)';
+
   /** @description Display text for an encoded payload. */
   public static final String REDACTED_PAYLOAD = WorkflowPayloadCodecs.REDACTED_PAYLOAD;
 
@@ -65,6 +68,7 @@ public inherited sharing class WorkflowPayloadService {
     String display;
     Integer fullLength;
     Boolean encoded;
+    Boolean omitted = false;
   }
 
   /**
@@ -99,6 +103,9 @@ public inherited sharing class WorkflowPayloadService {
       attachmentId != null && res.attachmentIdToData.containsKey(attachmentId)
     ) {
       AttachmentBody body = res.attachmentIdToData.get(attachmentId);
+      if (body.omitted) {
+        return OMITTED_PAYLOAD;
+      }
       if (body.encoded) {
         return REDACTED_PAYLOAD;
       }
@@ -202,6 +209,15 @@ public inherited sharing class WorkflowPayloadService {
             toDisplayBody(cv.VersionData.toString())
           );
         }
+      }
+    }
+    // A verified body that was not read could be encoded. Show a placeholder, not
+    // the marker, so the view keeps the redaction rule and hides the document Id.
+    for (Id docId : verified) {
+      if (!attachmentIdToData.containsKey(docId)) {
+        AttachmentBody omitted = new AttachmentBody();
+        omitted.omitted = true;
+        attachmentIdToData.put(docId, omitted);
       }
     }
     return attachmentIdToData;
