@@ -346,7 +346,7 @@ public class WorkflowAlertManagerTest {
     for (String ok : new List<String>{
       'ops@example.com',
       'first.last+tag@sub.example.co.uk',
-      'o''brien@example.com'
+      'o\'brien@example.com'
     }) {
       System.assertEquals(true, WorkflowAlertEmailBuilder.isValidAddress(ok), ok);
     }
@@ -369,6 +369,37 @@ public class WorkflowAlertManagerTest {
       new List<String>(),
       WorkflowAlertEmailBuilder.invalidRecipients(null),
       'Null has no tokens'
+    );
+  }
+
+  /**
+   * @description The watchdog builder sends to valid addresses only (#265).
+   */
+  @IsTest
+  static void testBuildersDropInvalidAddresses() {
+    Messaging.SingleEmailMessage mail = WorkflowAlertEmailBuilder.buildWatchdogStallEmail(
+      'ops@example.com, bad',
+      'Stalled'
+    );
+    System.assertEquals(
+      new List<String>{ 'ops@example.com' },
+      mail.getToAddresses(),
+      'Only the valid address stays'
+    );
+    System.assertEquals(
+      null,
+      WorkflowAlertEmailBuilder.buildWatchdogStallEmail('bad', 'Stalled'),
+      'No valid address gives no email'
+    );
+    System.assertEquals(
+      new List<String>(),
+      WorkflowAlertEmailBuilder.parseRecipients(null),
+      'Null gives no address'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.isValidAddress('a@' + 'b'.repeat(250) + '.com'),
+      'A long address is invalid'
     );
   }
 

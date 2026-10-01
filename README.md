@@ -806,7 +806,7 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 ### Configuration Fields
 
 1.  **Enable Alerts** (`Enable_Alerts__c`): Checkbox to toggle alerts (both email and platform events) for this configuration.
-2.  **Email Recipients** (`Email_Recipients__c`): A comma- or semicolon-separated list of target email addresses (e.g., `ops@example.com, alerts@example.com`). Revenant skips an address with an invalid shape and sends to the valid ones. If no address is valid, the config sends no email.
+2.  **Email Recipients** (`Email_Recipients__c`): A comma- or semicolon-separated list of target email addresses (e.g., `ops@example.com, alerts@example.com`). Revenant skips an address with an invalid shape and sends to the valid ones. If no address is valid, the config sends no email. The alert event still publishes when Publish Alert Event is on. Quoted local parts and non-ASCII domains are not valid.
 3.  **Publish Alert Event** (`Publish_Alert_Event__c`): Checkbox toggle to publish a `Workflow_Alert__e` platform event when an alert is triggered. This can be used in addition to or instead of email alerting (if `Email_Recipients__c` is left blank).
 4.  **Threshold Customization** (Optional - if left blank, alerts fire immediately on any failure):
     - `Consecutive_Failures_Limit__c`: Trigger alerts only after `N` consecutive executions fail.

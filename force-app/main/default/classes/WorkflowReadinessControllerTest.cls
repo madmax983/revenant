@@ -380,8 +380,14 @@ private class WorkflowReadinessControllerTest {
     }
     WorkflowReadinessCheck alert = check('alertConfig', checks);
     System.assertEquals(WARN, alert.status, 'No valid address warns');
-    System.assert(alert.finding.contains('not-an-email'), alert.finding);
-    System.assert(alert.finding.contains('ops@'), alert.finding);
+    System.assert(
+      alert.finding.contains('no valid address'),
+      alert.finding
+    );
+    System.assert(
+      alert.finding.contains('Invalid: not-an-email, ops@.'),
+      alert.finding
+    );
   }
 
   /**
@@ -395,11 +401,45 @@ private class WorkflowReadinessControllerTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       checks = WorkflowReadinessController.getReadinessChecks();
     }
-    System.assertEquals(
-      PASS,
-      check('alertConfig', checks).status,
-      'One valid address is a channel'
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(PASS, alert.status, 'One valid address is a channel');
+    System.assert(
+      alert.finding.contains('skips these invalid addresses: bad.'),
+      alert.finding
     );
+  }
+
+  /**
+   * @description An event channel passes and still names the skipped tokens (#265).
+   */
+  @IsTest
+  static void testEventWithMalformedRecipientsPassesWithNote() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(true, 'bad', true));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(PASS, alert.status, 'The event is a channel');
+    System.assert(alert.finding.contains('bad'), alert.finding);
+  }
+
+  /**
+   * @description Alerts off warns for that cause only. No token list (#265).
+   */
+  @IsTest
+  static void testDisabledAlertsWithMalformedRecipientsWarnsWithoutTokens() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(false, 'bad', false));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(WARN, alert.status, 'Disabled alerts warn');
+    System.assert(alert.finding.contains('Enable_Alerts__c off'), alert.finding);
+    System.assert(!alert.finding.contains('Invalid:'), alert.finding);
   }
 
   /**

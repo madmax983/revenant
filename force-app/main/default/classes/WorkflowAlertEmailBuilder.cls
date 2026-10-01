@@ -5,6 +5,7 @@
  * is best-effort and swallows failures so alerting can never disrupt callers.
  */
 public inherited sharing class WorkflowAlertEmailBuilder {
+  private static final Integer MAX_ADDRESS_LENGTH = 254;
   // Dot-separated local atoms, then two or more dot-separated domain labels.
   private static final String LOCAL_ATOM = '[A-Za-z0-9!#$%&\'*+/=?^_`{|}~-]+';
   private static final String DOMAIN_LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
@@ -352,13 +353,15 @@ public inherited sharing class WorkflowAlertEmailBuilder {
   }
 
   /**
-   * @description Conservative syntax check. It needs one @, a dotted domain and no
-   * spaces. It does not check that the address can receive mail.
+   * @description Conservative syntax check. It needs one @, a dotted domain, no
+   * spaces and 254 characters or fewer. It does not check that the address can receive mail.
    * @param address One trimmed address, or null.
    * @return True when the address has a valid shape.
    */
   public static Boolean isValidAddress(String address) {
-    return address != null && Pattern.matches(ADDRESS_REGEX, address);
+    return address != null &&
+      address.length() <= MAX_ADDRESS_LENGTH &&
+      Pattern.matches(ADDRESS_REGEX, address);
   }
 
   private static List<String> tokens(String recipients) {

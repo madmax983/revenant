@@ -8,7 +8,7 @@
 
 A mixed list sends to the valid addresses and skips the invalid ones.
 
-Reason: one typo must not stop an alert for the other people. Readiness names the invalid tokens, so the owner can fix them.
+Reason: one typo must not stop an alert for the other people. Readiness names the skipped tokens, so the owner can fix them.
 
 ## Thinking
 
@@ -44,6 +44,8 @@ Counter: use a conservative regex. Put the rule in one method. `parseRecipients`
 - `invalidRecipients`: returns the non-blank tokens that fail the check.
 - `hasRecipients`: true when one valid address exists.
 - Readiness: when alerts are on, the event is off, and no address is valid, Warn. The finding names each invalid token.
+- Readiness: when a channel works but some tokens are invalid, Pass. The finding lists the skipped tokens.
+- Limit: an address is at most 254 characters. This keeps the regex fast.
 
 ## Out of scope
 
