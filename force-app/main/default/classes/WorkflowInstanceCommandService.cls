@@ -23,6 +23,7 @@ public inherited sharing class WorkflowInstanceCommandService {
     WorkflowDashboardSupport.checkOperatorAction();
     try {
       Object input = null;
+      WorkflowPayloadOffload.rejectOffloadMarker(inputJson, 'Input Payload');
       if (String.isNotBlank(inputJson)) {
         try {
           input = JSON.deserializeUntyped(inputJson);

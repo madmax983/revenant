@@ -24,6 +24,7 @@ public inherited sharing class WorkflowSignalRouter {
    * idempotencyKey); when idempotencyKey is null, at-least-once behavior applies
    */
   public static void routeSignalRequest(WorkflowEngine.SignalRequest req) {
+    rejectMarkerPayload(req);
     String keyOrId = req.keyOrId;
     String signalName = req.signalName;
     Boolean isId = isInstanceId(keyOrId);
@@ -66,6 +67,34 @@ public inherited sharing class WorkflowSignalRouter {
     // store a per-instance-scoped hash on Signal_Key__c and catch DUPLICATE_VALUE
     // to treat a repeat delivery as an idempotent no-op (no row, no wake-up).
     deliverSignal(instance, req);
+  }
+
+  /**
+   * @description Rejects a caller signal whose payload is an offload marker.
+   * Public entry points call it. The event path does not, because a child
+   * completion event can carry a marker.
+   * @param req the signal request to check (null is ignored)
+   */
+  public static void rejectMarkerPayload(WorkflowEngine.SignalRequest req) {
+    if (req != null) {
+      WorkflowPayloadOffload.rejectOffloadMarker(req.payload, 'Signal payload');
+    }
+  }
+
+  /**
+   * @description Rejects every caller signal in a batch whose payload is an
+   * offload marker.
+   * @param requests the signal requests to check
+   */
+  public static void rejectMarkerPayloads(
+    List<WorkflowEngine.SignalRequest> requests
+  ) {
+    if (requests == null) {
+      return;
+    }
+    for (WorkflowEngine.SignalRequest req : requests) {
+      rejectMarkerPayload(req);
+    }
   }
 
   /**

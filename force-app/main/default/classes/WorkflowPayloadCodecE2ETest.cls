@@ -505,7 +505,8 @@ public class WorkflowPayloadCodecE2ETest {
       WorkflowStatusRead.getStatus(new List<Id>{ instanceId });
       harness.inspect();
       WorkflowPayloadOffload.resolvePayloads(
-        new List<String>{ checkpoint.Output__c, checkpoint.Captured_Values__c }
+        new List<String>{ checkpoint.Output__c, checkpoint.Captured_Values__c },
+        instanceId
       );
 
       System.assertEquals('Completed', r.status);
@@ -677,7 +678,7 @@ public class WorkflowPayloadCodecE2ETest {
       ];
       System.assertEquals(
         input,
-        WorkflowPayloadOffload.resolvePayload(inst.Input__c),
+        WorkflowPayloadOffload.resolvePayload(inst.Input__c, inst.Id),
         'One decode gives the input: no double encode'
       );
     }
@@ -966,7 +967,7 @@ public class WorkflowPayloadCodecE2ETest {
         'The engine offloads the encoded wrapper'
       );
       Map<String, Object> wrapper = (Map<String, Object>) JSON.deserializeUntyped(
-        WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
+        WorkflowPayloadOffload.resolvePayload(sig.Payload__c, parent.Id)
       );
       System.assertEquals('Failed', wrapper.get('status'));
       System.assertEquals(
@@ -1015,7 +1016,7 @@ public class WorkflowPayloadCodecE2ETest {
       );
       System.assertEquals(
         bigData,
-        WorkflowPayloadOffload.resolvePayload(marker)
+        WorkflowPayloadOffload.resolvePayload(marker, inst.Id)
       );
       System.assert(inline.length() <= 131072, 'The value fits the field');
       System.assertEquals(

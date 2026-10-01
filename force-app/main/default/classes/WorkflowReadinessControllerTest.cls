@@ -368,6 +368,81 @@ private class WorkflowReadinessControllerTest {
   }
 
   /**
+   * @description Malformed-only recipients warn and the finding names each token (#265).
+   */
+  @IsTest
+  static void testMalformedRecipientsWarnAndNameTokens() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(true, 'not-an-email; ops@', false));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(WARN, alert.status, 'No valid address warns');
+    System.assert(
+      alert.finding.contains('no valid address'),
+      alert.finding
+    );
+    System.assert(
+      alert.finding.contains('Invalid: not-an-email, ops@.'),
+      alert.finding
+    );
+  }
+
+  /**
+   * @description One valid address among bad ones still passes (#265).
+   */
+  @IsTest
+  static void testMixedRecipientsPass() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(true, 'bad, ops@example.com', false));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(PASS, alert.status, 'One valid address is a channel');
+    System.assert(
+      alert.finding.contains('skips these invalid addresses: bad.'),
+      alert.finding
+    );
+  }
+
+  /**
+   * @description An event channel passes and still names the skipped tokens (#265).
+   */
+  @IsTest
+  static void testEventWithMalformedRecipientsPassesWithNote() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(true, 'bad', true));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(PASS, alert.status, 'The event is a channel');
+    System.assert(alert.finding.contains('bad'), alert.finding);
+  }
+
+  /**
+   * @description Alerts off warns for that cause only. No token list (#265).
+   */
+  @IsTest
+  static void testDisabledAlertsWithMalformedRecipientsWarnsWithoutTokens() {
+    WorkflowReadinessService.probe = new FakeProbe()
+      .withAlert(alertConfig(false, 'bad', false));
+    List<WorkflowReadinessCheck> checks;
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      checks = WorkflowReadinessController.getReadinessChecks();
+    }
+    WorkflowReadinessCheck alert = check('alertConfig', checks);
+    System.assertEquals(WARN, alert.status, 'Disabled alerts warn');
+    System.assert(alert.finding.contains('Enable_Alerts__c off'), alert.finding);
+    System.assert(!alert.finding.contains('Invalid:'), alert.finding);
+  }
+
+  /**
    * @description A trigger that is not deployed fails.
    */
   @IsTest

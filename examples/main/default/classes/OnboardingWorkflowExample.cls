@@ -225,7 +225,10 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
         // Resolve the stored value. The engine can offload it. A payload codec can
         // encode it.
         Map<String, Object> payloadMap = (Map<String, Object>) JSON.deserializeUntyped(
-          WorkflowPayloadOffload.resolvePayload(sig.Payload__c)
+          WorkflowPayloadOffload.resolvePayload(
+            sig.Payload__c,
+            ctx.workflowInstanceId
+          )
         );
         Boolean approved = (Boolean) payloadMap.get('approved');
         if (!approved) {

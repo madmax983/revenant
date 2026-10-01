@@ -2162,6 +2162,14 @@ export default class WorkflowDashboard extends LightningElement {
     return !!(this.healthData && this.healthData.countsCapped);
   }
 
+  get healthDefinitionsCapped() {
+    return !!(this.healthData && this.healthData.definitionsCapped);
+  }
+
+  get healthDefinitionCap() {
+    return this.healthData ? this.healthData.definitionCap : 0;
+  }
+
   get healthCountCap() {
     return this.healthData ? this.healthData.countCap : 0;
   }

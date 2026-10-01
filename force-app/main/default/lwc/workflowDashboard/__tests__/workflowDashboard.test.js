@@ -4167,6 +4167,8 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
       windowHours: 24,
       countCap: 20000,
       countsCapped: false,
+      definitionsCapped: false,
+      definitionCap: 500,
       sampleCap: 2000,
       isSampled,
       rows: rows.map((r) => ({ ...r, durationSampled: isSampled })),
@@ -4377,6 +4379,20 @@ describe("c-workflow-dashboard fleet health view (#111)", () => {
 
     expect(query(element, "health-sampled-note")).toBeNull();
     expect(query(element, "health-capped-note")).toBeNull();
+    expect(query(element, "health-definitions-capped-note")).toBeNull();
+  });
+
+  it("shows a note when the rows are capped (#263)", async () => {
+    const element = await openHealth(
+      health(ROWS, { definitionsCapped: true, definitionCap: 7 }),
+    );
+
+    expect(
+      query(element, "health-definitions-capped-note").textContent.trim(),
+    ).toBe(
+      "This window has more than 7 definitions. The table shows 7 of them.",
+    );
+    expect(rowFor(element, "OnboardingWorkflow")).not.toBeNull();
   });
 
   it("shows a note when the counts use the newest instances only (AC6)", async () => {

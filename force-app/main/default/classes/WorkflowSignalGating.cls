@@ -109,7 +109,8 @@ public inherited sharing class WorkflowSignalGating {
       // Child-wait keys are plaintext control markers. Author state is not
       // decoded, so one bad row cannot fail the batch.
       List<String> resolved = WorkflowPayloadOffload.resolveControlPayloads(
-        rawOutputs
+        rawOutputs,
+        parentIds
       );
       for (Integer i = 0; i < parentIds.size(); i++) {
         scan.resolvedOutputsByParentId.put(parentIds[i], resolved[i]);

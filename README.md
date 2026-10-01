@@ -401,7 +401,7 @@ public class RequestCreditCheckStep implements WorkflowStep {
             if (outcome.isSuccess()) {
                 // Resume: read the child's output.
                 Map<String, Object> childResult = (Map<String, Object>) JSON.deserializeUntyped(
-                    WorkflowPayloadOffload.resolvePayload(outcome.output)
+                    WorkflowPayloadOffload.resolvePayload(outcome.output, ctx.workflowInstanceId)
                 );
                 // ... inspect childResult and return StepResult.complete(nextStep, output)
             } else {
@@ -806,7 +806,7 @@ The engine maps a workflow's class name to a custom metadata record's `Developer
 ### Configuration Fields
 
 1.  **Enable Alerts** (`Enable_Alerts__c`): Checkbox to toggle alerts (both email and platform events) for this configuration.
-2.  **Email Recipients** (`Email_Recipients__c`): A comma- or semicolon-separated list of target email addresses (e.g., `ops@example.com, alerts@example.com`).
+2.  **Email Recipients** (`Email_Recipients__c`): A comma- or semicolon-separated list of target email addresses (e.g., `ops@example.com, alerts@example.com`). Revenant skips an address with an invalid shape and sends to the valid ones. If no address is valid, the config sends no email. The alert event still publishes when Publish Alert Event is on. Quoted local parts and non-ASCII domains are not valid.
 3.  **Publish Alert Event** (`Publish_Alert_Event__c`): Checkbox toggle to publish a `Workflow_Alert__e` platform event when an alert is triggered. This can be used in addition to or instead of email alerting (if `Email_Recipients__c` is left blank).
 4.  **Threshold Customization** (Optional - if left blank, alerts fire immediately on any failure):
     - `Consecutive_Failures_Limit__c`: Trigger alerts only after `N` consecutive executions fail.
@@ -1016,9 +1016,9 @@ By default, Salesforce Platform Event triggers (like `WorkflowEventTrigger`) exe
 Revenant supports being packaged inside a Managed Package (1GP or 2GP) and installed in subscriber orgs. The engine resolves workflow and step classes dynamically across the namespace boundary.
 
 ### Global API (What Subscribers Can See)
-A subscriber sees only `global` Apex. Revenant makes a small, frozen set of members `global`. The set is: the step and definition interfaces, `StepContext` and its accessor objects, `StepResult`, `RetryPolicy`, `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`), `WorkflowStatusRead.getStatus`, and three Flow actions (Start, Signal, Get Workflow Status). All other engine code is namespace-private.
+A subscriber sees only `global` Apex. Revenant makes a small, frozen set of members `global`. The set is: the step and definition interfaces, `StepContext` and its accessor objects, `StepResult`, `RetryPolicy`, `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`), `WorkflowStatusRead.getStatus`, three Flow actions (Start, Signal, Get Workflow Status), `PayloadCodec`. It also has the archive API: `WorkflowArchiveSink`, the `WorkflowArchive` reads and `WorkflowArchiveRecord`. All other engine code is namespace-private.
 
-Other APIs in this README (for example `getHistory`, `findInstances`, `RateLimiter`, `PayloadCodec`) work in the package namespace only. They are candidates for the global API. `withParent` stays namespace-private. For each member and the stability policy, see [docs/global-api.md](docs/global-api.md). For the decision, see [ADR 0006](docs/adr/0006-frozen-global-api.md).
+Other APIs in this README (for example `getHistory`, `findInstances`, `RateLimiter`) work in the package namespace only. They are candidates for the global API. `withParent` stays namespace-private. For each member and the stability policy, see [docs/global-api.md](docs/global-api.md). For the decisions, see [ADR 0006](docs/adr/0006-frozen-global-api.md) and [ADR 0021](docs/adr/0021-global-codec-and-archive.md). To check an install, see [docs/packaging-smoke.md](docs/packaging-smoke.md).
 
 ### Class Resolution Model
 - **Engine Namespace**: When Revenant is installed as a package, the engine executes in the package namespace (e.g. `revenant`).

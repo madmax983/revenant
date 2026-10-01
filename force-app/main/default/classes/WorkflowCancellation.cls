@@ -16,7 +16,8 @@
  * `WorkflowCompensation.preCreateFirstCompensationSteps` and
  * `WorkflowCompensationStepLog.appendCompensationRetrySteps` members are referenced
  * fully qualified. The Cancel Workflow action (issue #107) uses the bulk
- * entries {@link cancelInstances} and {@link cancelWithCompensationsInstances}.
+ * entries {@link cancelInstances}, {@link cancelWithCompensationsInstances} and
+ * {@link cancelInstancesByMode}. The last one walks the trees of both modes once.
  * All SOQL/DML executes in system mode.
  */
 public inherited sharing class WorkflowCancellation {
@@ -124,6 +125,68 @@ public inherited sharing class WorkflowCancellation {
   }
 
   /**
+   * @description The Ids that each mode of {@link cancelInstancesByMode} cancelled.
+   */
+  public class ModeResult {
+    // Nodes (roots and descendants) that the hard-stop pass cancelled.
+    public Set<Id> hardStopped = new Set<Id>();
+    // Nodes (roots and descendants) that the rollback pass cancelled.
+    public Set<Id> rolledBack = new Set<Id>();
+  }
+
+  /**
+   * @description Bulk cancel entry (issue #264). Cancels hard-stop roots and
+   * rollback roots in one call. It walks the trees of both modes in one pass, so
+   * the walk costs one query per level, not one per level and mode. A node that
+   * is, or sits under, a hard-stop root gets a hard stop. The other nodes
+   * start a saga rollback. The hard-stop pass runs first, then the rollback pass.
+   * @param hardStopIds the roots to cancel with no rollback; null is empty
+   * @param rollbackIds the roots to cancel with rollback; null is empty
+   * @return the Ids that each pass cancelled
+   */
+  public static ModeResult cancelInstancesByMode(
+    List<Id> hardStopIds,
+    List<Id> rollbackIds
+  ) {
+    List<Id> hardRoots = hardStopIds ?? new List<Id>();
+    List<Id> rollbackRoots = rollbackIds ?? new List<Id>();
+    ModeResult result = new ModeResult();
+    if (hardRoots.isEmpty() && rollbackRoots.isEmpty()) {
+      return result;
+    }
+    List<Id> allRoots = new List<Id>(hardRoots);
+    allRoots.addAll(rollbackRoots);
+    TreeWalk walk = walkActiveTree(allRoots);
+    Set<Id> hardSet = subtreeOf(hardRoots, walk.childrenByParent);
+    List<Id> hardNodes = new List<Id>();
+    List<Id> rollbackNodes = new List<Id>();
+    for (Id nodeId : walk.ordered) {
+      if (hardSet.contains(nodeId)) {
+        hardNodes.add(nodeId);
+      } else {
+        rollbackNodes.add(nodeId);
+      }
+    }
+    if (!hardNodes.isEmpty()) {
+      result.hardStopped = cancelNodes(
+        hardNodes,
+        false,
+        null,
+        new Set<String>()
+      );
+    }
+    if (!rollbackNodes.isEmpty()) {
+      result.rolledBack = cancelNodes(
+        rollbackNodes,
+        true,
+        null,
+        ROLLBACK_STATUSES
+      );
+    }
+    return result;
+  }
+
+  /**
    * @description Shared body of the bulk cancel entries.
    * @param rootIds the instances to cancel, in order
    * @param runCompensations true to roll back completed steps
@@ -182,26 +245,95 @@ public inherited sharing class WorkflowCancellation {
    * @return the roots plus all active descendant Ids in parent-before-child order
    */
   private static List<Id> collectActiveTree(List<Id> rootIds) {
+    return walkActiveTree(rootIds).ordered;
+  }
+
+  /**
+   * @description The result of a tree walk.
+   */
+  private class TreeWalk {
+    // Roots first, then each level, parent before child.
     List<Id> ordered = new List<Id>();
+    // The child Ids of each parent that the walk read.
+    Map<Id, List<Id>> childrenByParent = new Map<Id, List<Id>>();
+  }
+
+  /**
+   * @description The walk of {@link collectActiveTree}. It also keeps the parent
+   * to child edges, so a caller can split the nodes by root without more SOQL.
+   * @param rootIds Ids of the instances at the root of the traversal
+   * @return the ordered node Ids and the child edges
+   */
+  private static TreeWalk walkActiveTree(List<Id> rootIds) {
+    TreeWalk walk = new TreeWalk();
     Set<Id> seen = new Set<Id>();
     for (Id rootId : rootIds) {
       if (rootId != null && seen.add(rootId)) {
-        ordered.add(rootId);
+        walk.ordered.add(rootId);
       }
     }
-    List<Id> frontier = new List<Id>(ordered);
+    List<Id> frontier = new List<Id>(walk.ordered);
     while (!frontier.isEmpty()) {
       List<Workflow_Instance__c> children = queryActiveChildren(frontier);
       List<Id> nextFrontier = new List<Id>();
       for (Workflow_Instance__c child : children) {
+        addEdge(walk.childrenByParent, child.Parent_Instance__c, child.Id);
         if (seen.add(child.Id)) {
-          ordered.add(child.Id);
+          walk.ordered.add(child.Id);
           nextFrontier.add(child.Id);
         }
       }
       frontier = nextFrontier;
     }
-    return ordered;
+    return walk;
+  }
+
+  /**
+   * @description Adds a child Id under its parent in the edge map.
+   * @param childrenByParent the edge map
+   * @param parentId the parent Id
+   * @param childId the child Id
+   */
+  private static void addEdge(
+    Map<Id, List<Id>> childrenByParent,
+    Id parentId,
+    Id childId
+  ) {
+    List<Id> children = childrenByParent.get(parentId);
+    if (children == null) {
+      children = new List<Id>();
+      childrenByParent.put(parentId, children);
+    }
+    children.add(childId);
+  }
+
+  /**
+   * @description The roots and all of their descendants in the walk edges.
+   * @param roots the start nodes; null Ids are ignored
+   * @param childrenByParent the child edges of the walk
+   * @return the Ids of the roots and their descendants
+   */
+  private static Set<Id> subtreeOf(
+    List<Id> roots,
+    Map<Id, List<Id>> childrenByParent
+  ) {
+    Set<Id> seen = new Set<Id>();
+    List<Id> queue = new List<Id>();
+    for (Id rootId : roots) {
+      if (rootId != null && seen.add(rootId)) {
+        queue.add(rootId);
+      }
+    }
+    // The loop adds to the queue while it reads the queue. The walk is
+    // breadth-first and uses no SOQL.
+    for (Integer i = 0; i < queue.size(); i++) {
+      for (Id childId : childrenByParent.get(queue[i]) ?? new List<Id>()) {
+        if (seen.add(childId)) {
+          queue.add(childId);
+        }
+      }
+    }
+    return seen;
   }
 
   /**
@@ -223,7 +355,7 @@ public inherited sharing class WorkflowCancellation {
     List<Id> frontier
   ) {
     return [
-      SELECT Id
+      SELECT Id, Parent_Instance__c
       FROM Workflow_Instance__c
       WHERE
         Parent_Instance__c IN :frontier

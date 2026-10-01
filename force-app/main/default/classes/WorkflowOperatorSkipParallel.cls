@@ -118,7 +118,10 @@ public inherited sharing class WorkflowOperatorSkipParallel {
     StepResult mockSpawningResult = StepResult.complete(
       'SENTINEL_NEXT_STEP',
       !spawningSteps.isEmpty()
-        ? WorkflowPayloadOffload.resolvePayload(spawningSteps[0].Output__c)
+        ? WorkflowPayloadOffload.resolvePayload(
+            spawningSteps[0].Output__c,
+            instanceId
+          )
         : null
     );
 
@@ -209,12 +212,21 @@ public inherited sharing class WorkflowOperatorSkipParallel {
     WorkflowOperatorSkip.ResumeSkipRun run
   ) {
     Map<String, Object> joinInput = new Map<String, Object>();
+    List<Workflow_Step_Execution__c> branches = new List<Workflow_Step_Execution__c>();
+    List<String> rawOutputs = new List<String>();
     for (String ps : run.latestParallelMap.keySet()) {
-      Workflow_Step_Execution__c pe = run.latestParallelMap.get(ps);
+      branches.add(run.latestParallelMap.get(ps));
+      rawOutputs.add(branches[branches.size() - 1].Output__c);
+    }
+    // One bulk read for all branches.
+    List<String> resolvedOutputs = WorkflowPayloadOffload.resolvePayloads(
+      rawOutputs,
+      run.instanceId
+    );
+    for (Integer i = 0; i < branches.size(); i++) {
+      Workflow_Step_Execution__c pe = branches[i];
       Object outputVal = null;
-      String resolvedOutput = WorkflowPayloadOffload.resolvePayload(
-        pe.Output__c
-      );
+      String resolvedOutput = resolvedOutputs[i];
       if (String.isNotBlank(resolvedOutput)) {
         try {
           outputVal = JSON.deserializeUntyped(resolvedOutput);

@@ -1,9 +1,9 @@
 /**
  * @description Flow action that cancels Revenant workflow instances (issue #107).
  * It finds each instance the same way as Get Workflow Status. It cancels all rows
- * in one set-based engine pass for each Run Compensations value. A keyed row
- * writes the same claim tombstone as a keyed Cancel signal, so a retry does not
- * cancel two times. It adds no engine behavior and no schema.
+ * in one engine call. The call walks each tree one time. A keyed row writes the
+ * same claim tombstone as a keyed Cancel signal, so a retry does not cancel two
+ * times. It adds no engine behavior and no schema.
  */
 public inherited sharing class WorkflowCancelInvocableAction {
   // Signal name on the claim tombstone. Same as the Cancel control signal.
@@ -219,9 +219,9 @@ public inherited sharing class WorkflowCancelInvocableAction {
   }
 
   /**
-   * @description Cancels the owner rows in one engine call for each Run
-   * Compensations value. The hard-stop call runs first. A parent hard stop
-   * therefore also stops a child that another row asked to roll back.
+   * @description Cancels the owner rows in one engine call. The engine walks the
+   * trees one time. It runs the hard-stop pass first. A parent hard stop also
+   * stops a child that another row asked to roll back.
    * @param batch The rows of the call, with owners selected.
    * @return The root Ids that their own row cancelled.
    */
@@ -238,12 +238,14 @@ public inherited sharing class WorkflowCancelInvocableAction {
         hardStopIds.add(batch.resolved[i].Id);
       }
     }
-    Set<Id> cancelledRoots = new Set<Id>(hardStopIds);
-    cancelledRoots.retainAll(WorkflowCancellation.cancelInstances(hardStopIds));
-    Set<Id> rolledBack = new Set<Id>(rollbackIds);
-    rolledBack.retainAll(
-      WorkflowCancellation.cancelWithCompensationsInstances(rollbackIds)
+    WorkflowCancellation.ModeResult byMode = WorkflowCancellation.cancelInstancesByMode(
+      hardStopIds,
+      rollbackIds
     );
+    Set<Id> cancelledRoots = new Set<Id>(hardStopIds);
+    cancelledRoots.retainAll(byMode.hardStopped);
+    Set<Id> rolledBack = new Set<Id>(rollbackIds);
+    rolledBack.retainAll(byMode.rolledBack);
     cancelledRoots.addAll(rolledBack);
     return cancelledRoots;
   }

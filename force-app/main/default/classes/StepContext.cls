@@ -408,7 +408,10 @@ global inherited sharing class StepContext {
     this.stepEmitter = new StepEmitter();
     this.stepRetry = new StepRetryInfo();
     this.stepRetry.setMaxAttempts(1);
-    this.stepSignals = new StepSignals(b.signalSourceVal);
+    this.stepSignals = new StepSignals(
+      b.signalSourceVal,
+      this.workflowInstanceId
+    );
     applyPendingSignals(b);
     if (b.timeoutResumeVal == true) {
       this.stepRetry.markTimeoutResume();

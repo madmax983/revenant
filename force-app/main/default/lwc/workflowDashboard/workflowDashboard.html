@@ -1579,6 +1579,11 @@
                                             More than {healthCountCap} instances started in this window. The counts use the {healthCountCap} most recent instances.
                                         </div>
                                     </template>
+                                    <template if:true={healthDefinitionsCapped}>
+                                        <div data-id="health-definitions-capped-note" class="slds-text-body_small text-orange slds-m-bottom_small">
+                                            This window has more than {healthDefinitionCap} definitions. The table shows {healthDefinitionCap} of them.
+                                        </div>
+                                    </template>
                                     <template if:true={healthIsSampled}>
                                         <div data-id="health-sampled-note" class="slds-text-body_small text-orange slds-m-bottom_small">
                                             Durations use the {healthSampleCap} instances of all definitions that finished last. A value with ≈ is approximate.

@@ -147,7 +147,7 @@ global inherited sharing class WorkflowStatusInvocableAction {
     );
 
     // 4. Bulk-resolve offloaded output/progress payloads.
-    Map<Id, String> dataByAttachment = WorkflowStatusPayloadRehydrator.loadOffloadedPayloads(
+    Map<String, String> dataByAttachment = WorkflowStatusPayloadRehydrator.loadOffloadedPayloads(
       resolved
     );
 
@@ -350,12 +350,12 @@ global inherited sharing class WorkflowStatusInvocableAction {
    * @description Builds the correspondingly-ordered StatusResult list from resolved
    * instances, rehydrating offloaded output and progress payloads.
    * @param resolved The resolved instances, one per request in order (null where unmatched).
-   * @param dataByAttachment The map of offload attachment Ids to rehydrated payload text.
+   * @param dataByAttachment The owned file text, keyed by WorkflowPayloadOffload.ownedKey.
    * @return One StatusResult per resolved instance, in the same order.
    */
   private static List<StatusResult> assembleResults(
     List<Workflow_Instance__c> resolved,
-    Map<Id, String> dataByAttachment
+    Map<String, String> dataByAttachment
   ) {
     // The gate redacts encoded payloads of instances that the user cannot read
     // (issue #243).
@@ -378,15 +378,15 @@ global inherited sharing class WorkflowStatusInvocableAction {
         res.errorMessage = inst.Error_Message__c;
         res.outputJson = WorkflowStatusPayloadRehydrator.rehydrate(
           inst.Output__c,
+          inst.Id,
           dataByAttachment,
-          gate,
-          inst.Id
+          gate
         );
         res.progressJson = WorkflowStatusPayloadRehydrator.rehydrate(
           inst.Progress__c,
+          inst.Id,
           dataByAttachment,
-          gate,
-          inst.Id
+          gate
         );
         res.causationId = WorkflowCausationParser.cleanCausationId(
           inst.Causation_Id__c

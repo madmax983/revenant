@@ -217,6 +217,7 @@ public inherited sharing class WorkflowWaitDescriptorService {
     Map<String, Object> state = parseState(
       WorkflowPayloadOffload.resolveControlPayloadWithin(
         pending.Output__c,
+        instance.Id,
         MAX_STATE_BYTES
       )
     );

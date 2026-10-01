@@ -40,13 +40,14 @@ public inherited sharing class WorkflowStepInvoke {
       stepInstance,
       prevOutput
     );
-    // Strict determinism (issue #102): digest the inputs before the step runs.
-    // Null, with no SOQL, when the mode is off.
-    String determinismInputs = WorkflowDeterminismGuard.captureInputs(
+    // Strict determinism (issue #102): read the inputs before the step runs.
+    // The snapshot is null, with no SOQL, when the mode is off.
+    WorkflowDeterminismGuard.InputSnapshot snapshot = WorkflowDeterminismGuard.capture(
       ctx,
       context,
       prevOutput
     );
+    String determinismInputs = snapshot?.digest;
     StepResult result = executeStepWithTimeout(ctx, stepInstance, context);
 
     // 6. Handle Step Outcome
@@ -61,12 +62,15 @@ public inherited sharing class WorkflowStepInvoke {
       ctx,
       result
     );
-    // An input can arrive after the snapshot and before the step reads it.
-    // Then the new decision is legal: do not report it.
+    // An input that the step read can change after the snapshot. Then the new
+    // decision is legal. Do not report it.
     if (
       divergence != null &&
-      !determinismInputs.equals(
-        WorkflowDeterminismGuard.captureInputs(ctx, context, prevOutput)
+      WorkflowDeterminismGuard.inputsChangedDuringRun(
+        snapshot,
+        ctx,
+        context,
+        prevOutput
       )
     ) {
       divergence = null;

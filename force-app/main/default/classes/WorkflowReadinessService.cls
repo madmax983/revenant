@@ -241,14 +241,26 @@ public inherited sharing class WorkflowReadinessService {
           'Setup > Custom Metadata Types > Workflow Alert Config > Manage Records > New. Set Label and Name to Default, select Enable Alerts, and set Email Recipients or select Publish Alert Event.'
         );
       }
+      List<String> invalid = WorkflowAlertEmailBuilder.invalidRecipients(
+        config.Email_Recipients__c
+      );
       if (WorkflowAlertManager.isAlertActionable(config)) {
+        String note = invalid.isEmpty()
+          ? ''
+          : ' It skips these invalid addresses: ' +
+            String.join(invalid, ', ') +
+            '.';
         return pass(
-          'The Default Workflow_Alert_Config__mdt record sends failure alerts.'
+          'The Default Workflow_Alert_Config__mdt record sends failure alerts.' +
+          note
         );
       }
       String cause = config.Enable_Alerts__c == true
-        ? 'has no address in Email_Recipients__c and Publish_Alert_Event__c is off.'
+        ? 'has no valid address in Email_Recipients__c and Publish_Alert_Event__c is off.'
         : 'has Enable_Alerts__c off.';
+      if (config.Enable_Alerts__c == true && !invalid.isEmpty()) {
+        cause += ' Invalid: ' + String.join(invalid, ', ') + '.';
+      }
       return row(
         STATUS_WARN,
         'The Default Workflow_Alert_Config__mdt record ' +
