@@ -781,12 +781,19 @@ public class WorkflowStrictDeterminismTest {
       Test.startTest();
       Id instId = startAndRun(GateWorkflow.class.getName(), 'bigState');
       Assert.areEqual('Suspended', load(instId).Status__c, 'The gate waits');
+      String firstMarker = rows(instId, GATE)[0].Output__c;
       Assert.isTrue(
-        String.valueOf(rows(instId, GATE)[0].Output__c)
-          .startsWith('{"$attachmentId"'),
+        String.valueOf(firstMarker).startsWith('{"$attachmentId"'),
         'The state is offloaded'
       );
       WorkflowEngine.runStep(instId); // Same wait. The state has a new marker.
+      Workflow_Step_Execution__c second = rows(instId, GATE)[0];
+      Assert.areNotEqual(
+        firstMarker,
+        second.Output__c,
+        'The second wait writes a new marker'
+      );
+      Assert.isNotNull(second.Decision_Record__c, 'The wait is recorded');
 
       mode = 'complete';
       WorkflowEngine.runStep(instId);

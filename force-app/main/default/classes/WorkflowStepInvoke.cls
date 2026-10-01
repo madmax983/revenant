@@ -40,8 +40,8 @@ public inherited sharing class WorkflowStepInvoke {
       stepInstance,
       prevOutput
     );
-    // Strict determinism (issue #102): digest the inputs before the step runs.
-    // Null, with no SOQL, when the mode is off.
+    // Strict determinism (issue #102): read the inputs before the step runs.
+    // The snapshot is null, with no SOQL, when the mode is off.
     WorkflowDeterminismGuard.InputSnapshot snapshot = WorkflowDeterminismGuard.capture(
       ctx,
       context,
@@ -63,7 +63,7 @@ public inherited sharing class WorkflowStepInvoke {
       result
     );
     // An input that the step read can change after the snapshot. Then the new
-    // decision is legal: do not report it.
+    // decision is legal. Do not report it.
     if (
       divergence != null &&
       WorkflowDeterminismGuard.inputsChangedDuringRun(

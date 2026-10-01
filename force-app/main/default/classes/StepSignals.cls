@@ -26,12 +26,12 @@ global inherited sharing class StepSignals {
   // Processing; merely-observed rows must never disturb a sibling's claim.
   /** Ids the source actually CLAIMED for this branch. */
   private Set<Id> claimedSignalIds = new Set<Id>();
-  // Names the step looked up, also when none was pending. The strict
-  // determinism re-check needs them: a signal with a probed name can arrive
-  // while the step runs. Lower case, as the name match ignores case.
+  // Names that the step looked up, also when no signal was pending. The
+  // re-check in strict mode needs them. A signal with such a name can arrive
+  // while the step runs. The names are lower case, because the name match
+  // ignores case.
   /** Lower-case names that the step looked up. */
   private Set<String> probedNames = new Set<String>();
-  // True after an unscoped read: the step saw every pending signal.
   /** True when the step read the full pending list. */
   private Boolean readAll = false;
 
@@ -203,9 +203,9 @@ global inherited sharing class StepSignals {
   }
 
   /**
-   * @description Lower-case names that the step looked up, also when no signal
-   * was pending. Strict determinism mode uses it to find an input that arrives
-   * while the step runs.
+   * @description Returns the lower-case names that the step looked up, also when
+   * no signal was pending. The re-check in strict mode uses them to find a
+   * signal that arrives while the step runs.
    * @return A cloned set of the probed names.
    */
   public Set<String> getProbedSignalNames() {
@@ -213,9 +213,9 @@ global inherited sharing class StepSignals {
   }
 
   /**
-   * @description True when the step read the full pending list with
+   * @description Tells if the step read the full pending list with
    * {@link #getSignals()}.
-   * @return True after an unscoped read.
+   * @return True after a read of the full list.
    */
   public Boolean hasReadAllSignals() {
     return readAll;
@@ -232,7 +232,7 @@ global inherited sharing class StepSignals {
     return state.signalSource != null && state.signalSource.readWasCapped();
   }
 
-  // Remembers a looked-up name. A blank name matches nothing.
+  // Stores a name that the step looked up. A blank name matches no signal.
   private void probe(String signalName) {
     if (String.isNotBlank(signalName)) {
       probedNames.add(signalName.toLowerCase());

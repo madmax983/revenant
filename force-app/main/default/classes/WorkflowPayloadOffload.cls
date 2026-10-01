@@ -433,13 +433,14 @@ public inherited sharing class WorkflowPayloadOffload {
   }
 
   /**
-   * @description Reads the checksum of each offloaded file in the stored
-   * values. It reads only files that the owner has linked. A marker of another
-   * instance gives no entry. The query does not load the file content.
+   * @description Reads the checksum of each offloaded file that the stored
+   * values name. It reads only files that are linked to the owner. A marker of
+   * another instance gives no entry. The query does not load the file content.
    * @param storedValues the stored values, which can hold offload markers
    * @param ownerId the instance that must own each file
    * @return a map of document id to checksum. A file with no checksum is left
-   * out. The map is empty and no query runs when no value is a marker.
+   * out. The map is empty, with no query, when no value is a marker or the
+   * owner is null.
    */
   public static Map<Id, String> ownedChecksums(
     List<String> storedValues,

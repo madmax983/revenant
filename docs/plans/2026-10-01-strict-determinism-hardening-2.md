@@ -2,11 +2,11 @@
 
 ## Goal
 
-Fix the false negatives that remain in #256 and have a safe fix. Keep each other item with a reason in ADR 0003. Part 1 is `2026-10-01-strict-determinism-hardening.md`.
+Fix the false negatives of #256 that have a safe fix. Keep each other item with a reason in ADR 0003. Part 1 is `2026-10-01-strict-determinism-hardening.md`.
 
 ## Constraint
 
-This session has no org and no `sf` CLI. The Apex tests are written but not run. `apex-ls` compiles the code. The validation items of #256 stay open.
+This session has no org and no `sf` CLI. The Apex tests exist but did not run. `apex-ls` compiles the code. The validation items of #256 stay open.
 
 ## Brainstorming
 
@@ -24,8 +24,8 @@ This session has no org and no `sf` CLI. The Apex tests are written but not run.
 
 ## Reverse Brainstorming (how to make it worse)
 
-- Re-check by name only: a signal edit that the step read goes unseen. **Avoid:** match by Id and by name.
-- Ignore every change when the step read all signals: a read-all step hides nothing. **Avoid:** any arrival counts after `getSignals()`.
+- Re-check by name only: a payload edit of a signal that the step read is missed. **Avoid:** match by Id and by name.
+- Ignore a change after the step read all signals: the step saw that change. **Avoid:** after `getSignals()`, any change counts.
 - Trust a marker from a step: it can name a file of another instance. **Avoid:** read a checksum only for a file linked to the instance.
 - Use a null checksum as a value: two files with no checksum look equal. **Avoid:** a null checksum keeps the marker text.
 - Query the checksum for each run: the off path pays. **Avoid:** no query when the mode is off or no marker exists.
@@ -33,12 +33,12 @@ This session has no org and no `sf` CLI. The Apex tests are written but not run.
 
 ## Six Hats
 
-- **White (facts):** The re-check compares the digest of the full live-signal set. `StepSignals` tracks matched Ids. It does not track probed names. `ContentVersion.Checksum` holds the MD5 of the file. A failed step row shows in the failure breakdown.
+- **White (facts):** Before this change, the re-check compared the digest of the full live-signal set. `StepSignals` tracked matched Ids. It did not track looked-up names. `ContentVersion.Checksum` holds the MD5 of the file. A failed step row shows in the failure breakdown.
 - **Red (feeling):** A false positive fails a live instance. A false negative is quiet. Keep the change small. Err toward "no report".
 - **Black (risk):** No org to run the tests. `Checksum` can be null in a test. A name rule that differs from the loader causes a false positive. A claim changes a signal status.
 - **Yellow (benefit):** A step that inserts an unread signal no longer hides its own route change. Offloaded state compares again.
 - **Green (new idea):** Compare snapshots by Id. Count a change only when the step read that Id or probed its name.
-- **Blue (process):** Red tests. Green code. Refactor. Docs and ADR. Review from several angles.
+- **Blue (process):** Write red tests. Write green code. Refactor. Update the docs and the ADR. Review from several angles.
 
 ## Decisions
 

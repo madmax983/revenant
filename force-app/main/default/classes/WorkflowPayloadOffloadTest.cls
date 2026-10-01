@@ -347,6 +347,10 @@ private class WorkflowPayloadOffloadTest {
       WHERE ContentDocumentId = :docId AND IsLatest = TRUE
     ];
 
+    Assert.isTrue(
+      String.isNotBlank(cv.Checksum),
+      'The platform sets the checksum of the file'
+    );
     Assert.areEqual(
       cv.Checksum,
       WorkflowPayloadOffload.ownedChecksums(

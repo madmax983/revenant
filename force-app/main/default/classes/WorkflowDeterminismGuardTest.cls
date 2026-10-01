@@ -615,6 +615,78 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
+  static void aRenamedReadSignalCountsInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c cfg = newSignal(inst, 'Cfg');
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isTrue(
+        context.signals().getSignal('Cfg').isPresent(),
+        'The step reads Cfg'
+      );
+      cfg.Signal_Name__c = 'Renamed';
+      update cfg;
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'A rename of a read signal counts: the old name was looked up'
+      );
+    }
+  }
+
+  @IsTest
+  static void aMatchedIdCountsWithoutAProbedName() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c cfg = newSignal(inst, 'Cfg');
+      StepContext context = readerFor(inst.Id);
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      // A read path that marks a signal as matched and looks up no name.
+      context.signals()
+        .markMatched(new StepContext.Signal(cfg.Id, 'Cfg', 'v1'));
+      cfg.Payload__c = 'v2';
+      update cfg;
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'An edit of a matched signal counts'
+      );
+    }
+  }
+
+  @IsTest
+  static void aClaimedSignalEditCountsInTheRecheck() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Workflow_Instance__c inst = insertInstance();
+      Workflow_Signal__c go = newSignal(inst, 'Go');
+      StepContext context = contextFor(inst.Id)
+        .signalSource(
+          new WorkflowSignalSources.ParallelBranchSignalSource(inst.Id)
+        )
+        .build();
+      WorkflowStepRunner.RunStepContext ctx = rowContext(inst.Id);
+      WorkflowDeterminismGuard.InputSnapshot before = snapshotOf(ctx, context);
+
+      Assert.isTrue(
+        context.signals().getSignal('Go').isPresent(),
+        'The branch claims Go'
+      );
+      go.Payload__c = 'v2';
+      update go;
+      Assert.isTrue(
+        changedDuringRun(before, ctx, context),
+        'An edit of a claimed signal counts'
+      );
+    }
+  }
+
+  @IsTest
   static void aRemovedReadSignalCountsInTheRecheck() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
@@ -851,6 +923,47 @@ private class WorkflowDeterminismGuardTest {
   }
 
   @IsTest
+  static void anOffloadedInputAndPreviousOutputAreDigestedByChecksum() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.strictDeterminism = true;
+      Id instId = insertInstance().Id;
+      String first = offload(instId, 'x'.repeat(100001));
+      String second = offload(instId, 'x'.repeat(100001));
+      String other = offload(instId, 'y'.repeat(100001));
+
+      WorkflowStepRunner.RunStepContext inputA = rowContext(instId);
+      inputA.stepExec.Input__c = first;
+      WorkflowStepRunner.RunStepContext inputB = rowContext(instId);
+      inputB.stepExec.Input__c = second;
+      WorkflowStepRunner.RunStepContext inputC = rowContext(instId);
+      inputC.stepExec.Input__c = other;
+      Assert.areEqual(
+        digestOf(inputA, contextFor(instId)),
+        digestOf(inputB, contextFor(instId)),
+        'An offloaded input with equal content is an equal input'
+      );
+      Assert.areNotEqual(
+        digestOf(inputA, contextFor(instId)),
+        digestOf(inputC, contextFor(instId)),
+        'An offloaded input with other content is a new input'
+      );
+
+      WorkflowStepRunner.RunStepContext ctx = rowContext(instId);
+      StepContext context = contextFor(instId).build();
+      Assert.areEqual(
+        WorkflowDeterminismGuard.captureInputs(ctx, context, first),
+        WorkflowDeterminismGuard.captureInputs(ctx, context, second),
+        'An offloaded previous output with equal content is an equal input'
+      );
+      Assert.areNotEqual(
+        WorkflowDeterminismGuard.captureInputs(ctx, context, first),
+        WorkflowDeterminismGuard.captureInputs(ctx, context, other),
+        'An offloaded previous output with other content is a new input'
+      );
+    }
+  }
+
+  @IsTest
   static void aMarkerOfAnotherInstanceKeepsTheMarkerText() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.strictDeterminism = true;
@@ -873,6 +986,7 @@ private class WorkflowDeterminismGuardTest {
       WorkflowEngine.strictDeterminism = true;
       Id instId = insertInstance().Id;
       String marker = offload(instId, 'x'.repeat(100001));
+      digestWithState(instId, 'warm-up');
 
       Integer before = Limits.getQueries();
       digestWithState(instId, 'plain');

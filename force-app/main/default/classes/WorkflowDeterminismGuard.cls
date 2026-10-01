@@ -23,7 +23,8 @@ public inherited sharing class WorkflowDeterminismGuard {
    */
   public static final String UNKNOWN_INPUTS = 'unknown';
 
-  // Digest part of an offloaded file: the checksum of its content.
+  // Prefix of a file checksum in the digest. It sets the text apart from a
+  // stored value.
   private static final String CHECKSUM_PREFIX = '$checksum|';
 
   // Max live signals the guard reads. Each payload can hold 131,072
@@ -38,11 +39,12 @@ public inherited sharing class WorkflowDeterminismGuard {
   public class InputSnapshot {
     /** @description Digest of all inputs. */
     public String digest;
-    // Digest of the inputs that are not a live signal.
+    // Digest of the inputs that are not live signals. It includes the
+    // children and the signal count.
     private String rest;
-    // Per live signal: Id to the text that the digest holds.
+    // The text of each live signal in the digest, by signal Id.
     private Map<Id, String> signalParts = new Map<Id, String>();
-    // Per live signal: Id to the lower-case name.
+    // The lower-case name of each live signal, by signal Id.
     private Map<Id, String> signalNames = new Map<Id, String>();
   }
 
@@ -52,7 +54,8 @@ public inherited sharing class WorkflowDeterminismGuard {
    * @param ctx The run context with the step row.
    * @param context The hydrated step context.
    * @param prevOutput The stored previous step output.
-   * @return The inputs digest, or null when strict mode is off.
+   * @return The inputs digest, or null when strict mode is off or an argument
+   * is missing.
    */
   public static String captureInputs(
     WorkflowStepRunner.RunStepContext ctx,
@@ -67,7 +70,8 @@ public inherited sharing class WorkflowDeterminismGuard {
    * @param ctx The run context with the step row.
    * @param context The hydrated step context.
    * @param prevOutput The stored previous step output.
-   * @return The snapshot, or null when strict mode is off.
+   * @return The snapshot, or null when strict mode is off or an argument is
+   * missing.
    */
   public static InputSnapshot capture(
     WorkflowStepRunner.RunStepContext ctx,
@@ -83,9 +87,13 @@ public inherited sharing class WorkflowDeterminismGuard {
     }
     Id instanceId = ctx.instanceId;
     InputSnapshot snap = new InputSnapshot();
-    // Typed JSON values: a null value and the text "null" differ.
-    List<Object> rest = baseParts(ctx, context, prevOutput);
-    List<Object> parts = new List<Object>(rest);
+    // The large stored values go through one digest. Typed JSON values: a null
+    // value and the text "null" differ.
+    String base = WorkflowDecisionFingerprint.digest(
+      JSON.serialize(baseParts(ctx, context, prevOutput))
+    );
+    List<Object> parts = new List<Object>{ base };
+    List<Object> rest = new List<Object>{ base };
     addSignalParts(snap, parts, rest, instanceId, context);
     addChildParts(parts, rest, instanceId);
     // JSON keeps each part apart: no part can look like two parts.
@@ -96,16 +104,16 @@ public inherited sharing class WorkflowDeterminismGuard {
 
   /**
    * @description Tells if an input that the step read changed during the run.
-   * It re-reads the inputs. It compares each live signal only when the step
-   * matched it, or probed its name, or read the full list. Any other change
-   * counts: the step state, the children and a count over the signal cap.
-   * The step cannot see a change to another signal, so that change does not
-   * hide a divergence.
+   * It reads the inputs again. A live signal counts only when the step matched
+   * it, looked up its name, or read the full list. A change to the step state,
+   * the children or the signal count over the cap always counts. A change to
+   * another live signal does not count, because the step cannot see it.
    * @param before The snapshot from before the run, or null.
    * @param ctx The run context with the step row.
    * @param context The step context after the run.
    * @param prevOutput The stored previous step output.
-   * @return True when a read input changed. False when the snapshot is null.
+   * @return True when a read input changed. False when the snapshot is null or
+   * the inputs are equal.
    */
   public static Boolean inputsChangedDuringRun(
     InputSnapshot before,
@@ -119,18 +127,23 @@ public inherited sharing class WorkflowDeterminismGuard {
     if (after == null || before.digest.equals(after.digest)) {
       return false;
     }
-    if (!before.rest.equals(after.rest)) {
-      return true;
-    }
-    StepSignals signals = context.signals();
-    if (signals.hasReadAllSignals()) {
-      return true;
-    }
+    return !before.rest.equals(after.rest) ||
+      context.signals().hasReadAllSignals() ||
+      readSignalChanged(before, after, context.signals());
+  }
+
+  // True when a changed live signal is one that the step matched, or one with
+  // a name that the step looked up.
+  private static Boolean readSignalChanged(
+    InputSnapshot before,
+    InputSnapshot after,
+    StepSignals signals
+  ) {
     Set<Id> matched = signals.getConsumedSignalIds();
     Set<String> probed = signals.getProbedSignalNames();
-    Set<Id> changed = new Set<Id>(before.signalParts.keySet());
-    changed.addAll(after.signalParts.keySet());
-    for (Id sigId : changed) {
+    Set<Id> ids = new Set<Id>(before.signalParts.keySet());
+    ids.addAll(after.signalParts.keySet());
+    for (Id sigId : ids) {
       String was = before.signalParts.get(sigId);
       if (was != null && was.equals(after.signalParts.get(sigId))) {
         continue;
@@ -146,9 +159,9 @@ public inherited sharing class WorkflowDeterminismGuard {
     return false;
   }
 
-  // The inputs that are not signals or children. An offload marker gives way
-  // to the checksum of its file: a new marker with equal content is an equal
-  // input.
+  // The inputs that are not signals or children. The engine replaces an
+  // offload marker with the checksum of its file. A new marker with equal
+  // content is then an equal input.
   private static List<Object> baseParts(
     WorkflowStepRunner.RunStepContext ctx,
     StepContext context,
@@ -177,8 +190,8 @@ public inherited sharing class WorkflowDeterminismGuard {
     return parts;
   }
 
-  // Live signals only: a step reads only these. Consumed history does not
-  // count query rows.
+  // The engine reads live signals only, because a step reads only these.
+  // Consumed signals add no query rows.
   private static void addSignalParts(
     InputSnapshot snap,
     List<Object> parts,

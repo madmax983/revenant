@@ -89,27 +89,30 @@ Fixed:
   signal counts when the step matched it, probed its name, or read the full
   list. A step that inserts a signal and does not read it can no longer hide
   its own route change. A change to the step state, to the children, or to the
-  count over the signal cap still stops the report. Only the re-check is
-  narrow. The first digest still holds every live signal: the engine does not
-  know the read set before the step runs.
+  count over the signal cap still stops the report. The first digest is not
+  narrow. It still holds every live signal, because the engine does not know
+  the read set before the step runs. Over 20 live signals, an edit of a read
+  signal beyond the first 20 does not change the digest, so the engine can
+  report a legal route change. This gap is older than the re-check. The cap
+  bounds the heap.
 - An offloaded value is digested as the checksum of its file. A wait that
   writes the same state again writes a new marker, but the checksum stays
   equal, so the engine compares. The checksum query does not load the file
   content (no heap cost). The engine reads a checksum only for a file that is
   linked to the instance, so a forged marker leaks nothing. A file with no
   checksum keeps the marker text: the engine compares less often, never more.
-  Two options were rejected: a digest of the decoded content (heap cost, and a
-  plaintext digest), and a digest without the marker (different content would
-  then look equal: a false positive).
+  The engine rejected two options. A digest of the decoded content costs heap
+  and is a plaintext digest. A digest without the marker makes different
+  content look equal. That is a false positive.
 
 Kept, with a reason:
 
 | Item | Reason |
 |------|--------|
-| Wait bookkeeping in the inputs | A wait writes step state, and a child wait also starts children. To leave it out, the engine must predict the next inputs from the wait result. An error there gives a false positive. No proof without an org. A false negative is cheaper than a false positive. |
+| Wait bookkeeping in the inputs | A wait writes step state, and a child wait also starts children. To leave it out, the engine must predict the next inputs from the wait result. An error there gives a false positive. A test of the prediction needs an org. A false negative is cheaper than a false positive. |
 | Payload codec: new ciphertext each wait | The digest uses the stored form on purpose. A digest of the decoded state is a plaintext digest. An admin can read `Decision_Record__c`, and a low-entropy state can be guessed. |
 | Blank `Failure_Category__c` after compensation | The compensation path does not set the category (unchanged behavior). The log row records it. The failed step row stays `Failed`, so the dashboard failure breakdown already counts it. A test shows this. |
-| `$timeoutResume` marker removed on the first fallback run | To keep the marker in `Input__c`, seven copy sites would carry it into compensation and retry rows. A `compensate()` run would then see a timeout run. A new field is a package change. Engine behavior from before #102. Not a strict-mode defect. |
+| `$timeoutResume` marker removed on the first fallback run | The engine has seven copy sites. Each site would copy the marker into compensation and retry rows. Then a `compensate()` run sees a timeout run. A new field is a package change. This is engine behavior from before #102. It is not a strict-mode defect. |
 | `CursorFanoutWorkflowExample`, `BatchFanoutWorkflowExample` | These examples start children by hand and yield while they spawn. `getChildOutcomes` needs a new design with step state. A change needs a tested org run. Docs mark them as not replay-safe. |
 
 An existing record has the old digest. The first run after the deploy reads
@@ -117,6 +120,7 @@ new inputs and records again. This gives no false positive.
 
 Open (needs an org): the full Apex suite with the mode off and on, the count
 of `STEP_NON_DETERMINISM` failures, and the SOQL cost per run. The Apex tests
-of #256 have not run. `ContentVersion.Checksum` must hold a value in the test
-context: `offloadedStateStillCompares` shows it. If the test fails for a null
-checksum, the engine still works, but it compares less often.
+of #256 did not run: no org was available. `ContentVersion.Checksum` must hold
+a value in the test context: `offloadedStateStillCompares` shows it. If the
+test fails because the checksum is null, the engine still works. It compares
+less often.
