@@ -58,7 +58,7 @@ A park does not change prior step rows. A park does not change `Compensation_Sta
 2. Open the instance on the dashboard. The panel shows the current step, the stored list and the live list. It shows added steps in green and removed steps with a line through them.
 3. Click **Release**. Or call `WorkflowDefinitionChangeService.release(instanceId)` from Apex.
 
-Release writes the live fingerprint and shape, sets `Running`, re-arms step timeouts and enqueues the current step. A wait can end in the park and leave a timer. Then release sets `Suspended` and does not enqueue. The sleep sweep wakes the instance when the timer ends. Pause resume and hold release follow the same rule. Release fails when a current step is not in the live list. In that case, restore the step or cancel the instance.
+Release writes the live fingerprint and shape, sets `Running`, re-arms step timeouts and enqueues the current step. A wait can end in the park and leave a timer. Then release sets `Suspended` and does not enqueue. The sleep sweep wakes the instance when the timer ends. A signal that arrived in the park keeps the instance `Running`, so the step reads it. Pause resume and hold release follow the same rule. Release fails when a current step is not in the live list. In that case, restore the step or cancel the instance.
 
 ## Limits
 

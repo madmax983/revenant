@@ -319,6 +319,44 @@ public class WorkflowParkedOutcomeTest {
     }
   }
 
+  // A signal that arrives in the park stays Received. The step must read it.
+  @IsTest
+  static void testReleaseRunsWhenSignalArrivedInPark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newInstance(
+        'DefinitionChanged',
+        futureWake()
+      );
+      newStepExec(inst.Id);
+      insert new Workflow_Signal__c(
+        Workflow_Instance__c = inst.Id,
+        Correlation_Key__c = inst.Correlation_Key__c,
+        Signal_Name__c = 'Go',
+        Status__c = 'Received'
+      );
+      WorkflowDefinitionChangeService.release(inst.Id);
+      System.assertEquals('Running', load(inst.Id).Status__c);
+    }
+  }
+
+  @IsTest
+  static void testPauseResumeRunsWhenSignalArrivedInPark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newInstance('Paused', futureWake());
+      newStepExec(inst.Id);
+      insert new Workflow_Signal__c(
+        Workflow_Instance__c = inst.Id,
+        Correlation_Key__c = inst.Correlation_Key__c,
+        Signal_Name__c = 'Go',
+        Status__c = 'Received'
+      );
+      WorkflowPauseGate.resumeDefinition(WF);
+      System.assertEquals('Running', load(inst.Id).Status__c);
+    }
+  }
+
   @IsTest
   static void testReleaseParallelKeepsTimer() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
