@@ -433,6 +433,54 @@ public inherited sharing class WorkflowPayloadOffload {
   }
 
   /**
+   * @description Reads the checksum of each offloaded file that the stored
+   * values name. It reads only files that are linked to the owner. A marker of
+   * another instance gives no entry. The query does not load the file content.
+   * @param storedValues the stored values, which can hold offload markers
+   * @param ownerId the instance that must own each file
+   * @return a map of document id to checksum. A file with no checksum is left
+   * out. The map is empty, with no query, when no value is a marker or the
+   * owner is null.
+   */
+  public static Map<Id, String> ownedChecksums(
+    List<String> storedValues,
+    Id ownerId
+  ) {
+    Map<Id, String> checksums = new Map<Id, String>();
+    Set<Id> docs = new Set<Id>();
+    for (String stored : storedValues) {
+      Id docId = markerDocId(stored);
+      if (docId != null) {
+        docs.add(docId);
+      }
+    }
+    if (docs.isEmpty() || ownerId == null) {
+      return checksums;
+    }
+    Map<Id, Set<Id>> links = linkedEntitiesByDoc(docs);
+    Set<Id> owned = new Set<Id>();
+    for (Id docId : links.keySet()) {
+      if (links.get(docId).contains(ownerId)) {
+        owned.add(docId);
+      }
+    }
+    if (owned.isEmpty()) {
+      return checksums;
+    }
+    for (ContentVersion cv : [
+      SELECT ContentDocumentId, Checksum
+      FROM ContentVersion
+      WHERE ContentDocumentId IN :owned AND IsLatest = TRUE
+      WITH SYSTEM_MODE
+    ]) {
+      if (String.isNotBlank(cv.Checksum)) {
+        checksums.put(cv.ContentDocumentId, cv.Checksum);
+      }
+    }
+    return checksums;
+  }
+
+  /**
    * @description Bulk-resolves the latest ContentVersion text for the given
    * document ids.
    * @param docIds the offloaded ContentDocument ids to resolve

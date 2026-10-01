@@ -8,8 +8,9 @@
  * The inputs digest holds: the stored step input, previous output and step
  * state, the attempt, the timeout-resume flag, the live signals (Id, status,
  * name and payload), and the child status counts. The guard digests stored
- * forms, so no decoded payload goes into the digest. Captures are not inputs:
- * once() values are stable by contract.
+ * forms, so no decoded payload goes into the digest. An offloaded value is
+ * digested as the checksum of its file. Captures are not inputs: once()
+ * values are stable by contract.
  */
 public inherited sharing class WorkflowDeterminismGuard {
   /** @description Error message prefix of a divergence. */
@@ -28,14 +29,47 @@ public inherited sharing class WorkflowDeterminismGuard {
   @TestVisible
   private static Integer maxLiveSignals = 20;
   /**
+   * @description The inputs of a step run. The digest covers all inputs. The
+   * other parts let the re-check find which live signal changed.
+   */
+  public class InputSnapshot {
+    /** @description Digest of all inputs. */
+    public String digest;
+    // Digest of the inputs that are not live signals. It includes the
+    // children and the signal count.
+    private String rest;
+    // The text of each live signal in the digest, by signal Id.
+    private Map<Id, String> signalParts = new Map<Id, String>();
+    // The lower-case name of each live signal, by signal Id.
+    private Map<Id, String> signalNames = new Map<Id, String>();
+  }
+
+  /**
    * @description Digests the inputs of a step run. Call before execute(), so
    * a signal that arrives during the run counts as a new input.
    * @param ctx The run context with the step row.
    * @param context The hydrated step context.
    * @param prevOutput The stored previous step output.
-   * @return The inputs digest, or null when strict mode is off.
+   * @return The inputs digest, or null when strict mode is off or an argument
+   * is missing.
    */
   public static String captureInputs(
+    WorkflowStepRunner.RunStepContext ctx,
+    StepContext context,
+    String prevOutput
+  ) {
+    return capture(ctx, context, prevOutput)?.digest;
+  }
+
+  /**
+   * @description Reads the inputs of a step run. Call before execute().
+   * @param ctx The run context with the step row.
+   * @param context The hydrated step context.
+   * @param prevOutput The stored previous step output.
+   * @return The snapshot, or null when strict mode is off or an argument is
+   * missing.
+   */
+  public static InputSnapshot capture(
     WorkflowStepRunner.RunStepContext ctx,
     StepContext context,
     String prevOutput
@@ -48,16 +82,122 @@ public inherited sharing class WorkflowDeterminismGuard {
       return null;
     }
     Id instanceId = ctx.instanceId;
-    // Typed JSON values: a null value and the text "null" differ.
-    List<Object> parts = new List<Object>{
+    InputSnapshot snap = new InputSnapshot();
+    // The large stored values go through one digest. Typed JSON values: a null
+    // value and the text "null" differ.
+    String base = WorkflowDecisionFingerprint.digest(
+      JSON.serialize(baseParts(ctx, context, prevOutput))
+    );
+    List<Object> parts = new List<Object>{ base };
+    List<Object> rest = new List<Object>{ base };
+    addSignalParts(snap, parts, rest, instanceId, context);
+    addChildParts(parts, rest, instanceId);
+    // JSON keeps each part apart: no part can look like two parts.
+    snap.digest = WorkflowDecisionFingerprint.digest(JSON.serialize(parts));
+    snap.rest = WorkflowDecisionFingerprint.digest(JSON.serialize(rest));
+    return snap;
+  }
+
+  /**
+   * @description Tells if an input that the step read changed during the run.
+   * It reads the inputs again. A live signal counts only when the step matched
+   * it, looked up its name, or read the full list. A change to the step state,
+   * the children or the signal count over the cap always counts. A change to
+   * another live signal does not count, because the step cannot see it.
+   * @param before The snapshot from before the run, or null.
+   * @param ctx The run context with the step row.
+   * @param context The step context after the run.
+   * @param prevOutput The stored previous step output.
+   * @return True when a read input changed. False when the snapshot is null or
+   * the inputs are equal.
+   */
+  public static Boolean inputsChangedDuringRun(
+    InputSnapshot before,
+    WorkflowStepRunner.RunStepContext ctx,
+    StepContext context,
+    String prevOutput
+  ) {
+    InputSnapshot after = before == null
+      ? null
+      : capture(ctx, context, prevOutput);
+    if (after == null || before.digest.equals(after.digest)) {
+      return false;
+    }
+    return !before.rest.equals(after.rest) ||
+      context.signals().hasReadAllSignals() ||
+      readSignalChanged(before, after, context.signals());
+  }
+
+  // True when a changed live signal is one that the step matched, or one with
+  // a name that the step looked up.
+  private static Boolean readSignalChanged(
+    InputSnapshot before,
+    InputSnapshot after,
+    StepSignals signals
+  ) {
+    Set<Id> matched = signals.getConsumedSignalIds();
+    Set<String> probed = signals.getProbedSignalNames();
+    Set<Id> ids = new Set<Id>(before.signalParts.keySet());
+    ids.addAll(after.signalParts.keySet());
+    for (Id sigId : ids) {
+      String was = before.signalParts.get(sigId);
+      if (was != null && was.equals(after.signalParts.get(sigId))) {
+        continue;
+      }
+      if (
+        matched.contains(sigId) ||
+        probed.contains(before.signalNames.get(sigId)) ||
+        probed.contains(after.signalNames.get(sigId))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // The inputs that are not signals or children. The engine replaces an
+  // offload marker with the checksum of its file. A new marker with equal
+  // content is then an equal input.
+  private static List<Object> baseParts(
+    WorkflowStepRunner.RunStepContext ctx,
+    StepContext context,
+    String prevOutput
+  ) {
+    List<String> stored = new List<String>{
       ctx.stepExec.Input__c,
       prevOutput,
-      ctx.stepExec.Output__c,
-      context.attempt,
-      context.retry().isTimeoutResume()
+      ctx.stepExec.Output__c
     };
-    // Live signals only: a step reads only these. Consumed history does
-    // not count query rows.
+    Map<Id, String> checksums = WorkflowPayloadOffload.ownedChecksums(
+      stored,
+      ctx.instanceId
+    );
+    List<Object> parts = new List<Object>();
+    for (String text : stored) {
+      Id docId = WorkflowPayloadOffload.markerDocId(text);
+      // A map, not text: no stored text can look like a checksum entry.
+      if (docId != null && checksums.containsKey(docId)) {
+        parts.add(
+          new Map<String, Object>{ 'fileChecksum' => checksums.get(docId) }
+        );
+      } else {
+        parts.add(text);
+      }
+    }
+    parts.add(context.attempt);
+    parts.add(context.retry().isTimeoutResume());
+    return parts;
+  }
+
+  // The engine reads live signals only, because a step reads only these.
+  // Consumed signals add no query rows.
+  private static void addSignalParts(
+    InputSnapshot snap,
+    List<Object> parts,
+    List<Object> rest,
+    Id instanceId,
+    StepContext context
+  ) {
     Integer rowCap = maxLiveSignals + 1;
     List<Workflow_Signal__c> live = [
       SELECT Id, Status__c, Signal_Name__c, Payload__c
@@ -77,24 +217,41 @@ public inherited sharing class WorkflowDeterminismGuard {
       Workflow_Signal__c sig = live[i];
       String status = ownClaims.contains(sig.Id) ? 'Received' : sig.Status__c;
       // A name or payload edit changes the digest: a legal route change.
-      parts.add(
+      String part =
         sig.Id +
-          '|' +
-          status +
-          '|' +
-          WorkflowDecisionFingerprint.digest(
-            JSON.serialize(new List<Object>{ sig.Signal_Name__c, sig.Payload__c })
-          )
-      );
+        '|' +
+        status +
+        '|' +
+        WorkflowDecisionFingerprint.digest(
+          JSON.serialize(new List<Object>{ sig.Signal_Name__c, sig.Payload__c })
+        );
+      parts.add(part);
+      snap.signalParts.put(sig.Id, part);
+      snap.signalNames.put(sig.Id, sig.Signal_Name__c?.toLowerCase());
     }
     if (live.size() > maxLiveSignals) {
       // The oldest rows are digested. The total count shows an arrival.
-      parts.add('liveCount|' + [SELECT COUNT() FROM Workflow_Signal__c
-        WHERE Workflow_Instance__c = :instanceId
-          AND Status__c IN ('Received', 'Processing')
-        WITH SYSTEM_MODE]);
+      String count =
+        'liveCount|' +
+        [
+          SELECT COUNT()
+          FROM Workflow_Signal__c
+          WHERE
+            Workflow_Instance__c = :instanceId
+            AND Status__c IN ('Received', 'Processing')
+          WITH SYSTEM_MODE
+        ];
+      parts.add(count);
+      rest.add(count);
     }
-    // One aggregate row for each status: no row cap, no heap cost.
+  }
+
+  // One aggregate row for each status: no row cap, no heap cost.
+  private static void addChildParts(
+    List<Object> parts,
+    List<Object> rest,
+    Id instanceId
+  ) {
     for (AggregateResult agg : [
       SELECT Status__c status, COUNT(Id) total
       FROM Workflow_Instance__c
@@ -103,10 +260,10 @@ public inherited sharing class WorkflowDeterminismGuard {
       GROUP BY Status__c
       ORDER BY Status__c
     ]) {
-      parts.add('child|' + agg.get('status') + '|' + agg.get('total'));
+      String part = 'child|' + agg.get('status') + '|' + agg.get('total');
+      parts.add(part);
+      rest.add(part);
     }
-    // JSON keeps each part apart: no part can look like two parts.
-    return WorkflowDecisionFingerprint.digest(JSON.serialize(parts));
   }
 
   /**

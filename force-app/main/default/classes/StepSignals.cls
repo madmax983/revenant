@@ -26,6 +26,14 @@ global inherited sharing class StepSignals {
   // Processing; merely-observed rows must never disturb a sibling's claim.
   /** Ids the source actually CLAIMED for this branch. */
   private Set<Id> claimedSignalIds = new Set<Id>();
+  // Names that the step looked up, also when no signal was pending. The
+  // re-check in strict mode needs them. A signal with such a name can arrive
+  // while the step runs. The names are lower case, because the name match
+  // ignores case.
+  /** Lower-case names that the step looked up. */
+  private Set<String> probedNames = new Set<String>();
+  /** True when the step read the full pending list. */
+  private Boolean readAll = false;
 
   /**
    * @description Constructs the signal accessor over a lazy signal source;
@@ -85,6 +93,7 @@ global inherited sharing class StepSignals {
    */
   global List<StepContext.Signal> getSignals() {
     List<StepContext.Signal> all = StepSignalLoader.loadAll(this.state);
+    readAll = true;
     for (StepContext.Signal s : all) {
       markMatched(s);
     }
@@ -98,6 +107,7 @@ global inherited sharing class StepSignals {
    * @return A cloned list of matching pending signals, in arrival order.
    */
   global List<StepContext.Signal> getSignals(String signalName) {
+    probe(signalName);
     List<StepContext.Signal> matches = StepSignalLoader.matchesFor(
       this.state,
       signalName
@@ -125,6 +135,7 @@ global inherited sharing class StepSignals {
    * when none is pending; never null.
    */
   global StepContext.Signal getSignal(String signalName) {
+    probe(signalName);
     StepContext.Signal latest = StepSignalLatest.latestFor(
       this.state,
       signalName
@@ -146,6 +157,7 @@ global inherited sharing class StepSignals {
    * @return True if at least one pending signal matches the name.
    */
   global Boolean hasSignal(String signalName) {
+    probe(signalName);
     StepContext.Signal latest = StepSignalLatest.latestFor(
       this.state,
       signalName
@@ -191,6 +203,25 @@ global inherited sharing class StepSignals {
   }
 
   /**
+   * @description Returns the lower-case names that the step looked up, also when
+   * no signal was pending. The re-check in strict mode uses them to find a
+   * signal that arrives while the step runs.
+   * @return A cloned set of the probed names.
+   */
+  public Set<String> getProbedSignalNames() {
+    return probedNames.clone();
+  }
+
+  /**
+   * @description Tells if the step read the full pending list with
+   * {@link #getSignals()}.
+   * @return True after a read of the full list.
+   */
+  public Boolean hasReadAllSignals() {
+    return readAll;
+  }
+
+  /**
    * @description True when any signal read was truncated by a governor-safety
    * cap, so the step may not have seen every pending row of a name. The engine
    * then skips same-name duplicate cleanup, which could otherwise consume backlog
@@ -199,6 +230,13 @@ global inherited sharing class StepSignals {
    */
   global Boolean signalReadWasCapped() {
     return state.signalSource != null && state.signalSource.readWasCapped();
+  }
+
+  // Stores a name that the step looked up. A blank name matches no signal.
+  private void probe(String signalName) {
+    if (String.isNotBlank(signalName)) {
+      probedNames.add(signalName.toLowerCase());
+    }
   }
 
   /**
