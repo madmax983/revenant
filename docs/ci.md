@@ -9,7 +9,7 @@ Every check runs in GitHub Actions. Each one also runs on your machine.
 | `ci.yml` | Global API | `npm run test:global-api`, with the packaged-view compile (`REQUIRE_APEX_LS=1`) | No |
 | `ci.yml` | Code Analyzer | `sf code-analyzer run`, rule selector `recommended` (PMD, ESLint, regex, retire-js, CPD, flow). Fails at High or worse | No |
 | `ci.yml` | CI | One job that needs all of the above. Require this one in branch protection | No |
-| `apex-tests.yml` | Apex tests and coverage | A new scratch org, deploy, all local Apex tests, org-wide coverage of at least `APEX_MIN_COVERAGE` (85) | Yes |
+| `apex-tests.yml` | Apex tests and coverage (label `run-org-tests`, nightly, on demand) | A new scratch org, deploy, all local Apex tests, org-wide coverage of at least `APEX_MIN_COVERAGE` (85) | Yes |
 | `sfge.yml` | SFGE | The Code Analyzer graph engine (data-flow rules). Weekly, on main and on demand. Not on pull requests: it takes more than 10 minutes | No |
 | `determinism-lint.yml` | Rust core, sf plugin | See `docs/determinism-lint.md` | No |
 | `report-types.yml` | Static checks | See `docs/report-types.md` | No |
@@ -20,8 +20,11 @@ Every check runs in GitHub Actions. Each one also runs on your machine.
 `apex-tests.yml` and the quickstart smoke use the repository secret `DEVHUB_SFDX_AUTH_URL`.
 Without it (for example on a fork pull request) those jobs skip with a warning. The shared
 login step is `.github/actions/sf-devhub`. Each run uses one scratch org from the daily
-Dev Hub limit, so both workflows run only when the engine or its inputs change, and
-a new push to a pull request cancels the old run.
+Dev Hub limit, and that limit is **6 a day**. So:
+
+- `apex-tests.yml` does not run on every push. It runs on a PR with the label `run-org-tests`, every night on main, and on demand.
+- The quickstart smoke still runs on each PR that touches the engine. Count it in the 6.
+- A new push to a pull request cancels the old run, but a cancelled run may already have used its org.
 
 ## Run the checks locally
 

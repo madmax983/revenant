@@ -2,29 +2,19 @@
 # Deploys every package folder, runs all local Apex tests with coverage, and fails when
 # the org-wide coverage is below APEX_MIN_COVERAGE. The org is always deleted.
 # Needs the DEVHUB_SFDX_AUTH_URL secret. Without it (a fork pull request), the job skips.
-# Each run uses one scratch org from the daily Dev Hub limit.
+# The Dev Hub allows only 6 scratch org signups a day, so this workflow must not run on
+# every push. It runs:
+#   - on a pull request that has the label "run-org-tests" (add it when the change needs
+#     Apex tests; it runs again on each push while the label stays)
+#   - every night on main (one org)
+#   - on demand (Actions > Apex Tests > Run workflow)
 name: Apex Tests
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "force-app/**"
-      - "examples/**"
-      - "lib/chunkedcursoriterator"
-      - "config/project-scratch-def.json"
-      - "sfdx-project.json"
-      - ".github/actions/sf-devhub/**"
-      - ".github/workflows/apex-tests.yml"
   pull_request:
-    paths:
-      - "force-app/**"
-      - "examples/**"
-      - "lib/chunkedcursoriterator"
-      - "config/project-scratch-def.json"
-      - "sfdx-project.json"
-      - ".github/actions/sf-devhub/**"
-      - ".github/workflows/apex-tests.yml"
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: "43 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -40,6 +30,8 @@ env:
 jobs:
   gate:
     name: Dev Hub secret
+    # A pull request needs the label. The other triggers always run.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-org-tests')
     runs-on: ubuntu-latest
     outputs:
       devhub: ${{ steps.check.outputs.devhub }}
@@ -58,7 +50,7 @@ jobs:
   apex:
     name: Apex tests and coverage
     needs: gate
-    if: needs.gate.outputs.devhub == 'true'
+    if: needs.gate.result == 'success' && needs.gate.outputs.devhub == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -77,12 +69,14 @@ jobs:
       - name: Deploy
         run: sf project deploy start --target-org ci --wait 60
       - name: Run all local Apex tests
+        id: tests
         run: |
           mkdir -p test-results
           sf apex run test --target-org ci --test-level RunLocalTests --code-coverage \
             --result-format json --output-dir test-results --wait 60
+      # Run after test failures too, but not when the org was never created.
       - name: Check the coverage
-        if: always()
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         run: |
           f=$(ls test-results/test-result-*.json 2>/dev/null | grep -v codecoverage | head -n 1 || true)
           if [ -z "$f" ]; then echo "::error::No test result file."; exit 1; fi
