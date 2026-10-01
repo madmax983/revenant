@@ -2,7 +2,7 @@
  * @description Computes read-only latency analytics for a single workflow definition over a
  * selectable time window: end-to-end instance-duration percentiles (p50/p95/p99/max) from
  * Terminal_At__c − CreatedDate on terminal Workflow_Instance__c records, and a ranking of
- * steps by median wall-clock duration derived from consecutive append-only
+ * steps by median wall-clock duration derived from append-only
  * Workflow_Step_Execution__c.CreatedDate deltas within each instance.
  *
  * Governor safety: the instance sample is bounded to the most-recent INSTANCE_SAMPLE_CAP
@@ -105,14 +105,16 @@ public inherited sharing class WorkflowLatencyService {
    * @description Returns end-to-end duration percentiles and a median-wall-clock step ranking
    * for one workflow definition over the given window. Percentiles are computed by the
    * nearest-rank method over the sorted list of terminal-instance durations
-   * (Terminal_At__c − CreatedDate, in milliseconds); per-step wall-clock is the delta between
-   * consecutive step-execution CreatedDate values within an instance, attributed to the
-   * earlier step, and each step is ranked by its median across the sample (slowest first).
+   * (Terminal_At__c − CreatedDate, in milliseconds); per-step wall-clock is the delta to the next
+   * step's CreatedDate. The last step is timed to Terminal_At__c. Each delta belongs to the
+   * earlier step. Steps rank by median across the sample (slowest first). Fan-out siblings get
+   * no sample and set stepsApproximate.
    * Wall-clock durations deliberately include durable waits (sleeps, retries, wait-for-signal).
    * @param workflowName The workflow definition name to analyze; blank returns an empty result.
    * @param windowKey One of '1h' | '24h' | '7d'; blank/unknown means all time.
    * @return A map with the window, cap metadata and isCapped flag, sampleSize, the p50/p95/p99/
-   *         max duration milliseconds, and the per-step median ranking rows.
+   *         max duration milliseconds, the stepsApproximate flag, and the per-step
+   *         median ranking rows.
    */
   public static Map<String, Object> definitionLatency(
     String workflowName,
@@ -140,6 +142,7 @@ public inherited sharing class WorkflowLatencyService {
 
     // Per-step median wall-clock ranking over the sampled instances' step executions.
     Boolean stepsCapped = false;
+    Boolean stepsApproximate = false;
     List<Map<String, Object>> stepRows = new List<Map<String, Object>>();
     if (!instanceIds.isEmpty()) {
       // Reserve the rows the instance query already consumed against the sync row governor.
@@ -149,7 +152,12 @@ public inherited sharing class WorkflowLatencyService {
         stepCap
       );
       stepsCapped = (stepExecs.size() >= stepCap);
-      stepRows = WorkflowLatencyStats.rankStepsByMedianWallClock(stepExecs);
+      stepRows = WorkflowLatencyStats.rankStepsByMedianWallClock(
+        stepExecs,
+        instances,
+        stepsCapped
+      );
+      stepsApproximate = WorkflowLatencyStats.hasFanOut(stepExecs);
     }
 
     return new Map<String, Object>{
@@ -162,6 +170,7 @@ public inherited sharing class WorkflowLatencyService {
       'p95Ms' => WorkflowLatencyStats.percentile(durations, 95),
       'p99Ms' => WorkflowLatencyStats.percentile(durations, 99),
       'maxMs' => WorkflowLatencyStats.maxDuration(durations),
+      'stepsApproximate' => stepsApproximate,
       'steps' => stepRows
     };
   }
@@ -178,6 +187,7 @@ public inherited sharing class WorkflowLatencyService {
       'p95Ms' => null,
       'p99Ms' => null,
       'maxMs' => null,
+      'stepsApproximate' => false,
       'steps' => new List<Map<String, Object>>()
     };
   }
