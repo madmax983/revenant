@@ -118,11 +118,11 @@ public inherited sharing class WorkflowInstanceDetailService {
     return new Map<String, Object>{
       'instance' => instance,
       'steps' => steps,
-      // The window holds the newest MAX_STEP_ROWS rows (issue #261).
-      'stepsTruncated' => stepCount > MAX_STEP_ROWS,
+      // The window holds the newest MAX_STEP_ROWS rows and the parked row (issue #261).
+      'stepsTruncated' => stepCount > steps.size(),
       'stepCount' => stepCount,
       'stepCountCapped' => stepCount >= STEP_COUNT_CAP,
-      'stepWindow' => MAX_STEP_ROWS,
+      'stepWindow' => steps.size(),
       'stepTextRows' => textRowsRead,
       'children' => children,
       'successor' => successors.isEmpty() ? null : successors[0],

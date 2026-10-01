@@ -285,6 +285,30 @@ private class WorkflowBoundedHistoryReadTest {
   }
 
   @IsTest
+  static void parkedRowOutsideTheWindowCountsAsShown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = CAN_START,
+        Status__c = 'Suspended'
+      );
+      insert inst;
+      insertRows(inst.Id, 'Park.Step', 'Pending', 1, 0);
+      insertRows(inst.Id, 'Loop.Step', 'Completed', 500, 1);
+
+      Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
+        inst.Id
+      );
+
+      List<Workflow_Step_Execution__c> steps = (List<Workflow_Step_Execution__c>) details.get(
+        'steps'
+      );
+      Assert.areEqual(501, steps.size(), 'All rows are returned');
+      Assert.areEqual(false, details.get('stepsTruncated'), 'No row is hidden');
+      Assert.areEqual(501, details.get('stepWindow'), 'The window is shown');
+    }
+  }
+
+  @IsTest
   static void parkedStepInsideTheWindowIsNotDuplicated() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = new Workflow_Instance__c(
