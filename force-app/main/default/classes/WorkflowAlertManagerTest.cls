@@ -288,6 +288,138 @@ public class WorkflowAlertManagerTest {
     );
   }
 
+  /**
+   * @description A list of only malformed addresses is no channel (#265).
+   */
+  @IsTest
+  static void testMalformedOnlyRecipientsIsNotActionable() {
+    Workflow_Alert_Config__mdt config = (Workflow_Alert_Config__mdt) JSON.deserialize(
+      '{"DeveloperName":"Default","Enable_Alerts__c":true,' +
+      '"Email_Recipients__c":"not-an-email; a@b","Publish_Alert_Event__c":false}',
+      Workflow_Alert_Config__mdt.class
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertManager.isAlertActionable(config),
+      'No valid address gives no channel'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.hasRecipients('not-an-email'),
+      'A malformed token is not a recipient'
+    );
+    System.assertEquals(
+      new List<String>{ 'not-an-email', 'a@b' },
+      WorkflowAlertEmailBuilder.invalidRecipients('not-an-email; a@b'),
+      'Each invalid token is listed'
+    );
+  }
+
+  /**
+   * @description A mixed list keeps the valid addresses only (#265).
+   */
+  @IsTest
+  static void testMixedRecipientsKeepValidOnly() {
+    String raw = 'ops@example.com, bad, x@y.org;;no@tld, a b@c.com';
+    System.assertEquals(
+      new List<String>{ 'ops@example.com', 'x@y.org' },
+      WorkflowAlertEmailBuilder.parseRecipients(raw),
+      'Only valid addresses stay'
+    );
+    System.assertEquals(
+      new List<String>{ 'bad', 'no@tld', 'a b@c.com' },
+      WorkflowAlertEmailBuilder.invalidRecipients(raw),
+      'Invalid tokens are listed in order'
+    );
+    System.assertEquals(
+      true,
+      WorkflowAlertEmailBuilder.hasRecipients(raw),
+      'One valid address is a channel'
+    );
+  }
+
+  /**
+   * @description Valid and invalid shapes for the shared predicate (#265).
+   */
+  @IsTest
+  static void testIsValidAddress() {
+    for (String ok : new List<String>{
+      'ops@example.com',
+      'first.last+tag@sub.example.co.uk',
+      'o\'brien@example.com'
+    }) {
+      System.assertEquals(true, WorkflowAlertEmailBuilder.isValidAddress(ok), ok);
+    }
+    for (String bad : new List<String>{
+      null,
+      '',
+      'plain',
+      '@example.com',
+      'ops@',
+      'ops@@example.com',
+      'ops@example',
+      'ops@-example.com',
+      'ops@example..com',
+      '.ops@example.com',
+      'ops@example.com.'
+    }) {
+      System.assertEquals(false, WorkflowAlertEmailBuilder.isValidAddress(bad), bad);
+    }
+    System.assertEquals(
+      new List<String>(),
+      WorkflowAlertEmailBuilder.invalidRecipients(null),
+      'Null has no tokens'
+    );
+  }
+
+  /**
+   * @description The watchdog builder sends to valid addresses only (#265).
+   */
+  @IsTest
+  static void testBuildersDropInvalidAddresses() {
+    Messaging.SingleEmailMessage mail = WorkflowAlertEmailBuilder.buildWatchdogStallEmail(
+      'ops@example.com, bad',
+      'Stalled'
+    );
+    System.assertEquals(
+      new List<String>{ 'ops@example.com' },
+      mail.getToAddresses(),
+      'Only the valid address stays'
+    );
+    System.assertEquals(
+      null,
+      WorkflowAlertEmailBuilder.buildWatchdogStallEmail('bad', 'Stalled'),
+      'No valid address gives no email'
+    );
+    System.assertEquals(
+      new List<String>(),
+      WorkflowAlertEmailBuilder.parseRecipients(null),
+      'Null gives no address'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.isValidAddress('a'.repeat(65) + '@example.com'),
+      'A long local part is invalid'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.isValidAddress('a@' + 'b'.repeat(64) + '.com'),
+      'A long domain label is invalid'
+    );
+    System.assertEquals(
+      true,
+      WorkflowAlertEmailBuilder.isValidAddress(
+        'a'.repeat(64) + '@' + 'b'.repeat(63) + '.com'
+      ),
+      'The limits are inclusive'
+    );
+    System.assertEquals(
+      false,
+      WorkflowAlertEmailBuilder.isValidAddress('a@' + 'b'.repeat(250) + '.com'),
+      'A long address is invalid'
+    );
+  }
+
   @IsTest
   static void testConsecutiveFailuresThreshold() {
     System.runAs(new User(Id = UserInfo.getUserId())) {

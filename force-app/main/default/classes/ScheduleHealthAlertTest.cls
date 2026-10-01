@@ -203,6 +203,27 @@ private class ScheduleHealthAlertTest {
     Assert.isNull(ScheduleHealthAlert.buildEmail(null, alerts));
   }
 
+  /**
+   * @description Invalid addresses are skipped. A malformed-only list sends nothing (#265).
+   */
+  @IsTest
+  static void emailSkipsInvalidAddresses() {
+    ScheduleHealth.Assessment a = assessed(
+      new Map<String, Object>{ 'Next_Fire_Window__c' => T0 },
+      T0.addHours(1)
+    );
+    List<ScheduleHealthAlert> alerts = new List<ScheduleHealthAlert>{
+      ScheduleHealthAlert.forOverdue(a, config(), 10)
+    };
+
+    Messaging.SingleEmailMessage mail = ScheduleHealthAlert.buildEmail(
+      'a@test.com; bad',
+      alerts
+    );
+    Assert.areEqual(new List<String>{ 'a@test.com' }, mail.getToAddresses());
+    Assert.isNull(ScheduleHealthAlert.buildEmail('bad', alerts));
+  }
+
   private static Workflow_Alert_Config__mdt emailConfig(String recipients) {
     return (Workflow_Alert_Config__mdt) JSON.deserialize(
       JSON.serialize(
