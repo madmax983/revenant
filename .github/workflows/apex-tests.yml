@@ -30,8 +30,13 @@ env:
 jobs:
   gate:
     name: Dev Hub secret
-    # A pull request needs the label. The other triggers always run.
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-org-tests')
+    # A pull request needs the label. A "labeled" event counts only when the label added is
+    # run-org-tests, so another label on a labelled PR does not spend an org.
+    # The other triggers always run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'run-org-tests') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'run-org-tests'))
     runs-on: ubuntu-latest
     outputs:
       devhub: ${{ steps.check.outputs.devhub }}
