@@ -1,0 +1,112 @@
+# Apex tests on a scratch org.
+# Deploys every package folder, runs all local Apex tests with coverage, and fails when
+# the org-wide coverage is below APEX_MIN_COVERAGE. The org is always deleted.
+# Needs the DEVHUB_SFDX_AUTH_URL secret. Without it (a fork pull request), the job skips.
+# Each run uses one scratch org from the daily Dev Hub limit.
+name: Apex Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "force-app/**"
+      - "examples/**"
+      - "lib/chunkedcursoriterator"
+      - "config/project-scratch-def.json"
+      - "sfdx-project.json"
+      - ".github/actions/sf-devhub/**"
+      - ".github/workflows/apex-tests.yml"
+  pull_request:
+    paths:
+      - "force-app/**"
+      - "examples/**"
+      - "lib/chunkedcursoriterator"
+      - "config/project-scratch-def.json"
+      - "sfdx-project.json"
+      - ".github/actions/sf-devhub/**"
+      - ".github/workflows/apex-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apex-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  APEX_MIN_COVERAGE: "85"
+
+jobs:
+  gate:
+    name: Dev Hub secret
+    runs-on: ubuntu-latest
+    outputs:
+      devhub: ${{ steps.check.outputs.devhub }}
+    steps:
+      - id: check
+        env:
+          DEVHUB_SFDX_AUTH_URL: ${{ secrets.DEVHUB_SFDX_AUTH_URL }}
+        run: |
+          if [ -n "$DEVHUB_SFDX_AUTH_URL" ]; then
+            echo "devhub=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "devhub=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DEVHUB_SFDX_AUTH_URL is not set. The Apex tests skip."
+          fi
+
+  apex:
+    name: Apex tests and coverage
+    needs: gate
+    if: needs.gate.outputs.devhub == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # One package folder is a submodule.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: ./.github/actions/sf-devhub
+        with:
+          auth-url: ${{ secrets.DEVHUB_SFDX_AUTH_URL }}
+      - name: Create a scratch org
+        run: sf org create scratch --definition-file config/project-scratch-def.json --alias ci --duration-days 1 --wait 30
+      - name: Deploy
+        run: sf project deploy start --target-org ci --wait 60
+      - name: Run all local Apex tests
+        run: |
+          mkdir -p test-results
+          sf apex run test --target-org ci --test-level RunLocalTests --code-coverage \
+            --result-format json --output-dir test-results --wait 60
+      - name: Check the coverage
+        if: always()
+        run: |
+          f=$(ls test-results/test-result-*.json 2>/dev/null | grep -v codecoverage | head -n 1 || true)
+          if [ -z "$f" ]; then echo "::error::No test result file."; exit 1; fi
+          node -e '
+            const r = require(process.argv[1]);
+            const s = r.summary || {};
+            const cov = parseFloat(s.orgWideCoverage);
+            const min = parseFloat(process.env.APEX_MIN_COVERAGE);
+            const lines = [
+              "### Apex tests",
+              `Outcome: ${s.outcome}`,
+              `Passing: ${s.passing} of ${s.testsRan}, failing: ${s.failing}`,
+              `Org-wide coverage: ${s.orgWideCoverage} (minimum ${min}%)`,
+            ];
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n\n") + "\n");
+            if (!(cov >= min)) { console.error(`::error::Coverage ${s.orgWideCoverage} is below ${min}%.`); process.exit(1); }
+          ' "$f"
+      - name: Keep the test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-test-results
+          path: test-results/
+          if-no-files-found: ignore
+      - name: Delete the scratch org
+        if: always()
+        run: sf org delete scratch --target-org ci --no-prompt || true

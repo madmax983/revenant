@@ -40,6 +40,9 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
      * @param rowLimit the maximum number of rows
      * @return the rows
      */
+    @SuppressWarnings(
+      'PMD.ApexCRUDViolation'
+    ) // Big Object SOQL has no CRUD or FLS
     public virtual List<Workflow_Archive__b> queryTimeline(
       Set<String> instanceIds,
       Integer rowLimit
@@ -78,6 +81,9 @@ public inherited sharing class BigObjectArchiveSink implements WorkflowArchiveSi
      * @param rowLimit the maximum number of rows
      * @return the rows
      */
+    @SuppressWarnings(
+      'PMD.ApexCRUDViolation'
+    ) // Big Object SOQL has no CRUD or FLS
     public virtual List<Workflow_Archive_Key__b> queryKeys(
       String keyHash,
       Integer rowLimit

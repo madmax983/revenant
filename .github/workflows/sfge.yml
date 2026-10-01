@@ -1,0 +1,62 @@
+# Code Analyzer graph engine (SFGE): data-flow rules for Apex (FLS, null pointer,
+# database operation in a loop, sharing). It builds a graph of the whole code base,
+# so it takes more than 10 minutes. It does not run on pull requests.
+# It runs on main, every week, and on demand. It fails at High (severity 2) or worse.
+name: Code Analyzer (graph engine)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "force-app/**"
+      - "code-analyzer.yml"
+      - ".github/workflows/sfge.yml"
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sfge-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep this version equal to CODE_ANALYZER_VERSION in ci.yml.
+  CODE_ANALYZER_VERSION: "5.16.0"
+
+jobs:
+  sfge:
+    name: SFGE
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install the Salesforce CLI and Code Analyzer
+        run: |
+          npm install --global @salesforce/cli
+          sf plugins install "code-analyzer@${CODE_ANALYZER_VERSION}"
+      - name: Run
+        run: |
+          mkdir -p sfge-results
+          sf code-analyzer run \
+            --workspace force-app \
+            --rule-selector sfge \
+            --severity-threshold 2 \
+            --output-file sfge-results/results.html \
+            --output-file sfge-results/results.json
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-analyzer-sfge
+          path: sfge-results/
+          if-no-files-found: ignore

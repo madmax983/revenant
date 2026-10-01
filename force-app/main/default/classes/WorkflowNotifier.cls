@@ -859,7 +859,7 @@ public inherited sharing class WorkflowNotifier {
   ) {
     Map<Id, Id> owners = new Map<Id, Id>();
     try {
-      Schema.DescribeSObjectResult typeDescribe = sobjectType.getDescribe();
+      Schema.DescribeSObjectResult typeDescribe = sobjectType.getDescribe(); // NOPMD EagerlyLoadedDescribeSObjectResult: fields.getMap() needs the eager describe
       if (!typeDescribe.fields.getMap().containsKey('ownerid')) {
         return owners;
       }

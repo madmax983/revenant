@@ -55,6 +55,9 @@ public inherited sharing class WorkflowPayloadAccess {
    * @param recordIds the records to check
    * @return the subset the user can read
    */
+  @SuppressWarnings(
+    'PMD.ApexCRUDViolation'
+  ) // UserRecordAccess reports access; it has no CRUD to enforce
   public static Set<Id> readableIds(Set<Id> recordIds) {
     Set<Id> allowed = new Set<Id>();
     List<Id> pending = new List<Id>(recordIds);
