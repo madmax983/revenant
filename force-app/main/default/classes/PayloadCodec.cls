@@ -19,7 +19,7 @@
  *   does not go into error fields.
  * - Use a public class with a public no-argument constructor.
  */
-public interface PayloadCodec {
+global interface PayloadCodec {
   /**
    * @description Encodes one serialized payload before the engine stores it.
    * @param plaintext the payload text. It is never blank.

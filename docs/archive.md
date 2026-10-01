@@ -152,7 +152,10 @@ contract makes that safe. The files and the instance go in the last page.
 
 ## Write your own sink
 
-Implement `WorkflowArchiveSink`:
+Implement `WorkflowArchiveSink`. The sink, `WorkflowArchiveRecord` and the
+`WorkflowArchive` reads are `global`. A subscriber org uses the package
+namespace, for example `implements rvn.WorkflowArchiveSink`. See
+[global-api.md](global-api.md).
 
 ```apex
 public class S3ArchiveSink implements WorkflowArchiveSink {

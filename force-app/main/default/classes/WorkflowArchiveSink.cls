@@ -17,7 +17,7 @@
  * - Read methods must not do DML. Return steps in `sequence` order.
  * - Use a public class with a public no-argument constructor.
  */
-public interface WorkflowArchiveSink {
+global interface WorkflowArchiveSink {
   /**
    * @description Stores the records. Throws when a record is not stored.
    * @param records the records to store. Never null.

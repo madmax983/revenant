@@ -2,7 +2,7 @@
 
 This page lists each Apex type and member that code in a different namespace can use. In a managed package, subscriber code sees only `global` declarations. All other engine code is namespace-private.
 
-Decision record: [ADR 0006](adr/0006-frozen-global-api.md). Issue: #122.
+Decision records: [ADR 0006](adr/0006-frozen-global-api.md) (issue #122) and [ADR 0021](adr/0021-global-codec-and-archive.md) (issue #255).
 
 ## Stability Policy
 
@@ -20,6 +20,8 @@ Decision record: [ADR 0006](adr/0006-frozen-global-api.md). Issue: #122.
 - **Control facade:** `WorkflowEngine` (`start`, `startOrGet`, `signal`, `cancel`) and `WorkflowStatusRead.getStatus`.
 - **Debounced start:** `WorkflowDebouncer.startDebounced` and `DebounceRequest` (issue #140). See [debounce.md](debounce.md).
 - **Flow:** the Start, Signal, and Get Workflow Status invocable actions.
+- **Payload codec:** `PayloadCodec` and `CodecContext`. See [payload-codec.md](payload-codec.md).
+- **Archive:** `WorkflowArchiveSink`, `WorkflowArchive` (reads and sink helpers) and `WorkflowArchiveRecord`. See [archive.md](archive.md).
 
 `getStatus` is on `WorkflowStatusRead`, not on `WorkflowEngine`. It moved there on 2026-07-15, before this release. The README names `WorkflowStatusRead.getStatus` as the read contract.
 
@@ -254,6 +256,58 @@ new WorkflowDebouncer.DebounceRequest(String, String, String)
 WorkflowDebouncer.DebounceRequest.withDebounce(Integer): WorkflowDebouncer.DebounceRequest
 WorkflowDebouncer.DebounceRequest.withMaxWait(Integer): WorkflowDebouncer.DebounceRequest
 
+# Payload codec
+global interface PayloadCodec
+PayloadCodec.encode(String, CodecContext): String
+PayloadCodec.decode(String, CodecContext): String
+global class CodecContext
+new CodecContext(CodecContext.PayloadKind)
+CodecContext.kind: CodecContext.PayloadKind { get }
+global enum CodecContext.PayloadKind { WORKFLOW_INPUT, STEP_OUTPUT, STEP_STATE, SIGNAL_PAYLOAD }
+
+# Archive
+global interface WorkflowArchiveSink
+WorkflowArchiveSink.write(List<WorkflowArchiveRecord>): void
+WorkflowArchiveSink.readByInstanceIds(Set<Id>): List<WorkflowArchiveRecord>
+WorkflowArchiveSink.readByCorrelationKey(String): List<WorkflowArchiveRecord>
+global class WorkflowArchive
+static final WorkflowArchive.MAX_READ_RECORDS: Integer
+static WorkflowArchive.getArchivedHistory(Id): WorkflowArchiveRecord
+static WorkflowArchive.findArchivedHistory(String): List<WorkflowArchiveRecord>
+static WorkflowArchive.hashCorrelationKey(String): String
+global class WorkflowArchive.ArchiveException extends Exception
+global class WorkflowArchiveRecord
+new WorkflowArchiveRecord()
+static final WorkflowArchiveRecord.DROPPED_MARKER: String
+WorkflowArchiveRecord.instanceId: Id
+WorkflowArchiveRecord.workflowName: String
+WorkflowArchiveRecord.correlationKey: String
+WorkflowArchiveRecord.status: String
+WorkflowArchiveRecord.errorMessage: String
+WorkflowArchiveRecord.failureCategory: String
+WorkflowArchiveRecord.parentInstanceId: Id
+WorkflowArchiveRecord.createdAt: Datetime
+WorkflowArchiveRecord.terminalAt: Datetime
+WorkflowArchiveRecord.archivedAt: Datetime
+WorkflowArchiveRecord.input: String
+WorkflowArchiveRecord.output: String
+WorkflowArchiveRecord.droppedPayloadCount: Integer
+WorkflowArchiveRecord.stepCount: Integer
+WorkflowArchiveRecord.steps: List<WorkflowArchiveRecord.Step>
+WorkflowArchiveRecord.isTruncated(): Boolean
+global class WorkflowArchiveRecord.Step
+new WorkflowArchiveRecord.Step()
+WorkflowArchiveRecord.Step.sequence: Integer
+WorkflowArchiveRecord.Step.executionId: Id
+WorkflowArchiveRecord.Step.stepName: String
+WorkflowArchiveRecord.Step.status: String
+WorkflowArchiveRecord.Step.attempt: Integer
+WorkflowArchiveRecord.Step.startedAt: Datetime
+WorkflowArchiveRecord.Step.endedAt: Datetime
+WorkflowArchiveRecord.Step.errorDetails: String
+WorkflowArchiveRecord.Step.totalDurationMs(): Long
+WorkflowArchiveRecord.Step.isCompensation(): Boolean
+
 # Flow: Start Workflow
 global class WorkflowStartInvocableAction
 @InvocableMethod static WorkflowStartInvocableAction.startWorkflow(List<WorkflowStartInvocableAction.StartRequest>): List<WorkflowStartInvocableAction.StartResult>
@@ -307,6 +361,7 @@ These stay namespace-private. The test fails if one of them gets `global`.
 
 - Engine internals: `WorkflowOrchestrator*`, `WorkflowWatchdog*`, `Watchdog*`, finalizers, `*Job`, `*Controller` (dashboard), `*Sweep`, `*Sweeper`, `*SweepRunner`. The test also finds internals by structure: a class that implements `Queueable`, `Schedulable`, `Database.Batchable`, or `Finalizer`, and a class with `@AuraEnabled` members.
 - Each member of a manifest type that is not in the manifest. Examples: `StepContext.Builder`, `StepContext.SignalSource`, `StepSignals.markMatched`, `StepResult.ActionType`, the other `StepDirective` data, `WorkflowEngine` configuration fields, `runStep`, `handleCrash`, `failWorkflowInstance`.
+- `WorkflowArchive.isEnabled`, `archiveAfterDays`, `sink` and `DEFAULT_ARCHIVE_AFTER_DAYS`. They are operator and sweep internals. The shipped sinks (`BigObjectArchiveSink`, `CsvArchiveSink`) and `IdentityPayloadCodec` also stay `public`.
 - `WorkflowEngine.StartRequest.withParent` and `parentInstanceId`. A subscriber could make a false parent link. Use `StepResult.startChild` or `startChildren`.
 
 ## Candidates
@@ -319,7 +374,7 @@ Not global in v1. Add one only when a subscriber needs it. You cannot remove a g
 - `WorkflowDebouncer.DebounceRequest.withAttributesJson` and `withCausationId`.
 - `WorkflowEngine.StartRequest.inputJson`. `StepContext.Signal.createdDate`.
 - `WorkflowBatchStep` as `global virtual`, with `bind()` and `Binding`, so a subscriber can extend it (issue #138). Today a subscriber uses the input JSON.
-- Opt-in interfaces: `ExecutionTimeoutConfigurable`, `CircuitBreakerGuarded`, `ValidatedWorkflow`, `WorkflowCatalogDescribable`, `PayloadCodec`, `WorkflowArchiveSink`.
+- Opt-in interfaces: `ExecutionTimeoutConfigurable`, `CircuitBreakerGuarded`, `ValidatedWorkflow`, `WorkflowCatalogDescribable`.
 - Subscriber test support (do before the first release). `StepContextTestBuilder` and `WorkflowTestHarness` are `@IsTest`, so subscribers cannot see them. A subscriber test can run only one async hop. A subscriber needs a non-test context builder, a harness that drives more hops, and a way to read the result kind.
 
 ## Verify

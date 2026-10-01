@@ -4,7 +4,7 @@
  * the kind of its first encode. For example, a child output that becomes a
  * signal payload keeps STEP_OUTPUT.
  */
-public inherited sharing class CodecContext {
+global inherited sharing class CodecContext {
   /**
    * @description The author payload classes that the engine encodes.
    * - WORKFLOW_INPUT: the input of a workflow instance.
@@ -12,7 +12,7 @@ public inherited sharing class CodecContext {
    * - STEP_STATE: step state: suspend state, captures and progress.
    * - SIGNAL_PAYLOAD: a signal payload or a resume payload.
    */
-  public enum PayloadKind {
+  global enum PayloadKind {
     WORKFLOW_INPUT,
     STEP_OUTPUT,
     STEP_STATE,
@@ -20,13 +20,14 @@ public inherited sharing class CodecContext {
   }
 
   /** @description The payload class. */
-  public final PayloadKind kind;
+  global PayloadKind kind { get; private set; }
 
   /**
-   * @description Makes a context for one payload class.
+   * @description Makes a context for one payload class. A subscriber can use
+   * it to unit-test a codec.
    * @param kind the payload class
    */
-  public CodecContext(PayloadKind kind) {
+  global CodecContext(PayloadKind kind) {
     this.kind = kind;
   }
 }
