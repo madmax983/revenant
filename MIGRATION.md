@@ -575,6 +575,21 @@ The DTOs (`ChainRequest`, `ChainPage`, `ChainGeneration`) are inner classes of `
 
 ---
 
+## Changed: child signals have no payload (issue #246)
+
+A `ChildCompleted:<key>` or `ChildFailed:<key>` signal only wakes the parent. The engine reads the outcome from the child record. Any caller can send these names, so the engine never trusts their payload.
+
+| Old | New |
+|---|---|
+| `ctx.signals().getSignal('ChildCompleted:' + key).payload` gives the child output | The payload is `null`. Use `ctx.signals().getChildOutcome(key).output`. |
+| `ChildFailed` payload is a JSON wrapper (`status`, `errorMessage`, `output`) | No payload. Use `getChildOutcome(key)` (`status`, `errorMessage`, `output`). |
+| `SELECT Payload__c FROM Workflow_Signal__c WHERE Signal_Name__c = 'ChildCompleted:...'` | The engine-made row has no payload. Use `getChildOutcome`. |
+| Unit tests seed a child signal with a payload | Seed the signal (payload `null`) and the child with `StepContextTestBuilder.childRecords(...)`. |
+
+`getChildOutcome` returns an outcome only when a pending child signal exists and the newest child of the key (a child of this instance) has a final status. The record status sets the outcome type. See [ADR 0022](docs/adr/0022-engine-provenance-child-outcomes.md) and the [threat model](docs/payload-ingress-threat-model.md).
+
+---
+
 ## PR index
 
 | PR | Breaking change(s) covered here |
@@ -586,3 +601,4 @@ The DTOs (`ChainRequest`, `ChainPage`, `ChainGeneration`) are inner classes of `
 | #207 | `StepContext` accessor sub-objects; `StepResult` `.directive()` reads + factory removals; dashboard read/command split |
 | #213 | `WorkflowEngine` reaches its final 19-method facade shape |
 | #214 | Internal sfge null-guards (no author-facing API change) |
+| #316 | Child signals have no payload; read child results with `getChildOutcome` (issue #246) |
