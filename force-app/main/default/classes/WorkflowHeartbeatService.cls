@@ -3,7 +3,7 @@
  * WorkflowEngine.processWatchdogHeartbeat() delegates to. Runs the timeout,
  * deadline, batch-wait, sleep-resume, unrouted-signal, schedule, schedule-health
  * alert, concurrency-reconcile, transient-retry-rescue, orphan-reclaim,
- * stall-detection and debounce phases in strict order, then publishes deferred lifecycle
+ * stall-detection, debounce and notifier-sweep phases in strict order, then publishes deferred lifecycle
  * events so a best-effort publish can never spend a DML statement a required
  * section needs. Then it publishes the engine-health snapshot
  * (WorkflowMetricsPublisher, default off) and writes the liveness stamp
@@ -151,6 +151,15 @@ public inherited sharing class WorkflowHeartbeatService {
       GlobalAdmissionGate.reconcile();
     } catch (Exception ignored) {
       // Best-effort reconcile; a failure here must not abort the watchdog heartbeat.
+    }
+
+    // 7c. Issue #274: publish lost approver-notification requests again.
+    // Best effort. It checks its DML budget and keeps a reserve.
+    try {
+      WorkflowNotifierSweep.run(now);
+    } catch (Exception ex) {
+      // The next heartbeat tries again. An error must not stop the heartbeat.
+      WorkflowLog.error('NotifierSweep', ex.getMessage());
     }
 
     // All required heartbeat work (timed-out-step failures, sleep resumptions,

@@ -60,6 +60,9 @@ is the concurrency gate that decides whether a step may run now.
   in its own transaction. It reads the `Requested` anchor rows and sends the
   Custom Notification. `WorkflowEventTrigger` ignores `NOTIFY`.
   Toggle: `Revenant_Config__mdt.Send_Notifications__c`.
+  `WorkflowNotifierSweep` (issue #274, heartbeat step 7c) publishes the
+  request of a row that stays `Requested` for 15 minutes again. After 3
+  attempts the row is `Failed`.
 - `WorkflowStepTimeoutConfig`, `WorkflowTimeoutArming`, `WorkflowTimeoutReArm`
 - `ConcurrencyGate` (facade) + `ConcurrencyConfigResolver`,
   `ConcurrencyReconciler`, `ConcurrencyReleaseProcessor`
