@@ -81,7 +81,7 @@ jobs:
           f=$(ls test-results/test-result-*.json 2>/dev/null | grep -v codecoverage | head -n 1 || true)
           if [ -z "$f" ]; then echo "::error::No test result file."; exit 1; fi
           node -e '
-            const r = require(process.argv[1]);
+            const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
             const s = r.summary || {};
             const cov = parseFloat(s.orgWideCoverage);
             const min = parseFloat(process.env.APEX_MIN_COVERAGE);
