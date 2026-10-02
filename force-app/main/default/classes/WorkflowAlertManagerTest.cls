@@ -343,27 +343,39 @@ public class WorkflowAlertManagerTest {
    */
   @IsTest
   static void testIsValidAddress() {
-    for (String ok : new List<String>{
-      'ops@example.com',
-      'first.last+tag@sub.example.co.uk',
-      'o\'brien@example.com'
-    }) {
-      System.assertEquals(true, WorkflowAlertEmailBuilder.isValidAddress(ok), ok);
+    for (
+      String ok : new List<String>{
+        'ops@example.com',
+        'first.last+tag@sub.example.co.uk',
+        'o\'brien@example.com'
+      }
+    ) {
+      System.assertEquals(
+        true,
+        WorkflowAlertEmailBuilder.isValidAddress(ok),
+        ok
+      );
     }
-    for (String bad : new List<String>{
-      null,
-      '',
-      'plain',
-      '@example.com',
-      'ops@',
-      'ops@@example.com',
-      'ops@example',
-      'ops@-example.com',
-      'ops@example..com',
-      '.ops@example.com',
-      'ops@example.com.'
-    }) {
-      System.assertEquals(false, WorkflowAlertEmailBuilder.isValidAddress(bad), bad);
+    for (
+      String bad : new List<String>{
+        null,
+        '',
+        'plain',
+        '@example.com',
+        'ops@',
+        'ops@@example.com',
+        'ops@example',
+        'ops@-example.com',
+        'ops@example..com',
+        '.ops@example.com',
+        'ops@example.com.'
+      }
+    ) {
+      System.assertEquals(
+        false,
+        WorkflowAlertEmailBuilder.isValidAddress(bad),
+        bad
+      );
     }
     System.assertEquals(
       new List<String>(),

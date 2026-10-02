@@ -6,75 +6,13 @@
 @IsTest
 private class WorkflowBatchStepTest {
   private static final Id JOB_ID = '707000000000001';
-  private static final String STUB_BATCH = 'WorkflowBatchStepTest.StubBatch';
+  private static final String STUB_BATCH = 'WorkflowBatchStepStubBatch';
   private static final String BOUND_STEP = 'WorkflowBatchStepTest.BoundStep';
   private static final String WORKFLOW = 'WorkflowBatchStepTest.BatchWorkflow';
-
-  /** @description A Batchable with no Revenant code. */
-  public class StubBatch implements Database.Batchable<SObject> {
-    public String tag;
-
-    /**
-     * @description Selects the accounts with the tag as name.
-     * @param bc The batch context.
-     * @return The query locator.
-     */
-    public Database.QueryLocator start(Database.BatchableContext bc) {
-      return Database.getQueryLocator(
-        [SELECT Id FROM Account WHERE Name = :tag WITH SYSTEM_MODE]
-      );
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     * @param scope The records of this chunk.
-     */
-    public void execute(Database.BatchableContext bc, List<SObject> scope) {
-      return;
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     */
-    public void finish(Database.BatchableContext bc) {
-      return;
-    }
-  }
 
   /** @description A class that is not a Batchable. */
   public class NotABatch {
     public String tag;
-  }
-
-  /** @description An Iterable Batchable with no Revenant code. */
-  public class IterBatch implements Database.Batchable<Object> {
-    /**
-     * @description Gives two items.
-     * @param bc The batch context.
-     * @return The items.
-     */
-    public Iterable<Object> start(Database.BatchableContext bc) {
-      return new List<Object>{ 'a', 'b' };
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     * @param scope The items of this chunk.
-     */
-    public void execute(Database.BatchableContext bc, List<Object> scope) {
-      return;
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     */
-    public void finish(Database.BatchableContext bc) {
-      return;
-    }
   }
 
   /** @description A subclass that gives the binding in Apex. */
@@ -205,8 +143,14 @@ private class WorkflowBatchStepTest {
     Assert.areEqual(String.valueOf(JOB_ID), r.directive().awaitedBatchJobId);
     Assert.areEqual(1, WorkflowBatchJobs.launchCount, 'One launch');
     Assert.areEqual(50, WorkflowBatchJobs.lastScopeSize);
-    Assert.isInstanceOfType(WorkflowBatchJobs.lastLaunched, StubBatch.class);
-    Assert.areEqual('t1', ((StubBatch) WorkflowBatchJobs.lastLaunched).tag);
+    Assert.isInstanceOfType(
+      WorkflowBatchJobs.lastLaunched,
+      WorkflowBatchStepStubBatch.class
+    );
+    Assert.areEqual(
+      't1',
+      ((WorkflowBatchStepStubBatch) WorkflowBatchJobs.lastLaunched).tag
+    );
     Assert.isTrue(ctx.captures().hasNewCaptures(), 'The job Id is captured');
     Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
       ctx.captures().getCapturedValuesJson()
@@ -234,7 +178,9 @@ private class WorkflowBatchStepTest {
           .input(new Map<String, Object>{ 'batchClass' => STUB_BATCH })
           .build()
       );
-    Assert.isNull(((StubBatch) WorkflowBatchJobs.lastLaunched).tag);
+    Assert.isNull(
+      ((WorkflowBatchStepStubBatch) WorkflowBatchJobs.lastLaunched).tag
+    );
   }
 
   @IsTest
@@ -254,7 +200,10 @@ private class WorkflowBatchStepTest {
       .execute(new StepContextTestBuilder().build());
     Assert.areEqual(StepResult.ActionType.SUSPEND, r.directive().action);
     Assert.areEqual(10, WorkflowBatchJobs.lastScopeSize);
-    Assert.areEqual('bound', ((StubBatch) WorkflowBatchJobs.lastLaunched).tag);
+    Assert.areEqual(
+      'bound',
+      ((WorkflowBatchStepStubBatch) WorkflowBatchJobs.lastLaunched).tag
+    );
   }
 
   @IsTest
@@ -325,13 +274,16 @@ private class WorkflowBatchStepTest {
         new StepContextTestBuilder()
           .input(
             new Map<String, Object>{
-              'batchClass' => 'WorkflowBatchStepTest.IterBatch'
+              'batchClass' => 'WorkflowBatchStepIterBatch'
             }
           )
           .build()
       );
     Assert.areEqual(StepResult.ActionType.SUSPEND, r.directive().action);
-    Assert.isInstanceOfType(WorkflowBatchJobs.lastLaunched, IterBatch.class);
+    Assert.isInstanceOfType(
+      WorkflowBatchJobs.lastLaunched,
+      WorkflowBatchStepIterBatch.class
+    );
   }
 
   // ── Outcome ───────────────────────────────────────────────────────────

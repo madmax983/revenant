@@ -327,7 +327,8 @@ public inherited sharing class WorkflowCancellation {
     // The loop adds to the queue while it reads the queue. The walk is
     // breadth-first and uses no SOQL.
     for (Integer i = 0; i < queue.size(); i++) {
-      for (Id childId : childrenByParent.get(queue[i]) ?? new List<Id>()) {
+      List<Id> children = childrenByParent.get(queue[i]) ?? new List<Id>();
+      for (Id childId : children) {
         if (seen.add(childId)) {
           queue.add(childId);
         }
@@ -570,13 +571,13 @@ public inherited sharing class WorkflowCancellation {
       instance.Sleep_Until__c = null;
       // Issue #138: a cancelled instance does not wait for its batch job.
       instance.Awaited_Batch_Job_Id__c = null;
-      List<Workflow_Instance__c> rollback = rollbackGroup(
+      List<Workflow_Instance__c> rollbackNodes = rollbackGroup(
         plan,
         instance,
         runCompensations
       );
-      if (rollback != null) {
-        rollback.add(instance);
+      if (rollbackNodes != null) {
+        rollbackNodes.add(instance);
         instance.Status__c = 'Cancelling';
         instance.Error_Message__c = CANCELLING_MESSAGE;
         plan.toEnqueue.add(instance.Id);

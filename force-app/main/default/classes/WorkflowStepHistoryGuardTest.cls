@@ -8,7 +8,7 @@
 // ApexTypeImplementor, which does not list inner classes of a private class.
 @IsTest
 public class WorkflowStepHistoryGuardTest {
-  private static final String LOOP = 'WorkflowStepHistoryGuardTest.LoopStep';
+  private static final String LOOP_STEP = 'WorkflowStepHistoryGuardTest.LoopStep';
   private static final String DONE = 'WorkflowStepHistoryGuardTest.DoneStep';
   private static final String CHARGE = 'WorkflowStepHistoryGuardTest.ChargeStep';
   private static final String RECOVER = 'WorkflowStepHistoryGuardTest.RecoverStep';
@@ -36,14 +36,14 @@ public class WorkflowStepHistoryGuardTest {
      * @return The step names.
      */
     public List<String> getSteps() {
-      return new List<String>{ LOOP, DONE };
+      return new List<String>{ LOOP_STEP, DONE };
     }
     /**
      * @description Names the first step.
      * @return The loop step.
      */
     public String getInitialStep() {
-      return LOOP;
+      return LOOP_STEP;
     }
     /**
      * @description Routes by the step hint.
@@ -63,14 +63,14 @@ public class WorkflowStepHistoryGuardTest {
      * @return The step names.
      */
     public List<String> getSteps() {
-      return new List<String>{ LOOP, DONE, RECOVER };
+      return new List<String>{ LOOP_STEP, DONE, RECOVER };
     }
     /**
      * @description Names the first step.
      * @return The loop step.
      */
     public String getInitialStep() {
-      return LOOP;
+      return LOOP_STEP;
     }
     /**
      * @description Routes by the step hint.
@@ -100,7 +100,7 @@ public class WorkflowStepHistoryGuardTest {
      * @return The step names.
      */
     public List<String> getSteps() {
-      return new List<String>{ CHARGE, LOOP, DONE };
+      return new List<String>{ CHARGE, LOOP_STEP, DONE };
     }
     /**
      * @description Names the first step.
@@ -117,7 +117,7 @@ public class WorkflowStepHistoryGuardTest {
      */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == CHARGE) {
-        return LOOP;
+        return LOOP_STEP;
       }
       return result.directive().nextStepName;
     }
@@ -161,7 +161,7 @@ public class WorkflowStepHistoryGuardTest {
       loopRuns++;
       if (loopsLeft > 0) {
         loopsLeft--;
-        return StepResult.complete(LOOP, null);
+        return StepResult.complete(LOOP_STEP, null);
       }
       return StepResult.complete(DONE, null);
     }
@@ -322,7 +322,7 @@ public class WorkflowStepHistoryGuardTest {
     WorkflowStepRunner.RunStepContext ctx = new WorkflowStepRunner.RunStepContext();
     ctx.instanceId = inst.Id;
     ctx.instance = inst;
-    ctx.activeStepName = LOOP;
+    ctx.activeStepName = LOOP_STEP;
     return ctx;
   }
 
@@ -620,8 +620,8 @@ public class WorkflowStepHistoryGuardTest {
       Id instId = start(LoopWorkflow.class.getName());
       setThresholds(100, 200);
       Test.startTest();
-      WorkflowEngine.runStep(instId); // LOOP -> LOOP
-      WorkflowEngine.runStep(instId); // LOOP -> DONE
+      WorkflowEngine.runStep(instId); // LOOP_STEP -> LOOP_STEP
+      WorkflowEngine.runStep(instId); // LOOP_STEP -> DONE
       WorkflowEngine.runStep(instId); // DONE -> end
       Test.stopTest();
 
@@ -654,8 +654,8 @@ public class WorkflowStepHistoryGuardTest {
       seedRows(instId, 3);
       setThresholds(3, 100);
       Test.startTest();
-      WorkflowEngine.runStep(instId); // count 3: WARN. LOOP -> LOOP
-      WorkflowEngine.runStep(instId); // count 4: WARN. LOOP -> DONE
+      WorkflowEngine.runStep(instId); // count 3: WARN. LOOP_STEP -> LOOP_STEP
+      WorkflowEngine.runStep(instId); // count 4: WARN. LOOP_STEP -> DONE
       WorkflowEngine.runStep(instId); // count 5: WARN. DONE -> end
       Test.stopTest();
 
@@ -795,7 +795,7 @@ public class WorkflowStepHistoryGuardTest {
       Workflow_Step_Execution__c open = [
         SELECT Id
         FROM Workflow_Step_Execution__c
-        WHERE Workflow_Instance__c = :instId AND Step_Name__c = :LOOP
+        WHERE Workflow_Instance__c = :instId AND Step_Name__c = :LOOP_STEP
       ];
       open.Timeout_At__c = Datetime.now().addHours(1);
       update open;
@@ -814,7 +814,7 @@ public class WorkflowStepHistoryGuardTest {
         'The category is STEP_HISTORY_LIMIT'
       );
       Assert.isTrue(
-        inst.Error_Message__c.contains('Failed at step ' + LOOP),
+        inst.Error_Message__c.contains('Failed at step ' + LOOP_STEP),
         'The message names the active step: ' + inst.Error_Message__c
       );
       Assert.isTrue(
@@ -861,7 +861,7 @@ public class WorkflowStepHistoryGuardTest {
       loopsLeft = 100;
       Id instId = start(LoopWorkflow.class.getName());
       setThresholds(0, 100);
-      WorkflowEngine.runStep(instId); // Current step is LOOP.
+      WorkflowEngine.runStep(instId); // Current step is LOOP_STEP.
       seedRows(instId, 5);
       setThresholds(0, 5);
       Test.startTest();
@@ -871,7 +871,7 @@ public class WorkflowStepHistoryGuardTest {
       Workflow_Instance__c inst = load(instId);
       Assert.areEqual('Failed', inst.Status__c, 'The ceiling fails the run');
       Assert.isTrue(
-        inst.Error_Message__c.contains('Failed at step ' + LOOP + ':'),
+        inst.Error_Message__c.contains('Failed at step ' + LOOP_STEP + ':'),
         'The message names the active step: ' + inst.Error_Message__c
       );
     }
@@ -913,7 +913,7 @@ public class WorkflowStepHistoryGuardTest {
       loopsLeft = 100;
       Id instId = start(SagaLoopWorkflow.class.getName());
       setThresholds(0, 100);
-      WorkflowEngine.runStep(instId); // CHARGE -> LOOP. Stack: [CHARGE]
+      WorkflowEngine.runStep(instId); // CHARGE -> LOOP_STEP. Stack: [CHARGE]
       String stackBefore = load(instId).Compensation_Stack__c;
       seedRows(instId, 6);
       setThresholds(0, 6);

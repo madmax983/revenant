@@ -662,7 +662,11 @@ public class WorkflowAdmissionPriorityTest {
     Test.stopTest();
 
     Workflow_Instance__c row = load(holder);
-    System.assertEquals(null, row.Admission_Queue__c, 'Slot holder is not queued');
+    System.assertEquals(
+      null,
+      row.Admission_Queue__c,
+      'Slot holder is not queued'
+    );
     System.assert(isAdmitted(holder), 'Slot kept');
   }
 

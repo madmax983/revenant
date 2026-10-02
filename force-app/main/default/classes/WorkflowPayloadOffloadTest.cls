@@ -298,20 +298,20 @@ private class WorkflowPayloadOffloadTest {
 
   @IsTest
   static void testShareIfOwnedChecksCurrentOwner() {
-    Workflow_Instance__c from = newInstance();
-    Workflow_Instance__c to = childOf(from);
+    Workflow_Instance__c source = newInstance();
+    Workflow_Instance__c to = childOf(source);
     Workflow_Instance__c stranger = new Workflow_Instance__c(
       Workflow_Name__c = 'WorkflowEngineTest.HappyWorkflow',
       Status__c = 'Running',
       Correlation_Key__c = 'ShareStrangerKey'
     );
     insert stranger;
-    String own = offload(from.Id, '{"own":1}');
+    String own = offload(source.Id, '{"own":1}');
     String foreign = offload(stranger.Id, '{"foreign":1}');
 
     System.assertEquals(
       true,
-      WorkflowPayloadOffload.shareIfOwned(own, from.Id, to.Id),
+      WorkflowPayloadOffload.shareIfOwned(own, source.Id, to.Id),
       'The owner shares its file'
     );
     System.assert(
@@ -320,7 +320,7 @@ private class WorkflowPayloadOffloadTest {
     );
     System.assertEquals(
       false,
-      WorkflowPayloadOffload.shareIfOwned(foreign, from.Id, to.Id),
+      WorkflowPayloadOffload.shareIfOwned(foreign, source.Id, to.Id),
       'A forged marker is not shared'
     );
     System.assertEquals(
