@@ -6510,6 +6510,32 @@ describe("c-workflow-dashboard concurrency queue (#132)", () => {
     );
   });
 
+  it("shows a queue-not-loaded notice when the server skipped the queue", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([
+      { ...QUEUE_ROW, waiting: [], waitingTruncated: true },
+    ]);
+    const element = await openDoctor();
+
+    const notice = element.shadowRoot.querySelector(
+      '[data-id="concurrency-queue-truncated"]',
+    );
+    expect(notice).not.toBeNull();
+    expect(notice.textContent).toContain("Queue not loaded");
+  });
+
+  it("shows no queue-not-loaded notice when the queue is loaded", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([
+      { ...QUEUE_ROW, waitingTruncated: false },
+    ]);
+    const element = await openDoctor();
+
+    expect(
+      element.shadowRoot.querySelector(
+        '[data-id="concurrency-queue-truncated"]',
+      ),
+    ).toBeNull();
+  });
+
   it("shows no queue list when nothing waits", async () => {
     getConcurrencyStatus.mockResolvedValueOnce([
       { ...QUEUE_ROW, waitingTotal: 0, waitingByPriority: {}, waiting: [] },

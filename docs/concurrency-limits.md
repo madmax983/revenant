@@ -3,7 +3,7 @@
 Revenant treats **concurrency** (a ceiling on simultaneously in-flight work) as a
 primitive distinct from **rate/throttle** ([`RateLimiter`](rate-limiting.md), events per unit time) and from
 **get-or-start dedup** (#10). A concurrency limit caps how many instances of a workflow
-definition may be *running at once*, so a bursty start — a 10k-record trigger, a Cursor
+definition may be _running at once_, so a bursty start — a 10k-record trigger, a Cursor
 fan-out — is throttled to a safe in-flight ceiling instead of stampeding fragile
 downstream systems (legacy SOAP endpoints, partner APIs with connection caps) or
 exhausting org-wide callout budget.
@@ -15,9 +15,9 @@ engine maps a workflow's class name to a record `DeveloperName` using the **same
 convention as `Workflow_Alert_Config__mdt`** — every non-alphanumeric character becomes
 `_`, truncated to 40 characters:
 
-| Workflow class                                  | Record DeveloperName                          |
-| ----------------------------------------------- | --------------------------------------------- |
-| `OnboardingWorkflow`                            | `OnboardingWorkflow`                          |
+| Workflow class                                  | Record DeveloperName                            |
+| ----------------------------------------------- | ----------------------------------------------- |
+| `OnboardingWorkflow`                            | `OnboardingWorkflow`                            |
 | `CalloutTimeoutWorkflowExample.CalloutWorkflow` | `CalloutTimeoutWorkflowExample_CalloutWorkflow` |
 
 Set **Max Concurrent Instances** (`Max_Concurrent_Instances__c`) to the ceiling `N`. A
@@ -178,6 +178,10 @@ the older instances are admitted. The engine does not re-rank the queue.
   `Admission_Queue__c`. The gate does not see it until the field is set. The
   watchdog heartbeat sets it on 200 rows per sweep. To set it at once after
   deploy, run `scripts/apex/backfill_admission_queue.apex` until it prints 0.
+- A row can fail the backfill. A call reads at most 5 pages. When all 5 fail,
+  the call saves its last Id in the `Admission_Backfill_Cursor__c` setting.
+  The next call starts after that Id. A page that fixes a row, or the end of
+  the scan, clears the cursor.
 - The feature adds no scheduled job class and no Platform Event. A yield is
   a normal park: it schedules one retry timer, as a park does.
 - With one priority class, a candidate can now yield to an older waiting
@@ -195,6 +199,10 @@ instances. Under each workflow, the panel shows the wait queue:
 
 - The count per priority class, for example `3 waiting · P9: 1 · P0: 2`.
 - Up to five next instances in admission order, with position and priority.
+- `Queue not loaded`, when the request ran out of SOQL before it read that
+  workflow. The server reads workflows in name order. It reads only workflows
+  that have waiting rows. The response sets `waitingTruncated` for each skipped
+  workflow. Its count still shows.
 
 The waiting count includes new starts that have no slot yet. The parked
 count includes only `Suspended` instances. Thus the waiting count can be
@@ -203,12 +211,12 @@ larger.
 ## Known limitation — enabling a ceiling on already-running work
 
 The slot counter is built up as instances are **admitted through the gate**. If you add
-a ceiling (or a `Default` record starts applying) to a workflow that *already* has
+a ceiling (or a `Default` record starts applying) to a workflow that _already_ has
 in-flight instances started before the gate existed, those pre-existing instances do not
 hold slots (`Concurrency_Slot_Held__c = false`), so the counter starts from the newly
 admitted work only. Until that older work drains, the effective number of concurrent
 instances can briefly exceed the configured ceiling. This matches how most engines apply
-a concurrency limit to *new* work; the ceiling becomes exact once the pre-gate instances
+a concurrency limit to _new_ work; the ceiling becomes exact once the pre-gate instances
 reach a terminal state. To enforce the ceiling immediately on a busy workflow, enable the
 config during a quiet window (or let the existing instances finish first).
 

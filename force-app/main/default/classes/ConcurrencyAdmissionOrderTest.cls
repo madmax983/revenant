@@ -291,6 +291,99 @@ public class ConcurrencyAdmissionOrderTest {
     );
   }
 
+  // #277: more than BACKFILL_PAGES failing pages must not block the next call.
+  @IsTest
+  static void testBackfillCursorSurvivesBetweenCalls() {
+    ConcurrencyAdmissionOrder.skipQueueSync = true;
+    List<Workflow_Instance__c> rows = new List<Workflow_Instance__c>();
+    for (Integer i = 0; i < 7; i++) {
+      rows.add(
+        new Workflow_Instance__c(
+          Workflow_Name__c = WF,
+          Status__c = 'Suspended',
+          Correlation_Key__c = 'queue-cursor-' + i,
+          Concurrency_Parked__c = true
+        )
+      );
+    }
+    insert rows;
+    ConcurrencyAdmissionOrder.skipQueueSync = false;
+    List<Workflow_Instance__c> ordered = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Id IN :rows
+      ORDER BY Id ASC
+    ];
+    ConcurrencyAdmissionOrder.backfillFailIds = new Set<Id>();
+    for (Integer i = 0; i < 6; i++) {
+      ConcurrencyAdmissionOrder.backfillFailIds.add(ordered[i].Id);
+    }
+
+    Test.startTest();
+    Integer first = ConcurrencyAdmissionOrder.backfillQueue(1);
+    String cursorAfterFirst = Admission_Backfill_Cursor__c.getOrgDefaults()
+      .After_Id__c;
+    Integer second = ConcurrencyAdmissionOrder.backfillQueue(1);
+    Test.stopTest();
+
+    System.assertEquals(0, first, 'Five failing pages fix nothing');
+    System.assertEquals(
+      String.valueOf(ordered[4].Id),
+      cursorAfterFirst,
+      'The cursor stays after the last failing page'
+    );
+    System.assertEquals(1, second, 'The next call goes past the failing rows');
+    System.assertEquals(
+      null,
+      Admission_Backfill_Cursor__c.getOrgDefaults().After_Id__c,
+      'Progress resets the cursor'
+    );
+    System.assertEquals(
+      WF,
+      [
+        SELECT Admission_Queue__c
+        FROM Workflow_Instance__c
+        WHERE Id = :ordered[6].Id
+      ]
+      .Admission_Queue__c,
+      'The last row is in the queue'
+    );
+  }
+
+  // #277: the cursor resets when the scan reaches the end.
+  @IsTest
+  static void testBackfillCursorResetsAtEndOfScan() {
+    ConcurrencyAdmissionOrder.skipQueueSync = true;
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'queue-cursor-end',
+      Concurrency_Parked__c = true
+    );
+    ConcurrencyAdmissionOrder.skipQueueSync = false;
+    Id row = [
+      SELECT Id
+      FROM Workflow_Instance__c
+      WHERE Correlation_Key__c = 'queue-cursor-end'
+    ]
+    .Id;
+    ConcurrencyAdmissionOrder.backfillFailIds = new Set<Id>{ row };
+    insert new Admission_Backfill_Cursor__c(
+      SetupOwnerId = UserInfo.getOrganizationId(),
+      After_Id__c = row
+    );
+
+    Test.startTest();
+    ConcurrencyAdmissionOrder.backfillQueue(10);
+    Test.stopTest();
+
+    System.assertEquals(
+      null,
+      Admission_Backfill_Cursor__c.getOrgDefaults().After_Id__c,
+      'An empty page resets the cursor'
+    );
+  }
+
   // A rollback does not use admission. A compensation step that suspends
   // later must not join the queue.
   @IsTest

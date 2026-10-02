@@ -685,4 +685,83 @@ public class WorkflowAdmissionPriorityTest {
     System.assertEquals('Running', row.Status__c, 'Resumed');
     System.assertEquals(WF, row.Admission_Queue__c, 'Still queued');
   }
+
+  // ── #277: the queue read order is fixed, and a skipped queue is flagged ─
+  private static void newGovernedWaiting(String workflowName) {
+    insert new Concurrency_State__c(
+      Workflow_Definition__c = workflowName,
+      In_Flight_Count__c = 1
+    );
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = workflowName,
+      Status__c = 'Pending',
+      Correlation_Key__c = 'trunc-' + workflowName,
+      Concurrency_Parked__c = true
+    );
+  }
+
+  @IsTest
+  static void testDashboardFlagsSkippedQueuesInNameOrder() {
+    WorkflowEngine.disableQueueableInTest = true;
+    for (String name : new List<String>{ 'WfC', 'WfA', 'WfB' }) {
+      newGovernedWaiting(name);
+    }
+    WorkflowDashboardStatusService.maxQueueReadsOverride = 2;
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardStatusService.concurrencyStatus();
+    Test.stopTest();
+
+    Map<String, Map<String, Object>> byName = new Map<String, Map<String, Object>>();
+    for (Map<String, Object> row : rows) {
+      byName.put((String) row.get('workflowName'), row);
+    }
+    System.assertEquals(
+      1,
+      ((List<Object>) byName.get('WfA').get('waiting')).size(),
+      'The first name in order is read'
+    );
+    System.assertEquals(
+      1,
+      ((List<Object>) byName.get('WfB').get('waiting')).size(),
+      'The second name in order is read'
+    );
+    System.assertEquals(false, byName.get('WfA').get('waitingTruncated'));
+    System.assertEquals(false, byName.get('WfB').get('waitingTruncated'));
+    System.assertEquals(
+      0,
+      ((List<Object>) byName.get('WfC').get('waiting')).size(),
+      'The last name in order is skipped'
+    );
+    System.assertEquals(
+      true,
+      byName.get('WfC').get('waitingTruncated'),
+      'The skipped queue is flagged'
+    );
+    System.assertEquals(
+      1,
+      byName.get('WfC').get('waitingTotal'),
+      'Count stays'
+    );
+  }
+
+  @IsTest
+  static void testDashboardDoesNotFlagWorkflowWithNoWaiters() {
+    WorkflowEngine.disableQueueableInTest = true;
+    insert new Concurrency_State__c(
+      Workflow_Definition__c = 'WfIdle',
+      In_Flight_Count__c = 1
+    );
+    WorkflowDashboardStatusService.maxQueueReadsOverride = 0;
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardStatusService.concurrencyStatus();
+    Test.stopTest();
+
+    System.assertEquals(
+      false,
+      rows[0].get('waitingTruncated'),
+      'An empty queue is not truncated'
+    );
+  }
 }
