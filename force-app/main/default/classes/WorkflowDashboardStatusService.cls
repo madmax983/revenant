@@ -9,12 +9,14 @@ public inherited sharing class WorkflowDashboardStatusService {
   private static final Integer QUEUE_ROWS_PER_WORKFLOW = 5;
   // SOQL kept free after the queue reads, for the rest of the request.
   private static final Integer QUEUE_QUERY_HEADROOM = 10;
-  // Test seam: the most queue reads in one request. Null uses the SOQL left, minus the headroom.
+  // Test seam: the most queue reads in one request. Null uses the SOQL left,
+  // minus the headroom.
   @TestVisible
   private static Integer maxQueueReadsOverride;
   // Upper bound on groups in the per-priority aggregate. Salesforce allows at
   // most 2,000 groups in an aggregate query that cannot page.
-  private static final Integer MAX_PRIORITY_GROUPS = 2000;
+  @TestVisible
+  private static Integer maxPriorityGroups = 2000;
 
   /**
    * @description Returns the watchdog/scheduler health snapshot for the dashboard: recent
@@ -355,11 +357,11 @@ public inherited sharing class WorkflowDashboardStatusService {
         parkedByDef.put((String) ar.get('wf'), (Integer) ar.get('cnt'));
       }
 
-      Map<String, Map<String, Object>> classesByDef = waitingByPriority(
-        workflowNames
-      );
+      PriorityCounts counts = waitingByPriority(workflowNames);
+      Map<String, Map<String, Object>> classesByDef = counts.byDef;
+      // A capped aggregate may omit a workflow, so then every workflow is read.
       Map<String, List<Map<String, Object>>> queueByDef = waitingQueue(
-        classesByDef.keySet(),
+        counts.capped ? null : classesByDef.keySet(),
         workflowNames
       );
 
@@ -384,7 +386,7 @@ public inherited sharing class WorkflowDashboardStatusService {
             'waiting' => queueByDef.containsKey(defKey)
               ? queueByDef.get(defKey)
               : new List<Map<String, Object>>(),
-            'waitingTruncated' => !classes.isEmpty() &&
+            'waitingTruncated' => (!classes.isEmpty() || counts.capped) &&
             !queueByDef.containsKey(defKey)
           }
         );
@@ -398,10 +400,10 @@ public inherited sharing class WorkflowDashboardStatusService {
   // Count of waiting instances per priority class, keyed by lower-cased workflow
   // name, then by priority as text. A blank priority (a row from before issue
   // #132) shows as the configured priority.
-  private static Map<String, Map<String, Object>> waitingByPriority(
-    Set<String> workflowNames
-  ) {
-    Map<String, Map<String, Object>> byDef = new Map<String, Map<String, Object>>();
+  private static PriorityCounts waitingByPriority(Set<String> workflowNames) {
+    PriorityCounts result = new PriorityCounts();
+    Map<String, Map<String, Object>> byDef = result.byDef;
+    Integer groups = 0;
     // Admission_Queue__c is set only while a row waits (see
     // ConcurrencyAdmissionOrder.isWaiting), and it is indexed.
     for (AggregateResult ar : [
@@ -410,8 +412,9 @@ public inherited sharing class WorkflowDashboardStatusService {
       WHERE Admission_Queue__c IN :workflowNames
       WITH SYSTEM_MODE
       GROUP BY Admission_Queue__c, Admission_Priority__c
-      LIMIT :MAX_PRIORITY_GROUPS
+      LIMIT :maxPriorityGroups
     ]) {
+      groups++;
       String wf = (String) ar.get('wf');
       String defKey = wf.toLowerCase();
       if (!byDef.containsKey(defKey)) {
@@ -424,12 +427,19 @@ public inherited sharing class WorkflowDashboardStatusService {
         : 0;
       classes.put(priority, prior + (Integer) ar.get('cnt'));
     }
-    return byDef;
+    result.capped = groups >= maxPriorityGroups;
+    return result;
+  }
+
+  // The per-priority counts, and whether the group cap cut the aggregate.
+  private class PriorityCounts {
+    Map<String, Map<String, Object>> byDef = new Map<String, Map<String, Object>>();
+    Boolean capped = false;
   }
 
   // The next waiting instances of each workflow, in the gate order (key, then
   // Id). One query per workflow, so that a deep queue cannot hide another
-  // queue. Only a workflow that has waiting rows is read. Workflows are read
+  // queue. Only a workflow that has waiting rows is read (all, when the key set is null). Workflows are read
   // in name order. The same ones are skipped on each request. Stops before
   // the SOQL limit. Keyed by lower-cased workflow name. The map has no key
   // for a skipped workflow.
@@ -441,7 +451,7 @@ public inherited sharing class WorkflowDashboardStatusService {
     Set<String> seen = new Set<String>();
     for (String workflowName : workflowNames) {
       String key = workflowName.toLowerCase();
-      if (waitingKeys.contains(key) && seen.add(key)) {
+      if ((waitingKeys == null || waitingKeys.contains(key)) && seen.add(key)) {
         ordered.add(workflowName);
       }
     }

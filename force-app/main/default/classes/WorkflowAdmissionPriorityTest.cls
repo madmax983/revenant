@@ -763,4 +763,28 @@ public class WorkflowAdmissionPriorityTest {
       'An empty queue is not truncated'
     );
   }
+
+  // A capped priority aggregate may omit a workflow. The service must not
+  // read that as "no waiters".
+  @IsTest
+  static void testDashboardReadsAllQueuesWhenAggregateIsCapped() {
+    WorkflowEngine.disableQueueableInTest = true;
+    newGovernedWaiting('WfA');
+    newGovernedWaiting('WfB');
+    WorkflowDashboardStatusService.maxPriorityGroups = 1;
+
+    Test.startTest();
+    List<Map<String, Object>> rows = WorkflowDashboardStatusService.concurrencyStatus();
+    Test.stopTest();
+
+    System.assertEquals(2, rows.size(), 'Both workflows listed');
+    for (Map<String, Object> row : rows) {
+      System.assertEquals(
+        1,
+        ((List<Object>) row.get('waiting')).size(),
+        'The queue is read for ' + row.get('workflowName')
+      );
+      System.assertEquals(false, row.get('waitingTruncated'));
+    }
+  }
 }
