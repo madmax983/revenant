@@ -3983,6 +3983,75 @@ describe("c-workflow-dashboard step-history warning (issue #112)", () => {
     );
   }
 
+  it("shows how many steps the detail pane hides", async () => {
+    mockLongHistory(true, null);
+    getInstanceDetails.mockResolvedValue({
+      ...(await getInstanceDetails()),
+      steps: [{ Id: "s1", Step_Name__c: "A", Status__c: "Completed" }],
+      stepsTruncated: true,
+      stepCount: 10000,
+      stepWindow: 500,
+      stepTextRows: 50,
+    });
+    const element = await openFirst();
+
+    const note = element.shadowRoot.querySelector(
+      '[data-id="steps-truncated"]',
+    );
+    expect(note).not.toBeNull();
+    expect(note.textContent).toBe(
+      "Showing 500 of 10000 steps: the newest steps and the step that waits. Input, output and error text show for the newest 50.",
+    );
+  });
+
+  it("marks a capped step count as a lower bound", async () => {
+    mockLongHistory(true, null);
+    getInstanceDetails.mockResolvedValue({
+      ...(await getInstanceDetails()),
+      steps: [{ Id: "s1", Step_Name__c: "A", Status__c: "Completed" }],
+      stepsTruncated: true,
+      stepCount: 50000,
+      stepCountCapped: true,
+      stepWindow: 500,
+      stepTextRows: 50,
+    });
+    const element = await openFirst();
+
+    const note = element.shadowRoot.querySelector(
+      '[data-id="steps-truncated"]',
+    );
+    expect(note.textContent).toContain("of 50000+ steps");
+  });
+
+  it("warns when only the long text is limited", async () => {
+    mockLongHistory(true, null);
+    getInstanceDetails.mockResolvedValue({
+      ...(await getInstanceDetails()),
+      steps: [{ Id: "s1", Step_Name__c: "A", Status__c: "Completed" }],
+      stepsTruncated: false,
+      stepCount: 120,
+      stepWindow: 500,
+      stepTextRows: 50,
+    });
+    const element = await openFirst();
+
+    const note = element.shadowRoot.querySelector(
+      '[data-id="steps-truncated"]',
+    );
+    expect(note.textContent).toBe(
+      "The instance has 120 steps. Input, output and error text show for the newest 50.",
+    );
+  });
+
+  it("shows no step note when the history is complete", async () => {
+    mockLongHistory(true, null);
+    const element = await openFirst();
+
+    expect(
+      element.shadowRoot.querySelector('[data-id="steps-truncated"]'),
+    ).toBeNull();
+  });
+
   it("shows a LONG HISTORY badge on a flagged list row", async () => {
     mockLongHistory(true, null);
     const element = await mount();

@@ -103,6 +103,7 @@ public inherited sharing class WorkflowCompensationStepLog {
       WHERE
         Workflow_Instance__c = :instance.Id
         AND Step_Name__c = :activeStepName
+        AND Status__c = 'Completed'
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1
@@ -195,11 +196,13 @@ public inherited sharing class WorkflowCompensationStepLog {
     }
     Map<String, Workflow_Step_Execution__c> latestAttempt = latestExecs(
       activeById.keySet(),
-      compNames
+      compNames,
+      false
     );
     Map<String, Workflow_Step_Execution__c> latestForward = latestExecs(
       activeById.keySet(),
-      new Set<String>(activeById.values())
+      new Set<String>(activeById.values()),
+      true
     );
 
     List<Workflow_Step_Execution__c> toInsert = new List<Workflow_Step_Execution__c>();
@@ -234,24 +237,23 @@ public inherited sharing class WorkflowCompensationStepLog {
   /**
    * @description Latest step execution per (instance | step name). It reads the
    * Ids of all attempts first. Then it reads the payload of the latest attempt
-   * only.
-   * Shared with WorkflowCompensation.preCreateFirstCompensationSteps.
+   * only. Shared with WorkflowCompensation.preCreateFirstCompensationSteps.
    * @param instanceIds the instances to read
    * @param stepNames the step names to read
+   * @param completedOnly true to consider only Completed executions
    * @return the latest execution by "instanceId|stepName"
    */
   public static Map<String, Workflow_Step_Execution__c> latestExecs(
     Set<Id> instanceIds,
-    Set<String> stepNames
+    Set<String> stepNames,
+    Boolean completedOnly
   ) {
     Map<String, Id> latestIdByKey = new Map<String, Id>();
-    for (Workflow_Step_Execution__c exec : [
-      SELECT Id, Workflow_Instance__c, Step_Name__c
-      FROM Workflow_Step_Execution__c
-      WHERE Workflow_Instance__c IN :instanceIds AND Step_Name__c IN :stepNames
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-    ]) {
+    for (
+      Workflow_Step_Execution__c exec : completedOnly
+        ? completedIdRows(instanceIds, stepNames)
+        : allIdRows(instanceIds, stepNames)
+    ) {
       String key = exec.Workflow_Instance__c + '|' + exec.Step_Name__c;
       if (!latestIdByKey.containsKey(key)) {
         latestIdByKey.put(key, exec.Id);
@@ -282,6 +284,37 @@ public inherited sharing class WorkflowCompensationStepLog {
     return latestByKey;
   }
 
+  // Id-only rows of every execution, newest first.
+  private static List<Workflow_Step_Execution__c> allIdRows(
+    Set<Id> instanceIds,
+    Set<String> stepNames
+  ) {
+    return [
+      SELECT Id, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c IN :instanceIds AND Step_Name__c IN :stepNames
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+  }
+
+  // Id-only rows of the Completed executions, newest first.
+  private static List<Workflow_Step_Execution__c> completedIdRows(
+    Set<Id> instanceIds,
+    Set<String> stepNames
+  ) {
+    return [
+      SELECT Id, Workflow_Instance__c, Step_Name__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c IN :instanceIds
+        AND Step_Name__c IN :stepNames
+        AND Status__c = 'Completed'
+      WITH SYSTEM_MODE
+      ORDER BY CreatedDate DESC, Id DESC
+    ];
+  }
+
   /**
    * @description Loads/locks the compensation step execution `FOR UPDATE`,
    * re-queries the instance under the lock, and builds (or short-circuits) the
@@ -297,13 +330,13 @@ public inherited sharing class WorkflowCompensationStepLog {
   ) {
     Workflow_Instance__c instance = run.instance;
     String compensationStepLogName = run.compensationStepLogName;
-    // Load all executions so compensateVisit can be derived in Apex without an
-    // extra COUNT() SOQL query.
+    // Load all executions (no long text) so compensateVisit can be derived in Apex
+    // without an extra COUNT() SOQL query. The locked requery reads the long text.
     // Captured_Values__c is selected only on the single-row FOR UPDATE requery
     // below, not on this all-rows visit-count read, to avoid loading every
     // historical capture payload into heap (see the forward runStep path).
     List<Workflow_Step_Execution__c> stepExecs = [
-      SELECT Id, Status__c, Input__c, Output__c, Retry_Count__c, Step_Name__c
+      SELECT Id, Status__c, Retry_Count__c, Step_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instance.Id
@@ -421,6 +454,7 @@ public inherited sharing class WorkflowCompensationStepLog {
         WHERE
           Workflow_Instance__c = :run.forwardSourceInstanceId
           AND Step_Name__c = :run.activeStepName
+          AND Status__c = 'Completed'
         WITH SYSTEM_MODE
         ORDER BY CreatedDate DESC, Id DESC
         LIMIT 1

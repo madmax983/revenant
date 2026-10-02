@@ -11,6 +11,33 @@ public inherited sharing class WorkflowPayloadService {
   @TestVisible
   private static final Integer PAYLOAD_DISPLAY_LIMIT = 50000;
 
+  // Heap the attachment reads may add (bytes). The read stops at the budget. An
+  // attachment not read shows its marker text.
+  @TestVisible
+  private static Integer attachmentHeapBudget = 2000000;
+
+  // The attachment reads do not start a batch when the transaction heap is above
+  // this size (bytes). It is half of the limit, so the long text reads and these
+  // reads share one ceiling.
+  @TestVisible
+  private static Integer heapCeiling = Limits.getLimitHeapSize() / 2;
+
+  // SOQL queries the attachment reads leave free for the caller. The read stops
+  // when fewer queries remain.
+  @TestVisible
+  private static Integer queryReserve = 25;
+
+  // Max body bytes in one ContentVersion query. The size is known before the read
+  // (ContentSize). A body above this is not read and shows its marker text.
+  @TestVisible
+  private static Integer attachmentBatchBytes = 500000;
+
+  // Max attachments in one ContentVersion query.
+  private static final Integer ATTACHMENT_CHUNK = 5;
+
+  /** @description Display text for an attachment that the view did not read. */
+  public static final String OMITTED_PAYLOAD = '(Payload not shown: it is too large to read here.)';
+
   /** @description Display text for an encoded payload. */
   public static final String REDACTED_PAYLOAD = WorkflowPayloadCodecs.REDACTED_PAYLOAD;
 
@@ -36,16 +63,24 @@ public inherited sharing class WorkflowPayloadService {
     return val;
   }
 
+  // The display form of one attachment body. The full body is not kept.
+  private class AttachmentBody {
+    String display;
+    Integer fullLength;
+    Boolean encoded;
+    Boolean omitted = false;
+  }
+
   /**
    * Carries the resolved attachment bodies plus the download descriptors accumulated
    * while resolving an instance's payload fields, so resolveAndRecordPayload can take a
    * single context object instead of a long parameter list.
    */
   private class PayloadResolution {
-    Map<Id, String> attachmentIdToData;
+    Map<Id, AttachmentBody> attachmentIdToData;
     Map<String, Object> payloadFiles;
 
-    PayloadResolution(Map<Id, String> attachmentIdToData) {
+    PayloadResolution(Map<Id, AttachmentBody> attachmentIdToData) {
       this.attachmentIdToData = attachmentIdToData;
       this.payloadFiles = new Map<String, Object>();
     }
@@ -67,22 +102,25 @@ public inherited sharing class WorkflowPayloadService {
     if (
       attachmentId != null && res.attachmentIdToData.containsKey(attachmentId)
     ) {
-      String full = res.attachmentIdToData.get(attachmentId);
-      if (WorkflowPayloadCodecs.isEncoded(full)) {
+      AttachmentBody body = res.attachmentIdToData.get(attachmentId);
+      if (body.omitted) {
+        return OMITTED_PAYLOAD;
+      }
+      if (body.encoded) {
         return REDACTED_PAYLOAD;
       }
-      if (full != null && full.length() > PAYLOAD_DISPLAY_LIMIT) {
+      if (body.fullLength > PAYLOAD_DISPLAY_LIMIT) {
         res.payloadFiles.put(
           fieldKey,
           new Map<String, Object>{
             'contentDocumentId' => attachmentId,
             'downloadUrl' => '/sfc/servlet.shepherd/document/download/' +
             attachmentId,
-            'fullLength' => full.length()
+            'fullLength' => body.fullLength
           }
         );
       }
-      return truncatePayload(full);
+      return body.display;
     }
     if (WorkflowPayloadCodecs.isEncoded(textValue)) {
       return REDACTED_PAYLOAD;
@@ -130,32 +168,100 @@ public inherited sharing class WorkflowPayloadService {
     return verifiedAttachmentIds;
   }
 
-  private static Map<Id, String> loadAttachmentData(
+  // Reads the verified attachment bodies in batches. A batch holds at most
+  // attachmentBatchBytes of body (sizes come from ContentSize, with no blob read).
+  // A body above that size is skipped. It keeps the display text only. It stops
+  // when the reads used the heap budget or the query budget, or when the heap is
+  // above the shared ceiling (else the first batch always runs).
+  private static Map<Id, AttachmentBody> loadAttachmentData(
     Set<Id> attachmentIds,
     Id linkedEntityId
   ) {
-    Map<Id, String> attachmentIdToData = new Map<Id, String>();
+    Map<Id, AttachmentBody> attachmentIdToData = new Map<Id, AttachmentBody>();
     if (attachmentIds.isEmpty()) {
       return attachmentIdToData;
     }
-    Set<Id> verifiedAttachmentIds = verifyAttachmentLinks(
-      attachmentIds,
-      linkedEntityId
-    );
-    if (verifiedAttachmentIds.isEmpty()) {
+    Set<Id> verified = verifyAttachmentLinks(attachmentIds, linkedEntityId);
+    if (verified.isEmpty()) {
       return attachmentIdToData;
     }
-    for (ContentVersion cv : [
-      SELECT ContentDocumentId, VersionData
-      FROM ContentVersion
-      WHERE ContentDocumentId IN :verifiedAttachmentIds AND IsLatest = TRUE
-      WITH SYSTEM_MODE
-    ]) {
-      if (cv.VersionData != null) {
-        attachmentIdToData.put(cv.ContentDocumentId, cv.VersionData.toString());
+    Integer heapLimit = Limits.getHeapSize() + attachmentHeapBudget;
+    Boolean first = true;
+    for (List<Id> batch : planBatches(verified)) {
+      if (
+        Limits.getHeapSize() > heapCeiling ||
+        (!first &&
+        (Limits.getHeapSize() > heapLimit ||
+        Limits.getQueries() + queryReserve > Limits.getLimitQueries()))
+      ) {
+        break;
+      }
+      first = false;
+      for (ContentVersion cv : [
+        SELECT ContentDocumentId, VersionData
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :batch AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        if (cv.VersionData != null) {
+          attachmentIdToData.put(
+            cv.ContentDocumentId,
+            toDisplayBody(cv.VersionData.toString())
+          );
+        }
+      }
+    }
+    // A verified body that was not read could be encoded. Show a placeholder, not
+    // the marker, so the view keeps the redaction rule and hides the document Id.
+    for (Id docId : verified) {
+      if (!attachmentIdToData.containsKey(docId)) {
+        AttachmentBody omitted = new AttachmentBody();
+        omitted.omitted = true;
+        attachmentIdToData.put(docId, omitted);
       }
     }
     return attachmentIdToData;
+  }
+
+  // Groups the attachments into batches by size. It reads sizes only, not bodies.
+  private static List<List<Id>> planBatches(Set<Id> documentIds) {
+    List<List<Id>> batches = new List<List<Id>>();
+    List<Id> batch = new List<Id>();
+    Integer batchBytes = 0;
+    for (ContentVersion cv : [
+      SELECT ContentDocumentId, ContentSize
+      FROM ContentVersion
+      WHERE ContentDocumentId IN :documentIds AND IsLatest = TRUE
+      WITH SYSTEM_MODE
+    ]) {
+      Integer size = cv.ContentSize == null ? 0 : cv.ContentSize;
+      if (size > attachmentBatchBytes) {
+        continue;
+      }
+      if (
+        !batch.isEmpty() &&
+        (batch.size() >= ATTACHMENT_CHUNK ||
+        batchBytes + size > attachmentBatchBytes)
+      ) {
+        batches.add(batch);
+        batch = new List<Id>();
+        batchBytes = 0;
+      }
+      batch.add(cv.ContentDocumentId);
+      batchBytes += size;
+    }
+    if (!batch.isEmpty()) {
+      batches.add(batch);
+    }
+    return batches;
+  }
+
+  private static AttachmentBody toDisplayBody(String full) {
+    AttachmentBody body = new AttachmentBody();
+    body.encoded = WorkflowPayloadCodecs.isEncoded(full);
+    body.fullLength = full.length();
+    body.display = body.encoded ? null : truncatePayload(full);
+    return body;
   }
 
   /**
@@ -171,7 +277,7 @@ public inherited sharing class WorkflowPayloadService {
     List<Workflow_Step_Execution__c> steps
   ) {
     Set<Id> attachmentIds = collectPayloadAttachmentIds(instance, steps);
-    Map<Id, String> attachmentIdToData = loadAttachmentData(
+    Map<Id, AttachmentBody> attachmentIdToData = loadAttachmentData(
       attachmentIds,
       instance.Id
     );

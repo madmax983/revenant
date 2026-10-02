@@ -39,6 +39,11 @@
  * SOQL runs WITH SYSTEM_MODE.
  */
 public inherited sharing class WorkflowWaitDescriptorService {
+  /**
+   * Largest offloaded wait state (bytes) the detail view reads. A larger state
+   * gives the generic descriptor (issue #261).
+   */
+  public static final Integer MAX_STATE_BYTES = 500000;
   /** Descriptor type for an approval (WAIT_FOR_APPROVAL) wait. */
   public static final String TYPE_APPROVAL = 'approval';
   /** Descriptor type for a child-completion (START_CHILD / START_CHILDREN) wait. */
@@ -210,11 +215,17 @@ public inherited sharing class WorkflowWaitDescriptorService {
   ) {
     String stepName = pending.Step_Name__c;
     Map<String, Object> state = parseState(
-      WorkflowPayloadOffload.resolveControlPayload(
+      WorkflowPayloadOffload.resolveControlPayloadWithin(
         pending.Output__c,
-        instance.Id
+        instance.Id,
+        MAX_STATE_BYTES
       )
     );
+    // A state above MAX_STATE_BYTES is not read. The park wrote Wait_Type__c for a
+    // signal wait, so the wait stays a generic signal wait, also with a timer armed.
+    if (state.containsKey('$attachmentId') && hasWaitType(pending)) {
+      return genericDescriptor(stepName);
+    }
     Map<String, Object> approval = approvalDescriptor(stepName, state);
     if (approval != null) {
       return approval;
@@ -245,6 +256,16 @@ public inherited sharing class WorkflowWaitDescriptorService {
   // state.get / state.containsKey marker checks would NPE, throwing the DETAIL endpoint instead of
   // showing a generic wait descriptor. Returning an empty map (never null) lets those marker checks
   // run uniformly: no marker key is present, so an opaque state falls through to a generic/timer wait.
+  // True when the park stored a signal wait type. A row read without the field
+  // has none.
+  private static Boolean hasWaitType(Workflow_Step_Execution__c step) {
+    try {
+      return String.isNotBlank(step.Wait_Type__c);
+    } catch (SObjectException ignored) {
+      return false;
+    }
+  }
+
   private static Map<String, Object> parseState(String resolvedOutput) {
     try {
       // Coerce the parsed value through the Map copy-constructor so EVERY non-object case funnels

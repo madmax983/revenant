@@ -316,6 +316,23 @@ function failedDeploy(result) {
   };
 }
 
+test("runSmoke: puts a root cause before the dependent failures", async () => {
+  const dependent = {
+    fullName: "AClass",
+    problem: "Dependent class is invalid and needs recompilation:",
+  };
+  const root = { fullName: "ZClass", problem: "Invalid type: Foo" };
+  const { sf } = fakeSf({
+    "project deploy": failedDeploy({
+      details: { componentFailures: [dependent, root] },
+    }),
+  });
+  await assert.rejects(
+    smoke(sf),
+    /Deploy failed: ZClass: Invalid type: Foo; AClass: Dependent class/,
+  );
+});
+
 test("runSmoke: stops with each component failure of a deploy", async () => {
   const one = { fullName: "HelloWorkflow", problem: "Invalid type: Foo" };
   const two = { fullName: "HelloWorkflowCheck", problem: "Bad field" };

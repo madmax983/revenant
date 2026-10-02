@@ -2080,6 +2080,9 @@
                                 <div>
                                     <h3 class="slds-text-heading_small slds-m-bottom_medium font-outfit">DAG Execution Path</h3>
                                     
+                                    <template if:true={showStepsNote}>
+                                        <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_small" data-id="steps-truncated">{stepsNoteMessage}</div>
+                                    </template>
                                     <template if:true={hasSteps}>
                                         <div class="slds-m-left_small timeline-container">
                                             <template for:each={steps} for:item="step">

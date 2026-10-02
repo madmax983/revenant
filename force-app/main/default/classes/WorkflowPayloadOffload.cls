@@ -140,6 +140,46 @@ public inherited sharing class WorkflowPayloadOffload {
     )[0];
   }
 
+  // The heap limit (bytes) that resolveControlPayloadWithin uses. A test sets it.
+  @TestVisible
+  private static Integer heapLimit = Limits.getLimitHeapSize();
+
+  /**
+   * @description Like {@link #resolveControlPayload}, but it does not read an
+   * offloaded body above `maxBytes`, or a body that does not fit in the heap. The
+   * size comes from `ContentSize`, before the read. It returns the marker text for such a body. Operator views use this to
+   * keep the heap small.
+   * @param textValue the raw stored value
+   * @param ownerId the instance that owns the value
+   * @param maxBytes the largest body to read, in bytes
+   * @return the resolved control payload, the marker text for a large body, or
+   * null for an encoded value
+   */
+  public static String resolveControlPayloadWithin(
+    String textValue,
+    Id ownerId,
+    Integer maxBytes
+  ) {
+    Id docId = markerDocId(textValue);
+    Integer heapUsed = Limits.getHeapSize();
+    if (docId != null) {
+      for (ContentVersion cv : [
+        SELECT ContentSize
+        FROM ContentVersion
+        WHERE ContentDocumentId = :docId AND IsLatest = TRUE
+        WITH SYSTEM_MODE
+      ]) {
+        Integer size = cv.ContentSize == null ? 0 : cv.ContentSize;
+        // The read holds the body and its string (about three times the size).
+        // It does not start when that would pass three quarters of the heap.
+        if (size > maxBytes || heapUsed + 3 * size > heapLimit * 3 / 4) {
+          return textValue;
+        }
+      }
+    }
+    return resolveControlPayload(textValue, ownerId);
+  }
+
   /**
    * @description Bulk variant of {@link #resolveControlPayload}. It never calls
    * the codec, so a value that cannot be decoded does not stop the batch.

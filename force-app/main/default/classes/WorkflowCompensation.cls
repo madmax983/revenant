@@ -147,12 +147,14 @@ public inherited sharing class WorkflowCompensation {
       instance
     );
 
+    // Use the last Completed visit. Do not use a later Failed or halted visit.
     List<Workflow_Step_Execution__c> originalExecs = [
       SELECT Input__c, Output__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :forwardSourceInstanceId
         AND Step_Name__c = :activeStepName
+        AND Status__c = 'Completed'
       WITH SYSTEM_MODE
       ORDER BY CreatedDate DESC, Id DESC
       LIMIT 1
@@ -205,7 +207,8 @@ public inherited sharing class WorkflowCompensation {
     );
     Map<String, Workflow_Step_Execution__c> latestForward = WorkflowCompensationStepLog.latestExecs(
       new Set<Id>(sourceById.values()),
-      new Set<String>(activeById.values())
+      new Set<String>(activeById.values()),
+      true
     );
 
     List<Workflow_Step_Execution__c> toInsert = new List<Workflow_Step_Execution__c>();
@@ -283,8 +286,8 @@ public inherited sharing class WorkflowCompensation {
     return sourceById;
   }
 
-  // Builds the first Pending compensation step log, seeded from the latest
-  // forward execution (null when the forward step has no log).
+  // Builds the first Pending compensation step log, seeded from the last Completed
+  // forward execution (null when the forward step has none).
   private static Workflow_Step_Execution__c buildFirstCompensationStep(
     Id instanceId,
     String compensationStepLogName,
