@@ -807,7 +807,7 @@
                                                         </div>
                                                         <template if:true={cc.queueNotLoaded}>
                                                             <div class="slds-text-body_small slds-text-color_weak" data-id="concurrency-queue-truncated">
-                                                                Queue not loaded. Too many governed workflows for one request.
+                                                                Queue not loaded. The request ran out of SOQL queries.
                                                             </div>
                                                         </template>
                                                         <template if:true={cc.hasWaitingRows}>

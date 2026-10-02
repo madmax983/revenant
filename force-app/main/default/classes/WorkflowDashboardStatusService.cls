@@ -9,7 +9,7 @@ public inherited sharing class WorkflowDashboardStatusService {
   private static final Integer QUEUE_ROWS_PER_WORKFLOW = 5;
   // SOQL kept free after the queue reads, for the rest of the request.
   private static final Integer QUEUE_QUERY_HEADROOM = 10;
-  // Test seam: the most queue reads in one request. Null uses the SOQL limit.
+  // Test seam: the most queue reads in one request. Null uses the SOQL left, minus the headroom.
   @TestVisible
   private static Integer maxQueueReadsOverride;
   // Upper bound on groups in the per-priority aggregate. Salesforce allows at
@@ -430,9 +430,9 @@ public inherited sharing class WorkflowDashboardStatusService {
   // The next waiting instances of each workflow, in the gate order (key, then
   // Id). One query per workflow, so that a deep queue cannot hide another
   // queue. Only a workflow that has waiting rows is read. Workflows are read
-  // in name order, so the same ones are skipped on each request. Stops before
-  // the SOQL limit. Keyed by lower-cased workflow name. A skipped workflow has
-  // no key.
+  // in name order. The same ones are skipped on each request. Stops before
+  // the SOQL limit. Keyed by lower-cased workflow name. The map has no key
+  // for a skipped workflow.
   private static Map<String, List<Map<String, Object>>> waitingQueue(
     Set<String> waitingKeys,
     Set<String> workflowNames
