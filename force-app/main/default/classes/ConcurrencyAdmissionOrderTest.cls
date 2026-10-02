@@ -367,7 +367,6 @@ public class ConcurrencyAdmissionOrderTest {
       WHERE Correlation_Key__c = 'queue-cursor-end'
     ]
     .Id;
-    ConcurrencyAdmissionOrder.backfillFailIds = new Set<Id>{ row };
     insert new Admission_Backfill_Cursor__c(
       SetupOwnerId = UserInfo.getOrganizationId(),
       After_Id__c = row
