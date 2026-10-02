@@ -83,4 +83,4 @@ The visit count of a `_Compensate` step reads no long text. The locked requery r
 
 - One hop that adds more rows than the gap (a wide fan-out) can go from below the warning to the ceiling.
 - A saga at the ceiling ends `Compensated` with a blank category.
-- The dashboard detail pane reads all step rows. It can fail on the heap for a very large history. See issue #261.
+- The dashboard detail pane shows the newest 500 rows and the parked row. Older rows are hidden. Only the newest 50 rows show input, output and error text. See "Bounded reads".
