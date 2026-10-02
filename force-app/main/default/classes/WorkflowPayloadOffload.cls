@@ -161,6 +161,7 @@ public inherited sharing class WorkflowPayloadOffload {
     Integer maxBytes
   ) {
     Id docId = markerDocId(textValue);
+    Integer heapUsed = Limits.getHeapSize();
     if (docId != null) {
       for (ContentVersion cv : [
         SELECT ContentSize
@@ -171,10 +172,7 @@ public inherited sharing class WorkflowPayloadOffload {
         Integer size = cv.ContentSize == null ? 0 : cv.ContentSize;
         // The read holds the body and its string (about three times the size).
         // It does not start when that would pass three quarters of the heap.
-        if (
-          size > maxBytes ||
-          Limits.getHeapSize() + 3 * size > heapLimit * 3 / 4
-        ) {
+        if (size > maxBytes || heapUsed + 3 * size > heapLimit * 3 / 4) {
           return textValue;
         }
       }
