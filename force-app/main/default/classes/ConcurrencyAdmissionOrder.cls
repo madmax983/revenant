@@ -57,6 +57,8 @@ public inherited sharing class ConcurrencyAdmissionOrder {
 
   // Pages that one backfill call reads when full pages fail.
   private static final Integer BACKFILL_PAGES = 5;
+  // DML statements kept free for the heartbeat steps after the backfill.
+  private static final Integer CURSOR_DML_RESERVE = 10;
 
   /**
    * @description Returns the priority for a new instance: the clamped
@@ -186,7 +188,8 @@ public inherited sharing class ConcurrencyAdmissionOrder {
   public static Integer backfillQueue(Integer maxRows) {
     Integer fixed = 0;
     String stored = Admission_Backfill_Cursor__c.getOrgDefaults().After_Id__c;
-    Id afterId = parseCursor(stored);
+    Id startId = parseCursor(stored);
+    Id afterId = startId;
     Id nextCursor = null;
     for (Integer page = 0; page < BACKFILL_PAGES; page++) {
       List<Workflow_Instance__c> rows = queryUnqueuedWaiting(afterId, maxRows);
@@ -204,35 +207,40 @@ public inherited sharing class ConcurrencyAdmissionOrder {
       afterId = rows[rows.size() - 1].Id;
       nextCursor = afterId;
     }
-    saveCursor(stored, nextCursor);
+    saveCursor(stored, startId, nextCursor);
     return fixed;
   }
 
-  // A value that is not an Id (a manual edit) means: start at the top.
+  // A value that is not a Workflow_Instance__c Id (a manual edit) is ignored.
   private static Id parseCursor(String stored) {
     if (String.isBlank(stored)) {
       return null;
     }
     try {
-      return Id.valueOf(stored);
+      Id parsed = Id.valueOf(stored);
+      return parsed.getSobjectType() == Workflow_Instance__c.SObjectType
+        ? parsed
+        : null;
     } catch (Exception ignored) {
       return null;
     }
   }
 
-  // Saves the cursor. Writes only when the value changes. A failed write must
-  // not stop the caller: the next call then starts again at the old cursor.
-  private static void saveCursor(String stored, Id nextCursor) {
-    String value = nextCursor == null ? null : String.valueOf(nextCursor);
-    if (String.isBlank(stored) && value == null) {
-      return;
-    }
+  // Saves the cursor. Writes only when the value changes, and a bad stored
+  // value counts as a change. It leaves DML statements for the heartbeat steps
+  // after it. A failed write must not stop the caller: the next call then
+  // starts again at the old cursor.
+  private static void saveCursor(String stored, Id startId, Id nextCursor) {
+    Boolean unchanged =
+      startId == nextCursor && (startId != null || String.isBlank(stored));
     if (
-      stored == value ||
-      Limits.getDmlStatements() >= Limits.getLimitDmlStatements()
+      unchanged ||
+      Limits.getDmlStatements() + CURSOR_DML_RESERVE >=
+      Limits.getLimitDmlStatements()
     ) {
       return;
     }
+    String value = nextCursor == null ? null : String.valueOf(nextCursor);
     try {
       Admission_Backfill_Cursor__c current = Admission_Backfill_Cursor__c.getOrgDefaults();
       Admission_Backfill_Cursor__c row = new Admission_Backfill_Cursor__c(

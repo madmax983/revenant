@@ -438,8 +438,10 @@ public inherited sharing class WorkflowDashboardStatusService {
     Set<String> workflowNames
   ) {
     List<String> ordered = new List<String>();
+    Set<String> seen = new Set<String>();
     for (String workflowName : workflowNames) {
-      if (waitingKeys.contains(workflowName.toLowerCase())) {
+      String key = workflowName.toLowerCase();
+      if (waitingKeys.contains(key) && seen.add(key)) {
         ordered.add(workflowName);
       }
     }
