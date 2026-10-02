@@ -785,6 +785,11 @@ public class WorkflowAdmissionPriorityTest {
         'The queue is read for ' + row.get('workflowName')
       );
       System.assertEquals(false, row.get('waitingTruncated'));
+      System.assertEquals(true, row.get('waitingCountPartial'), 'Count is low');
+      System.assert(
+        (Integer) row.get('waitingTotal') >= 1,
+        'A loaded queue is never counted as empty'
+      );
     }
   }
 }

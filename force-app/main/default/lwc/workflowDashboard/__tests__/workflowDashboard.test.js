@@ -6523,6 +6523,23 @@ describe("c-workflow-dashboard concurrency queue (#132)", () => {
     expect(notice.textContent).toContain("Queue not loaded");
   });
 
+  it("shows a partial count as a lower bound", async () => {
+    getConcurrencyStatus.mockResolvedValueOnce([
+      {
+        ...QUEUE_ROW,
+        waitingTotal: 2,
+        waitingByPriority: {},
+        waitingCountPartial: true,
+      },
+    ]);
+    const element = await openDoctor();
+
+    const summary = element.shadowRoot.querySelector(
+      '[data-id="concurrency-priority-summary"]',
+    );
+    expect(summary.textContent).toContain("2+ waiting");
+  });
+
   it("shows no queue-not-loaded notice when the queue is loaded", async () => {
     getConcurrencyStatus.mockResolvedValueOnce([
       { ...QUEUE_ROW, waitingTruncated: false },

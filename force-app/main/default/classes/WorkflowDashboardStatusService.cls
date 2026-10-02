@@ -312,10 +312,11 @@ public inherited sharing class WorkflowDashboardStatusService {
    * in-flight count vs. its configured ceiling, and the number of parked/throttled
    * instances awaiting admission. One row per durable counter (Concurrency_State__c).
    * Each entry: { workflowName, ceiling, inFlight, parked, waitingTotal,
-   * waitingByPriority, waiting, waitingTruncated }. `waiting` lists the next
+   * waitingByPriority, waiting, waitingTruncated, waitingCountPartial }. `waiting` lists the next
    * instances in admission order with their priority (issue #132).
    * `waitingTruncated` is true when the request had no SOQL left to read the
-   * queue of that workflow (issue #277).
+   * queue of that workflow (issue #277). `waitingCountPartial` is true when
+   * the group cap cut the aggregate, so `waitingTotal` is a lower bound.
    * @return One concurrency-status map per governed workflow, or an empty list.
    */
   public static List<Map<String, Object>> concurrencyStatus() {
@@ -381,7 +382,12 @@ public inherited sharing class WorkflowDashboardStatusService {
             'parked' => parkedByDef.containsKey(s.Workflow_Definition__c)
               ? parkedByDef.get(s.Workflow_Definition__c)
               : 0,
-            'waitingTotal' => sumCounts(classes),
+            'waitingTotal' => waitingTotal(
+              classes,
+              counts.capped,
+              queueByDef.get(defKey)
+            ),
+            'waitingCountPartial' => counts.capped,
             'waitingByPriority' => classes,
             'waiting' => queueByDef.containsKey(defKey)
               ? queueByDef.get(defKey)
@@ -499,6 +505,17 @@ public inherited sharing class WorkflowDashboardStatusService {
     return stored != null
       ? stored.intValue()
       : ConcurrencyAdmissionOrder.resolvePriority(workflowName, null);
+  }
+
+  // The sum of the class counts. A capped aggregate can omit classes, so the
+  // total is then at least the number of rows that the queue read loaded.
+  private static Integer waitingTotal(
+    Map<String, Object> classes,
+    Boolean capped,
+    List<Map<String, Object>> loaded
+  ) {
+    Integer total = sumCounts(classes);
+    return capped && loaded != null ? Math.max(total, loaded.size()) : total;
   }
 
   private static Integer sumCounts(Map<String, Object> classes) {
