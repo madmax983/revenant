@@ -55,8 +55,8 @@ public class WorkflowStrictDeterminismTest {
      */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == GATE) {
-        String route = result.directive().nextStepName;
-        return String.isNotBlank(route) ? route : NEXT;
+        String routeHint = result.directive().nextStepName;
+        return String.isNotBlank(routeHint) ? routeHint : NEXT;
       }
       return null;
     }
@@ -88,8 +88,8 @@ public class WorkflowStrictDeterminismTest {
      */
     public String getNextStep(String currentStepName, StepResult result) {
       if (currentStepName == GATE) {
-        String route = result.directive().nextStepName;
-        return String.isNotBlank(route) ? route : NEXT;
+        String routeHint = result.directive().nextStepName;
+        return String.isNotBlank(routeHint) ? routeHint : NEXT;
       }
       return null;
     }

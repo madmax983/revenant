@@ -1,0 +1,26 @@
+# Installs the Salesforce CLI and logs in to the Dev Hub from DEVHUB_SFDX_AUTH_URL.
+name: Salesforce CLI and Dev Hub
+description: Install the sf CLI and authenticate the Dev Hub as the default Dev Hub.
+inputs:
+  auth-url:
+    description: The sfdx auth URL of the Dev Hub (secret DEVHUB_SFDX_AUTH_URL).
+    required: true
+  cli-version:
+    description: The @salesforce/cli version or tag.
+    required: false
+    default: latest
+runs:
+  using: composite
+  steps:
+    - name: Install the Salesforce CLI
+      shell: bash
+      run: npm install --global "@salesforce/cli@${{ inputs.cli-version }}"
+    - name: Log in to the Dev Hub
+      shell: bash
+      env:
+        DEVHUB_SFDX_AUTH_URL: ${{ inputs.auth-url }}
+      run: |
+        auth_file="$RUNNER_TEMP/devhub.txt"
+        trap 'rm -f "$auth_file"' EXIT
+        printf '%s' "$DEVHUB_SFDX_AUTH_URL" > "$auth_file"
+        sf org login sfdx-url --sfdx-url-file "$auth_file" --alias devhub --set-default-dev-hub

@@ -126,7 +126,7 @@ To see the notification state of an instance, query `Workflow_Log__c` where `Log
 
 Issue #274. The watchdog heartbeat runs `WorkflowNotifierSweep` (step 7c). It finds `Requested` anchor rows that no event reached.
 
-1. It reads max 10 rows with `Fire_Time__c` older than 15 minutes (oldest first). It locks them (`FOR UPDATE`).
+1. It reads max 10 rows with `Fire_Time__c` older than 15 minutes (oldest first), then locks them by Id (`FOR UPDATE`). A locking query takes no `ORDER BY`, so these are two queries. The lock query repeats the filter, so a row that another sweep handled in between is skipped.
 2. For each row, it adds 1 to `attempts` in `Message__c`, sets `Fire_Time__c` to now, and saves the row.
 3. It publishes one `NOTIFY` event for each saved row. The trigger sends as usual.
 4. A row with 3 attempts, or with an unreadable `Message__c`, is `Failed` (`Level__c = Error`).

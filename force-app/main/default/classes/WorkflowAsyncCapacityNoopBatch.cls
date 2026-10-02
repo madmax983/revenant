@@ -1,12 +1,12 @@
 /**
- * @description Test batch. It only adds a BatchApex AsyncApexJob row. It is top level, as a Batchable must be.
+ * @description Test batch. It only adds a BatchApex AsyncApexJob row.
  */
 @IsTest
-public class WorkflowTestNoopBatch implements Database.Batchable<SObject> {
+public class WorkflowAsyncCapacityNoopBatch implements Database.Batchable<SObject> {
   /**
-   * @description Starts the batch.
+   * @description Returns no rows.
    * @param bc The batch context.
-   * @return The records or items of the batch.
+   * @return An empty scope.
    */
   public Iterable<SObject> start(Database.BatchableContext bc) {
     return new List<SObject>();
@@ -15,7 +15,7 @@ public class WorkflowTestNoopBatch implements Database.Batchable<SObject> {
   /**
    * @description Does nothing.
    * @param bc The batch context.
-   * @param scope The records of this chunk.
+   * @param scope The records.
    */
   public void execute(Database.BatchableContext bc, List<SObject> scope) {
     return;

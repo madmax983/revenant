@@ -1,12 +1,10 @@
-/**
- * @description An Iterable Batchable with no Revenant code. It gives two items. It is top level, as a Batchable must be.
- */
+/** @description An Iterable Batchable with no Revenant code. */
 @IsTest
-public class WorkflowTestIterBatch implements Database.Batchable<Object> {
+public class WorkflowBatchJobsIterBatch implements Database.Batchable<Object> {
   /**
-   * @description Starts the batch.
+   * @description Gives two items.
    * @param bc The batch context.
-   * @return The records or items of the batch.
+   * @return The items.
    */
   public Iterable<Object> start(Database.BatchableContext bc) {
     return new List<Object>{ 'a', 'b' };
@@ -15,7 +13,7 @@ public class WorkflowTestIterBatch implements Database.Batchable<Object> {
   /**
    * @description Does nothing.
    * @param bc The batch context.
-   * @param scope The records of this chunk.
+   * @param scope The items of this chunk.
    */
   public void execute(Database.BatchableContext bc, List<Object> scope) {
     return;

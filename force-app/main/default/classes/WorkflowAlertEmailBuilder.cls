@@ -236,6 +236,9 @@ public inherited sharing class WorkflowAlertEmailBuilder {
    * @return One result for each email, in the same order: true when the
    * platform accepted it.
    */
+  @SuppressWarnings(
+    'PMD.EmptyCatchBlock'
+  ) // A failed send leaves each result false
   public static List<Boolean> sendEmails(
     List<Messaging.SingleEmailMessage> mails
   ) {

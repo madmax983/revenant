@@ -288,7 +288,7 @@ private class WorkflowAsyncCapacityServiceTest {
   static void batchThatDidNotStartIsCountedAsUnsized() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Test.startTest();
-      Database.executeBatch(new WorkflowTestNoopBatch());
+      Database.executeBatch(new WorkflowAsyncCapacityNoopBatch());
       Map<String, Object> result = WorkflowAsyncCapacityService.readCapacity();
       Test.stopTest();
       Map<String, Object> jobs = (Map<String, Object>) result.get('jobCounts');

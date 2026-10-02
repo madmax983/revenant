@@ -363,8 +363,11 @@ private class ArchiveWorkflowTest {
       def.getNextStep(def.getInitialStep(), null),
       'End'
     );
-    // The assignment compiles only when the step is a CalloutStep.
-    CalloutStep step = new ArchiveWorkflow.ArchiveOldInstancesStep();
-    System.assertNotEquals(null, step, 'A callout sink needs a CalloutStep');
+    // Through an Object: the platform compiler rejects an instanceof that is always true.
+    Object step = new ArchiveWorkflow.ArchiveOldInstancesStep();
+    System.assert(
+      step instanceof CalloutStep,
+      'A callout sink needs a CalloutStep'
+    );
   }
 }

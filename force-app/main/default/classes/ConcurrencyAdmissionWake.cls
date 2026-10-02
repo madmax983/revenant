@@ -23,9 +23,9 @@ public inherited sharing class ConcurrencyAdmissionWake implements Queueable {
    * @param ctx The Queueable context.
    */
   public void execute(QueueableContext ctx) {
-    // Lock all rows first. The platform locks them in Id order. The gate then
-    // locks the counter. This keeps the engine lock order (instance rows, then
-    // counter) for each row.
+    // Lock all rows first, in Id order (a locking query takes no ORDER BY: the
+    // platform locks in Id order). The gate then locks the counter. This keeps
+    // the engine lock order (instance rows, then counter) for each row.
     List<Workflow_Instance__c> locked = [
       SELECT Id
       FROM Workflow_Instance__c

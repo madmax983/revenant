@@ -1,0 +1,172 @@
+# Static CI. No org and no secret, so it runs on fork pull requests too.
+# format:        Prettier check of every Apex class and trigger.
+# lwc:           LWC Jest tests.
+# global-api:    the frozen global API manifest and the packaged-view compile.
+# ci-org:        tests for the shared CI scratch org script (scripts/ci-org). No org.
+# apex-compile:  apex-ls compiles every package folder. No org, no scratch org signup.
+# code-analyzer: Salesforce Code Analyzer (PMD, ESLint, regex, retire-js, CPD, flow).
+#                The job fails on High (severity 2) or worse. The full report is an artifact.
+# The Code Analyzer graph engine (SFGE) is slow. It has its own workflow, sfge.yml.
+# The Determinism Lint, Report Types and Quickstart workflows stay separate.
+# Apex tests on a scratch org are in apex-tests.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Code Analyzer is pinned so that new rules do not turn main red. Raise it on purpose.
+  CODE_ANALYZER_VERSION: "5.16.0"
+  # Fail the Code Analyzer job at this severity or worse. 1 Critical, 2 High, 3 Moderate.
+  CODE_ANALYZER_FAIL_SEVERITY: "2"
+
+jobs:
+  format:
+    name: Apex format (Prettier)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check
+        run: npx prettier --check --plugin=prettier-plugin-apex "force-app/**/*.{cls,trigger}" "examples/**/*.{cls,trigger}"
+
+  lwc:
+    name: LWC Jest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Jest
+        run: npm run test:unit:coverage
+      - name: Keep the coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwc-coverage
+          path: coverage/
+          if-no-files-found: ignore
+
+  global-api:
+    name: Global API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - name: Fetch apex-ls
+        run: bash scripts/global-api/fetch-apex-ls.sh
+      - name: Global API tests
+        run: npm run test:global-api
+        env:
+          REQUIRE_APEX_LS: "1"
+
+  apex-compile:
+    name: Apex compile (apex-ls)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # One package folder is a submodule.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Fetch apex-ls
+        run: bash scripts/global-api/fetch-apex-ls.sh
+      - name: Compile
+        run: npm run check:apex-compile
+        env:
+          REQUIRE_APEX_LS: "1"
+          REQUIRE_SUBMODULES: "1"
+
+  ci-org:
+    name: CI org script
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tests
+        run: npm run test:ci-org
+
+  code-analyzer:
+    name: Code Analyzer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install the Salesforce CLI and Code Analyzer
+        run: |
+          npm install --global @salesforce/cli
+          sf plugins install "code-analyzer@${CODE_ANALYZER_VERSION}"
+      - name: Run
+        run: |
+          mkdir -p code-analyzer-results
+          sf code-analyzer run \
+            --workspace force-app --workspace examples \
+            --rule-selector recommended \
+            --severity-threshold "$CODE_ANALYZER_FAIL_SEVERITY" \
+            --output-file code-analyzer-results/results.html \
+            --output-file code-analyzer-results/results.json \
+            --output-file code-analyzer-results/results.sarif
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-analyzer
+          path: code-analyzer-results/
+          if-no-files-found: ignore
+
+  # One job to require in branch protection. It fails when any job above fails or is skipped.
+  ci:
+    name: CI
+    if: always()
+    needs: [format, lwc, global-api, apex-compile, ci-org, code-analyzer]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs passed
+        run: |
+          echo '${{ toJSON(needs) }}'
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"

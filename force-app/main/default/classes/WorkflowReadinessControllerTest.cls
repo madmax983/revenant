@@ -380,10 +380,7 @@ private class WorkflowReadinessControllerTest {
     }
     WorkflowReadinessCheck alert = check('alertConfig', checks);
     System.assertEquals(WARN, alert.status, 'No valid address warns');
-    System.assert(
-      alert.finding.contains('no valid address'),
-      alert.finding
-    );
+    System.assert(alert.finding.contains('no valid address'), alert.finding);
     System.assert(
       alert.finding.contains('Invalid: not-an-email, ops@.'),
       alert.finding
@@ -438,7 +435,10 @@ private class WorkflowReadinessControllerTest {
     }
     WorkflowReadinessCheck alert = check('alertConfig', checks);
     System.assertEquals(WARN, alert.status, 'Disabled alerts warn');
-    System.assert(alert.finding.contains('Enable_Alerts__c off'), alert.finding);
+    System.assert(
+      alert.finding.contains('Enable_Alerts__c off'),
+      alert.finding
+    );
     System.assert(!alert.finding.contains('Invalid:'), alert.finding);
   }
 

@@ -327,7 +327,8 @@ public inherited sharing class WorkflowCancellation {
     // The loop adds to the queue while it reads the queue. The walk is
     // breadth-first and uses no SOQL.
     for (Integer i = 0; i < queue.size(); i++) {
-      for (Id childId : childrenByParent.get(queue[i]) ?? new List<Id>()) {
+      List<Id> children = childrenByParent.get(queue[i]) ?? new List<Id>();
+      for (Id childId : children) {
         if (seen.add(childId)) {
           queue.add(childId);
         }

@@ -19,6 +19,8 @@ public inherited sharing class WorkflowNotifierSweep {
   public static final Integer MAX_ROWS = 10;
 
   private static final String ATTEMPTS_KEY = 'attempts';
+  // SOQL queries of one sweep: pick the oldest rows, then lock them.
+  private static final Integer QUERY_STATEMENTS = 2;
   // DML statements of one sweep: the row update and the publish.
   private static final Integer DML_STATEMENTS = 2;
   // Headroom for the liveness stamp that runs after the sweep: its own
@@ -46,31 +48,12 @@ public inherited sharing class WorkflowNotifierSweep {
     if (!hasBudget()) {
       return 0;
     }
-    Datetime cutoff = now.addMinutes(-STALE_MINUTES);
-    // A locking query cannot have an ORDER BY. So the oldest rows come from a
-    // plain query. Then a locking query reads them again, with the same filter.
-    List<Workflow_Log__c> oldest = [
-      SELECT Id
-      FROM Workflow_Log__c
-      WHERE
-        Log_Type__c = :WorkflowNotifier.LOG_TYPE
-        AND Outcome__c = :WorkflowNotifier.OUTCOME_REQUESTED
-        AND Fire_Time__c < :cutoff
-      WITH SYSTEM_MODE
-      ORDER BY Fire_Time__c
-      LIMIT :MAX_ROWS
-    ];
-    List<Workflow_Log__c> stale = [
-      SELECT Id, Fire_Key__c, Message__c, Workflow_Instance__c
-      FROM Workflow_Log__c
-      WHERE
-        Id IN :oldest
-        AND Log_Type__c = :WorkflowNotifier.LOG_TYPE
-        AND Outcome__c = :WorkflowNotifier.OUTCOME_REQUESTED
-        AND Fire_Time__c < :cutoff
-      WITH SYSTEM_MODE
-      FOR UPDATE
-    ];
+    List<Workflow_Log__c> stale = lockOldestStale(
+      now.addMinutes(-STALE_MINUTES)
+    );
+    if (stale.isEmpty()) {
+      return 0;
+    }
     List<Workflow_Log__c> retry = new List<Workflow_Log__c>();
     List<Workflow_Log__c> changed = new List<Workflow_Log__c>();
     for (Workflow_Log__c row : stale) {
@@ -94,6 +77,51 @@ public inherited sharing class WorkflowNotifierSweep {
       changed.add(row);
     }
     return publishRetries(changed, retry);
+  }
+
+  // Picks the oldest stale rows and locks them. A locking query takes no ORDER
+  // BY, so the oldest rows are picked first, with no lock, and then locked by
+  // Id. The lock query repeats the filter: a row that another sweep handled in
+  // between is not returned. The result keeps the oldest-first order.
+  private static List<Workflow_Log__c> lockOldestStale(Datetime cutoff) {
+    List<Id> oldest = new List<Id>();
+    for (Workflow_Log__c row : [
+      SELECT Id
+      FROM Workflow_Log__c
+      WHERE
+        Log_Type__c = :WorkflowNotifier.LOG_TYPE
+        AND Outcome__c = :WorkflowNotifier.OUTCOME_REQUESTED
+        AND Fire_Time__c < :cutoff
+      WITH SYSTEM_MODE
+      ORDER BY Fire_Time__c
+      LIMIT :MAX_ROWS
+    ]) {
+      oldest.add(row.Id);
+    }
+    if (oldest.isEmpty()) {
+      return new List<Workflow_Log__c>();
+    }
+    Map<Id, Workflow_Log__c> lockedById = new Map<Id, Workflow_Log__c>(
+      [
+        SELECT Id, Fire_Key__c, Message__c, Workflow_Instance__c
+        FROM Workflow_Log__c
+        WHERE
+          Id IN :oldest
+          AND Log_Type__c = :WorkflowNotifier.LOG_TYPE
+          AND Outcome__c = :WorkflowNotifier.OUTCOME_REQUESTED
+          AND Fire_Time__c < :cutoff
+        WITH SYSTEM_MODE
+        FOR UPDATE
+      ]
+    );
+    List<Workflow_Log__c> stale = new List<Workflow_Log__c>();
+    for (Id rowId : oldest) {
+      Workflow_Log__c row = lockedById.get(rowId);
+      if (row != null) {
+        stale.add(row);
+      }
+    }
+    return stale;
   }
 
   // Saves the rows, then publishes the rows that the save counted. The save
@@ -177,7 +205,7 @@ public inherited sharing class WorkflowNotifierSweep {
   // keeps its reserve for the DML after the sweep.
   private static Boolean hasBudget() {
     return !forceDmlBudgetExhausted &&
-      Limits.getQueries() < Limits.getLimitQueries() &&
+      Limits.getQueries() + QUERY_STATEMENTS <= Limits.getLimitQueries() &&
       Limits.getDmlStatements() + DML_STATEMENTS + DML_RESERVE <=
       Limits.getLimitDmlStatements() &&
       Limits.getDmlRows() + (2 * MAX_ROWS) + DML_RESERVE <=

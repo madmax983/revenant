@@ -6,7 +6,7 @@
 @IsTest
 private class WorkflowBatchStepTest {
   private static final Id JOB_ID = '707000000000001';
-  private static final String STUB_BATCH = 'WorkflowTestStubBatch';
+  private static final String STUB_BATCH = 'WorkflowBatchStepStubBatch';
   private static final String BOUND_STEP = 'WorkflowBatchStepTest.BoundStep';
   private static final String WORKFLOW = 'WorkflowBatchStepTest.BatchWorkflow';
 
@@ -145,11 +145,11 @@ private class WorkflowBatchStepTest {
     Assert.areEqual(50, WorkflowBatchJobs.lastScopeSize);
     Assert.isInstanceOfType(
       WorkflowBatchJobs.lastLaunched,
-      WorkflowTestStubBatch.class
+      WorkflowBatchStepStubBatch.class
     );
     Assert.areEqual(
       't1',
-      ((WorkflowTestStubBatch) WorkflowBatchJobs.lastLaunched).tag
+      ((WorkflowBatchStepStubBatch) WorkflowBatchJobs.lastLaunched).tag
     );
     Assert.isTrue(ctx.captures().hasNewCaptures(), 'The job Id is captured');
     Map<String, Object> captures = (Map<String, Object>) JSON.deserializeUntyped(
@@ -178,7 +178,9 @@ private class WorkflowBatchStepTest {
           .input(new Map<String, Object>{ 'batchClass' => STUB_BATCH })
           .build()
       );
-    Assert.isNull(((WorkflowTestStubBatch) WorkflowBatchJobs.lastLaunched).tag);
+    Assert.isNull(
+      ((WorkflowBatchStepStubBatch) WorkflowBatchJobs.lastLaunched).tag
+    );
   }
 
   @IsTest
@@ -200,7 +202,7 @@ private class WorkflowBatchStepTest {
     Assert.areEqual(10, WorkflowBatchJobs.lastScopeSize);
     Assert.areEqual(
       'bound',
-      ((WorkflowTestStubBatch) WorkflowBatchJobs.lastLaunched).tag
+      ((WorkflowBatchStepStubBatch) WorkflowBatchJobs.lastLaunched).tag
     );
   }
 
@@ -271,14 +273,16 @@ private class WorkflowBatchStepTest {
       .execute(
         new StepContextTestBuilder()
           .input(
-            new Map<String, Object>{ 'batchClass' => 'WorkflowTestIterBatch' }
+            new Map<String, Object>{
+              'batchClass' => 'WorkflowBatchStepIterBatch'
+            }
           )
           .build()
       );
     Assert.areEqual(StepResult.ActionType.SUSPEND, r.directive().action);
     Assert.isInstanceOfType(
       WorkflowBatchJobs.lastLaunched,
-      WorkflowTestIterBatch.class
+      WorkflowBatchStepIterBatch.class
     );
   }
 

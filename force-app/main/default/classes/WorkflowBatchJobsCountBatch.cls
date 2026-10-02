@@ -1,19 +1,19 @@
-/**
- * @description A Batchable with no Revenant code. It selects the accounts with the tag as name. It is top level, as a Batchable must be.
- */
+/** @description A Batchable with no Revenant code. */
 @IsTest
-public class WorkflowTestStubBatch implements Database.Batchable<SObject> {
-  /** @description The account name to select. */
-  public String tag;
-
+public class WorkflowBatchJobsCountBatch implements Database.Batchable<SObject> {
   /**
-   * @description Starts the batch.
+   * @description Selects the test accounts.
    * @param bc The batch context.
-   * @return The records or items of the batch.
+   * @return The query locator.
    */
   public Database.QueryLocator start(Database.BatchableContext bc) {
     return Database.getQueryLocator(
-      [SELECT Id FROM Account WHERE Name = :tag WITH SYSTEM_MODE]
+      [
+        SELECT Id
+        FROM Account
+        WHERE Name LIKE 'BatchJobsTest%'
+        WITH SYSTEM_MODE
+      ]
     );
   }
 

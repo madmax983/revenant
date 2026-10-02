@@ -123,11 +123,10 @@ private class CleanupWorkflowArchiveTest {
 
   @IsTest
   static void purgeStepIsACalloutStep() {
-    // The assignment compiles only when the step is a CalloutStep.
-    CalloutStep step = new CleanupWorkflow.PurgeOldInstancesStep();
-    System.assertNotEquals(
-      null,
-      step,
+    // Through an Object: the platform compiler rejects an instanceof that is always true.
+    Object step = new CleanupWorkflow.PurgeOldInstancesStep();
+    System.assert(
+      step instanceof CalloutStep,
       'insertImmediate and callout sinks need no DML before execute'
     );
   }

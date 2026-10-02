@@ -84,7 +84,7 @@ private class WorkflowBatchJobsTest {
   static void testRealLaunchReachesCompleted() {
     insert new Account(Name = 'BatchJobsTest 1');
     Test.startTest();
-    Id jobId = WorkflowBatchJobs.launch(new WorkflowTestCountBatch(), 200);
+    Id jobId = WorkflowBatchJobs.launch(new WorkflowBatchJobsCountBatch(), 200);
     Assert.isNull(
       WorkflowBatchJobs.terminalOutcome(jobId),
       'A queued job is not terminal'
@@ -101,7 +101,7 @@ private class WorkflowBatchJobsTest {
   @IsTest
   static void testRealIterableLaunchReachesCompleted() {
     Test.startTest();
-    Id jobId = WorkflowBatchJobs.launch(new WorkflowTestIterBatch(), 200);
+    Id jobId = WorkflowBatchJobs.launch(new WorkflowBatchJobsIterBatch(), 200);
     Test.stopTest();
     Map<String, Object> outcome = WorkflowBatchJobs.terminalOutcome(jobId);
     Assert.isNotNull(outcome, 'The job ends at stopTest');
