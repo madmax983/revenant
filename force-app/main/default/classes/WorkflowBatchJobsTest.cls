@@ -8,71 +8,6 @@ private class WorkflowBatchJobsTest {
   private static final Id DONE_ID = '707000000000002';
   private static final Id GONE_ID = '707000000000003';
 
-  /** @description A Batchable with no Revenant code. */
-  public class CountBatch implements Database.Batchable<SObject> {
-    /**
-     * @description Selects the test accounts.
-     * @param bc The batch context.
-     * @return The query locator.
-     */
-    public Database.QueryLocator start(Database.BatchableContext bc) {
-      return Database.getQueryLocator(
-        [
-          SELECT Id
-          FROM Account
-          WHERE Name LIKE 'BatchJobsTest%'
-          WITH SYSTEM_MODE
-        ]
-      );
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     * @param scope The records of this chunk.
-     */
-    public void execute(Database.BatchableContext bc, List<SObject> scope) {
-      return;
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     */
-    public void finish(Database.BatchableContext bc) {
-      return;
-    }
-  }
-
-  /** @description An Iterable Batchable with no Revenant code. */
-  public class IterBatch implements Database.Batchable<Object> {
-    /**
-     * @description Gives two items.
-     * @param bc The batch context.
-     * @return The items.
-     */
-    public Iterable<Object> start(Database.BatchableContext bc) {
-      return new List<Object>{ 'a', 'b' };
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     * @param scope The items of this chunk.
-     */
-    public void execute(Database.BatchableContext bc, List<Object> scope) {
-      return;
-    }
-
-    /**
-     * @description Does nothing.
-     * @param bc The batch context.
-     */
-    public void finish(Database.BatchableContext bc) {
-      return;
-    }
-  }
-
   private static AsyncApexJob job(Id jobId, String status, Integer errors) {
     return (AsyncApexJob) JSON.deserialize(
       JSON.serialize(
@@ -149,7 +84,7 @@ private class WorkflowBatchJobsTest {
   static void testRealLaunchReachesCompleted() {
     insert new Account(Name = 'BatchJobsTest 1');
     Test.startTest();
-    Id jobId = WorkflowBatchJobs.launch(new CountBatch(), 200);
+    Id jobId = WorkflowBatchJobs.launch(new WorkflowBatchJobsCountBatch(), 200);
     Assert.isNull(
       WorkflowBatchJobs.terminalOutcome(jobId),
       'A queued job is not terminal'
@@ -166,7 +101,7 @@ private class WorkflowBatchJobsTest {
   @IsTest
   static void testRealIterableLaunchReachesCompleted() {
     Test.startTest();
-    Id jobId = WorkflowBatchJobs.launch(new IterBatch(), 200);
+    Id jobId = WorkflowBatchJobs.launch(new WorkflowBatchJobsIterBatch(), 200);
     Test.stopTest();
     Map<String, Object> outcome = WorkflowBatchJobs.terminalOutcome(jobId);
     Assert.isNotNull(outcome, 'The job ends at stopTest');

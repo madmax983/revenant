@@ -63,14 +63,17 @@ public inherited sharing class WorkflowPayloadAccess {
     List<Id> pending = new List<Id>(recordIds);
     Id userId = UserInfo.getUserId();
     for (Integer i = 0; i < pending.size(); i += CHUNK) {
-      List<Id> chunk = new List<Id>();
+      List<Id> batchIds = new List<Id>();
       for (Integer j = i; j < Math.min(i + CHUNK, pending.size()); j++) {
-        chunk.add(pending[j]);
+        batchIds.add(pending[j]);
       }
       for (UserRecordAccess a : [
         SELECT RecordId
         FROM UserRecordAccess
-        WHERE UserId = :userId AND RecordId IN :chunk AND HasReadAccess = TRUE
+        WHERE
+          UserId = :userId
+          AND RecordId IN :batchIds
+          AND HasReadAccess = TRUE
       ]) {
         allowed.add(a.RecordId);
       }

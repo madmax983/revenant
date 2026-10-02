@@ -3,6 +3,7 @@
 # lwc:           LWC Jest tests.
 # global-api:    the frozen global API manifest and the packaged-view compile.
 # ci-org:        tests for the shared CI scratch org script (scripts/ci-org). No org.
+# apex-compile:  apex-ls compiles every package folder. No org, no scratch org signup.
 # code-analyzer: Salesforce Code Analyzer (PMD, ESLint, regex, retire-js, CPD, flow).
 #                The job fails on High (severity 2) or worse. The full report is an artifact.
 # The Code Analyzer graph engine (SFGE) is slow. It has its own workflow, sfge.yml.
@@ -87,6 +88,30 @@ jobs:
         env:
           REQUIRE_APEX_LS: "1"
 
+  apex-compile:
+    name: Apex compile (apex-ls)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # One package folder is a submodule.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Fetch apex-ls
+        run: bash scripts/global-api/fetch-apex-ls.sh
+      - name: Compile
+        run: npm run check:apex-compile
+        env:
+          REQUIRE_APEX_LS: "1"
+          REQUIRE_SUBMODULES: "1"
+
   ci-org:
     name: CI org script
     runs-on: ubuntu-latest
@@ -138,7 +163,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [format, lwc, global-api, ci-org, code-analyzer]
+    needs: [format, lwc, global-api, apex-compile, ci-org, code-analyzer]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs passed

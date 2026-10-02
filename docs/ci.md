@@ -7,6 +7,7 @@ Every check runs in GitHub Actions. Each one also runs on your machine.
 | `ci.yml` | Apex format | `prettier --check` of all Apex classes and triggers | No |
 | `ci.yml` | LWC Jest | `npm run test:unit:coverage` | No |
 | `ci.yml` | Global API | `npm run test:global-api`, with the packaged-view compile (`REQUIRE_APEX_LS=1`) | No |
+| `ci.yml` | Apex compile (apex-ls) | `npm run check:apex-compile`: every package folder, with no org. See the note below | No |
 | `ci.yml` | CI org script | `npm run test:ci-org`: tests for `scripts/ci-org` with a fake `sf` | No |
 | `ci.yml` | Code Analyzer | `sf code-analyzer run`, rule selector `recommended` (PMD, ESLint, regex, retire-js, CPD, flow). Fails at High or worse | No |
 | `ci.yml` | CI | One job that needs all of the above. Require this one in branch protection | No |
@@ -77,6 +78,7 @@ npx prettier --check --plugin=prettier-plugin-apex "force-app/**/*.{cls,trigger}
 npm run test:unit
 npm run test:global-api
 npm run test:ci-org
+npm run check:apex-compile
 sf plugins install code-analyzer@5.16.0
 sf code-analyzer run --workspace force-app --workspace examples --rule-selector recommended --severity-threshold 2
 ```
@@ -99,3 +101,20 @@ sf code-analyzer run --workspace force-app --workspace examples --rule-selector 
 
 Apex is formatted with `prettier-plugin-apex`. The parser fails on a variable named
 `from`. Use another name.
+
+## Apex compile check (no org)
+
+A scratch org compile can reject Apex that compiled the day before, when the platform
+gets stricter. Each failed smoke run costs one scratch org signup (6 a day), so
+`npm run check:apex-compile` compiles every package folder with apex-ls first.
+
+- It needs Java, `scripts/global-api/fetch-apex-ls.sh` and the submodule
+  (`git submodule update --init`).
+- It finds Apex errors: a local variable that has the same name as a constant or a type
+  (Apex names are not case sensitive: `List<Id> chunk` hides `CHUNK`, `Verdict verdict`
+  hides `Verdict.HALT`), a reserved word (`rollback`, `LOOP`, `hint`), and a wrong method
+  signature.
+- It does **not** find a locking query that has `ORDER BY` (`FOR UPDATE` takes no order),
+  a `Database.Batchable` class that is not top-level, an `instanceof` that is always true,
+  or metadata XML (for example, the same element in two separate runs in a permission
+  set). Only a scratch org deploy finds those.

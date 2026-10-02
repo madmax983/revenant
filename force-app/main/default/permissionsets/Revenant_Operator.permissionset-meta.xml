@@ -185,6 +185,24 @@
         <object>Workflow_Metrics__e</object>
         <viewAllRecords>false</viewAllRecords>
     </objectPermissions>
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Archive__b</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
+    <objectPermissions>
+        <allowCreate>false</allowCreate>
+        <allowDelete>false</allowDelete>
+        <allowEdit>false</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>false</modifyAllRecords>
+        <object>Workflow_Archive_Key__b</object>
+        <viewAllRecords>false</viewAllRecords>
+    </objectPermissions>
 
     <!-- ===== Field permissions: READ ONLY (editable=false) for every field Revenant_Admin
          exposes. Critically Workflow_Instance__c.Compensation_Stack__c (LIFO integrity) and
@@ -759,22 +777,4 @@
         <field>Workflow_Archive_Key__b.Correlation_Key__c</field>
         <readable>true</readable>
     </fieldPermissions>
-    <objectPermissions>
-        <allowCreate>false</allowCreate>
-        <allowDelete>false</allowDelete>
-        <allowEdit>false</allowEdit>
-        <allowRead>true</allowRead>
-        <modifyAllRecords>false</modifyAllRecords>
-        <object>Workflow_Archive__b</object>
-        <viewAllRecords>false</viewAllRecords>
-    </objectPermissions>
-    <objectPermissions>
-        <allowCreate>false</allowCreate>
-        <allowDelete>false</allowDelete>
-        <allowEdit>false</allowEdit>
-        <allowRead>true</allowRead>
-        <modifyAllRecords>false</modifyAllRecords>
-        <object>Workflow_Archive_Key__b</object>
-        <viewAllRecords>false</viewAllRecords>
-    </objectPermissions>
 </PermissionSet>

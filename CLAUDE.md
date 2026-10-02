@@ -10,6 +10,7 @@ Revenant brings durable execution, sagas, and event-driven orchestration to Apex
 - **Run specific Apex test class**: `sf apex run test -n <TestClassName> -w 5`
 - **Check the frozen global API**: `npm run test:global-api` (packaged-view compile needs Java and apex-ls; with Maven, run `scripts/global-api/fetch-apex-ls.sh` one time)
 - **Check the shared CI org script**: `npm run test:ci-org` (see `docs/ci.md`)
+- **Compile all Apex without an org**: `npm run check:apex-compile` (needs Java, apex-ls and the submodule; see `docs/ci.md`)
 - **Check the quickstart runner, doc and scripts**: `npm run test:quickstart`
 - **Check the Custom Report Types**: `npm run test:report-types` (see `docs/report-types.md`)
 - **Run the quickstart on the default org**: `npm run quickstart` (see `docs/quickstart.md`)
