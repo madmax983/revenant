@@ -703,7 +703,7 @@ public class WorkflowAdmissionPriorityTest {
   @IsTest
   static void testDashboardFlagsSkippedQueuesInNameOrder() {
     WorkflowEngine.disableQueueableInTest = true;
-    for (String name : new List<String>{ 'WfC', 'WfA', 'WfB' } // sorted: WfA, WfB, WfC) {
+    for (String name : new List<String>{ 'WfC', 'WfA', 'WfB' }) {
       newGovernedWaiting(name);
     }
     WorkflowDashboardStatusService.maxQueueReadsOverride = 2;
