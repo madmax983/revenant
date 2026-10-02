@@ -363,8 +363,10 @@ private class ArchiveWorkflowTest {
       def.getNextStep(def.getInitialStep(), null),
       'End'
     );
+    // Through an Object: the platform compiler rejects an instanceof that is always true.
+    Object step = new ArchiveWorkflow.ArchiveOldInstancesStep();
     System.assert(
-      new ArchiveWorkflow.ArchiveOldInstancesStep() instanceof CalloutStep,
+      step instanceof CalloutStep,
       'A callout sink needs a CalloutStep'
     );
   }
