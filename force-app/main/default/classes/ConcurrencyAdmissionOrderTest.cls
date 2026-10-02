@@ -384,6 +384,34 @@ public class ConcurrencyAdmissionOrderTest {
     );
   }
 
+  // #277: a cursor that is not an Id is ignored and replaced.
+  @IsTest
+  static void testBackfillIgnoresCorruptCursor() {
+    ConcurrencyAdmissionOrder.skipQueueSync = true;
+    insert new Workflow_Instance__c(
+      Workflow_Name__c = WF,
+      Status__c = 'Suspended',
+      Correlation_Key__c = 'queue-cursor-bad',
+      Concurrency_Parked__c = true
+    );
+    ConcurrencyAdmissionOrder.skipQueueSync = false;
+    insert new Admission_Backfill_Cursor__c(
+      SetupOwnerId = UserInfo.getOrganizationId(),
+      After_Id__c = 'garbage'
+    );
+
+    Test.startTest();
+    Integer fixed = ConcurrencyAdmissionOrder.backfillQueue(10);
+    Test.stopTest();
+
+    System.assertEquals(1, fixed, 'The scan starts at the top');
+    System.assertEquals(
+      null,
+      Admission_Backfill_Cursor__c.getOrgDefaults().After_Id__c,
+      'The bad value is replaced'
+    );
+  }
+
   // A rollback does not use admission. A compensation step that suspends
   // later must not join the queue.
   @IsTest

@@ -186,7 +186,7 @@ public inherited sharing class ConcurrencyAdmissionOrder {
   public static Integer backfillQueue(Integer maxRows) {
     Integer fixed = 0;
     String stored = Admission_Backfill_Cursor__c.getOrgDefaults().After_Id__c;
-    Id afterId = String.isBlank(stored) ? null : (Id) stored;
+    Id afterId = parseCursor(stored);
     Id nextCursor = null;
     for (Integer page = 0; page < BACKFILL_PAGES; page++) {
       List<Workflow_Instance__c> rows = queryUnqueuedWaiting(afterId, maxRows);
@@ -206,6 +206,18 @@ public inherited sharing class ConcurrencyAdmissionOrder {
     }
     saveCursor(stored, nextCursor);
     return fixed;
+  }
+
+  // A value that is not an Id (a manual edit) means: start at the top.
+  private static Id parseCursor(String stored) {
+    if (String.isBlank(stored)) {
+      return null;
+    }
+    try {
+      return Id.valueOf(stored);
+    } catch (Exception ignored) {
+      return null;
+    }
   }
 
   // Saves the cursor. Writes only when the value changes. A failed write must
