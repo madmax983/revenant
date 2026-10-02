@@ -187,7 +187,8 @@ public inherited sharing class ConcurrencyAdmissionOrder {
    */
   public static Integer backfillQueue(Integer maxRows) {
     Integer fixed = 0;
-    String stored = Admission_Backfill_Cursor__c.getOrgDefaults().After_Id__c;
+    Admission_Backfill_Cursor__c setting = Admission_Backfill_Cursor__c.getOrgDefaults();
+    String stored = setting == null ? null : setting.After_Id__c;
     Id startId = parseCursor(stored);
     Id afterId = startId;
     Id nextCursor = null;
