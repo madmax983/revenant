@@ -402,7 +402,8 @@ public class WorkflowScheduleSweeperTest {
       // Replay the same window: startOrGet resolves to the first instance.
       update new Workflow_Schedule__c(
         Id = sched.Id,
-        Last_Fired_Window__c = null
+        Last_Fired_Window__c = null,
+        Next_Fire_Window__c = null
       );
 
       WorkflowScheduleSweeper.sweep();
@@ -424,6 +425,41 @@ public class WorkflowScheduleSweeperTest {
   }
 
   @IsTest
+  static void testSharedPrefixDedupedFiresShareOneLog() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      List<Workflow_Schedule__c> scheds = new List<Workflow_Schedule__c>();
+      for (Integer i = 0; i < 3; i++) {
+        Workflow_Schedule__c sched = new Sched(
+            PREFIX + 'D3' + i,
+            EVERY_MINUTE_CRON
+          )
+          .enabled(true)
+          .overlap('Allow')
+          .build();
+        sched.Correlation_Key_Prefix__c = PREFIX + 'D3';
+        scheds.add(sched);
+      }
+      insert scheds;
+
+      // The three schedules share one window key. Two resolve as Deduped.
+      WorkflowScheduleSweeper.sweep();
+
+      Assert.areEqual(
+        1,
+        [
+          SELECT COUNT()
+          FROM Workflow_Log__c
+          WHERE
+            Correlation_Key__c LIKE :PREFIX + 'D3%'
+            AND Outcome__c = 'Deduped'
+        ],
+        'Duplicate Deduped fires share one log row'
+      );
+    }
+  }
+
+  @IsTest
   static void testDedicatedDedupedFireWritesLog() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
@@ -435,7 +471,7 @@ public class WorkflowScheduleSweeperTest {
       insert sched;
       Test.startTest();
       new WorkflowScheduleJob(sched.Id).execute(null);
-      // The job derives the window from now, so a second run replays it.
+      // The job takes the window from the current time. A second run uses the same window.
       new WorkflowScheduleJob(sched.Id).execute(null);
       Test.stopTest();
 
@@ -446,6 +482,12 @@ public class WorkflowScheduleSweeperTest {
       ];
       Assert.areEqual(1, logs.size(), 'One Deduped log for the window');
       Assert.areEqual('ScheduleDedicatedFire', logs[0].Log_Type__c);
+      Assert.isNotNull(logs[0].Workflow_Instance__c);
+      Assert.areEqual(
+        'Deduped',
+        [SELECT Last_Outcome__c FROM Workflow_Schedule__c WHERE Id = :sched.Id]
+        .Last_Outcome__c
+      );
     }
   }
 

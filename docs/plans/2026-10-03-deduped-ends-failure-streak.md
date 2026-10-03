@@ -18,8 +18,8 @@ and no second alert.
 
 | Risk | Control |
 |---|---|
-| Log noise from `Deduped` rows | `Deduped` is rare. One row for each window. Upsert on `Fire_Key__c`. |
-| A `Deduped` row hides a real failure | A failure sets `Last_Outcome__c`. The row only ends the streak. |
+| Log noise from `Deduped` rows | `Deduped` is rare. The sweep writes one row for each window. The upsert uses `Fire_Key__c`. |
+| The row hides a failure | It cannot. A failure still sets `Last_Outcome__c`. The row only ends the streak. |
 | The two fire paths drift | Test both paths. |
 | Docs still say "no log row" | Update `recurring-schedules.md` and `schedule-health.md`. |
 | `instanceId` is null | Guard the null `StartResult`. |
@@ -27,9 +27,9 @@ and no second alert.
 ## Six hats
 
 - White: both fire paths skip the log for `Deduped`. `ScheduleFireLog` already accepts it.
-- Red: an operator expects an alert for a second failure.
+- Red: the operator expects an alert for a second failure.
 - Yellow: small change, the streak rule stays the same.
-- Black: extra DML rows. The sweep upserts logs in one bulk call, so no new DML statement.
+- Black: extra DML rows. The sweep upserts all logs in one bulk call. It adds no DML statement.
 - Green: option B is a fallback if volume becomes a problem.
 - Blue: RED tests first, then GREEN, then REFACTOR, then review.
 

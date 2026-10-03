@@ -108,13 +108,14 @@ public inherited sharing class WorkflowScheduleSweepRunner {
   }
 
   /**
-   * @description Runs the bulk start and records the Started or Deduped log and the cursor advance.
+   * @description Runs the bulk start. Writes the Started or Deduped log. Advances the cursor.
    * @param state The sweep working set holding the built requests and starting items.
    */
   private static void startAndRecord(SweepState state) {
     List<WorkflowEngine.StartResult> results = WorkflowEngine.startOrGet(
       state.requests
     );
+    Set<String> loggedKeys = new Set<String>();
     for (Integer i = 0; i < state.starting.size(); i++) {
       DueItem item = state.starting[i];
       WorkflowEngine.StartResult sr = results[i];
@@ -122,7 +123,11 @@ public inherited sharing class WorkflowScheduleSweepRunner {
       String outcome = isNew ? 'Started' : 'Deduped';
       ScheduleFireLog.Spec spec = specFor(item, outcome);
       spec.instanceId = sr == null ? null : sr.instanceId;
-      state.logsToUpsert.add(ScheduleFireLog.build(spec));
+      Workflow_Log__c log = ScheduleFireLog.build(spec);
+      // Schedules with one prefix share a window key. One row for each key.
+      if (loggedKeys.add(log.Fire_Key__c)) {
+        state.logsToUpsert.add(log);
+      }
       state.toUpdate.add(advanceRow(item, outcome));
     }
   }
