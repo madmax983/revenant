@@ -6,6 +6,7 @@ private class ScheduleFireHistoryTest {
     Workflow_Schedule__c sched = new Workflow_Schedule__c(
       Name = name,
       Workflow_Name__c = TEST_WF,
+      Correlation_Key_Prefix__c = name,
       Cron_Expression__c = '0 * * * *',
       Enabled__c = true,
       Dedicated_Slot__c = false
