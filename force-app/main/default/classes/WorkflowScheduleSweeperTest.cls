@@ -425,19 +425,17 @@ public class WorkflowScheduleSweeperTest {
   }
 
   @IsTest
-  static void testSharedPrefixDedupedFiresShareOneLog() {
+  static void testSharedNameDedupedFiresShareOneLog() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       List<Workflow_Schedule__c> scheds = new List<Workflow_Schedule__c>();
       for (Integer i = 0; i < 3; i++) {
-        Workflow_Schedule__c sched = new Sched(
-            PREFIX + 'D3' + i,
-            EVERY_MINUTE_CRON
-          )
+        // A blank prefix falls back to Name, which is not unique.
+        Workflow_Schedule__c sched = new Sched(PREFIX + 'D3', EVERY_MINUTE_CRON)
           .enabled(true)
           .overlap('Allow')
           .build();
-        sched.Correlation_Key_Prefix__c = PREFIX + 'D3';
+        sched.Correlation_Key_Prefix__c = null;
         scheds.add(sched);
       }
       insert scheds;
