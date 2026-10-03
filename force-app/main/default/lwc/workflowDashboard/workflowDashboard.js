@@ -2731,8 +2731,9 @@ export default class WorkflowDashboard extends LightningElement {
       queueKey: `${r.workflowName}-queue`,
       waitingRows: waiting,
       hasWaitingRows: waiting.length > 0,
+      queueNotLoaded: r.waitingTruncated === true,
       hasWaitingSummary: waitingTotal > 0,
-      waitingSummary: `${waitingTotal} waiting · ${priorityClasses}`,
+      waitingSummary: `${waitingTotal}${r.waitingCountPartial === true ? "+" : ""} waiting · ${priorityClasses}`,
     };
   }
 

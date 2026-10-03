@@ -177,7 +177,12 @@ the older instances are admitted. The engine does not re-rank the queue.
 - A waiting row from before this feature also has a blank
   `Admission_Queue__c`. The gate does not see it until the field is set. The
   watchdog heartbeat sets it on 200 rows per sweep. To set it at once after
-  deploy, run `scripts/apex/backfill_admission_queue.apex` until it prints 0.
+  deploy, run `scripts/apex/backfill_admission_queue.apex` until the count is
+  0 and the cursor is null.
+- A row can fail to update. When 5 full pages in a row fix no row, the call
+  saves its last Id in the `Admission_Backfill_Cursor__c` setting. The next
+  call starts after that Id. A page that fixes a row, or the end of the scan,
+  clears the cursor.
 - The feature adds no scheduled job class and no Platform Event. A yield is
   a normal park: it schedules one retry timer, as a park does.
 - With one priority class, a candidate can now yield to an older waiting
@@ -195,6 +200,12 @@ instances. Under each workflow, the panel shows the wait queue:
 
 - The count per priority class, for example `3 waiting · P9: 1 · P0: 2`.
 - Up to five next instances in admission order, with position and priority.
+- `Queue not loaded`, when the request ran out of SOQL queries before it read
+  that workflow. The server reads only workflows that have waiting rows, in
+  name order. The response sets `waitingTruncated` for each skipped workflow.
+  The waiting count for that workflow still shows.
+- `N+ waiting`, when the aggregate hit its 2,000-group cap. The count is then a
+  lower bound, and the server reads every queue.
 
 The waiting count includes new starts that have no slot yet. The parked
 count includes only `Suspended` instances. Thus the waiting count can be
