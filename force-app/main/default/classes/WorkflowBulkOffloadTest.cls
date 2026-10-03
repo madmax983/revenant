@@ -365,7 +365,8 @@ private class WorkflowBulkOffloadTest {
         new Workflow_Step_Execution__c(
           Workflow_Instance__c = inst.Id,
           Step_Name__c = 'S1',
-          Status__c = 'Suspended'
+          // The step Status__c picklist has no Suspended value. A parked step stays Running.
+          Status__c = 'Running'
         )
       );
       reqs.add(new WorkflowEngine.ResumeRequest(inst.Id, 'r'.repeat(BIG)));
@@ -377,6 +378,8 @@ private class WorkflowBulkOffloadTest {
   @IsTest
   static void bulkResumeDmlDoesNotGrowWithRows() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Fixture step S1 is not a class. Do not run the orchestrator.
+      WorkflowEngine.disableQueueableInTest = true;
       WorkflowPayloadCodecs.setCodec(new AesCodec());
       List<WorkflowEngine.ResumeRequest> two = suspendedResumes('r2-', 2);
       List<WorkflowEngine.ResumeRequest> three = suspendedResumes('r3-', 3);
@@ -411,6 +414,8 @@ private class WorkflowBulkOffloadTest {
   @IsTest
   static void bulkResumeKeepsSmallPayloadInline() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Fixture step S1 is not a class. Do not run the orchestrator.
+      WorkflowEngine.disableQueueableInTest = true;
       WorkflowPayloadCodecs.setCodec(null);
       List<WorkflowEngine.ResumeRequest> reqs = suspendedResumes('k', 2);
       reqs[0] = new WorkflowEngine.ResumeRequest(

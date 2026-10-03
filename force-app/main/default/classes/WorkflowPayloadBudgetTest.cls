@@ -66,7 +66,7 @@ private class WorkflowPayloadBudgetTest {
 
   private static List<Workflow_Step_Execution__c> stepsOf(Id instanceId) {
     return [
-      SELECT Output__c
+      SELECT Input__c, Output__c
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c = :instanceId
     ];

@@ -108,7 +108,7 @@ public inherited sharing class WorkflowScheduleSweepRunner {
   }
 
   /**
-   * @description Runs the bulk start and records Started/Deduped logs + cursor advances.
+   * @description Runs the bulk start. Writes the Started or Deduped log. Advances the cursor.
    * @param state The sweep working set holding the built requests and starting items.
    */
   private static void startAndRecord(SweepState state) {
@@ -120,11 +120,9 @@ public inherited sharing class WorkflowScheduleSweepRunner {
       WorkflowEngine.StartResult sr = results[i];
       Boolean isNew = sr != null && sr.isNew;
       String outcome = isNew ? 'Started' : 'Deduped';
-      if (isNew) {
-        ScheduleFireLog.Spec spec = specFor(item, outcome);
-        spec.instanceId = sr.instanceId;
-        state.logsToUpsert.add(ScheduleFireLog.build(spec));
-      }
+      ScheduleFireLog.Spec spec = specFor(item, outcome);
+      spec.instanceId = sr == null ? null : sr.instanceId;
+      state.logsToUpsert.add(ScheduleFireLog.build(spec));
       state.toUpdate.add(advanceRow(item, outcome));
     }
   }

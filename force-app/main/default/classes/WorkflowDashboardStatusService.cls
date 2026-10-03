@@ -13,8 +13,8 @@ public inherited sharing class WorkflowDashboardStatusService {
   // minus the headroom.
   @TestVisible
   private static Integer maxQueueReadsOverride;
-  // Upper bound on groups in the per-priority aggregate. Salesforce allows at
-  // most 2,000 groups in an aggregate query that cannot page.
+  // Upper bound on rows that the per-priority count reads. A Number field
+  // cannot be grouped in SOQL, so Apex counts the rows.
   @TestVisible
   private static Integer maxPriorityGroups = 2000;
 
@@ -409,31 +409,33 @@ public inherited sharing class WorkflowDashboardStatusService {
   private static PriorityCounts waitingByPriority(Set<String> workflowNames) {
     PriorityCounts result = new PriorityCounts();
     Map<String, Map<String, Object>> byDef = result.byDef;
-    Integer groups = 0;
+    Integer rows = 0;
     // Admission_Queue__c is set only while a row waits (see
-    // ConcurrencyAdmissionOrder.isWaiting), and it is indexed.
-    for (AggregateResult ar : [
-      SELECT Admission_Queue__c wf, Admission_Priority__c p, COUNT(Id) cnt
+    // ConcurrencyAdmissionOrder.isWaiting), and it is indexed. A Number field
+    // cannot be grouped in SOQL, so Apex counts the rows.
+    for (Workflow_Instance__c inst : [
+      SELECT Admission_Queue__c, Admission_Priority__c
       FROM Workflow_Instance__c
       WHERE Admission_Queue__c IN :workflowNames
       WITH SYSTEM_MODE
-      GROUP BY Admission_Queue__c, Admission_Priority__c
       LIMIT :maxPriorityGroups
     ]) {
-      groups++;
-      String wf = (String) ar.get('wf');
+      rows++;
+      String wf = inst.Admission_Queue__c;
       String defKey = wf.toLowerCase();
       if (!byDef.containsKey(defKey)) {
         byDef.put(defKey, new Map<String, Object>());
       }
       Map<String, Object> classes = byDef.get(defKey);
-      String priority = String.valueOf(priorityOf(wf, (Decimal) ar.get('p')));
+      String priority = String.valueOf(
+        priorityOf(wf, inst.Admission_Priority__c)
+      );
       Integer prior = classes.containsKey(priority)
         ? (Integer) classes.get(priority)
         : 0;
-      classes.put(priority, prior + (Integer) ar.get('cnt'));
+      classes.put(priority, prior + 1);
     }
-    result.capped = groups >= maxPriorityGroups;
+    result.capped = rows >= maxPriorityGroups;
     return result;
   }
 

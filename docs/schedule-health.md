@@ -57,8 +57,8 @@ flowchart LR
    | ---------------- | --------------------------------------------------- | ---------------------- |
    | Overdue          | `ScheduleOverdue:<Id>:<Next_Fire_Window__c ms>`     | `Schedule Overdue`     |
    | Last fire failed | `ScheduleFailed:<Id>:<outcome>:<last good fire ms>` | `Schedule Fire Failed` |
-   - Last good fire = the newest `Started` or `Skipped` scheduled fire log
-     of the schedule (`ScheduleFire` or `ScheduleDedicatedFire`). A manual
+   - The last good fire is the newest scheduled fire log of the schedule
+     with the outcome `Started`, `Skipped` or `Deduped` (`ScheduleFire` or `ScheduleDedicatedFire`). A manual
      **Run Now** does not end a failure streak. No log gives `0`.
    - A missed window keeps its key until the window fires. It sends one
      alert.

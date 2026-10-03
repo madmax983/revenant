@@ -159,7 +159,8 @@ public inherited sharing class WorkflowStartValidation {
     Set<String> localNamesToQuery = q.localNames;
     Set<String> namespacesToQuery = q.namespaces;
 
-    for (ApexTypeImplementor impl : [
+    // ApexTypeImplementor has no queryMore(): read one batch, not a for-loop.
+    List<ApexTypeImplementor> impls = [
       SELECT ClassName, ClassNamespacePrefix
       FROM ApexTypeImplementor
       WHERE
@@ -171,7 +172,9 @@ public inherited sharing class WorkflowStartValidation {
           'ErrorRoutingWorkflow'
         )
       WITH SYSTEM_MODE
-    ]) {
+      LIMIT 2000
+    ];
+    for (ApexTypeImplementor impl : impls) {
       String matchName = String.isBlank(impl.ClassNamespacePrefix)
         ? impl.ClassName
         : (impl.ClassNamespacePrefix + '.' + impl.ClassName);

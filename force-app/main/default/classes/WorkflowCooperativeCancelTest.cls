@@ -4,8 +4,10 @@
  * same transaction. Apex tests are single-threaded, so this is how a test puts
  * a cancel in the middle of `execute()`.
  */
+// Public: WorkflowEngine.start authorizes a definition through
+// ApexTypeImplementor, which does not list inner classes of a private class.
 @IsTest
-private class WorkflowCooperativeCancelTest {
+public class WorkflowCooperativeCancelTest {
   private static final String LOOP_WORKFLOW = 'WorkflowCooperativeCancelTest.LoopWorkflow';
   private static final String SAGA_WORKFLOW = 'WorkflowCooperativeCancelTest.SagaLoopWorkflow';
   private static final String LOOP_STEP = 'WorkflowCooperativeCancelTest.LoopStep';

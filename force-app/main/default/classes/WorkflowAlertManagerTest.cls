@@ -374,7 +374,7 @@ public class WorkflowAlertManagerTest {
       System.assertEquals(
         false,
         WorkflowAlertEmailBuilder.isValidAddress(bad),
-        bad
+        'Address: ' + bad
       );
     }
     System.assertEquals(

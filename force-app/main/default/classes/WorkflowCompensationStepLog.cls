@@ -351,6 +351,7 @@ public inherited sharing class WorkflowCompensationStepLog {
       stepExecs = [
         SELECT
           Id,
+          Workflow_Instance__c,
           Status__c,
           Input__c,
           Output__c,

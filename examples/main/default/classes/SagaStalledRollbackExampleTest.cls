@@ -19,8 +19,6 @@ public class SagaStalledRollbackExampleTest {
       WorkflowEngine.disableQueueableInTest = true;
       SagaStalledRollbackExample.failShipmentCompensation = true;
 
-      Test.startTest();
-
       Id instanceId = WorkflowEngine.start(
         'SagaStalledRollbackExample.StalledSagaWorkflow',
         'StalledSagaKey_1',
@@ -44,6 +42,10 @@ public class SagaStalledRollbackExampleTest {
       }
 
       assertRollbackStarted(instanceId);
+
+      // The whole run needs more than 100 SOQL queries. The rollback runs in
+      // a second governor context.
+      Test.startTest();
 
       // Compensate BookCourierStep (top of stack) -> succeeds, pops to depth 3.
       WorkflowEngine.runStep(instanceId, null);

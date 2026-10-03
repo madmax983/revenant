@@ -92,7 +92,7 @@ public inherited sharing class ScheduleHealthAlert implements Comparable {
    * starts a new streak.
    * @param a The assessment. a.lastFireFailed must be true.
    * @param config The resolved alert config.
-   * @param lastGoodFireAt Time of the last Started or Skipped fire log, or null.
+   * @param lastGoodFireAt Time of the last good fire log, or null.
    * @return The alert.
    */
   public static ScheduleHealthAlert forFailed(

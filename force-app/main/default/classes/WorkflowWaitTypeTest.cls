@@ -212,8 +212,10 @@ public class WorkflowWaitTypeTest {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newInstance();
       Workflow_Step_Execution__c exec = newStepExec(inst.Id);
-      exec.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_APPROVAL;
-      update exec;
+      update new Workflow_Step_Execution__c(
+        Id = exec.Id,
+        Wait_Type__c = WorkflowWaitDescriptorService.TYPE_APPROVAL
+      );
       Test.startTest();
       WorkflowStepSuspension.handleSleepOutcome(
         outcomeFor(inst, exec, StepResult.sleep(60))

@@ -103,6 +103,9 @@ private class WorkflowBoundedHistoryReadTest {
   static void detailPaneOpensWithTenThousandRows() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c inst = longInstance();
+      // The setup rows count in this transaction. startTest gives a new DML
+      // row budget for the second 5,000 rows.
+      Test.startTest();
       insertRows(inst.Id, 'Loop.Step', 'Completed', 5000, 5000);
       Assert.areEqual(
         10000,
@@ -114,7 +117,6 @@ private class WorkflowBoundedHistoryReadTest {
         'The fixture has 10,000 rows'
       );
 
-      Test.startTest();
       Integer rowsBefore = Limits.getQueryRows();
       Map<String, Object> details = WorkflowInstanceDetailService.loadDetails(
         inst.Id

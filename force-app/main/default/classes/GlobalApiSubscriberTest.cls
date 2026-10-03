@@ -395,7 +395,11 @@ public class GlobalApiSubscriberTest {
         started.instanceId
       );
       System.assert(started.isNew, 'The first start must make an instance');
-      System.assertEquals('Completed', status.status, status.errorMessage);
+      System.assertEquals(
+        'Completed',
+        status.status,
+        'Error: ' + status.errorMessage
+      );
       System.assert(status.isTerminal, 'Completed must be terminal');
       System.assertEquals('"approved"', status.output, 'Last step output');
     }
@@ -518,7 +522,7 @@ public class GlobalApiSubscriberTest {
         new List<WorkflowStatusInvocableAction.StatusRequest>{ read }
       );
 
-      System.assert(started[0].isValid, started[0].validationError);
+      System.assert(started[0].isValid, 'Error: ' + started[0].validationError);
       System.assert(started[0].isNew, 'The Flow start must make an instance');
       System.assert(statuses[0].found, 'The Flow read must find it');
       System.assertEquals(
@@ -529,7 +533,7 @@ public class GlobalApiSubscriberTest {
       System.assertEquals(
         'Completed',
         statuses[0].status,
-        statuses[0].errorMessage
+        'Error: ' + statuses[0].errorMessage
       );
       System.assert(statuses[0].isSuccess, 'Completed is a success');
       System.assert(statuses[0].isTerminal, 'Completed is terminal');
