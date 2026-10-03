@@ -387,6 +387,68 @@ public class WorkflowScheduleSweeperTest {
     }
   }
 
+  // ── A Deduped fire writes a log row (issue #278) ──────────────────────────
+
+  @IsTest
+  static void testSweepDedupedFireWritesLog() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Schedule__c sched = new Sched(PREFIX + 'D1', EVERY_MINUTE_CRON)
+        .enabled(true)
+        .overlap('Allow')
+        .build();
+      insert sched;
+      WorkflowScheduleSweeper.sweep();
+      // Replay the same window: startOrGet resolves to the first instance.
+      update new Workflow_Schedule__c(
+        Id = sched.Id,
+        Last_Fired_Window__c = null
+      );
+
+      WorkflowScheduleSweeper.sweep();
+
+      Assert.areEqual(
+        'Deduped',
+        [SELECT Last_Outcome__c FROM Workflow_Schedule__c WHERE Id = :sched.Id]
+        .Last_Outcome__c
+      );
+      List<Workflow_Log__c> logs = [
+        SELECT Log_Type__c, Workflow_Instance__c
+        FROM Workflow_Log__c
+        WHERE Schedule__c = :sched.Id AND Outcome__c = 'Deduped'
+      ];
+      Assert.areEqual(1, logs.size(), 'One Deduped log for the window');
+      Assert.areEqual('ScheduleFire', logs[0].Log_Type__c);
+      Assert.isNotNull(logs[0].Workflow_Instance__c);
+    }
+  }
+
+  @IsTest
+  static void testDedicatedDedupedFireWritesLog() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Schedule__c sched = new Sched(PREFIX + 'D2', '0 2 * * *')
+        .enabled(true)
+        .overlap('Allow')
+        .build();
+      sched.Dedicated_Slot__c = true;
+      insert sched;
+      Test.startTest();
+      new WorkflowScheduleJob(sched.Id).execute(null);
+      // The job derives the window from now, so a second run replays it.
+      new WorkflowScheduleJob(sched.Id).execute(null);
+      Test.stopTest();
+
+      List<Workflow_Log__c> logs = [
+        SELECT Log_Type__c, Workflow_Instance__c
+        FROM Workflow_Log__c
+        WHERE Schedule__c = :sched.Id AND Outcome__c = 'Deduped'
+      ];
+      Assert.areEqual(1, logs.size(), 'One Deduped log for the window');
+      Assert.areEqual('ScheduleDedicatedFire', logs[0].Log_Type__c);
+    }
+  }
+
   // ── Dedicated-slot helper: converts cron and registers/aborts CronTrigger ─
 
   @IsTest
