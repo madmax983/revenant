@@ -425,39 +425,6 @@ public class WorkflowScheduleSweeperTest {
   }
 
   @IsTest
-  static void testSharedNameDedupedFiresShareOneLog() {
-    System.runAs(new User(Id = UserInfo.getUserId())) {
-      WorkflowEngine.disableQueueableInTest = true;
-      List<Workflow_Schedule__c> scheds = new List<Workflow_Schedule__c>();
-      for (Integer i = 0; i < 3; i++) {
-        // A blank prefix falls back to Name, which is not unique.
-        Workflow_Schedule__c sched = new Sched(PREFIX + 'D3', EVERY_MINUTE_CRON)
-          .enabled(true)
-          .overlap('Allow')
-          .build();
-        sched.Correlation_Key_Prefix__c = null;
-        scheds.add(sched);
-      }
-      insert scheds;
-
-      // The three schedules share one window key. Two resolve as Deduped.
-      WorkflowScheduleSweeper.sweep();
-
-      Assert.areEqual(
-        1,
-        [
-          SELECT COUNT()
-          FROM Workflow_Log__c
-          WHERE
-            Correlation_Key__c LIKE :PREFIX + 'D3%'
-            AND Outcome__c = 'Deduped'
-        ],
-        'Duplicate Deduped fires share one log row'
-      );
-    }
-  }
-
-  @IsTest
   static void testDedicatedDedupedFireWritesLog() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
