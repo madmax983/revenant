@@ -204,7 +204,7 @@ instances. Under each workflow, the panel shows the wait queue:
   that workflow. The server reads only workflows that have waiting rows, in
   name order. The response sets `waitingTruncated` for each skipped workflow.
   The waiting count for that workflow still shows.
-- `N+ waiting`, when the aggregate hit its 2,000-group cap. The count is then a
+- `N+ waiting`, when the count hit its 2,000-row cap. The count is then a
   lower bound, and the server reads every queue.
 
 The waiting count includes new starts that have no slot yet. The parked

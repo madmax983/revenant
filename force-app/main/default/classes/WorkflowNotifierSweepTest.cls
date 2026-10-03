@@ -14,6 +14,21 @@ private class WorkflowNotifierSweepTest {
     0
   );
   private static Integer keyCounter = 0;
+  private static Id instanceId;
+
+  // The event field Workflow_Instance_Id__c is required. Each real anchor row
+  // points to an instance, so the rows here do too.
+  private static Id testInstanceId() {
+    if (instanceId == null) {
+      Workflow_Instance__c inst = new Workflow_Instance__c(
+        Workflow_Name__c = 'SweepTest',
+        Status__c = 'Running'
+      );
+      insert as system inst;
+      instanceId = inst.Id;
+    }
+    return instanceId;
+  }
 
   // ----- Helpers
 
@@ -33,6 +48,7 @@ private class WorkflowNotifierSweepTest {
       Level__c = 'Info',
       Outcome__c = outcome,
       Fire_Key__c = key,
+      Workflow_Instance__c = testInstanceId(),
       Fire_Time__c = fireTime,
       Message__c = JSON.serialize(msg)
     );

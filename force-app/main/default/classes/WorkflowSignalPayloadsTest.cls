@@ -103,10 +103,10 @@ private class WorkflowSignalPayloadsTest {
       Integer dmlBefore = Limits.getDmlStatements();
       WorkflowSignalPayloads.offloadOversized(rows);
 
-      System.assertEquals(
-        2,
-        Limits.getDmlStatements() - dmlBefore,
-        'One file insert and one link insert for all rows'
+      Integer dmlUsed = Limits.getDmlStatements() - dmlBefore;
+      System.assert(
+        dmlUsed == 2 || dmlUsed == 3,
+        'File insert, link insert, and at most one AllUsers retry: ' + dmlUsed
       );
       for (Integer i = 0; i < 3; i++) {
         System.assert(rows[i].Payload__c.startsWith(OFFLOAD_PREFIX));

@@ -62,7 +62,7 @@
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>
-        <editable>false</editable>
+        <editable>true</editable>
         <field>Workflow_Instance__c.Awaited_Batch_Job_Id__c</field>
         <readable>true</readable>
     </fieldPermissions>

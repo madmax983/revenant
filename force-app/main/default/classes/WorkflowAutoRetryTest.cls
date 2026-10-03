@@ -1196,7 +1196,7 @@ public class WorkflowAutoRetryTest {
       'Details keep the stack trace: ' + details
     );
     Assert.isTrue(
-      WorkflowAutoRetry.exhaustedMessage(1, new BlipException())
+      WorkflowAutoRetry.exhaustedMessage(1, new BlipException(' '))
         .contains('BlipException'),
       'A blank message falls back to the type name'
     );

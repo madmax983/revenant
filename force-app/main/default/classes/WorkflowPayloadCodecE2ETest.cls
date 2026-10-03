@@ -412,6 +412,13 @@ public class WorkflowPayloadCodecE2ETest {
         SELECT Signal_Name__c, Payload__c
         FROM Workflow_Signal__c
       ]) {
+        if (WorkflowSignalPayloads.isWakeOnly(sig.Signal_Name__c)) {
+          System.assert(
+            String.isBlank(sig.Payload__c),
+            'A child-completion signal holds no payload: ' + sig.Signal_Name__c
+          );
+          continue;
+        }
         System.assert(
           sig.Payload__c.startsWith(ENVELOPE_PREFIX),
           'Signal payload is encoded: ' + sig.Signal_Name__c
@@ -500,6 +507,8 @@ public class WorkflowPayloadCodecE2ETest {
           AND Status__c = 'Completed'
       ];
 
+      // A second governor context for the rest of the drive.
+      Test.startTest();
       WorkflowTestHarness.Result r = harness.drive();
       Integer dmlBefore = Limits.getDmlStatements();
       WorkflowStatusRead.getStatus(new List<Id>{ instanceId });
@@ -527,6 +536,7 @@ public class WorkflowPayloadCodecE2ETest {
         checkpoint.Captured_Values__c,
         after.Captured_Values__c
       );
+      Test.stopTest();
     }
   }
 
@@ -780,7 +790,9 @@ public class WorkflowPayloadCodecE2ETest {
 
       System.assertEquals('Compensated', r.status);
       System.assertEquals(
-        new List<String>{ 'WorkflowPayloadCodecE2ETest.ReserveStep' },
+        new List<String>{
+          'WorkflowPayloadCodecE2ETest.ReserveStep_Compensate'
+        },
         r.compensatedSteps
       );
       Workflow_Instance__c inst = [

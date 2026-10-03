@@ -45,7 +45,8 @@ public inherited sharing class WorkflowDefinitionDiscoveryService {
    */
   private static List<String> getDefinitionsFromTypeIndex() {
     Set<String> definitions = new Set<String>();
-    for (ApexTypeImplementor impl : [
+    // ApexTypeImplementor has no queryMore(): read one batch, not a for-loop.
+    List<ApexTypeImplementor> impls = [
       SELECT ClassName
       FROM ApexTypeImplementor
       WHERE
@@ -53,7 +54,9 @@ public inherited sharing class WorkflowDefinitionDiscoveryService {
         AND ClassNamespacePrefix = NULL
         AND IsConcrete = TRUE
       WITH SYSTEM_MODE
-    ]) {
+      LIMIT 2000
+    ];
+    for (ApexTypeImplementor impl : impls) {
       String className = impl.ClassName;
       if (String.isBlank(className)) {
         continue;

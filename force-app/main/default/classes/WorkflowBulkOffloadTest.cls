@@ -365,7 +365,8 @@ private class WorkflowBulkOffloadTest {
         new Workflow_Step_Execution__c(
           Workflow_Instance__c = inst.Id,
           Step_Name__c = 'S1',
-          Status__c = 'Suspended'
+          // The step Status__c picklist has no Suspended value. A parked step stays Running.
+          Status__c = 'Running'
         )
       );
       reqs.add(new WorkflowEngine.ResumeRequest(inst.Id, 'r'.repeat(BIG)));

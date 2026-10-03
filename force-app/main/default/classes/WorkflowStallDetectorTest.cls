@@ -367,7 +367,12 @@ private class WorkflowStallDetectorTest {
 
   @IsTest
   static void soqlDoesNotGrowWithInstanceCount() {
-    useConfig(10);
+    // Event channel only. An email channel reserves org email capacity for
+    // all 20 addresses at once, and a scratch org can refuse that.
+    WorkflowAlertManager.mockConfigs.put(
+      FLOW_KEY,
+      config(FLOW_KEY, true, 10, '', true)
+    );
     stalled('Running', 15);
     // Load the pause cache first, so both sweeps start the same.
     WorkflowPauseGate.isDefinitionPaused(FLOW);
