@@ -136,16 +136,38 @@ public class WorkflowPayloadAccessTest {
     Id id1 = completedInstance('{"$attachmentId":"' + docId + '"}');
     // A marker resolves only when the file links to the instance.
     WorkflowPayloadOffload.linkToOwner(docId, id1);
+    User u = makeUser(null);
+    String userBefore;
+    System.runAs(u) {
+      userBefore = WorkflowStatusRead.getStatus(id1).output;
+    }
     System.assertEquals(
       SECRET,
       WorkflowStatusRead.getStatus(id1).output,
       'Admin reads the file'
     );
-    User u = makeUser(null);
     System.runAs(u) {
+      Boolean hasRead = [
+        SELECT HasReadAccess
+        FROM UserRecordAccess
+        WHERE UserId = :u.Id AND RecordId = :id1
+      ]
+      .HasReadAccess;
+      String stored = [
+        SELECT Output__c
+        FROM Workflow_Instance__c
+        WHERE Id = :id1
+      ]
+      .Output__c;
       System.assertEquals(
         WorkflowPayloadAccess.DENIED_PAYLOAD,
-        WorkflowStatusRead.getStatus(id1).output
+        WorkflowStatusRead.getStatus(id1).output,
+        'DIAG userBefore=' +
+          userBefore +
+          ' hasRead=' +
+          hasRead +
+          ' stored=' +
+          stored
       );
     }
   }

@@ -114,6 +114,7 @@ public inherited sharing class WorkflowStepExecLock {
     return [
       SELECT
         Id,
+        Workflow_Instance__c,
         Step_Name__c,
         Status__c,
         Input__c,
