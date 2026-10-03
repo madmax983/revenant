@@ -134,8 +134,12 @@ jobs:
             echo "$out"
             echo "$out" | grep -qi "duplicate" || exit 1
           fi
+      # The full result with coverage does not fit in the default Node heap (about 4 GB).
+      # The CLI aborts with exit code 134. The runner has at least 7 GB.
       - name: Run all local Apex tests
         id: tests
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           mkdir -p test-results
           sf apex run test --target-org ci --test-level RunLocalTests --code-coverage \
