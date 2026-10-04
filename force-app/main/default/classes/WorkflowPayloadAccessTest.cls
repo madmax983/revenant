@@ -148,7 +148,7 @@ public class WorkflowPayloadAccessTest {
     );
     System.runAs(u) {
       Boolean hasRead = [
-        SELECT HasReadAccess
+        SELECT RecordId, HasReadAccess
         FROM UserRecordAccess
         WHERE UserId = :u.Id AND RecordId = :id1
       ]
