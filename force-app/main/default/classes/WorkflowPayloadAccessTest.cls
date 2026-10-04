@@ -159,16 +159,33 @@ public class WorkflowPayloadAccessTest {
       WHERE Id = :id1
     ]
     .Output__c;
+    String fileText = [
+        SELECT VersionData
+        FROM ContentVersion
+        WHERE ContentDocumentId = :docId AND IsLatest = TRUE
+      ]
+      .VersionData.toString();
+    String diag =
+      'DIAG userBefore=' +
+      userBefore +
+      ' hasRead=' +
+      hasRead +
+      ' stored=' +
+      stored +
+      ' fileHead=' +
+      fileText.left(24) +
+      ' fileEncoded=' +
+      WorkflowPayloadCodecs.isEncoded(fileText);
     System.runAs(u) {
+      diag +=
+        ' gateReadable=' +
+        WorkflowPayloadAccess.readableIds(new Set<Id>{ id1 }).contains(id1) +
+        ' userId=' +
+        UserInfo.getUserId();
       System.assertEquals(
         WorkflowPayloadAccess.DENIED_PAYLOAD,
         WorkflowStatusRead.getStatus(id1).output,
-        'DIAG userBefore=' +
-          userBefore +
-          ' hasRead=' +
-          hasRead +
-          ' stored=' +
-          stored
+        diag
       );
     }
   }
