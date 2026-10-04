@@ -146,19 +146,20 @@ public class WorkflowPayloadAccessTest {
       WorkflowStatusRead.getStatus(id1).output,
       'Admin reads the file'
     );
+    // The user cannot query the object, so read these as the admin.
+    Boolean hasRead = [
+      SELECT RecordId, HasReadAccess
+      FROM UserRecordAccess
+      WHERE UserId = :u.Id AND RecordId = :id1
+    ]
+    .HasReadAccess;
+    String stored = [
+      SELECT Output__c
+      FROM Workflow_Instance__c
+      WHERE Id = :id1
+    ]
+    .Output__c;
     System.runAs(u) {
-      Boolean hasRead = [
-        SELECT RecordId, HasReadAccess
-        FROM UserRecordAccess
-        WHERE UserId = :u.Id AND RecordId = :id1
-      ]
-      .HasReadAccess;
-      String stored = [
-        SELECT Output__c
-        FROM Workflow_Instance__c
-        WHERE Id = :id1
-      ]
-      .Output__c;
       System.assertEquals(
         WorkflowPayloadAccess.DENIED_PAYLOAD,
         WorkflowStatusRead.getStatus(id1).output,
