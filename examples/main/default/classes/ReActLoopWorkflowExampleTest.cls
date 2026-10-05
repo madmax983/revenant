@@ -136,7 +136,6 @@ public class ReActLoopWorkflowExampleTest {
       }
       ReActLoopWorkflowExample.mockLlmResponses = neverEndingResponses;
 
-      Test.startTest();
       Id instanceId = WorkflowEngine.start(
         'ReActLoopWorkflowExample.ReActLoopWorkflow',
         'ReAct_LoopGuard_1',
@@ -144,8 +143,14 @@ public class ReActLoopWorkflowExampleTest {
           'question' => 'A question the model can never answer.'
         }
       );
-      WorkflowTestHarness.Result result = new WorkflowTestHarness(instanceId)
-        .drive();
+      WorkflowTestHarness harness = new WorkflowTestHarness(instanceId);
+      // The whole run needs more than 100 SOQL queries. Run the first hops
+      // before Test.startTest(), and the rest in it.
+      for (Integer hop = 0; hop < 5; hop++) {
+        harness.step();
+      }
+      Test.startTest();
+      WorkflowTestHarness.Result result = harness.drive();
       Test.stopTest();
 
       System.assertEquals(

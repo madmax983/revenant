@@ -9,7 +9,9 @@
  * Each run uses its own correlation key, so start dedup does not join the runs.
  * The AES run also reads the stored root Output__c and Input__c. They must be
  * envelopes, not plaintext. The identity run runs before Test.startTest(), and
- * the AES run runs in it, so each run has its own governor limits.
+ * the AES run runs in it, so each run has its own governor limits. A scenario
+ * that needs more than 100 SOQL queries for one run is a queueable job instead
+ * (RunJob). Test.stopTest() runs the jobs, each with its own limits.
  *
  * Some scenarios also compare a detail text: the resolved root input, the
  * error message and each step payload, in audit order.
@@ -73,6 +75,60 @@ private class PayloadCodecRoundTripTest {
   }
 
   private class CodecTestException extends Exception {
+  }
+
+  // Some scenarios need more than 100 SOQL queries for one run. A queueable job
+  // has its own limits, and runs at Test.stopTest(). So each run of those
+  // scenarios is one job. The job writes its snapshot here.
+  private static Map<String, Snapshot> jobSnapshots = new Map<String, Snapshot>();
+  private static AesCodec aesCodec;
+
+  /** One scenario run (identity or AES) in its own governor limits. */
+  private class RunJob implements Queueable {
+    private final String scenario;
+    private final String slot;
+    private final Boolean useAes;
+    private final String key;
+    private Boolean flag = false;
+    private Decimal amount;
+    private Id recordId;
+    private List<String> replies;
+    private String question;
+
+    private RunJob(String scenario, String slot, Boolean useAes, String key) {
+      this.scenario = scenario;
+      this.slot = slot;
+      this.useAes = useAes;
+      this.key = key;
+    }
+
+    public void execute(QueueableContext context) {
+      // A job can add only one more job. The harness drives the steps itself.
+      WorkflowEngine.disableQueueableInTest = true;
+      PayloadCodec codec = useAes ? (PayloadCodec) aesCodec : null;
+      Snapshot result;
+      if (scenario == 'PARALLEL_SAGA') {
+        result = runParallelSaga(codec, key, flag);
+      } else if (scenario == 'ONBOARDING') {
+        result = runOnboarding(codec, key, amount);
+      } else if (scenario == 'OPPORTUNITY') {
+        result = runOpportunityOnboarding(codec, recordId);
+      } else if (scenario == 'REACT') {
+        result = runReAct(codec, key, replies, question);
+      } else {
+        result = runStalledRollback(codec, key);
+      }
+      jobSnapshots.put(slot, result);
+    }
+  }
+
+  // Runs the identity job and the AES job. Each has its own limits.
+  private static void runJobs(RunJob identityJob, RunJob aesJob) {
+    aesCodec = new AesCodec();
+    Test.startTest();
+    System.enqueueJob(identityJob);
+    System.enqueueJob(aesJob);
+    Test.stopTest();
   }
 
   // ─── helpers ────────────────────────────────────────────────────────────
@@ -793,6 +849,21 @@ private class PayloadCodecRoundTripTest {
       key,
       new Map<String, Object>{ 'endpoint' => 'https://httpbin.org/status/500' }
     );
+    // The step has a 60 second deadline, so the watchdog skips it. Expire the
+    // deadline. The step makes no real callout in a test.
+    Workflow_Step_Execution__c armed = [
+      SELECT Id
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :instanceId
+        AND Step_Name__c = 'CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'
+        AND Status__c = 'Pending'
+        AND Timeout_At__c != NULL
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    armed.Timeout_At__c = DateTime.now().addSeconds(-10);
+    update as system armed;
     return snap(
       new WorkflowTestHarness(instanceId)
         .fireTimeout('CalloutTimeoutWorkflowExample.MakeHttpCalloutStep'),
@@ -1401,15 +1472,22 @@ private class PayloadCodecRoundTripTest {
   @IsTest
   static void parallelSagaJoinRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Snapshot identity = runParallelSaga(
-        null,
-        'CodecParallel_Identity',
-        false
+      RunJob identityJob = new RunJob(
+        'PARALLEL_SAGA',
+        'identity',
+        false,
+        'CodecParallel_Identity'
       );
-      Test.startTest();
-      AesCodec aes = new AesCodec();
-      Snapshot encoded = runParallelSaga(aes, 'CodecParallel_Aes', false);
-      Test.stopTest();
+      RunJob aesJob = new RunJob(
+        'PARALLEL_SAGA',
+        'aes',
+        true,
+        'CodecParallel_Aes'
+      );
+      runJobs(identityJob, aesJob);
+      Snapshot identity = jobSnapshots.get('identity');
+      Snapshot encoded = jobSnapshots.get('aes');
+      AesCodec aes = aesCodec;
 
       System.assertEquals('Completed', identity.status);
       System.assert(
@@ -1425,11 +1503,24 @@ private class PayloadCodecRoundTripTest {
   @IsTest
   static void parallelSagaRollbackRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Snapshot identity = runParallelSaga(null, 'CodecRollback_Identity', true);
-      Test.startTest();
-      AesCodec aes = new AesCodec();
-      Snapshot encoded = runParallelSaga(aes, 'CodecRollback_Aes', true);
-      Test.stopTest();
+      RunJob identityJob = new RunJob(
+        'PARALLEL_SAGA',
+        'identity',
+        false,
+        'CodecRollback_Identity'
+      );
+      identityJob.flag = true;
+      RunJob aesJob = new RunJob(
+        'PARALLEL_SAGA',
+        'aes',
+        true,
+        'CodecRollback_Aes'
+      );
+      aesJob.flag = true;
+      runJobs(identityJob, aesJob);
+      Snapshot identity = jobSnapshots.get('identity');
+      Snapshot encoded = jobSnapshots.get('aes');
+      AesCodec aes = aesCodec;
 
       System.assertEquals('Compensated', identity.status);
       assertRoundTrip(identity, encoded, aes);
@@ -1439,11 +1530,24 @@ private class PayloadCodecRoundTripTest {
   @IsTest
   static void onboardingParallelChildSleepRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Snapshot identity = runOnboarding(null, 'CodecOnboarding_Identity', 5000);
-      Test.startTest();
-      AesCodec aes = new AesCodec();
-      Snapshot encoded = runOnboarding(aes, 'CodecOnboarding_Aes', 5000);
-      Test.stopTest();
+      RunJob identityJob = new RunJob(
+        'ONBOARDING',
+        'identity',
+        false,
+        'CodecOnboarding_Identity'
+      );
+      identityJob.amount = 5000;
+      RunJob aesJob = new RunJob(
+        'ONBOARDING',
+        'aes',
+        true,
+        'CodecOnboarding_Aes'
+      );
+      aesJob.amount = 5000;
+      runJobs(identityJob, aesJob);
+      Snapshot identity = jobSnapshots.get('identity');
+      Snapshot encoded = jobSnapshots.get('aes');
+      AesCodec aes = aesCodec;
 
       System.assertEquals('Completed', identity.status);
       assertRoundTrip(identity, encoded, aes);
@@ -1500,11 +1604,19 @@ private class PayloadCodecRoundTripTest {
   @IsTest
   static void onboardingVipApprovalRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Snapshot identity = runOnboarding(null, 'CodecVip_Identity', 15000);
-      Test.startTest();
-      AesCodec aes = new AesCodec();
-      Snapshot encoded = runOnboarding(aes, 'CodecVip_Aes', 15000);
-      Test.stopTest();
+      RunJob identityJob = new RunJob(
+        'ONBOARDING',
+        'identity',
+        false,
+        'CodecVip_Identity'
+      );
+      identityJob.amount = 15000;
+      RunJob aesJob = new RunJob('ONBOARDING', 'aes', true, 'CodecVip_Aes');
+      aesJob.amount = 15000;
+      runJobs(identityJob, aesJob);
+      Snapshot identity = jobSnapshots.get('identity');
+      Snapshot encoded = jobSnapshots.get('aes');
+      AesCodec aes = aesCodec;
 
       System.assertEquals('Completed', identity.status);
       System.assert(
@@ -1811,11 +1923,14 @@ private class PayloadCodecRoundTripTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Account acc = new Account(Name = 'Test Account');
       insert acc;
-      Snapshot identity = runOpportunityOnboarding(null, acc.Id);
-      Test.startTest();
-      AesCodec aes = new AesCodec();
-      Snapshot encoded = runOpportunityOnboarding(aes, acc.Id);
-      Test.stopTest();
+      RunJob identityJob = new RunJob('OPPORTUNITY', 'identity', false, null);
+      identityJob.recordId = acc.Id;
+      RunJob aesJob = new RunJob('OPPORTUNITY', 'aes', true, null);
+      aesJob.recordId = acc.Id;
+      runJobs(identityJob, aesJob);
+      Snapshot identity = jobSnapshots.get('identity');
+      Snapshot encoded = jobSnapshots.get('aes');
+      AesCodec aes = aesCodec;
 
       System.assertEquals('Completed', identity.status);
       System.assert(
@@ -1935,21 +2050,21 @@ private class PayloadCodecRoundTripTest {
         replies.add('Thought: Still looking.\nAction: Search[sfdc revenue]');
       }
       String question = 'A question the model can never answer.';
-      Snapshot identity = runReAct(
-        null,
-        'CodecReActGuard_Identity',
-        replies,
-        question
+      RunJob identityJob = new RunJob(
+        'REACT',
+        'identity',
+        false,
+        'CodecReActGuard_Identity'
       );
-      Test.startTest();
-      AesCodec aes = new AesCodec();
-      Snapshot encoded = runReAct(
-        aes,
-        'CodecReActGuard_Aes',
-        replies,
-        question
-      );
-      Test.stopTest();
+      identityJob.replies = replies;
+      identityJob.question = question;
+      RunJob aesJob = new RunJob('REACT', 'aes', true, 'CodecReActGuard_Aes');
+      aesJob.replies = replies;
+      aesJob.question = question;
+      runJobs(identityJob, aesJob);
+      Snapshot identity = jobSnapshots.get('identity');
+      Snapshot encoded = jobSnapshots.get('aes');
+      AesCodec aes = aesCodec;
 
       System.assertEquals('Completed', identity.status);
       System.assert(
@@ -1963,11 +2078,17 @@ private class PayloadCodecRoundTripTest {
   @IsTest
   static void stalledRollbackResumeRoundTrips() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      Snapshot identity = runStalledRollback(null, 'CodecStalled_Identity');
-      Test.startTest();
-      AesCodec aes = new AesCodec();
-      Snapshot encoded = runStalledRollback(aes, 'CodecStalled_Aes');
-      Test.stopTest();
+      RunJob identityJob = new RunJob(
+        'STALLED',
+        'identity',
+        false,
+        'CodecStalled_Identity'
+      );
+      RunJob aesJob = new RunJob('STALLED', 'aes', true, 'CodecStalled_Aes');
+      runJobs(identityJob, aesJob);
+      Snapshot identity = jobSnapshots.get('identity');
+      Snapshot encoded = jobSnapshots.get('aes');
+      AesCodec aes = aesCodec;
 
       System.assertEquals('CompensationFailed>Compensated', identity.status);
       assertRoundTrip(identity, encoded, aes);

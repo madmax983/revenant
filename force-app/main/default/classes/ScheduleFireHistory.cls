@@ -1,12 +1,14 @@
 /**
  * @description Reads the scheduled fire history (issue #126). A good
- * scheduled fire ends a failure streak. A manual Run Now does not.
+ * scheduled fire (Started, Skipped or Deduped) ends a failure streak.
+ * A manual Run Now does not.
  */
 public inherited sharing class ScheduleFireHistory {
   /** @description Fire log outcomes that end a failure streak. */
   public static final Set<String> GOOD_OUTCOMES = new Set<String>{
     'Started',
-    'Skipped'
+    'Skipped',
+    'Deduped'
   };
 
   /** @description Log types of scheduled fires (0-slot and dedicated). */
@@ -16,7 +18,7 @@ public inherited sharing class ScheduleFireHistory {
   };
 
   /**
-   * @description Returns the time of the last Started or Skipped scheduled
+   * @description Returns the time of the last good scheduled
    * fire log for each failed schedule. One aggregate query, only when a
    * failed schedule exists.
    * @param found The assessments.

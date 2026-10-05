@@ -372,8 +372,8 @@ public class ThrottledCalloutWorkflowExampleTest {
     for (String raw : expected.keySet()) {
       MockThrottledApi.queue(429, raw);
       StepResult.StepDirective d = callout(context(CALLOUT));
-      Assert.areEqual(StepResult.ActionType.SLEEP, d.action, raw);
-      Assert.areEqual(expected.get(raw), d.sleepDurationSeconds, raw);
+      Assert.areEqual(StepResult.ActionType.SLEEP, d.action, 'Raw: ' + raw);
+      Assert.areEqual(expected.get(raw), d.sleepDurationSeconds, 'Raw: ' + raw);
     }
   }
 

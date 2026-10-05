@@ -199,8 +199,8 @@ The engine wraps codec output in an envelope:
 - **Read APIs.** `getStatus`, `getCausationLineage`, `getStepError`, the status
   Flow action and `StepContext` return decoded payloads. The read APIs query in
   system mode. Before they decode an encoded payload, they check read access to
-  the instance. The check uses `UserRecordAccess`: sharing and object
-  permission. A user without access gets `WorkflowPayloadAccess.DENIED_PAYLOAD`
+  the instance. The check is a user-mode query of the instance Id: object
+  permission, field permission and sharing. A user without access gets `WorkflowPayloadAccess.DENIED_PAYLOAD`
   in `output`, `progressJson` and the `failureData` part. Status, error text and
   keys stay visible. The check costs one query for each 200 instances. It runs
   only for an encoded payload, so the identity codec has no extra query. A

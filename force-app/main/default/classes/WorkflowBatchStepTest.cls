@@ -3,8 +3,10 @@
  * StepContextTestBuilder and the WorkflowBatchJobs test seams. The last tests
  * drive a workflow through the harness and the watchdog heartbeat.
  */
+// Public: WorkflowEngine.start authorizes a definition through
+// ApexTypeImplementor, which does not list inner classes of a private class.
 @IsTest
-private class WorkflowBatchStepTest {
+public class WorkflowBatchStepTest {
   private static final Id JOB_ID = '707000000000001';
   private static final String STUB_BATCH = 'WorkflowBatchStepStubBatch';
   private static final String BOUND_STEP = 'WorkflowBatchStepTest.BoundStep';

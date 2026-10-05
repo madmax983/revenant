@@ -23,10 +23,13 @@ private class WorkflowArchiveSnapshotTest {
       inst.Id,
       new List<String>{ 'ChargeCard', 'ChargeCard_Compensate' }
     );
-    steps[0].Status__c = 'Failed';
-    steps[0].Retry_Count__c = 2;
-    steps[0].Error_Details__c = 'Stack trace';
-    update steps[0];
+    // Update a fresh row: the master-detail field cannot be in an update.
+    update new Workflow_Step_Execution__c(
+      Id = steps[0].Id,
+      Status__c = 'Failed',
+      Retry_Count__c = 2,
+      Error_Details__c = 'Stack trace'
+    );
 
     WorkflowEngine.StepHistory live = WorkflowHistoryRead.getHistory(inst.Id);
 
@@ -130,8 +133,10 @@ private class WorkflowArchiveSnapshotTest {
       inst.Id,
       new List<String>{ 'A' }
     );
-    steps[0].Error_Details__c = '{"$attachmentId":"069000000000002AAA"}';
-    update steps[0];
+    update new Workflow_Step_Execution__c(
+      Id = steps[0].Id,
+      Error_Details__c = '{"$attachmentId":"069000000000002AAA"}'
+    );
 
     List<WorkflowArchiveRecord> records = WorkflowArchiveSnapshot.build(
       new Set<Id>{ inst.Id }
@@ -166,10 +171,16 @@ private class WorkflowArchiveSnapshotTest {
       inst.Id,
       new List<String>{ 'A', 'B' }
     );
-    steps[0]
-      .Error_Details__c = 'Card declined\nfailureData: {"$attachmentId":"069000000000003AAA"}';
-    steps[1].Error_Details__c = 'Plain error\nfailureData: {"code":7}';
-    update steps;
+    update new List<Workflow_Step_Execution__c>{
+      new Workflow_Step_Execution__c(
+        Id = steps[0].Id,
+        Error_Details__c = 'Card declined\nfailureData: {"$attachmentId":"069000000000003AAA"}'
+      ),
+      new Workflow_Step_Execution__c(
+        Id = steps[1].Id,
+        Error_Details__c = 'Plain error\nfailureData: {"code":7}'
+      )
+    };
 
     WorkflowArchiveRecord r = WorkflowArchiveSnapshot.build(
       new Set<Id>{ inst.Id }
@@ -264,10 +275,16 @@ private class WorkflowArchiveSnapshotTest {
       inst.Id,
       names
     );
+    List<Workflow_Step_Execution__c> updates = new List<Workflow_Step_Execution__c>();
     for (Integer i = 0; i < steps.size(); i++) {
-      steps[i].Error_Details__c = 'error ' + i;
+      updates.add(
+        new Workflow_Step_Execution__c(
+          Id = steps[i].Id,
+          Error_Details__c = 'error ' + i
+        )
+      );
     }
-    update steps;
+    update updates;
 
     WorkflowArchiveRecord r = WorkflowArchiveSnapshot.build(
       new Set<Id>{ inst.Id }

@@ -47,11 +47,14 @@ private class BatchStepWorkflowExampleTest {
       Assert.isTrue(r.completedSteps.contains(TAG_STEP));
       Assert.isTrue(r.completedSteps.contains(CONFIRM));
       Assert.isFalse(r.executedSteps.contains(ROLLBACK_STEP));
-      Assert.areEqual(
-        2,
-        [SELECT COUNT() FROM Account WHERE Description = 'Q3-Review'],
-        'The batch tags the matching accounts only'
-      );
+      // Description is a long text field. SOQL cannot filter on it.
+      Integer tagged = 0;
+      for (Account acc : [SELECT Description FROM Account]) {
+        if (acc.Description == 'Q3-Review') {
+          tagged++;
+        }
+      }
+      Assert.areEqual(2, tagged, 'The batch tags the matching accounts only');
       Assert.areEqual(
         1,
         [

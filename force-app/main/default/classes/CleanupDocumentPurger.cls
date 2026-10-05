@@ -100,6 +100,10 @@ public inherited sharing class CleanupDocumentPurger {
     for (Workflow_Instance__c inst : candidateInstances) {
       candidateInstanceIds.add(inst.Id);
     }
+    // An empty IN set on ContentDocumentLink fails on the platform.
+    if (candidateInstanceIds.isEmpty()) {
+      return idx;
+    }
 
     for (ContentDocumentLink link : [
       SELECT ContentDocumentId, LinkedEntityId

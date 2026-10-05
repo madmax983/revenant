@@ -146,7 +146,7 @@ Each run's correlation key is `prefix_yyyyMMddHHmm` (e.g. `NightlyRecon_20260617
 |---|---|
 | `Started` | A new workflow instance was created. `Workflow_Instance__c` is populated. |
 | `Skipped` | Overlap=Skip and a prior run is still active. No instance was started. |
-| `Deduped` | `startOrGet` resolved to an existing instance (safety net; rare). No log row is written for Deduped to avoid noise. |
+| `Deduped` | `startOrGet` resolved to an existing instance (safety net; rare). The sweep writes a log row. The row links to the existing instance. The row ends a failure streak. |
 | `Error` | The schedule is misconfigured — malformed `Input_Json__c`, or a `Workflow_Name__c` that does not resolve to a `WorkflowDefinition` (e.g. the record was created via Setup, bypassing the manager's validation). The bad schedule is isolated and logged with `Outcome__c = 'Error'` (in both the 0-slot and dedicated paths); other due schedules in the same heartbeat are unaffected, and the cursor advances so it does not retry every tick. No instance is started. |
 | `Invalid cron` | A syntactically valid cron that never resolves to a fire window (e.g. `0 0 31 2 *`). The 0-slot sweep parks the row (advances its cursor) so it cannot starve other schedules. Re-saving with a valid cron clears it. |
 | `Invalid time zone` | An unsupported `Time_Zone__c` (only reachable for rows created via Setup/API — the UI rejects it at save). The 0-slot sweep isolates and parks the row (advances its cursor) without aborting the batch; the dedicated path records it as an `Error`. Re-saving with a supported zone (or blank for UTC) clears it. No instance is started. |

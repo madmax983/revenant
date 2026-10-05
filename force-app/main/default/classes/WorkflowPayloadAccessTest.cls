@@ -134,6 +134,8 @@ public class WorkflowPayloadAccessTest {
     ]
     .ContentDocumentId;
     Id id1 = completedInstance('{"$attachmentId":"' + docId + '"}');
+    // A marker resolves only when the file links to the instance.
+    WorkflowPayloadOffload.linkToOwner(docId, id1);
     System.assertEquals(
       SECRET,
       WorkflowStatusRead.getStatus(id1).output,

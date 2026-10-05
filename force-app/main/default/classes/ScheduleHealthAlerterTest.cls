@@ -622,6 +622,30 @@ private class ScheduleHealthAlerterTest {
   }
 
   @IsTest
+  static void dedupedFireEndsAFailureStreak() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      setUp();
+      enableDefaultAlerts();
+      Workflow_Schedule__c sched = insertFailed('Deduped');
+      Assert.areEqual(1, ScheduleHealthAlerter.detectAndAlert(later()));
+
+      // A Deduped fire is not a failure. It ends the streak.
+      insert new Workflow_Log__c(
+        Fire_Key__c = 'DedupedKey_1:Deduped',
+        Log_Type__c = 'ScheduleFire',
+        Outcome__c = 'Deduped',
+        Schedule__c = sched.Id
+      );
+      Assert.areEqual(
+        1,
+        ScheduleHealthAlerter.detectAndAlert(later().addHours(1)),
+        'The same failure after a Deduped fire is a new problem'
+      );
+      Assert.areEqual(2, claims().size());
+    }
+  }
+
+  @IsTest
   static void failedPublishReleasesAnEventOnlyClaim() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       setUp();

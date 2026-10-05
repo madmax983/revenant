@@ -195,7 +195,7 @@ private class ScheduleHealthTest {
         ),
         T0
       );
-      Assert.isFalse(a.lastFireFailed, String.valueOf(outcome));
+      Assert.isFalse(a.lastFireFailed, 'Outcome: ' + outcome);
       Assert.areEqual(ScheduleHealth.STATUS_OK, a.status);
     }
   }

@@ -16,14 +16,14 @@ public class WorkflowParkedOutcomeTest {
     'Held'
   };
 
-  /** @description One-step definition for the release tests. */
+  /** @description Two-step definition for the release tests. */
   public class ParkWorkflow implements WorkflowDefinition {
     /**
      * @description Returns the step list.
      * @return The step names.
      */
     public List<String> getSteps() {
-      return new List<String>{ STEP };
+      return new List<String>{ STEP, STEP_B };
     }
     /**
      * @description Returns the first step.

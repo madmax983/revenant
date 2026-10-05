@@ -125,8 +125,21 @@ jobs:
           fail-on-cache-miss: true
       - name: Deploy
         run: sf project deploy start --target-org ci --wait 60
+      # The tests run as the org's admin user. The permission set gives that user the
+      # field access for the Revenant objects. A run on the shared org assigns it again,
+      # and the second assignment is a duplicate. Any other error fails the step.
+      - name: Assign the Revenant_Admin permission set
+        run: |
+          if ! out=$(sf org assign permset --name Revenant_Admin --target-org ci 2>&1); then
+            echo "$out"
+            echo "$out" | grep -qi "duplicate" || exit 1
+          fi
+      # The full result with coverage does not fit in the default Node heap (about 4 GB).
+      # The CLI aborts with exit code 134. The runner has at least 7 GB.
       - name: Run all local Apex tests
         id: tests
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           mkdir -p test-results
           sf apex run test --target-org ci --test-level RunLocalTests --code-coverage \

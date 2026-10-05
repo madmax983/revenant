@@ -154,6 +154,7 @@ public inherited sharing class WorkflowStartInstanceBuilder {
         )
         AND IsConcrete = TRUE
       WITH SYSTEM_MODE
+      LIMIT 2000
     ];
     if (!matchesAuthorizedImpl(queryResults, c)) {
       return false;

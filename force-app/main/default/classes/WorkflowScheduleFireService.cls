@@ -67,11 +67,9 @@ public inherited sharing class WorkflowScheduleFireService {
     );
     Boolean isNew = sr != null && sr.isNew;
     String outcome = isNew ? 'Started' : 'Deduped';
-    if (isNew) {
-      ScheduleFireLog.Spec spec = specFor(ctx, outcome);
-      spec.instanceId = sr.instanceId;
-      upsert as system ScheduleFireLog.build(spec) Fire_Key__c;
-    }
+    ScheduleFireLog.Spec spec = specFor(ctx, outcome);
+    spec.instanceId = sr == null ? null : sr.instanceId;
+    upsert as system ScheduleFireLog.build(spec) Fire_Key__c;
     updateState(ctx, outcome);
   }
 

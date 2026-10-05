@@ -192,6 +192,8 @@ public inherited sharing class WorkflowStepContext {
           autoRetryPolicy
         )
         .maximumAttempts;
+      // The context builder reads this key again. Keep it equal to the new cap.
+      cc.capturesMap.put('__maxAttempts', cc.maxAttempts);
     }
     if (!isTimeoutResume) {
       cc.maxAttempts = WorkflowRetryConfigResolver.overrideMaxAttempts(
