@@ -165,23 +165,56 @@ public class WorkflowPayloadAccessTest {
         WHERE ContentDocumentId = :docId AND IsLatest = TRUE
       ]
       .VersionData.toString();
+    Workflow_Instance__c inst = [
+      SELECT
+        Id,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Status__c,
+        Error_Message__c,
+        Output__c,
+        Causation_Id__c
+      FROM Workflow_Instance__c
+      WHERE Id = :id1
+    ];
     String diag =
       'DIAG userBefore=' +
       userBefore +
       ' hasRead=' +
       hasRead +
-      ' stored=' +
-      stored +
-      ' fileHead=' +
-      fileText.left(24) +
       ' fileEncoded=' +
       WorkflowPayloadCodecs.isEncoded(fileText);
     System.runAs(u) {
+      Boolean sameUser = UserInfo.getUserId() == u.Id;
+      Set<Id> ids = new Set<Id>{ id1 };
+      Map<String, String> loaded = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
+        new List<Workflow_Instance__c>{ inst }
+      );
+      String loadedText = loaded.get(
+        WorkflowPayloadOffload.ownedKey(
+          id1,
+          WorkflowPayloadOffload.markerDocId(stored)
+        )
+      );
+      String viaGate = new WorkflowPayloadAccess.Gate(ids)
+        .decode(fileText, id1);
+      String viaBuild = WorkflowStatusProjection.buildStatus(
+          inst,
+          loaded,
+          new WorkflowPayloadAccess.Gate(ids)
+        )
+        .output;
       diag +=
-        ' gateReadable=' +
-        WorkflowPayloadAccess.readableIds(new Set<Id>{ id1 }).contains(id1) +
-        ' userId=' +
-        UserInfo.getUserId();
+        ' sameUser=' +
+        sameUser +
+        ' readable=' +
+        WorkflowPayloadAccess.readableIds(ids).contains(id1) +
+        ' loadedHead=' +
+        (loadedText == null ? 'null' : loadedText.left(16)) +
+        ' viaGate=' +
+        viaGate.left(16) +
+        ' viaBuild=' +
+        viaBuild.left(16);
       System.assertEquals(
         WorkflowPayloadAccess.DENIED_PAYLOAD,
         WorkflowStatusRead.getStatus(id1).output,
