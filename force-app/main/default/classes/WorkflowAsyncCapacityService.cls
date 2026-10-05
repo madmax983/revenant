@@ -15,10 +15,12 @@ public inherited sharing class WorkflowAsyncCapacityService {
   private static final String JOB_HOLDING = 'Holding';
   private static final String JOB_QUEUED = 'Queued';
   private static final String JOB_PROCESSING = 'Processing';
+  private static final String JOB_PREPARING = 'Preparing';
   private static final List<String> JOB_STATUSES = new List<String>{
     JOB_HOLDING,
     JOB_QUEUED,
-    JOB_PROCESSING
+    JOB_PROCESSING,
+    JOB_PREPARING
   };
 
   // Max job rows that the read counts. One more row tells that the read stopped.
@@ -97,7 +99,7 @@ public inherited sharing class WorkflowAsyncCapacityService {
   // One row query, max JOB_SCAN_LIMIT + 1 rows. A grouped SUM() costs one query row
   // for each job with no cap, so the read counts the rows itself. ORDER BY JobType puts
   // BatchApex rows (the rows with many chunks) first when the read stops at the cap.
-  // Batch jobs in Preparing are not counted.
+  // A batch job in Preparing has TotalJobItems 0, so it counts as unsized.
   // A failed read leaves jobsKnown false, so the pending executions metric shows Unknown.
   private static void readJobCounts(AsyncCapacityEvaluator.Reading r) {
     try {
@@ -116,7 +118,8 @@ public inherited sharing class WorkflowAsyncCapacityService {
       Map<String, Integer> byStatus = new Map<String, Integer>{
         JOB_HOLDING => 0,
         JOB_QUEUED => 0,
-        JOB_PROCESSING => 0
+        JOB_PROCESSING => 0,
+        JOB_PREPARING => 0
       };
       Integer executions = 0;
       Integer unsized = 0;
@@ -136,6 +139,7 @@ public inherited sharing class WorkflowAsyncCapacityService {
       r.holding = byStatus.get(JOB_HOLDING);
       r.queued = byStatus.get(JOB_QUEUED);
       r.processing = byStatus.get(JOB_PROCESSING);
+      r.preparing = byStatus.get(JOB_PREPARING);
       r.pendingExecutions = executions;
       r.jobsCapped = jobs.size() > JOB_SCAN_LIMIT;
       r.unsizedBatches = unsized;

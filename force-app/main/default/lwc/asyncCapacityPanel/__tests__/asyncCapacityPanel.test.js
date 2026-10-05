@@ -171,6 +171,47 @@ describe("c-async-capacity-panel", () => {
     expect(jobs).toContain("Total 9");
   });
 
+  it("renders the Preparing count", async () => {
+    const element = await render(
+      envelope({
+        jobCounts: {
+          holding: 3,
+          queued: 5,
+          processing: 1,
+          preparing: 2,
+          total: 11,
+          flexQueueLimit: 100,
+        },
+      }),
+    );
+    const jobs = q(element, "capacity-jobs").textContent;
+    expect(jobs).toContain("Preparing 2");
+    expect(jobs).toContain("Total 11");
+  });
+
+  it("renders a Preparing count of 0 between Processing and Total", async () => {
+    const element = await render(
+      envelope({
+        jobCounts: {
+          holding: 1,
+          queued: 1,
+          processing: 1,
+          preparing: 0,
+          total: 3,
+          flexQueueLimit: 100,
+        },
+      }),
+    );
+    expect(q(element, "capacity-jobs").textContent).toContain(
+      "Processing 1 · Preparing 0 · Total 3",
+    );
+  });
+
+  it("shows no Preparing count when the data has none", async () => {
+    const element = await render(envelope());
+    expect(q(element, "capacity-jobs").textContent).not.toContain("Preparing");
+  });
+
   it("says when job counts are not available", async () => {
     const element = await render(
       envelope({
@@ -449,7 +490,9 @@ describe("c-async-capacity-panel", () => {
       }),
     );
     expect(q(element, "capacity-metric").textContent).toContain("≥ 0%");
-    expect(q(element, "capacity-unsized").textContent).toContain("1 batch job");
+    const note = q(element, "capacity-unsized").textContent;
+    expect(note).toContain("1 batch job has no chunk count yet");
+    expect(note).not.toContain("did not start");
   });
 
   it("hides the unsized note when all batch jobs have a size", async () => {

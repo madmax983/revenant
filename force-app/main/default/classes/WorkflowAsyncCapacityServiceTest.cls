@@ -131,13 +131,20 @@ private class WorkflowAsyncCapacityServiceTest {
       Test.stopTest();
 
       Map<String, Object> jobs = (Map<String, Object>) result.get('jobCounts');
+      Assert.isNotNull(jobs.get('preparing'), 'Preparing must have a count');
+      Assert.areEqual(
+        0,
+        jobs.get('preparing'),
+        'A test cannot force Preparing'
+      );
       Integer total = (Integer) jobs.get('total');
       Assert.isTrue(total >= 1, 'The queued job must count: ' + jobs);
       Assert.areEqual(
         total,
         (Integer) jobs.get('holding') +
           (Integer) jobs.get('queued') +
-          (Integer) jobs.get('processing')
+          (Integer) jobs.get('processing') +
+          (Integer) jobs.get('preparing')
       );
     }
   }

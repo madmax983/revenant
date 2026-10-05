@@ -92,7 +92,7 @@ Percent = round(used / limit × 100, 2), `HALF_UP`. Classify this percent.
 - Invariant: the read does 0 DML and max 1 SOQL.
 - Invariant: `WorkflowOrchestrator` and the enqueue classes do not call the
   read.
-- Pending jobs metric: (Holding + Queued + Processing) / (daily limit −
+- Pending jobs metric: (Holding + Queued + Processing + Preparing) / (daily limit −
   daily used). Unknown when a value is missing or no executions are left.
 
 ## Design

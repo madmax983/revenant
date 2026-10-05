@@ -1,10 +1,10 @@
 /**
  * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
  * thresholds, calculates percentages and gives each metric a status. Metrics: daily
- * executions (used / limit) and pending executions (of the Holding, Queued and
- * Processing jobs) / daily executions left. Both gate the Queueable chain. The flex
- * queue (Holding / 100) is a count only: Queueables do not enter it. It does no SOQL,
- * no DML and reads no clock.
+ * executions (used / limit) and pending executions (of the Holding, Queued,
+ * Processing and Preparing jobs) / daily executions left. Both gate the Queueable
+ * chain. The flex queue (Holding / 100) is a count only: Queueables do not enter
+ * it. It does no SOQL, no DML and reads no clock.
  */
 public inherited sharing class AsyncCapacityEvaluator {
   /** @description Percent is below the warn threshold. */
@@ -79,6 +79,8 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer queued;
     /** @description AsyncApexJob rows in Processing. */
     public Integer processing;
+    /** @description AsyncApexJob rows in Preparing (the batch start method is running). */
+    public Integer preparing = 0;
     /** @description False when the AsyncApexJob read failed. */
     public Boolean jobsKnown = false;
     /**
@@ -87,7 +89,7 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer pendingExecutions;
     /** @description True when the job read stopped at its row cap. */
     public Boolean jobsCapped = false;
-    /** @description Batch jobs that did not start, so their chunk count is not known. */
+    /** @description Batch jobs with no chunk count yet (not started, or in Preparing). */
     public Integer unsizedBatches = 0;
   }
 
@@ -240,13 +242,15 @@ public inherited sharing class AsyncCapacityEvaluator {
     };
   }
 
-  // Holding + Queued + Processing. Null when the job read failed.
+  // Holding + Queued + Processing + Preparing. Null when the job read failed.
   private static Integer pendingJobs(Reading r) {
-    return r.jobsKnown ? r.holding + r.queued + r.processing : null;
+    return r.jobsKnown
+      ? r.holding + r.queued + r.processing + r.preparing
+      : null;
   }
 
   // True when pending executions is a lower bound: the read hit its cap, or a batch
-  // job did not start and its chunk count is not known.
+  // job has no chunk count yet (not started, or in Preparing).
   private static Boolean isLowerBound(Reading r) {
     return r.jobsCapped || r.unsizedBatches > 0;
   }
@@ -285,6 +289,7 @@ public inherited sharing class AsyncCapacityEvaluator {
         'holding' => null,
         'queued' => null,
         'processing' => null,
+        'preparing' => null,
         'total' => null,
         'pendingExecutions' => null,
         'capped' => false,
@@ -297,6 +302,7 @@ public inherited sharing class AsyncCapacityEvaluator {
       'holding' => r.holding,
       'queued' => r.queued,
       'processing' => r.processing,
+      'preparing' => r.preparing,
       'total' => total,
       'pendingExecutions' => pendingExecutions(r),
       'capped' => r.jobsCapped,
