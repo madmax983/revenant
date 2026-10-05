@@ -136,89 +136,16 @@ public class WorkflowPayloadAccessTest {
     Id id1 = completedInstance('{"$attachmentId":"' + docId + '"}');
     // A marker resolves only when the file links to the instance.
     WorkflowPayloadOffload.linkToOwner(docId, id1);
-    User u = makeUser(null);
-    String userBefore;
-    System.runAs(u) {
-      userBefore = WorkflowStatusRead.getStatus(id1).output;
-    }
     System.assertEquals(
       SECRET,
       WorkflowStatusRead.getStatus(id1).output,
       'Admin reads the file'
     );
-    // The user cannot query the object, so read these as the admin.
-    Boolean hasRead = [
-      SELECT RecordId, HasReadAccess
-      FROM UserRecordAccess
-      WHERE UserId = :u.Id AND RecordId = :id1
-    ]
-    .HasReadAccess;
-    String stored = [
-      SELECT Output__c
-      FROM Workflow_Instance__c
-      WHERE Id = :id1
-    ]
-    .Output__c;
-    String fileText = [
-        SELECT VersionData
-        FROM ContentVersion
-        WHERE ContentDocumentId = :docId AND IsLatest = TRUE
-      ]
-      .VersionData.toString();
-    Workflow_Instance__c inst = [
-      SELECT
-        Id,
-        Workflow_Name__c,
-        Correlation_Key__c,
-        Status__c,
-        Error_Message__c,
-        Output__c,
-        Causation_Id__c
-      FROM Workflow_Instance__c
-      WHERE Id = :id1
-    ];
-    String diag =
-      'DIAG userBefore=' +
-      userBefore +
-      ' hasRead=' +
-      hasRead +
-      ' fileEncoded=' +
-      WorkflowPayloadCodecs.isEncoded(fileText);
+    User u = makeUser(null);
     System.runAs(u) {
-      Boolean sameUser = UserInfo.getUserId() == u.Id;
-      Set<Id> ids = new Set<Id>{ id1 };
-      Map<String, String> loaded = WorkflowStatusProjection.bulkResolveOffloadedOutputs(
-        new List<Workflow_Instance__c>{ inst }
-      );
-      String loadedText = loaded.get(
-        WorkflowPayloadOffload.ownedKey(
-          id1,
-          WorkflowPayloadOffload.markerDocId(stored)
-        )
-      );
-      String viaGate = new WorkflowPayloadAccess.Gate(ids)
-        .decode(fileText, id1);
-      String viaBuild = WorkflowStatusProjection.buildStatus(
-          inst,
-          loaded,
-          new WorkflowPayloadAccess.Gate(ids)
-        )
-        .output;
-      diag +=
-        ' sameUser=' +
-        sameUser +
-        ' readable=' +
-        WorkflowPayloadAccess.readableIds(ids).contains(id1) +
-        ' loadedHead=' +
-        (loadedText == null ? 'null' : loadedText.left(16)) +
-        ' viaGate=' +
-        viaGate.left(16) +
-        ' viaBuild=' +
-        viaBuild.left(16);
       System.assertEquals(
         WorkflowPayloadAccess.DENIED_PAYLOAD,
-        WorkflowStatusRead.getStatus(id1).output,
-        diag
+        WorkflowStatusRead.getStatus(id1).output
       );
     }
   }

@@ -10,7 +10,7 @@ public inherited sharing class WorkflowPayloadAccess {
    * instance. It is valid JSON.
    */
   public static final String DENIED_PAYLOAD = '{"$redacted":"Access denied. The user cannot read this workflow instance."}';
-  // UserRecordAccess accepts at most 200 record Ids in one query.
+  // One access query covers at most 200 instance Ids.
   private static final Integer CHUNK = 200;
 
   /**
@@ -50,32 +50,33 @@ public inherited sharing class WorkflowPayloadAccess {
   }
 
   /**
-   * @description Finds the records that the running user can read. Uses
-   * `UserRecordAccess`, so sharing and object permission both apply.
-   * @param recordIds the records to check
+   * @description Finds the instances that the running user can read. It runs a
+   * user-mode query that selects only the Id, so object permission, field
+   * permission and sharing all apply. A user without object access gets an
+   * empty result.
+   * @param recordIds the instance Ids to check
    * @return the subset the user can read
    */
-  @SuppressWarnings(
-    'PMD.ApexCRUDViolation'
-  ) // UserRecordAccess reports access; it has no CRUD to enforce
   public static Set<Id> readableIds(Set<Id> recordIds) {
     Set<Id> allowed = new Set<Id>();
     List<Id> pending = new List<Id>(recordIds);
-    Id userId = UserInfo.getUserId();
     for (Integer i = 0; i < pending.size(); i += CHUNK) {
       List<Id> batchIds = new List<Id>();
       for (Integer j = i; j < Math.min(i + CHUNK, pending.size()); j++) {
         batchIds.add(pending[j]);
       }
-      for (UserRecordAccess a : [
-        SELECT RecordId
-        FROM UserRecordAccess
-        WHERE
-          UserId = :userId
-          AND RecordId IN :batchIds
-          AND HasReadAccess = TRUE
-      ]) {
-        allowed.add(a.RecordId);
+      try {
+        for (Workflow_Instance__c inst : [
+          SELECT Id
+          FROM Workflow_Instance__c
+          WHERE Id IN :batchIds
+          WITH USER_MODE
+        ]) {
+          allowed.add(inst.Id);
+        }
+      } catch (QueryException ex) {
+        // No object access: the user can read none of these instances.
+        continue;
       }
     }
     return allowed;
