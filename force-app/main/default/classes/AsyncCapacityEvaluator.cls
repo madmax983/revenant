@@ -89,7 +89,7 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer pendingExecutions;
     /** @description True when the job read stopped at its row cap. */
     public Boolean jobsCapped = false;
-    /** @description Batch jobs that did not start, so their chunk count is not known. */
+    /** @description Batch jobs with no chunk count yet (not started, or in Preparing). */
     public Integer unsizedBatches = 0;
   }
 
@@ -250,7 +250,7 @@ public inherited sharing class AsyncCapacityEvaluator {
   }
 
   // True when pending executions is a lower bound: the read hit its cap, or a batch
-  // job did not start and its chunk count is not known.
+  // job has no chunk count yet (not started, or in Preparing).
   private static Boolean isLowerBound(Reading r) {
     return r.jobsCapped || r.unsizedBatches > 0;
   }

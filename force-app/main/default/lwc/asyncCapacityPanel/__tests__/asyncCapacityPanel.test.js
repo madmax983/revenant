@@ -490,7 +490,9 @@ describe("c-async-capacity-panel", () => {
       }),
     );
     expect(q(element, "capacity-metric").textContent).toContain("≥ 0%");
-    expect(q(element, "capacity-unsized").textContent).toContain("1 batch job");
+    const note = q(element, "capacity-unsized").textContent;
+    expect(note).toContain("1 batch job has no chunk count yet");
+    expect(note).not.toContain("did not start");
   });
 
   it("hides the unsized note when all batch jobs have a size", async () => {

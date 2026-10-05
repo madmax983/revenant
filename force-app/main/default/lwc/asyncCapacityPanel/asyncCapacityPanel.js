@@ -170,8 +170,8 @@ export default class AsyncCapacityPanel extends LightningElement {
       return null;
     }
     const jobs =
-      count === 1 ? "1 batch job" : `${formatCount(count)} batch jobs`;
-    return `${jobs} did not start. The chunk count is not known, so the pending executions are a lower bound.`;
+      count === 1 ? "1 batch job has" : `${formatCount(count)} batch jobs have`;
+    return `${jobs} no chunk count yet. The pending executions are a lower bound.`;
   }
 
   get thresholdLabel() {
