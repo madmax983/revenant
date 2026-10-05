@@ -15,11 +15,12 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
 1. Read the daily count from `System.OrgLimits` key
    `DailyAsyncApexExecutions`. `Limits.getAsyncCalls()` is "reserved for
    future use" and gives no org data.
-2. Read the `Holding`, `Queued`, `Processing` and `Preparing` jobs with one `AsyncApexJob`
-   row query, max 2,001 rows (`ORDER BY JobType`, so batch jobs come first).
-   Count the rows and the executions that they need in Apex. A capped read,
-   or a batch job that did not start or is in `Preparing` (no chunk count
-   yet), gives a lower bound: it can prove Critical, else the status is Unknown.
+2. Read the `Holding`, `Queued`, `Processing` and `Preparing` jobs with one
+   `AsyncApexJob` row query, max 2,001 rows (`ORDER BY JobType`, so batch
+   jobs come first). Count the rows and the executions that they need in
+   Apex. A capped read, or a batch job that did not start or is in
+   `Preparing` (no chunk count yet), gives a lower bound: it can prove
+   Critical, else the status is Unknown.
 3. Two metrics have a status. Both gate the Queueable chain: daily
    executions, and pending executions / daily executions left. A job needs 1
    execution. A batch job needs 1 for each chunk that is left, plus 1.

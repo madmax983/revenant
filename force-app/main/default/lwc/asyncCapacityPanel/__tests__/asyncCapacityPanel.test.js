@@ -189,6 +189,24 @@ describe("c-async-capacity-panel", () => {
     expect(jobs).toContain("Total 11");
   });
 
+  it("renders a Preparing count of 0 between Processing and Total", async () => {
+    const element = await render(
+      envelope({
+        jobCounts: {
+          holding: 1,
+          queued: 1,
+          processing: 1,
+          preparing: 0,
+          total: 3,
+          flexQueueLimit: 100,
+        },
+      }),
+    );
+    expect(q(element, "capacity-jobs").textContent).toContain(
+      "Processing 1 · Preparing 0 · Total 3",
+    );
+  });
+
   it("shows no Preparing count when the data has none", async () => {
     const element = await render(envelope());
     expect(q(element, "capacity-jobs").textContent).not.toContain("Preparing");

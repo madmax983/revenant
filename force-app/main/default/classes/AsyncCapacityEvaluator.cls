@@ -2,9 +2,9 @@
  * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
  * thresholds, calculates percentages and gives each metric a status. Metrics: daily
  * executions (used / limit) and pending executions (of the Holding, Queued,
- * Processing and Preparing jobs) / daily executions left. Both gate the Queueable chain. The flex
- * queue (Holding / 100) is a count only: Queueables do not enter it. It does no SOQL,
- * no DML and reads no clock.
+ * Processing and Preparing jobs) / daily executions left. Both gate the Queueable
+ * chain. The flex queue (Holding / 100) is a count only: Queueables do not enter
+ * it. It does no SOQL, no DML and reads no clock.
  */
 public inherited sharing class AsyncCapacityEvaluator {
   /** @description Percent is below the warn threshold. */
@@ -79,7 +79,7 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer queued;
     /** @description AsyncApexJob rows in Processing. */
     public Integer processing;
-    /** @description AsyncApexJob rows in Preparing (batch start method runs). */
+    /** @description AsyncApexJob rows in Preparing (the batch start method is running). */
     public Integer preparing = 0;
     /** @description False when the AsyncApexJob read failed. */
     public Boolean jobsKnown = false;

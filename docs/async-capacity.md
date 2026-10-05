@@ -59,17 +59,17 @@ The panel also shows these counts. They have no status:
   for finish. A batch worker row (`BatchApexWorker`) counts 0, because its
   batch job counts the chunk.
 - The pending executions are a lower bound in two cases:
-  - A batch job did not start or is in `Preparing`. Its `TotalJobItems` is 0, so its chunk count
-    is not known. It counts 1. The panel shows how many batch jobs have no
-    size.
+  - A batch job did not start or is in `Preparing`. Its `TotalJobItems` is 0,
+    so its chunk count is not known. It counts 1. The panel shows how many
+    batch jobs have no size.
   - The read counts max 2,000 jobs. When more jobs are pending, the panel
     says so. Batch jobs are read first.
 - For a lower bound, the panel shows the percent as "≥ n%". When the lower
   bound is below the critical threshold, the status is **Unknown**, because
   the real value can be Critical. When the lower bound is at or above the
   critical threshold, the status is **Critical**.
-- A batch job in `Preparing` (its start method runs) is counted. Its
-  `TotalJobItems` is 0, so it is an unsized batch and the value is a lower
+- The panel counts a batch job in `Preparing` (its start method is running).
+  Its `TotalJobItems` is 0, so it is an unsized batch and the value is a lower
   bound.
 
 ## Status
