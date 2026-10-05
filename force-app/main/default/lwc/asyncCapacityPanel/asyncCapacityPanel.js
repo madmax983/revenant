@@ -149,9 +149,11 @@ export default class AsyncCapacityPanel extends LightningElement {
       flexLimit,
     )} · Queued ${formatCount(
       jobs.queued,
-    )} · Processing ${formatCount(jobs.processing)} · Total ${formatCount(
-      jobs.total,
-    )}`;
+    )} · Processing ${formatCount(jobs.processing)}`;
+    if (!isMissing(jobs.preparing)) {
+      label += ` · Preparing ${formatCount(jobs.preparing)}`;
+    }
+    label += ` · Total ${formatCount(jobs.total)}`;
     if (!isMissing(jobs.pendingExecutions)) {
       label += ` · Pending executions ${formatCount(jobs.pendingExecutions)}`;
     }

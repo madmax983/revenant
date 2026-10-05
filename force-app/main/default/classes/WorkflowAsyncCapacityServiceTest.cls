@@ -137,7 +137,8 @@ private class WorkflowAsyncCapacityServiceTest {
         total,
         (Integer) jobs.get('holding') +
           (Integer) jobs.get('queued') +
-          (Integer) jobs.get('processing')
+          (Integer) jobs.get('processing') +
+          (Integer) jobs.get('preparing')
       );
     }
   }

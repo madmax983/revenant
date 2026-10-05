@@ -360,6 +360,66 @@ private class AsyncCapacityEvaluatorTest {
   }
 
   @IsTest
+  static void preparingJobsAreCounted() {
+    AsyncCapacityEvaluator.Reading r = reading(0, 250000, 2);
+    r.queued = 5;
+    r.processing = 1;
+    r.preparing = 3;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Map<String, Object> jobs = (Map<String, Object>) result.get('jobCounts');
+    Assert.areEqual(3, jobs.get('preparing'));
+    Assert.areEqual(11, jobs.get('total'), 'Total includes Preparing');
+    Assert.areEqual(
+      11,
+      metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('used'),
+      'No pendingExecutions: the metric uses the job count'
+    );
+  }
+
+  @IsTest
+  static void preparingIsZeroByDefault() {
+    Map<String, Object> jobs = (Map<String, Object>) AsyncCapacityEvaluator.evaluate(
+        reading(0, 250000, 1),
+        defaults()
+      )
+      .get('jobCounts');
+    Assert.areEqual(0, jobs.get('preparing'));
+    Assert.areEqual(1, jobs.get('total'));
+  }
+
+  @IsTest
+  static void unknownJobsGiveNullPreparing() {
+    Map<String, Object> jobs = (Map<String, Object>) AsyncCapacityEvaluator.evaluate(
+        reading(0, 250000, null),
+        defaults()
+      )
+      .get('jobCounts');
+    Assert.isTrue(jobs.containsKey('preparing'));
+    Assert.isNull(jobs.get('preparing'));
+  }
+
+  @IsTest
+  static void preparingBatchIsALowerBound() {
+    // One batch in Preparing. TotalJobItems is 0, so the read marks it unsized.
+    AsyncCapacityEvaluator.Reading r = reading(1000, 250000, 0);
+    r.preparing = 1;
+    r.pendingExecutions = 1;
+    r.unsizedBatches = 1;
+    Map<String, Object> result = AsyncCapacityEvaluator.evaluate(r, defaults());
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_UNKNOWN,
+      metricFor(result, AsyncCapacityEvaluator.METRIC_BACKLOG).get('status')
+    );
+    Assert.areEqual(false, result.get('chainAtRisk'));
+    r.pendingExecutions = 249000;
+    Assert.areEqual(
+      AsyncCapacityEvaluator.STATUS_CRITICAL,
+      AsyncCapacityEvaluator.evaluate(r, defaults()).get('status'),
+      'A large lower bound proves Critical'
+    );
+  }
+
+  @IsTest
   static void configThresholdsChangeStatus() {
     Map<String, Object> result = AsyncCapacityEvaluator.evaluate(
       reading(50, 100, 0),

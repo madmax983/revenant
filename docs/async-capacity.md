@@ -25,17 +25,17 @@ flowchart LR
 
 Two metrics have a status. Both gate the Queueable chain.
 
-| Panel metric                          | Used / limit                                                                                    | Where an admin sees it                                                                                  |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Daily async Apex executions           | `System.OrgLimits` key `DailyAsyncApexExecutions`                                               | REST resource `/services/data/vXX.X/limits`, key `DailyAsyncApexExecutions`. CLI: `sf org list limits`. |
-| Pending executions vs executions left | Executions that the `Holding`, `Queued` and `Processing` jobs need / (daily limit − daily used) | **Setup → Apex Jobs** (filter on the status) and the daily value above.                                 |
+| Panel metric                          | Used / limit                                                                                                 | Where an admin sees it                                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Daily async Apex executions           | `System.OrgLimits` key `DailyAsyncApexExecutions`                                                            | REST resource `/services/data/vXX.X/limits`, key `DailyAsyncApexExecutions`. CLI: `sf org list limits`. |
+| Pending executions vs executions left | Executions that the `Holding`, `Queued`, `Processing` and `Preparing` jobs need / (daily limit − daily used) | **Setup → Apex Jobs** (filter on the status) and the daily value above.                                 |
 
 The panel also shows these counts. They have no status:
 
-| Count                        | Source                                | Where an admin sees it       |
-| ---------------------------- | ------------------------------------- | ---------------------------- |
-| Flex queue (Holding) n / 100 | `AsyncApexJob` rows in `Holding`      | **Setup → Apex Flex Queue**. |
-| Queued, Processing and Total | `AsyncApexJob` rows in these statuses | **Setup → Apex Jobs**.       |
+| Count                                   | Source                                | Where an admin sees it       |
+| --------------------------------------- | ------------------------------------- | ---------------------------- |
+| Flex queue (Holding) n / 100            | `AsyncApexJob` rows in `Holding`      | **Setup → Apex Flex Queue**. |
+| Queued, Processing, Preparing and Total | `AsyncApexJob` rows in these statuses | **Setup → Apex Jobs**.       |
 
 - No Setup page shows the daily count. Use the REST `/limits` resource or
   `sf org list limits`.
@@ -59,7 +59,7 @@ The panel also shows these counts. They have no status:
   for finish. A batch worker row (`BatchApexWorker`) counts 0, because its
   batch job counts the chunk.
 - The pending executions are a lower bound in two cases:
-  - A batch job did not start. Its `TotalJobItems` is 0, so its chunk count
+  - A batch job did not start or is in `Preparing`. Its `TotalJobItems` is 0, so its chunk count
     is not known. It counts 1. The panel shows how many batch jobs have no
     size.
   - The read counts max 2,000 jobs. When more jobs are pending, the panel
@@ -68,7 +68,9 @@ The panel also shows these counts. They have no status:
   bound is below the critical threshold, the status is **Unknown**, because
   the real value can be Critical. When the lower bound is at or above the
   critical threshold, the status is **Critical**.
-- Batch jobs in `Preparing` are not counted.
+- A batch job in `Preparing` (its start method runs) is counted. Its
+  `TotalJobItems` is 0, so it is an unsized batch and the value is a lower
+  bound.
 
 ## Status
 

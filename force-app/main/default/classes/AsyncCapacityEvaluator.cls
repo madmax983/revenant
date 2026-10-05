@@ -1,8 +1,8 @@
 /**
  * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
  * thresholds, calculates percentages and gives each metric a status. Metrics: daily
- * executions (used / limit) and pending executions (of the Holding, Queued and
- * Processing jobs) / daily executions left. Both gate the Queueable chain. The flex
+ * executions (used / limit) and pending executions (of the Holding, Queued,
+ * Processing and Preparing jobs) / daily executions left. Both gate the Queueable chain. The flex
  * queue (Holding / 100) is a count only: Queueables do not enter it. It does no SOQL,
  * no DML and reads no clock.
  */
@@ -79,6 +79,8 @@ public inherited sharing class AsyncCapacityEvaluator {
     public Integer queued;
     /** @description AsyncApexJob rows in Processing. */
     public Integer processing;
+    /** @description AsyncApexJob rows in Preparing (batch start method runs). */
+    public Integer preparing = 0;
     /** @description False when the AsyncApexJob read failed. */
     public Boolean jobsKnown = false;
     /**
@@ -240,9 +242,11 @@ public inherited sharing class AsyncCapacityEvaluator {
     };
   }
 
-  // Holding + Queued + Processing. Null when the job read failed.
+  // Holding + Queued + Processing + Preparing. Null when the job read failed.
   private static Integer pendingJobs(Reading r) {
-    return r.jobsKnown ? r.holding + r.queued + r.processing : null;
+    return r.jobsKnown
+      ? r.holding + r.queued + r.processing + r.preparing
+      : null;
   }
 
   // True when pending executions is a lower bound: the read hit its cap, or a batch
@@ -285,6 +289,7 @@ public inherited sharing class AsyncCapacityEvaluator {
         'holding' => null,
         'queued' => null,
         'processing' => null,
+        'preparing' => null,
         'total' => null,
         'pendingExecutions' => null,
         'capped' => false,
@@ -297,6 +302,7 @@ public inherited sharing class AsyncCapacityEvaluator {
       'holding' => r.holding,
       'queued' => r.queued,
       'processing' => r.processing,
+      'preparing' => r.preparing,
       'total' => total,
       'pendingExecutions' => pendingExecutions(r),
       'capped' => r.jobsCapped,
