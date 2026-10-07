@@ -73,8 +73,6 @@ const REASON_LABELS = {
 const NEXT_CAVEATS = {
   SPAWNING_STEP_UNKNOWN:
     "No step row shows the step that started the parallel branches. The step after the join is not known.",
-  ROUTING_UNKNOWN:
-    "The probe found no route from this step for the version of this run.",
 };
 const DEFAULT_NEXT_CAVEAT =
   "Step output can route to other steps. This list shows only the routes that the probe found.";
@@ -394,8 +392,11 @@ export default class WorkflowTopologyGraph extends LightningElement {
     const join = this.nextAfterJoin;
     const next = list(overlay.nextSteps);
     if (next.length > 0) {
-      const names = next.map((name) => this.labelOf(name)).join(", ");
-      return join ? `${names} (after the branches join)` : names;
+      let text = next.map((name) => this.labelOf(name)).join(", ");
+      if (overlay.canEnd === true) {
+        text += " (or the run can end)";
+      }
+      return join ? `${text} (after the branches join)` : text;
     }
     if (!overlay.nextStepsUnknownReason && overlay.canEnd === true) {
       return join
@@ -421,7 +422,13 @@ export default class WorkflowTopologyGraph extends LightningElement {
   }
 
   get nextCaveat() {
-    const reason = this.overlay && this.overlay.nextStepsUnknownReason;
+    const overlay = this.overlay || {};
+    const reason = overlay.nextStepsUnknownReason;
+    if (reason === "ROUTING_UNKNOWN") {
+      return overlay.nextStepsFrom
+        ? `No route is known from ${this.labelOf(overlay.nextStepsFrom)} for the version of this run.`
+        : "No current step is known.";
+    }
     return reason && Object.prototype.hasOwnProperty.call(NEXT_CAVEATS, reason)
       ? NEXT_CAVEATS[reason]
       : DEFAULT_NEXT_CAVEAT;

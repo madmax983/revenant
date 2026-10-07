@@ -52,15 +52,17 @@ flowchart LR
    When `getSteps()` also declares that name, the engine rule applies: only
    the newest such row is a rollback, and only when `<step>` is on
    `Compensation_Stack__c` and the status permits a live rollback.
-5. **Next steps.** Issue #290. The overlay routes as the engine does. It
-   probes one step, `nextStepsFrom`, with the two `COMPLETE` results:
+5. **Next steps** (issue #290). The overlay routes as the engine does. It
+   probes one step, `nextStepsFrom`, with the two `COMPLETE` results. As the
+   engine does, it probes a step that `getSteps()` does not declare:
    - A serial run routes from its current step.
    - A `SPLIT` (a comma in `Current_Step__c`) routes after the join from
-     its spawning step. This is the newest `Completed` or `OperatorSkipped`
-     row that is not a branch, as in `WorkflowParallelJoin`.
+     its spawning step. The spawning step is the step of the newest
+     `Completed` or `OperatorSkipped` row that is not a branch, as in
+     `WorkflowParallelJoin`.
    - A `VersionedWorkflow` uses the stored `Definition_Version__c`. A null
-     version is version 1. Thus a version outside the newest 50 also
-     routes.
+     version is version 1. The probe also uses a version that the graph
+     does not probe (older than the newest 50).
 
 ## What The Graph Shows
 
@@ -122,12 +124,13 @@ step. See
 - **End:** the graph shows no next step.
 - **Not known:** `nextSteps` is empty and `nextStepsUnknownReason` gives
   the cause. The summary shows "No next step is known." and the cause:
-  - `ROUTING_UNKNOWN`: the step is not declared, or each probe threw for
-    the version of the run.
-  - `SPAWNING_STEP_UNKNOWN`: no step row in the newest 200 rows shows the
+  - `ROUTING_UNKNOWN`: no current step is known, the definition did not
+    resolve, or a probe threw and no probe gave a route for the version of
+    the run.
+  - `SPAWNING_STEP_UNKNOWN`: no step row in the newest 201 rows shows the
     step that started the `SPLIT`.
 - **Can end:** `canEnd` is true when a probe of `nextStepsFrom` gave no
-  successor.
+  successor and no probe threw.
 - **Signal wait:** the summary and the current node show the awaited
   signal, for example `Approve:OrderReview`. The value is the #84
   descriptor that the instance detail reads. A timed approval has a

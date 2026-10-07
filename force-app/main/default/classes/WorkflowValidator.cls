@@ -80,8 +80,11 @@ public with sharing class WorkflowValidator {
     public Set<String> compensatableSteps = new Set<String>();
     /** The probe transitions, or null when the definition did not resolve. */
     public WorkflowTransitionProbe.Transitions transitions;
-    /** The definition instance, or null when it did not resolve (issue #290). */
-    public WorkflowDefinition definition;
+    /**
+     * The definition instance, or null when it did not resolve (issue #290).
+     * Transient: JSON.serialize does not write it.
+     */
+    public transient WorkflowDefinition definition;
 
     /**
      * @description Creates an empty result bound to the workflow being validated.

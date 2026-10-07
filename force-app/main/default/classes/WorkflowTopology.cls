@@ -43,7 +43,7 @@ public inherited sharing class WorkflowTopology {
   /** The instance is in a terminal status. */
   public static final String STATE_ENDED = 'ENDED';
 
-  /** The step that routes is not declared, or its probe threw each time. */
+  /** No current step, no definition, or a probe threw and gave no route. */
   public static final String NEXT_ROUTING_UNKNOWN = 'ROUTING_UNKNOWN';
   /** No step row gives the step that started the SPLIT. */
   public static final String NEXT_SPAWNING_STEP_UNKNOWN = 'SPAWNING_STEP_UNKNOWN';
@@ -59,7 +59,11 @@ public inherited sharing class WorkflowTopology {
   };
   // Current_Step__c holds the branches of a SPLIT, joined with commas.
   private static final String BRANCH_SEPARATOR = ',';
-  // The statuses of a spawning step row (WorkflowParallelJoin.proceedToJoin).
+  // The range of an Apex Integer, for Definition_Version__c (Number 18, 0).
+  private static final Decimal MIN_VERSION = -2147483648L;
+  private static final Decimal MAX_VERSION = 2147483647;
+  // The statuses of the row of the step that starts a SPLIT
+  // (WorkflowParallelJoin.proceedToJoin).
   private static final Set<String> SPAWNING_STATUSES = new Set<String>{
     'Completed',
     'OperatorSkipped'
@@ -237,7 +241,8 @@ public inherited sharing class WorkflowTopology {
     public List<String> nextSteps = new List<String>();
     /**
      * The step that the engine routes from: the current step, or for a SPLIT
-     * the step that started it. Null when not known or the run does not move.
+     * the step that started it. It is null when it is not known, during a
+     * rollback, or after the end.
      */
     @AuraEnabled
     public String nextStepsFrom;
@@ -488,7 +493,7 @@ public inherited sharing class WorkflowTopology {
     return overlay;
   }
 
-  // Issue #290: routes as the engine does. A serial run routes from its
+  // Issue #290: this method routes as the engine does. A serial run routes from its
   // current step. A SPLIT (a comma in Current_Step__c) routes after the join
   // from its spawning step. The probe uses the stored instance version.
   private static void addNextSteps(
@@ -511,32 +516,58 @@ public inherited sharing class WorkflowTopology {
     }
     overlay.nextStepsFrom = fromStep;
     b.addNode(fromStep, false);
-    // As the graph does, probe only declared steps.
-    if (b.definition == null || !b.declaredNames().contains(fromStep)) {
+    Decimal version = instance.Definition_Version__c;
+    // The engine routes an undeclared step too, so the probe does not skip it.
+    // A version out of the Integer range must not fail the graph read.
+    if (b.definition == null || !isRoutableVersion(version)) {
       overlay.nextStepsUnknownReason = NEXT_ROUTING_UNKNOWN;
       return;
     }
-    WorkflowTransitionProbe.Transitions t = WorkflowTransitionProbe.probeStep(
-      b.definition,
-      fromStep,
-      instance.Definition_Version__c == null
-        ? null
-        : (Integer) instance.Definition_Version__c
+    applyProbe(
+      overlay,
+      b,
+      WorkflowTransitionProbe.probeStep(
+        b.definition,
+        fromStep,
+        version == null ? null : version.intValue()
+      )
     );
+  }
+
+  private static Boolean isRoutableVersion(Decimal version) {
+    return version == null ||
+      (version >= MIN_VERSION &&
+      version <= MAX_VERSION);
+  }
+
+  // Copies the probe of nextStepsFrom to the overlay. A probe that threw marks
+  // the step "?" and stops canEnd, because the throw can hide a route.
+  private static void applyProbe(
+    Overlay overlay,
+    GraphBuilder b,
+    WorkflowTransitionProbe.Transitions t
+  ) {
+    String fromStep = overlay.nextStepsFrom;
     for (String successor : t.successorsOf(fromStep)) {
       overlay.nextSteps.add(successor);
       // A version outside the graph probe can give a new step.
       b.addNode(successor, false);
     }
-    overlay.canEnd = t.endingSteps.contains(fromStep);
+    Boolean threw = t.unresolvedSteps.contains(fromStep);
+    if (threw) {
+      b.nodeByName.get(fromStep).routingUnknown = true;
+      b.addReason(REASON_ROUTING_THREW);
+    }
+    overlay.canEnd = t.endingSteps.contains(fromStep) && !threw;
     if (overlay.nextSteps.isEmpty() && !overlay.canEnd) {
       overlay.nextStepsUnknownReason = NEXT_ROUTING_UNKNOWN;
     }
   }
 
   // The engine rule (WorkflowParallelJoin.proceedToJoin): the newest Completed
-  // or OperatorSkipped row that is not a branch. Null when no read row matches.
-  // The names match without case, as SOQL NOT IN does.
+  // or OperatorSkipped row that is not a branch. Null when no row from the
+  // query matches. Upper-case and lower-case letters are equal, as in SOQL
+  // NOT IN.
   private static String spawningStepOf(
     List<Workflow_Step_Execution__c> newestFirst,
     List<String> branches

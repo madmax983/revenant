@@ -504,6 +504,76 @@ describe("c-workflow-topology-graph", () => {
       );
     });
 
+    it("says that the run can also end when steps follow", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          gapsFound: false,
+          overlay: running({
+            currentSteps: [S],
+            nextStepsFrom: S,
+            nextSteps: [H],
+            canEnd: true,
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next").textContent).toBe(
+        "Ship (or the run can end)",
+      );
+    });
+
+    it("says that no current step is known", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          overlay: running({
+            currentSteps: [],
+            nextSteps: [],
+            nextStepsUnknownReason: "ROUTING_UNKNOWN",
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next-caveat").textContent).toContain(
+        "No current step is known.",
+      );
+    });
+
+    it("names the step with no known route", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          overlay: running({
+            currentSteps: [S, R],
+            nextStepsFrom: V,
+            nextSteps: [],
+            nextStepsUnknownReason: "ROUTING_UNKNOWN",
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next-caveat").textContent).toContain(
+        "No route is known from Validate",
+      );
+    });
+
+    it("shows the default caveat for an unknown reason code", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          overlay: running({
+            nextSteps: [],
+            nextStepsUnknownReason: "toString",
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next-caveat").textContent).toContain(
+        "Step output can route to other steps.",
+      );
+    });
+
     it("says that the run can end at the current step", async () => {
       const element = await render(
         { instanceId: "a0G000000000001" },

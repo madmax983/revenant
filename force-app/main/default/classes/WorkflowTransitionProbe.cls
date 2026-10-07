@@ -219,7 +219,7 @@ public inherited sharing class WorkflowTransitionProbe {
    * @description Probes one step as the engine routes an instance (issue
    * #290). A VersionedWorkflow uses getNextStep(current, result, version), as
    * WorkflowStepAdvance.resolveNextStepName does. Another definition uses
-   * getNextStep(current, result). Records no defect.
+   * getNextStep(current, result). It records no defect.
    * @param def The workflow definition.
    * @param stepName The step to probe.
    * @param version The instance version. Null gives version 1, as in the engine.
