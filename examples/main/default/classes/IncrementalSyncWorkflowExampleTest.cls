@@ -106,4 +106,23 @@ public class IncrementalSyncWorkflowExampleTest {
       );
     }
   }
+
+  /**
+   * Issue #283: the cold-start window comes from once(), so a replay gives the same value.
+   */
+  @IsTest
+  static void coldStartWindowUsesCapturedTime() {
+    StepContext ctx = new StepContextTestBuilder()
+      .once('coldStartSince', '1700000000000')
+      .build();
+
+    Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
+      new IncrementalSyncWorkflowExample.SyncChangedAccountsStep()
+        .execute(ctx)
+        .directive()
+        .outputJson
+    );
+
+    Assert.areEqual('2023-11-14T22:13:20Z', out.get('since'));
+  }
 }

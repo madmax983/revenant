@@ -128,7 +128,7 @@ String trace = String.valueOf(Crypto.getRandomInteger());
 
 ## CI gate
 
-`.github/workflows/determinism-lint.yml` runs the Rust and plugin tests. To stop a deploy that has a HIGH defect, add this step before the deploy step:
+`.github/workflows/determinism-lint.yml` runs the Rust and plugin tests. It also lints `force-app` and `examples`, and fails on a HIGH defect. To stop a deploy that has a HIGH defect, add this step before the deploy step:
 
 ```bash
 sf revenant lint determinism --fail-on high

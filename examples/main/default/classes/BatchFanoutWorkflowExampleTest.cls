@@ -110,4 +110,24 @@ public class BatchFanoutWorkflowExampleTest {
       );
     }
   }
+
+  /**
+   * Issue #283: the audit time comes from once(), so a replay gives the same value.
+   */
+  @IsTest
+  static void auditStepUsesCapturedTime() {
+    StepContext ctx = new StepContextTestBuilder()
+      .workflowInput(new Map<String, Object>{ 'id' => 'X1', 'name' => 'Acme' })
+      .once('auditedAt', '1700000000000')
+      .build();
+
+    Map<String, Object> out = (Map<String, Object>) JSON.deserializeUntyped(
+      new BatchFanoutWorkflowExample.ProcessAccountStep()
+        .execute(ctx)
+        .directive()
+        .outputJson
+    );
+
+    Assert.areEqual(1700000000000L, (Long) out.get('timestamp'));
+  }
 }

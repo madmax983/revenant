@@ -123,8 +123,11 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
     public StepResult execute(StepContext ctx) {
       ctx.progress().reportProgress(30.0, 'Creating client sandbox');
 
+      // once() keeps the id the same on each run of this step.
       String sandboxOrgId =
-        '00D' + String.valueOf(Math.abs(Crypto.getRandomInteger())).left(15);
+        '00D' +
+        String.valueOf(ctx.captures().once('sandboxSeed', new RandomProducer()))
+          .left(15);
       Map<String, Object> result = new Map<String, Object>{
         'sandboxOrgId' => sandboxOrgId,
         'status' => 'Provisioned'
@@ -145,9 +148,11 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
     public StepResult execute(StepContext ctx) {
       ctx.progress().reportProgress(50.0, 'Configuring billing accounts');
 
+      // once() keeps the id the same on each run of this step.
       String billingAccountId =
         'cust_billing_' +
-        String.valueOf(Math.abs(Crypto.getRandomInteger())).left(8);
+        String.valueOf(ctx.captures().once('billingSeed', new RandomProducer()))
+          .left(8);
       Map<String, Object> result = new Map<String, Object>{
         'billingAccountId' => billingAccountId,
         'status' => 'Created'
@@ -297,11 +302,41 @@ public inherited sharing class OnboardingWorkflowExample implements WorkflowDefi
      */
     public StepResult execute(StepContext ctx) {
       ctx.progress().reportProgress(100.0, 'Finished onboarding checklist');
+      // once() keeps the completion time the same on each run of this step.
+      Long completedAt = Long.valueOf(
+        (String) ctx.captures().once('completedAt', new NowProducer())
+      );
       Map<String, Object> onboardingResults = new Map<String, Object>{
         'status' => 'Completed',
-        'completedDate' => Datetime.now()
+        'completedDate' => Datetime.newInstance(completedAt)
       };
       return StepResult.complete(null, onboardingResults);
+    }
+  }
+
+  /**
+   * @description Produces a random non-negative Integer.
+   */
+  private class RandomProducer implements CaptureProducer {
+    /**
+     * @description Returns a random non-negative Integer.
+     * @return The random Integer.
+     */
+    public Object produce() {
+      return Math.abs(Crypto.getRandomInteger());
+    }
+  }
+
+  /**
+   * @description Produces the current time in epoch milliseconds, as a String.
+   */
+  private class NowProducer implements CaptureProducer {
+    /**
+     * @description Returns the current time.
+     * @return The epoch milliseconds, as a String.
+     */
+    public Object produce() {
+      return String.valueOf(Datetime.now().getTime());
     }
   }
 

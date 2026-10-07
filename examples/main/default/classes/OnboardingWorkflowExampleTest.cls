@@ -100,4 +100,42 @@ public class OnboardingWorkflowExampleTest {
       );
     }
   }
+
+  /**
+   * Issue #283: the steps read their random ids and the completion time from
+   * once(), so a replay gives the same values.
+   */
+  @IsTest
+  static void stepsUseCapturedValues() {
+    Long ms = 1700000000000L;
+    StepContext ctx = new StepContextTestBuilder()
+      .once('sandboxSeed', 12345)
+      .once('billingSeed', 678)
+      .once('completedAt', String.valueOf(ms))
+      .build();
+
+    Map<String, Object> sandbox = (Map<String, Object>) JSON.deserializeUntyped(
+      new OnboardingWorkflowExample.ProvisionSandboxStep()
+        .execute(ctx)
+        .directive()
+        .outputJson
+    );
+    Map<String, Object> billing = (Map<String, Object>) JSON.deserializeUntyped(
+      new OnboardingWorkflowExample.CreateBillingAccountStep()
+        .execute(ctx)
+        .directive()
+        .outputJson
+    );
+    String completed = new OnboardingWorkflowExample.CompleteOnboardingStep()
+      .execute(ctx)
+      .directive()
+      .outputJson;
+
+    Assert.areEqual('00D12345', sandbox.get('sandboxOrgId'));
+    Assert.areEqual('cust_billing_678', billing.get('billingAccountId'));
+    Assert.isTrue(
+      completed.contains(JSON.serialize(Datetime.newInstance(ms))),
+      completed
+    );
+  }
 }
