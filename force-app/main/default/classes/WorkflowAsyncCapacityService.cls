@@ -110,9 +110,10 @@ public inherited sharing class WorkflowAsyncCapacityService {
 
   // One row query, max JOB_SCAN_LIMIT + 1 rows. It reads charged job types only. A
   // grouped SUM() costs one query row for each job with no cap, so the read counts the
-  // rows itself. ORDER BY JobType puts BatchApex rows (the rows with many chunks) first
-  // when the read stops at the cap. A failed read leaves jobsKnown false, so the
-  // pending executions metric shows Unknown.
+  // rows itself. ORDER BY TotalJobItems DESC puts the batch jobs with the most chunks
+  // first when the read stops at the cap. SOQL sorts a picklist (JobType) in its
+  // setup order, not by name, so JobType cannot do this. A failed read leaves
+  // jobsKnown false, so the pending executions metric shows Unknown.
   private static void readJobCounts(AsyncCapacityEvaluator.Reading r) {
     try {
       if (failJobQuery) {
@@ -124,7 +125,7 @@ public inherited sharing class WorkflowAsyncCapacityService {
         FROM AsyncApexJob
         WHERE Status IN :JOB_STATUSES AND JobType IN :CHARGED_JOB_TYPES
         WITH SYSTEM_MODE
-        ORDER BY JobType ASC
+        ORDER BY TotalJobItems DESC NULLS LAST
         LIMIT :rowLimit
       ];
       tallyJobs(jobs, r);

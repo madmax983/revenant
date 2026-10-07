@@ -17,8 +17,8 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
    `DailyAsyncApexExecutions`. `Limits.getAsyncCalls()` is "reserved for
    future use" and gives no org data.
 2. Read the `Holding`, `Queued`, `Processing` and `Preparing` jobs with one
-   `AsyncApexJob` row query, max 2,001 rows (`ORDER BY JobType`, so batch
-   jobs come first). Read only the job types that the daily limit counts:
+   `AsyncApexJob` row query, max 2,001 rows (`ORDER BY TotalJobItems DESC`,
+   so the largest batch jobs come first; #280). Read only the job types that the daily limit counts:
    `BatchApex`, `Future`, `Queueable`, `ScheduledApex` (#280). Count the rows
    and the executions that they need in Apex. A capped read, or a batch job
    that did not start or is in `Preparing` (no chunk count yet), gives a

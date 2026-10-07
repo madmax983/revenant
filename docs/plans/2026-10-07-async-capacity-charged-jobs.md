@@ -25,14 +25,16 @@ Salesforce docs: the daily limit counts batch Apex (`start`, `execute`,
 
 ## Reverse brainstorm: how can it fail?
 
-| Risk                                                         | Control                                                   |
-| ------------------------------------------------------------ | --------------------------------------------------------- |
-| A `Processing` batch at its last chunk gives 0               | Formula keeps `finish`: `max(T − D − 1, 0) + 1`. Test it. |
-| `JobType` spelled wrong in the filter                        | One constant list. The helper test uses the same names.   |
-| A `Processing` batch with `TotalJobItems` 0 shows as unsized | `start` is done in `Processing`. Not unsized. Test it.    |
-| Job counts disagree with **Setup → Apex Jobs**               | Docs say the counts are charged job types only.           |
-| `ORDER BY JobType` no longer puts batch first                | `BatchApex` sorts first in the new set.                   |
-| SOQL cost goes up                                            | Same query, one more filter. Test checks 1 SOQL.          |
+| Risk                                                         | Control                                                                                      |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| A `Processing` batch at its last chunk gives 0               | Formula keeps `finish`: `max(T − D − 1, 0) + 1`. Test it.                                    |
+| `JobType` spelled wrong in the filter                        | One constant list. The helper test uses the same names.                                      |
+| A `Processing` batch with `TotalJobItems` 0 shows as unsized | `start` is done in `Processing`. Not unsized. Test it.                                       |
+| Job counts disagree with **Setup → Apex Jobs**               | Docs say the counts are charged job types only.                                              |
+| `ORDER BY JobType` does not put batch first                  | SOQL sorts a picklist in setup order. Use `ORDER BY TotalJobItems DESC NULLS LAST` (review). |
+| SOQL cost goes up                                            | Same query, one more filter. Test checks 1 SOQL.                                             |
+| Salesforce docs do not name `SharingRecalculation`           | The issue says it is not charged. Keep it out. Rare jobs.                                    |
+| `ScheduledApex` rows stay `Queued`                           | Each counts 1. Docs say so. No change (as today).                                            |
 
 ## Six hats
 

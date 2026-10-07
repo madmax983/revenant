@@ -67,12 +67,14 @@ The panel also shows these counts. They have no status:
   (`BatchApex`) counts 1 for each chunk that is left (`TotalJobItems` −
   `JobItemsProcessed`), plus 1 for finish. In `Processing`, the daily count
   already has the current chunk: max(chunks left − 1, 0) + 1.
+- A `ScheduledApex` row stays `Queued` until the schedule is deleted. It
+  counts 1, whatever its next fire time or repeat rate.
 - The pending executions are a lower bound in two cases:
   - A batch job did not start or is in `Preparing`. Its `TotalJobItems` is 0,
     so its chunk count is not known. It counts 1. The panel shows how many
     batch jobs have no size.
   - The read counts max 2,000 jobs. When more jobs are pending, the panel
-    says so. Batch jobs are read first.
+    says so. Batch jobs with the most chunks are read first.
 - For a lower bound, the panel shows the percent as "≥ n%". When the lower
   bound is below the critical threshold, the status is **Unknown**, because
   the real value can be Critical. When the lower bound is at or above the
