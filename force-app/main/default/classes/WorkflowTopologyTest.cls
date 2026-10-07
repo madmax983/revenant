@@ -1386,8 +1386,7 @@ public class WorkflowTopologyTest {
       Workflow_Instance__c v2 = seedVersioned(wf, MIDDLE, 2);
 
       WorkflowTopology.Graph g1 = WorkflowTopology.forInstance(v1.Id);
-      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id)
-        .overlay;
+      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id).overlay;
 
       System.assert(hasEdge(g1.edges, MIDDLE, V2_ONLY), 'Graph keeps union');
       System.assert(g1.overlay.nextSteps.isEmpty(), 'Version 1 ends here');
@@ -1445,8 +1444,7 @@ public class WorkflowTopologyTest {
       Workflow_Instance__c v2 = seedVersioned(wf, MIDDLE, 2);
 
       WorkflowTopology.Graph g1 = WorkflowTopology.forInstance(v1.Id);
-      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id)
-        .overlay;
+      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id).overlay;
 
       System.assertEquals(true, node(g1, MIDDLE).terminal, 'Union: v2 ends');
       System.assert(g1.overlay.nextSteps.isEmpty());
@@ -1530,10 +1528,8 @@ public class WorkflowTopologyTest {
       seedSteps(v1.Id, new List<String>{ MIDDLE + '|Completed' });
       seedSteps(v2.Id, new List<String>{ MIDDLE + '|Completed' });
 
-      WorkflowTopology.Overlay o1 = WorkflowTopology.forInstance(v1.Id)
-        .overlay;
-      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id)
-        .overlay;
+      WorkflowTopology.Overlay o1 = WorkflowTopology.forInstance(v1.Id).overlay;
+      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id).overlay;
 
       System.assertEquals(MIDDLE, o1.nextStepsFrom);
       System.assert(o1.nextSteps.isEmpty());

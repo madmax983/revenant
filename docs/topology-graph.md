@@ -52,6 +52,15 @@ flowchart LR
    When `getSteps()` also declares that name, the engine rule applies: only
    the newest such row is a rollback, and only when `<step>` is on
    `Compensation_Stack__c` and the status permits a live rollback.
+5. **Next steps.** Issue #290. The overlay routes as the engine does. It
+   probes one step, `nextStepsFrom`, with the two `COMPLETE` results:
+   - A serial run routes from its current step.
+   - A `SPLIT` (a comma in `Current_Step__c`) routes after the join from
+     its spawning step. This is the newest `Completed` or `OperatorSkipped`
+     row that is not a branch, as in `WorkflowParallelJoin`.
+   - A `VersionedWorkflow` uses the stored `Definition_Version__c`. A null
+     version is version 1. Thus a version outside the newest 50 also
+     routes.
 
 ## What The Graph Shows
 
@@ -105,11 +114,20 @@ step. See
 
 ## The Current Step
 
-- **SPLIT:** `currentSteps` has one entry for each branch.
+- **SPLIT:** `currentSteps` has one entry for each branch. The next steps
+  are the steps after the join, from the spawning step.
 - **Rollback:** a rollback runs (`Compensating`, `Cancelling`) or is
   parked (the newest row is a compensation row). The step of the newest
   compensation row is current. The graph shows no next step.
 - **End:** the graph shows no next step.
+- **Not known:** `nextSteps` is empty and `nextStepsUnknownReason` gives
+  the cause. The summary shows "No next step is known." and the cause:
+  - `ROUTING_UNKNOWN`: the step is not declared, or each probe threw for
+    the version of the run.
+  - `SPAWNING_STEP_UNKNOWN`: no step row in the newest 200 rows shows the
+    step that started the `SPLIT`.
+- **Can end:** `canEnd` is true when a probe of `nextStepsFrom` gave no
+  successor.
 - **Signal wait:** the summary and the current node show the awaited
   signal, for example `Approve:OrderReview`. The value is the #84
   descriptor that the instance detail reads. A timed approval has a
@@ -133,7 +151,8 @@ The DTO shape is pinned by `WorkflowTopologyTest.dtoShapeIsPinned`:
   `compensatable`, `routingUnknown`, `reachable`.
 - `Edge`: `source`, `target`.
 - `Overlay`: `instanceId`, `instanceStatus`, `currentSteps`,
-  `currentState`, `path`, `nextSteps`, `pathTruncated`.
+  `currentState`, `path`, `nextSteps`, `nextStepsFrom`, `canEnd`,
+  `nextStepsUnknownReason`, `pathTruncated`.
 - `PathEntry`: `stepName`, `status`, `compensation`.
 
 `WorkflowTopology` does no authorization check. The LWC endpoints are on
@@ -152,8 +171,8 @@ give access to this class.
 - **Bounded.** The graph uses 1 SOQL for the type check in each
   transaction. The probe makes 2 `getNextStep` calls for each step, plus 2
   for each step and version (50 versions maximum). The overlay adds 2 SOQL:
-  the instance, and 1 step query with `LIMIT 201`. The cost does not grow
-  with the step history.
+  the instance, and 1 step query with `LIMIT 201`. It adds 2 `getNextStep`
+  calls for the next steps. The cost does not grow with the step history.
 - **No schema.** No new object, field, event or metadata type.
 
 ## Limits
@@ -161,6 +180,7 @@ give access to this class.
 - The validator makes an instance of each step class. Keep step and
   definition constructors free of side effects. The engine has the same
   rule.
-- The graph shows the union of the routes of the probed versions.
+- The graph shows the union of the routes of the probed versions. The
+  next steps of an instance use only its version.
 - The graph does not update itself. It reads again when the instance
   detail refreshes.
