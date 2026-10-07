@@ -561,7 +561,8 @@ public class WorkflowTopologyTest {
   /**
    * @description 60 versions. Versions 1 and 2 of Middle read step output:
    * the null-output probe throws. Version 1 then goes to Start. Version 2
-   * ends. Version 3 goes to Start or ends.
+   * ends. Version 3 goes to Start or ends. Later versions go to Start, so
+   * the graph probe finds no end at Middle.
    */
   public class OldVersionThrowsWorkflow implements VersionedWorkflow {
     /**
@@ -618,7 +619,7 @@ public class WorkflowTopologyTest {
         Integer size = result.directive().outputJson.length();
         return version == 1 && size > 0 ? START : null;
       }
-      return null;
+      return current == MIDDLE ? START : null;
     }
   }
 
@@ -1586,6 +1587,7 @@ public class WorkflowTopologyTest {
 
       System.assertEquals(new List<String>{ START }, graph.overlay.nextSteps);
       System.assertEquals(true, graph.overlay.canEnd);
+      System.assertEquals(true, node(graph, MIDDLE).terminal, 'End mark');
       System.assertEquals(true, node(graph, MIDDLE).routingUnknown);
       System.assert(
         graph.incompleteReasons.contains(WorkflowTopology.REASON_ROUTING_VARIES)

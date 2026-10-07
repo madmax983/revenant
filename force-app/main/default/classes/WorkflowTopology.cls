@@ -577,6 +577,10 @@ public inherited sharing class WorkflowTopology {
       b.addReason(REASON_ROUTING_VARIES);
     }
     overlay.canEnd = t.endingSteps.contains(fromStep) && !threw;
+    if (overlay.canEnd) {
+      // The graph shows the End mark that the overlay found.
+      b.nodeByName.get(fromStep).terminal = true;
+    }
     if (overlay.nextSteps.isEmpty() && !overlay.canEnd) {
       overlay.nextStepsUnknownReason = NEXT_ROUTING_UNKNOWN;
     }
