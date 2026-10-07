@@ -58,10 +58,25 @@ public inherited sharing class VerifyWorkflowHelper {
       ) {
         return StepResult.complete(null, 'SuccessorFinished');
       }
+      // once() keeps the key the same on each run of this step.
       return StepResult.continueAsNew(
         'successor',
-        'SuccessorKey_' + System.currentTimeMillis()
+        'SuccessorKey_' +
+        (String) ctx.captures().once('nowMs', new NowProducer())
       );
+    }
+  }
+
+  /**
+   * @description Produces the current time in epoch milliseconds, as a String.
+   */
+  private class NowProducer implements CaptureProducer {
+    /**
+     * @description Returns the current time.
+     * @return The epoch milliseconds, as a String.
+     */
+    public Object produce() {
+      return String.valueOf(System.currentTimeMillis());
     }
   }
 }

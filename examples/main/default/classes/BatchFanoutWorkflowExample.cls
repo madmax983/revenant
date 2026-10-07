@@ -355,8 +355,13 @@ public inherited sharing class BatchFanoutWorkflowExample {
       String accId = (String) acc.get('id');
       String accName = (String) acc.get('name');
 
+      // once() keeps the audit time the same on each run of this step.
+      Long auditedAt = Long.valueOf(
+        (String) ctx.captures().once('auditedAt', new NowProducer())
+      );
       String status = 'Audited';
-      String note = 'Audited by Revenant Workflow at ' + DateTime.now();
+      String note =
+        'Audited by Revenant Workflow at ' + Datetime.newInstance(auditedAt);
 
       if (accId.startsWith('001') && accId.length() >= 15) {
         // Real Account - Perform DML transaction
@@ -367,12 +372,25 @@ public inherited sharing class BatchFanoutWorkflowExample {
 
       Map<String, Object> auditResult = new Map<String, Object>{
         'status' => status,
-        'timestamp' => DateTime.now().getTime(),
+        'timestamp' => auditedAt,
         'score' => 95,
         'accountId' => accId,
         'accountName' => accName
       };
       return StepResult.complete(null, auditResult);
+    }
+  }
+
+  /**
+   * @description Produces the current time in epoch milliseconds, as a String.
+   */
+  private class NowProducer implements CaptureProducer {
+    /**
+     * @description Returns the current time.
+     * @return The epoch milliseconds, as a String.
+     */
+    public Object produce() {
+      return String.valueOf(Datetime.now().getTime());
     }
   }
 

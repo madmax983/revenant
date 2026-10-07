@@ -82,9 +82,15 @@ public inherited sharing class IncrementalSyncWorkflowExample {
     public StepResult execute(StepContext ctx) {
       // Use previousRunAt as the high-water mark. Fall back to a cold-start
       // lookback window on the very first run (previousRunAt is null).
+      // once() keeps the cold-start window the same on each run of this step.
       Datetime since = ctx.previousRunAt != null
         ? ctx.previousRunAt
-        : Datetime.now().addHours(-coldStartLookbackHours);
+        : Datetime.newInstance(
+            Long.valueOf(
+              (String) ctx.captures()
+                .once('coldStartSince', new SinceProducer())
+            )
+          );
 
       // Drain the ENTIRE window each run. With previousRunAt as the cursor,
       // run N queries >= start(N-1) and run N+1 queries >= start(N), so every
@@ -115,6 +121,21 @@ public inherited sharing class IncrementalSyncWorkflowExample {
           'processedCount' => processed,
           'since' => since.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'')
         }
+      );
+    }
+  }
+
+  /**
+   * @description Produces the cold-start window start in epoch milliseconds, as a String.
+   */
+  private class SinceProducer implements CaptureProducer {
+    /**
+     * @description Returns the current time minus the cold-start lookback.
+     * @return The epoch milliseconds, as a String.
+     */
+    public Object produce() {
+      return String.valueOf(
+        Datetime.now().addHours(-coldStartLookbackHours).getTime()
       );
     }
   }

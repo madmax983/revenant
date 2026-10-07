@@ -1,6 +1,6 @@
 # Determinism lint gate (issue #135).
 # rust: fmt, clippy (pedantic, nursery), tests. Then the lint runs on this repo.
-# That step only reports. Correct the example hazards (#283), then make it fail the job.
+# That step fails the job on a HIGH hazard.
 # plugin: builds the wasm core and runs the sf plugin tests.
 name: Determinism Lint
 
@@ -52,8 +52,8 @@ jobs:
         run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
       - name: Test
         run: cargo test
-      - name: Dogfood (report only)
-        run: cargo run --quiet -- --fail-on never ../../force-app ../../examples
+      - name: Dogfood (fail on HIGH)
+        run: cargo run --quiet -- ../../force-app ../../examples
 
   plugin:
     name: sf plugin

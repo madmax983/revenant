@@ -97,6 +97,7 @@ public inherited sharing class CalloutTimeoutWorkflowExample {
         // via doCalloutAndResume, so skipping the enqueue reproduces the
         // production suspend/resume path without the test-only chaining.
         if (!Test.isRunningTest()) {
+          // revenant-lint-disable-next-line: the blank step state guards it, and suspend() follows
           System.enqueueJob(
             new AsyncCalloutJob(ctx.workflowInstanceId, endpoint)
           );
