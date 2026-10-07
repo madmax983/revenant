@@ -622,6 +622,33 @@ public class WorkflowTopologyTest {
     }
   }
 
+  /** @description getSteps() is empty. Start still routes to Middle. */
+  public class NoStepsWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares no step.
+     * @return An empty list.
+     */
+    public List<String> getSteps() {
+      return new List<String>();
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes Start to Middle.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return current == START ? MIDDLE : null;
+    }
+  }
+
   /**
    * @description Start splits into Approve and Reject, then goes to Finish.
    * Approve -> Reject is a branch route that the join does not use.
@@ -1708,6 +1735,27 @@ public class WorkflowTopologyTest {
       System.assert(overlay.nextSteps.isEmpty());
       System.assertEquals(true, overlay.canEnd, 'getNextStep gives null');
       System.assertEquals(null, overlay.nextStepsUnknownReason);
+    }
+  }
+
+  @IsTest
+  static void emptyStepListStillRoutesTheRun() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'NoStepsWorkflow',
+        'Running',
+        START
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assert(
+        graph.incompleteReasons.contains(
+          WorkflowTopology.REASON_DEFINITION_UNRESOLVED
+        )
+      );
+      System.assertEquals(new List<String>{ MIDDLE }, graph.overlay.nextSteps);
+      System.assertEquals(null, graph.overlay.nextStepsUnknownReason);
     }
   }
 

@@ -305,11 +305,13 @@ public inherited sharing class WorkflowTopology {
     for (WorkflowValidator.Defect d : result.defects) {
       b.graph.defects.add(d.message);
     }
+    // Keep the definition before the return: the engine routes a run without
+    // getSteps(), so the overlay can too.
+    b.definition = result.definition;
     if (result.transitions == null || result.declaredSteps.isEmpty()) {
       b.addReason(REASON_DEFINITION_UNRESOLVED);
       return b;
     }
-    b.definition = result.definition;
     b.graph.initialStep = result.initialStep;
     addNodesAndEdges(b, result);
     markReachable(b);
