@@ -408,6 +408,122 @@ describe("c-workflow-topology-graph", () => {
       expect(q(element, "summary-state").textContent).toBe("Running");
     });
 
+    // Issue #290: the overlay gives the step that routes, its end flag and
+    // the reason when the next step is not known.
+    const running = (extra) =>
+      overlay({
+        currentState: "RUNNING",
+        instanceStatus: "Running",
+        ...extra,
+      });
+
+    it("lists the steps after the join of a SPLIT", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          gapsFound: false,
+          overlay: running({
+            currentSteps: [S, R],
+            nextStepsFrom: V,
+            nextSteps: [H],
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next").textContent).toBe(
+        "Ship (after the branches join)",
+      );
+      expect(q(element, "summary-next-caveat")).toBeNull();
+    });
+
+    it("says that a SPLIT can end after the join", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          gapsFound: false,
+          overlay: running({
+            currentSteps: [S, R],
+            nextStepsFrom: V,
+            nextSteps: [],
+            canEnd: true,
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next").textContent).toBe(
+        "None. The run can end after the branches join.",
+      );
+    });
+
+    it("says not known when the step that started a SPLIT is not known", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          gapsFound: false,
+          nodes: [
+            node(V, "Validate", { initial: true }),
+            node(S, "Reserve", { terminal: true }),
+            node(H, "Ship", { terminal: true }),
+          ],
+          overlay: running({
+            currentSteps: [S, H],
+            nextSteps: [],
+            nextStepsUnknownReason: "SPAWNING_STEP_UNKNOWN",
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next").textContent).toBe(
+        "No next step is known.",
+      );
+      expect(q(element, "summary-next-caveat").textContent).toContain(
+        "started the parallel branches",
+      );
+    });
+
+    it("uses the route of the run version, not the end mark of the node", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          gapsFound: false,
+          overlay: running({
+            currentSteps: [H],
+            nextStepsFrom: H,
+            nextSteps: [],
+            canEnd: false,
+            nextStepsUnknownReason: "ROUTING_UNKNOWN",
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next").textContent).toBe(
+        "No next step is known.",
+      );
+      expect(q(element, "summary-next-caveat").textContent).toContain(
+        "version of this run",
+      );
+    });
+
+    it("says that the run can end at the current step", async () => {
+      const element = await render(
+        { instanceId: "a0G000000000001" },
+        graph({
+          gapsFound: false,
+          overlay: running({
+            currentSteps: [S],
+            nextStepsFrom: S,
+            nextSteps: [],
+            canEnd: true,
+          }),
+        }),
+      );
+
+      expect(q(element, "summary-next").textContent).toBe(
+        "None. The run can end here.",
+      );
+      expect(q(element, "summary-next-caveat")).toBeNull();
+    });
+
     it("draws the path in order and marks no edge as used", async () => {
       const element = await render(
         { instanceId: "a0G000000000001" },
