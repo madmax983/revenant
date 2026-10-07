@@ -233,17 +233,23 @@ public inherited sharing class WorkflowTransitionProbe {
     Transitions t = new Transitions();
     Boolean versioned = def instanceof VersionedWorkflow;
     Integer routed = version == null ? 1 : version;
+    Set<String> outcomes = new Set<String>();
     for (StepResult probe : probeResults()) {
+      String successor;
       try {
-        t.record(
-          stepName,
-          versioned
-            ? ((VersionedWorkflow) def).getNextStep(stepName, probe, routed)
-            : def.getNextStep(stepName, probe)
-        );
+        successor = versioned
+          ? ((VersionedWorkflow) def).getNextStep(stepName, probe, routed)
+          : def.getNextStep(stepName, probe);
       } catch (Exception e) {
         t.unresolvedSteps.add(stepName);
+        continue;
       }
+      outcomes.add(String.isBlank(successor) ? '' : successor);
+      t.record(stepName, successor);
+    }
+    // As recordOutcome does: two outcomes show data-dependent routing.
+    if (outcomes.size() > 1) {
+      t.variedSteps.add(stepName);
     }
     return t;
   }

@@ -540,8 +540,8 @@ public inherited sharing class WorkflowTopology {
       version <= MAX_VERSION);
   }
 
-  // Copies the probe of nextStepsFrom to the overlay. A probe that threw marks
-  // the step "?" and stops canEnd, because the throw can hide a route.
+  // Copies the probe of nextStepsFrom to the overlay. A probe that threw or
+  // varied marks the step "?". A throw also stops canEnd: it can hide a route.
   private static void applyProbe(
     Overlay overlay,
     GraphBuilder b,
@@ -557,6 +557,10 @@ public inherited sharing class WorkflowTopology {
     if (threw) {
       b.nodeByName.get(fromStep).routingUnknown = true;
       b.addReason(REASON_ROUTING_THREW);
+    }
+    if (t.variedSteps.contains(fromStep)) {
+      b.nodeByName.get(fromStep).routingUnknown = true;
+      b.addReason(REASON_ROUTING_VARIES);
     }
     overlay.canEnd = t.endingSteps.contains(fromStep) && !threw;
     if (overlay.nextSteps.isEmpty() && !overlay.canEnd) {

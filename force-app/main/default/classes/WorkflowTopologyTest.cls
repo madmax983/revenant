@@ -561,7 +561,7 @@ public class WorkflowTopologyTest {
   /**
    * @description 60 versions. Versions 1 and 2 of Middle read step output:
    * the null-output probe throws. Version 1 then goes to Start. Version 2
-   * ends.
+   * ends. Version 3 goes to Start or ends.
    */
   public class OldVersionThrowsWorkflow implements VersionedWorkflow {
     /**
@@ -608,6 +608,10 @@ public class WorkflowTopologyTest {
     ) {
       if (current == START) {
         return MIDDLE;
+      }
+      if (current == MIDDLE && version == 3) {
+        // The two probes differ: Start, then an end.
+        return result.directive().outputJson == null ? START : null;
       }
       if (current == MIDDLE && version <= 2) {
         // A null output throws here. The output "{}" has length 2.
@@ -1535,6 +1539,26 @@ public class WorkflowTopologyTest {
       System.assertEquals(true, node(graph, MIDDLE).routingUnknown);
       System.assert(
         graph.incompleteReasons.contains(WorkflowTopology.REASON_ROUTING_THREW)
+      );
+    }
+  }
+
+  @IsTest
+  static void varyingProbeOfAnOldVersionMarksTheStepUnknown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedVersioned(
+        PREFIX + 'OldVersionThrowsWorkflow',
+        MIDDLE,
+        3
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assertEquals(new List<String>{ START }, graph.overlay.nextSteps);
+      System.assertEquals(true, graph.overlay.canEnd);
+      System.assertEquals(true, node(graph, MIDDLE).routingUnknown);
+      System.assert(
+        graph.incompleteReasons.contains(WorkflowTopology.REASON_ROUTING_VARIES)
       );
     }
   }
