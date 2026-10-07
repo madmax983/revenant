@@ -17,15 +17,18 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
    future use" and gives no org data.
 2. Read the `Holding`, `Queued`, `Processing` and `Preparing` jobs with one
    `AsyncApexJob` row query, max 2,001 rows (`ORDER BY JobType`, so batch
-   jobs come first). Count the rows and the executions that they need in
-   Apex. A capped read, or a batch job that did not start or is in
-   `Preparing` (no chunk count yet), gives a lower bound: it can prove
-   Critical, else the status is Unknown.
+   jobs come first). Read only the job types that the daily limit counts:
+   `BatchApex`, `Future`, `Queueable`, `ScheduledApex` (#280). Count the rows
+   and the executions that they need in Apex. A capped read, or a batch job
+   that did not start or is in `Preparing` (no chunk count yet), gives a
+   lower bound: it can prove Critical, else the status is Unknown.
 3. Two metrics have a status. Both gate the Queueable chain: daily
    executions, and pending executions / daily executions left. A job needs 1
-   execution. A batch job needs 1 for each chunk that is left, plus 1.
-   Queueable jobs in `Queued` have no queue limit, so the pending executions
-   use the executions that are left as the limit.
+   execution. A batch job needs 1 for each chunk that is left, plus 1. A
+   `Processing` job is already in the daily count: a non-batch job needs 0,
+   and a batch job does not count its current chunk (#280). Queueable jobs in
+   `Queued` have no queue limit, so the pending executions use the executions
+   that are left as the limit.
 4. The flex queue (`Holding` / 100) is a count with no status. Queueable jobs
    do not go into the flex queue, so a full flex queue cannot stop the chain.
 5. When the org has an elastic limit above 0, use it as the daily limit. This
@@ -64,3 +67,5 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
 - A grouped `SUM(TotalJobItems)`: `SUM()` costs one query row for each job,
   with no cap. A job storm can then stop the read when the operator needs it.
 - A second SOQL for the batch progress: the issue permits 1 SOQL.
+- Read all job types and skip the uncounted types in Apex: test rows still
+  fill the 2,000-row cap (#280).

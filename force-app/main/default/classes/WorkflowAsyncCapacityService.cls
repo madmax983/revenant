@@ -23,6 +23,17 @@ public inherited sharing class WorkflowAsyncCapacityService {
     JOB_PREPARING
   };
 
+  private static final String JOB_TYPE_BATCH = 'BatchApex';
+  // Job types that the daily limit counts (Salesforce governor limits docs).
+  // Test runs, sharing recalculation and batch worker rows are not counted.
+  @TestVisible
+  private static final List<String> CHARGED_JOB_TYPES = new List<String>{
+    JOB_TYPE_BATCH,
+    'Future',
+    'Queueable',
+    'ScheduledApex'
+  };
+
   // Max job rows that the read counts. One more row tells that the read stopped.
   @TestVisible
   private static final Integer JOB_SCAN_LIMIT = 2000;
@@ -96,11 +107,11 @@ public inherited sharing class WorkflowAsyncCapacityService {
     }
   }
 
-  // One row query, max JOB_SCAN_LIMIT + 1 rows. A grouped SUM() costs one query row
-  // for each job with no cap, so the read counts the rows itself. ORDER BY JobType puts
-  // BatchApex rows (the rows with many chunks) first when the read stops at the cap.
-  // A batch job in Preparing has TotalJobItems 0, so it counts as unsized.
-  // A failed read leaves jobsKnown false, so the pending executions metric shows Unknown.
+  // One row query, max JOB_SCAN_LIMIT + 1 rows. It reads charged job types only. A
+  // grouped SUM() costs one query row for each job with no cap, so the read counts the
+  // rows itself. ORDER BY JobType puts BatchApex rows (the rows with many chunks) first
+  // when the read stops at the cap. A failed read leaves jobsKnown false, so the
+  // pending executions metric shows Unknown.
   private static void readJobCounts(AsyncCapacityEvaluator.Reading r) {
     try {
       if (failJobQuery) {
@@ -110,50 +121,68 @@ public inherited sharing class WorkflowAsyncCapacityService {
       List<AsyncApexJob> jobs = [
         SELECT Status, JobType, TotalJobItems, JobItemsProcessed
         FROM AsyncApexJob
-        WHERE Status IN :JOB_STATUSES
+        WHERE Status IN :JOB_STATUSES AND JobType IN :CHARGED_JOB_TYPES
         WITH SYSTEM_MODE
         ORDER BY JobType ASC
         LIMIT :rowLimit
       ];
-      Map<String, Integer> byStatus = new Map<String, Integer>{
-        JOB_HOLDING => 0,
-        JOB_QUEUED => 0,
-        JOB_PROCESSING => 0,
-        JOB_PREPARING => 0
-      };
-      Integer executions = 0;
-      Integer unsized = 0;
-      Integer counted = Math.min(jobs.size(), JOB_SCAN_LIMIT);
-      for (Integer i = 0; i < counted; i++) {
-        AsyncApexJob job = jobs[i];
-        byStatus.put(job.Status, byStatus.get(job.Status) + 1);
-        executions += executionsFor(
-          job.JobType,
-          job.TotalJobItems,
-          job.JobItemsProcessed
-        );
-        if (isUnsizedBatch(job.JobType, job.TotalJobItems)) {
-          unsized++;
-        }
-      }
-      r.holding = byStatus.get(JOB_HOLDING);
-      r.queued = byStatus.get(JOB_QUEUED);
-      r.processing = byStatus.get(JOB_PROCESSING);
-      r.preparing = byStatus.get(JOB_PREPARING);
-      r.pendingExecutions = executions;
-      r.jobsCapped = jobs.size() > JOB_SCAN_LIMIT;
-      r.unsizedBatches = unsized;
-      r.jobsKnown = true;
+      tallyJobs(jobs, r);
     } catch (Exception ex) {
       r.jobsKnown = false;
     }
   }
 
   /**
-   * @description Executions that one pending job still needs. A batch job needs one
-   * for each chunk left plus one for finish (min. 1). A batch worker row needs 0: its
-   * parent batch row counts the chunk. Other jobs need 1.
+   * @description Counts the first JOB_SCAN_LIMIT rows into the reading: the jobs in
+   * each status, the executions they need and the batch jobs with no size.
+   * @param jobs The AsyncApexJob rows, max JOB_SCAN_LIMIT + 1.
+   * @param r The reading to fill.
+   */
+  @TestVisible
+  private static void tallyJobs(
+    List<AsyncApexJob> jobs,
+    AsyncCapacityEvaluator.Reading r
+  ) {
+    Map<String, Integer> byStatus = new Map<String, Integer>{
+      JOB_HOLDING => 0,
+      JOB_QUEUED => 0,
+      JOB_PROCESSING => 0,
+      JOB_PREPARING => 0
+    };
+    Integer executions = 0;
+    Integer unsized = 0;
+    Integer counted = Math.min(jobs.size(), JOB_SCAN_LIMIT);
+    for (Integer i = 0; i < counted; i++) {
+      AsyncApexJob job = jobs[i];
+      byStatus.put(job.Status, byStatus.get(job.Status) + 1);
+      executions += executionsFor(
+        job.JobType,
+        job.Status,
+        job.TotalJobItems,
+        job.JobItemsProcessed
+      );
+      if (isUnsizedBatch(job.JobType, job.Status, job.TotalJobItems)) {
+        unsized++;
+      }
+    }
+    r.holding = byStatus.get(JOB_HOLDING);
+    r.queued = byStatus.get(JOB_QUEUED);
+    r.processing = byStatus.get(JOB_PROCESSING);
+    r.preparing = byStatus.get(JOB_PREPARING);
+    r.pendingExecutions = executions;
+    r.jobsCapped = jobs.size() > JOB_SCAN_LIMIT;
+    r.unsizedBatches = unsized;
+    r.jobsKnown = true;
+  }
+
+  /**
+   * @description Executions that one job still needs from the daily limit. A job type
+   * that the limit does not count needs 0. A Processing job is already in the daily
+   * count. A batch job needs 1 for each chunk left plus 1 for finish. In Processing,
+   * its current chunk started, so that chunk is not counted. Other jobs need 1, or 0
+   * in Processing.
    * @param jobType The AsyncApexJob.JobType value.
+   * @param status The AsyncApexJob.Status value.
    * @param totalItems The AsyncApexJob.TotalJobItems value.
    * @param processedItems The AsyncApexJob.JobItemsProcessed value.
    * @return The executions the job still needs.
@@ -161,24 +190,35 @@ public inherited sharing class WorkflowAsyncCapacityService {
   @TestVisible
   private static Integer executionsFor(
     String jobType,
+    String status,
     Integer totalItems,
     Integer processedItems
   ) {
-    if (jobType == 'BatchApexWorker') {
+    if (!CHARGED_JOB_TYPES.contains(jobType)) {
       return 0;
     }
-    if (jobType == 'BatchApex') {
+    Boolean started = status == JOB_PROCESSING;
+    if (jobType == JOB_TYPE_BATCH) {
       Integer total = totalItems == null ? 0 : totalItems;
       Integer done = processedItems == null ? 0 : processedItems;
-      return Math.max(total - done, 0) + 1;
+      Integer currentChunk = started ? 1 : 0;
+      return Math.max(total - done - currentChunk, 0) + 1;
     }
-    return 1;
+    return started ? 0 : 1;
   }
 
-  // A batch job whose start method did not run has TotalJobItems 0 or null. Its chunk
-  // count is not known, so its executions are a lower bound.
-  private static Boolean isUnsizedBatch(String jobType, Integer totalItems) {
-    return jobType == 'BatchApex' && (totalItems == null || totalItems == 0);
+  // A batch job whose start method did not finish (not started, or in Preparing) has
+  // TotalJobItems 0 or null. Its chunk count is not known, so its executions are a
+  // lower bound. In Processing, start is done, so 0 means no chunks.
+  private static Boolean isUnsizedBatch(
+    String jobType,
+    String status,
+    Integer totalItems
+  ) {
+    return jobType == JOB_TYPE_BATCH &&
+      status != JOB_PROCESSING &&
+      (totalItems == null ||
+      totalItems == 0);
   }
 
   // Custom metadata getInstance costs no SOQL.
