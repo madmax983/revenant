@@ -77,7 +77,7 @@
                 <div data-id="capacity-asof" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">{asOfLabel}</div>
             </div>
             <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">
-                This panel is read-only. Pending executions: 1 for each job. A batch job counts 1 for each chunk that is left, plus 1. The flex queue holds a maximum of 100 batch jobs. Queueable jobs do not go into the flex queue, so the flex queue has no status.
+                This panel is read-only. Pending executions use only batch, future, Queueable and scheduled Apex jobs. A non-batch job counts 1 before it starts and 0 in Processing. A batch job counts 1 for each chunk that is left, plus 1. In Processing, its current chunk counts 0. The flex queue holds a maximum of 100 batch jobs. Queueable jobs do not go into the flex queue, so the flex queue has no status.
             </p>
         </template>
     </div>

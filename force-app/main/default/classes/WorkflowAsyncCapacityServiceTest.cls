@@ -257,37 +257,229 @@ private class WorkflowAsyncCapacityServiceTest {
     }
   }
 
+  // Asserts executionsFor for one job type, status and batch progress.
+  private static void assertExecutions(
+    Integer expected,
+    String jobType,
+    String status,
+    Integer totalItems,
+    Integer processedItems
+  ) {
+    Assert.areEqual(
+      expected,
+      WorkflowAsyncCapacityService.executionsFor(
+        jobType,
+        status,
+        totalItems,
+        processedItems
+      ),
+      jobType + ' in ' + status
+    );
+  }
+
+  // Makes an in-memory AsyncApexJob. Its fields are read-only, so use JSON.
+  private static AsyncApexJob job(
+    String status,
+    String jobType,
+    Integer totalItems,
+    Integer processedItems
+  ) {
+    return (AsyncApexJob) JSON.deserialize(
+      JSON.serialize(
+        new Map<String, Object>{
+          'Status' => status,
+          'JobType' => jobType,
+          'TotalJobItems' => totalItems,
+          'JobItemsProcessed' => processedItems
+        }
+      ),
+      AsyncApexJob.class
+    );
+  }
+
   @IsTest
-  static void executionsForEachJobType() {
+  static void chargedJobTypesMatchTheDailyLimit() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Salesforce: the daily limit counts batch, future, Queueable and
+      // scheduled Apex executions.
       Assert.areEqual(
-        1,
-        WorkflowAsyncCapacityService.executionsFor('Queueable', 0, 0)
+        new Set<String>{ 'BatchApex', 'Future', 'Queueable', 'ScheduledApex' },
+        new Set<String>(WorkflowAsyncCapacityService.CHARGED_JOB_TYPES)
       );
+    }
+  }
+
+  @IsTest
+  static void nonBatchJobNeedsOneUntilItStarts() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      for (
+        String jobType : new List<String>{
+          'Queueable',
+          'Future',
+          'ScheduledApex'
+        }
+      ) {
+        assertExecutions(1, jobType, 'Holding', null, null);
+        assertExecutions(1, jobType, 'Queued', 0, 0);
+        assertExecutions(1, jobType, 'Preparing', null, null);
+        // A started job is already in dailyUsed.
+        assertExecutions(0, jobType, 'Processing', 0, 0);
+      }
+    }
+  }
+
+  @IsTest
+  static void batchNeedsChunksLeftPlusFinish() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      assertExecutions(4001, 'BatchApex', 'Queued', 5000, 1000);
+      assertExecutions(4001, 'BatchApex', 'Holding', 5000, 1000);
+      assertExecutions(1, 'BatchApex', 'Holding', 0, 0);
+      assertExecutions(1, 'BatchApex', 'Queued', null, null);
+      // Preparing: start runs and TotalJobItems is 0. Finish is left.
+      assertExecutions(1, 'BatchApex', 'Preparing', 0, 0);
+      // Never below 1.
+      assertExecutions(1, 'BatchApex', 'Queued', 10, 12);
+    }
+  }
+
+  @IsTest
+  static void processingBatchDoesNotCountItsCurrentChunk() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      assertExecutions(4000, 'BatchApex', 'Processing', 5000, 1000);
+      assertExecutions(1, 'BatchApex', 'Processing', 10, 9);
+      // Last chunk done or no chunks: finish is left.
+      assertExecutions(1, 'BatchApex', 'Processing', 10, 10);
+      assertExecutions(1, 'BatchApex', 'Processing', 0, 0);
+      assertExecutions(1, 'BatchApex', 'Processing', 10, 12);
+    }
+  }
+
+  @IsTest
+  static void uncountedJobTypesNeedNoExecution() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      for (
+        String jobType : new List<String>{
+          'BatchApexWorker',
+          'TestRequest',
+          'TestWorker',
+          'SharingRecalculation',
+          'ApexToken',
+          null
+        }
+      ) {
+        for (
+          String status : new List<String>{
+            'Holding',
+            'Queued',
+            'Processing',
+            'Preparing'
+          }
+        ) {
+          assertExecutions(0, jobType, status, 5, 1);
+        }
+      }
+    }
+  }
+
+  @IsTest
+  static void tallyDoesNotCountStartedExecutions() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      AsyncCapacityEvaluator.Reading r = new AsyncCapacityEvaluator.Reading();
+      WorkflowAsyncCapacityService.tallyJobs(
+        new List<AsyncApexJob>{
+          job('Processing', 'BatchApex', 10, 4),
+          job('Processing', 'BatchApex', 0, 0),
+          job('Processing', 'Queueable', null, null),
+          job('Processing', 'Future', null, null),
+          job('Queued', 'Queueable', null, null),
+          job('Processing', 'TestRequest', 5, 1),
+          job('Completed', 'Queueable', null, null)
+        },
+        r
+      );
+      Assert.isTrue(r.jobsKnown);
+      Assert.areEqual(5, r.processing, 'The tally counts each row it gets');
+      Assert.areEqual(1, r.queued);
+      Assert.areEqual(0, r.holding);
+      Assert.areEqual(0, r.preparing);
+      // 6 (5 chunks + finish) + 1 (finish) + 0 + 0 + 1 + 0 (TestRequest).
+      // The Completed row is skipped.
+      Assert.areEqual(8, r.pendingExecutions);
+      Assert.areEqual(0, r.unsizedBatches, 'Start is done in Processing');
+      Assert.isFalse(r.jobsCapped);
+    }
+  }
+
+  @IsTest
+  static void tallyFlagsBatchesWithNoSize() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      AsyncCapacityEvaluator.Reading r = new AsyncCapacityEvaluator.Reading();
+      WorkflowAsyncCapacityService.tallyJobs(
+        new List<AsyncApexJob>{
+          job('Holding', 'BatchApex', 0, 0),
+          job('Queued', 'BatchApex', null, null),
+          job('Preparing', 'BatchApex', 0, 0),
+          job('Queued', 'BatchApex', 3, 0)
+        },
+        r
+      );
+      Assert.areEqual(1, r.holding);
+      Assert.areEqual(2, r.queued);
+      Assert.areEqual(1, r.preparing);
+      Assert.areEqual(3, r.unsizedBatches);
+      Assert.areEqual(1 + 1 + 1 + 4, r.pendingExecutions);
+    }
+  }
+
+  @IsTest
+  static void tallyStopsAtTheScanLimit() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<AsyncApexJob> jobs = new List<AsyncApexJob>();
+      AsyncApexJob queued = job('Queued', 'Queueable', null, null);
+      for (
+        Integer i = 0; i <= WorkflowAsyncCapacityService.JOB_SCAN_LIMIT; i++
+      ) {
+        jobs.add(queued);
+      }
+      AsyncCapacityEvaluator.Reading r = new AsyncCapacityEvaluator.Reading();
+      WorkflowAsyncCapacityService.tallyJobs(jobs, r);
+      Assert.isTrue(r.jobsCapped);
+      Assert.areEqual(WorkflowAsyncCapacityService.JOB_SCAN_LIMIT, r.queued);
       Assert.areEqual(
-        1,
-        WorkflowAsyncCapacityService.executionsFor('Future', null, null)
+        WorkflowAsyncCapacityService.JOB_SCAN_LIMIT,
+        r.pendingExecutions
       );
+    }
+  }
+
+  @IsTest
+  static void processingJobsDoNotMakeAFalseCritical() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // 95 executions left. 100 Queueables in Processing are already in
+      // dailyUsed. The old count gave 101 / 95 (Critical).
+      List<AsyncApexJob> jobs = new List<AsyncApexJob>();
+      for (Integer i = 0; i < 100; i++) {
+        jobs.add(job('Processing', 'Queueable', null, null));
+      }
+      jobs.add(job('Queued', 'Queueable', null, null));
+      AsyncCapacityEvaluator.Reading r = new AsyncCapacityEvaluator.Reading();
+      r.dailyUsed = 905;
+      r.dailyLimit = 1000;
+      WorkflowAsyncCapacityService.tallyJobs(jobs, r);
+      Map<String, Object> result = AsyncCapacityEvaluator.evaluate(
+        r,
+        AsyncCapacityEvaluator.parseThresholds(null)
+      );
+      Map<String, Object> backlog = metricFor(
+        result,
+        AsyncCapacityEvaluator.METRIC_BACKLOG
+      );
+      Assert.areEqual(1, backlog.get('used'));
       Assert.areEqual(
-        0,
-        WorkflowAsyncCapacityService.executionsFor('BatchApexWorker', 5, 1),
-        'The parent batch row counts the chunks'
+        AsyncCapacityEvaluator.STATUS_HEALTHY,
+        backlog.get('status')
       );
-      Assert.areEqual(
-        4001,
-        WorkflowAsyncCapacityService.executionsFor('BatchApex', 5000, 1000),
-        'Chunks left plus finish'
-      );
-      Assert.areEqual(
-        1,
-        WorkflowAsyncCapacityService.executionsFor('BatchApex', 0, 0),
-        'A batch that did not start counts at least 1'
-      );
-      Assert.areEqual(
-        1,
-        WorkflowAsyncCapacityService.executionsFor('BatchApex', 10, 12),
-        'Never below 1'
-      );
+      Assert.isFalse((Boolean) result.get('chainAtRisk'));
     }
   }
 
