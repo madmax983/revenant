@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-28
 - **Issue:** #129
+- **Amended:** 2026-10-07 (#280)
 
 ## Context
 
@@ -67,5 +68,5 @@ config field, no new object, max 1 SOQL and no change to the enqueue path.
 - A grouped `SUM(TotalJobItems)`: `SUM()` costs one query row for each job,
   with no cap. A job storm can then stop the read when the operator needs it.
 - A second SOQL for the batch progress: the issue permits 1 SOQL.
-- Read all job types and skip the uncounted types in Apex: test rows still
+- Read all job types and skip the uncharged types in Apex: test rows still
   fill the 2,000-row cap (#280).

@@ -24,8 +24,9 @@ public inherited sharing class WorkflowAsyncCapacityService {
   };
 
   private static final String JOB_TYPE_BATCH = 'BatchApex';
-  // Job types that the daily limit counts (Salesforce governor limits docs).
-  // Test runs, sharing recalculation and batch worker rows are not counted.
+  // Job types that the daily limit charges (Salesforce governor limits docs). Test
+  // runs and sharing recalculation are not charged. The BatchApex row counts the
+  // chunks of its BatchApexWorker rows.
   @TestVisible
   private static final List<String> CHARGED_JOB_TYPES = new List<String>{
     JOB_TYPE_BATCH,
@@ -134,7 +135,8 @@ public inherited sharing class WorkflowAsyncCapacityService {
 
   /**
    * @description Counts the first JOB_SCAN_LIMIT rows into the reading: the jobs in
-   * each status, the executions they need and the batch jobs with no size.
+   * each status, the executions they need and the batch jobs with no size. It skips a
+   * row in a status that the read does not get.
    * @param jobs The AsyncApexJob rows, max JOB_SCAN_LIMIT + 1.
    * @param r The reading to fill.
    */
@@ -154,7 +156,11 @@ public inherited sharing class WorkflowAsyncCapacityService {
     Integer counted = Math.min(jobs.size(), JOB_SCAN_LIMIT);
     for (Integer i = 0; i < counted; i++) {
       AsyncApexJob job = jobs[i];
-      byStatus.put(job.Status, byStatus.get(job.Status) + 1);
+      Integer inStatus = byStatus.get(job.Status);
+      if (inStatus == null) {
+        continue;
+      }
+      byStatus.put(job.Status, inStatus + 1);
       executions += executionsFor(
         job.JobType,
         job.Status,
@@ -180,7 +186,8 @@ public inherited sharing class WorkflowAsyncCapacityService {
    * that the limit does not count needs 0. A Processing job is already in the daily
    * count. A batch job needs 1 for each chunk left plus 1 for finish. In Processing,
    * its current chunk started, so that chunk is not counted. Other jobs need 1, or 0
-   * in Processing.
+   * in Processing. The batch start method is not counted, so a batch job that did not
+   * start is a lower bound (see isUnsizedBatch).
    * @param jobType The AsyncApexJob.JobType value.
    * @param status The AsyncApexJob.Status value.
    * @param totalItems The AsyncApexJob.TotalJobItems value.

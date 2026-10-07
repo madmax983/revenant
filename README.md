@@ -966,7 +966,7 @@ The Workflow Dashboard includes a **System Doctor** tab to monitor limits, check
 - **Bootstrap Action**: Includes an **Enqueue Watchdog** button to manually trigger and restart the Queueable chain if it ever halts (e.g., during major platform maintenance windows).
 - **Async Apex Capacity**: The panel is read-only. It shows two metrics as percent used:
   - Daily async Apex executions (`System.OrgLimits` `DailyAsyncApexExecutions`, or the elastic limit when the org has one).
-  - Pending executions / daily executions left. Only the job types that the daily limit counts. A job needs 1 execution, or 0 in `Processing`. A batch job needs 1 for each chunk that is left, plus 1. In `Processing`, its current chunk is not counted.
+  - Pending executions / daily executions left. The panel reads only the job types that the daily limit charges. A non-batch job needs 1 execution, or 0 in `Processing`. A batch job needs 1 for each chunk that is left, plus 1. In `Processing`, its current chunk is not counted.
   - It also shows the flex queue (`Holding` / 100) and the job counts, with no status. Queueable jobs do not go into the flex queue.
   - Each metric is **Healthy**, **Degraded** (≥ warn, default 80%), **Critical** (≥ crit, default 95%) or **Unknown** (no limit, or a failed job read). When a metric is Critical, the panel shows a red **Chain handoff at risk** alert.
   - Cost: 1 SOQL for the read, no DML. The in-flight enqueue path does not call it. The global admission brake calls it when its auto-brake is on. See [docs/async-capacity.md](docs/async-capacity.md).

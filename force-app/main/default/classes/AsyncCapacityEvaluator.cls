@@ -1,7 +1,7 @@
 /**
  * @description Pure rules of the Async Apex Capacity panel (#129). It parses the
  * thresholds, calculates percentages and gives each metric a status. Metrics: daily
- * executions (used / limit) and pending executions (of the counted Holding, Queued,
+ * executions (used / limit) and pending executions (of the charged Holding, Queued,
  * Processing and Preparing jobs) / daily executions left. Both gate the Queueable
  * chain. The flex queue (Holding / 100) is a count only: Queueables do not enter
  * it. It does no SOQL, no DML and reads no clock.

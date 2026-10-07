@@ -312,14 +312,19 @@ private class WorkflowAsyncCapacityServiceTest {
   @IsTest
   static void nonBatchJobNeedsOneUntilItStarts() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
-      for (String jobType : new List<String>{ 'Queueable', 'Future' }) {
-        assertExecutions(1, jobType, 'Queued', 0, 0);
+      for (
+        String jobType : new List<String>{
+          'Queueable',
+          'Future',
+          'ScheduledApex'
+        }
+      ) {
         assertExecutions(1, jobType, 'Holding', null, null);
+        assertExecutions(1, jobType, 'Queued', 0, 0);
+        assertExecutions(1, jobType, 'Preparing', null, null);
         // A started job is already in dailyUsed.
         assertExecutions(0, jobType, 'Processing', 0, 0);
       }
-      assertExecutions(1, 'ScheduledApex', 'Queued', null, null);
-      assertExecutions(0, 'ScheduledApex', 'Processing', null, null);
     }
   }
 
@@ -386,16 +391,19 @@ private class WorkflowAsyncCapacityServiceTest {
           job('Processing', 'BatchApex', 0, 0),
           job('Processing', 'Queueable', null, null),
           job('Processing', 'Future', null, null),
-          job('Queued', 'Queueable', null, null)
+          job('Queued', 'Queueable', null, null),
+          job('Processing', 'TestRequest', 5, 1),
+          job('Completed', 'Queueable', null, null)
         },
         r
       );
       Assert.isTrue(r.jobsKnown);
-      Assert.areEqual(4, r.processing);
+      Assert.areEqual(5, r.processing, 'The tally counts each row it gets');
       Assert.areEqual(1, r.queued);
       Assert.areEqual(0, r.holding);
       Assert.areEqual(0, r.preparing);
-      // 6 (5 chunks + finish) + 1 (finish) + 0 + 0 + 1.
+      // 6 (5 chunks + finish) + 1 (finish) + 0 + 0 + 1 + 0 (TestRequest).
+      // The Completed row is skipped.
       Assert.areEqual(8, r.pendingExecutions);
       Assert.areEqual(0, r.unsizedBatches, 'Start is done in Processing');
       Assert.isFalse(r.jobsCapped);
@@ -448,7 +456,7 @@ private class WorkflowAsyncCapacityServiceTest {
   static void processingJobsDoNotMakeAFalseCritical() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       // 95 executions left. 100 Queueables in Processing are already in
-      // dailyUsed. The old count gave 100 / 95 (Critical).
+      // dailyUsed. The old count gave 101 / 95 (Critical).
       List<AsyncApexJob> jobs = new List<AsyncApexJob>();
       for (Integer i = 0; i < 100; i++) {
         jobs.add(job('Processing', 'Queueable', null, null));
