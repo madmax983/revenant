@@ -11,7 +11,7 @@ Every check runs in GitHub Actions. Each one also runs on your machine.
 | `ci.yml` | CI org script | `npm run test:ci-org`: tests for `scripts/ci-org` with a fake `sf` | No |
 | `ci.yml` | Code Analyzer | `sf code-analyzer run`, rule selector `recommended` (PMD, ESLint, regex, retire-js, CPD, flow). Fails at High or worse | No |
 | `ci.yml` | CI | One job that needs all of the above. Require this one in branch protection | No |
-| `apex-tests.yml` | Apex tests and coverage (label `run-org-tests`, nightly, on demand) | The shared CI org (or a one-off org), deploy, assign `Revenant_Admin` to the org user, all local Apex tests, org-wide coverage of at least `APEX_MIN_COVERAGE` (85) | Yes |
+| `apex-tests.yml` | Apex tests and coverage (label `run-org-tests`, nightly, on demand) | The shared CI org (or a one-off org), deploy, assign `Revenant_Admin` to the org user, make the user's file library (`scripts/ci-org/warm-file-library.apex`), all local Apex tests, org-wide coverage of at least `APEX_MIN_COVERAGE` (85) | Yes |
 | `sfge.yml` | SFGE | The Code Analyzer graph engine (data-flow rules). Weekly, on main and on demand. Not on pull requests: it takes more than 10 minutes | No |
 | `determinism-lint.yml` | Rust core, sf plugin | See `docs/determinism-lint.md` | No |
 | `report-types.yml` | Static checks | See `docs/report-types.md` | No |

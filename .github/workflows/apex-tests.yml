@@ -134,6 +134,11 @@ jobs:
             echo "$out"
             echo "$out" | grep -qi "duplicate" || exit 1
           fi
+      # A new org makes the user's personal file library on the first file insert. Parallel
+      # tests that insert files can then fail with INVALID_CROSS_REFERENCE_KEY. One insert
+      # here makes the library first.
+      - name: Make the file library of the org user
+        run: sf apex run --target-org ci --file scripts/ci-org/warm-file-library.apex
       # The full result with coverage does not fit in the default Node heap (about 4 GB).
       # The CLI aborts with exit code 134. The runner has at least 7 GB.
       - name: Run all local Apex tests
