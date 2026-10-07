@@ -415,8 +415,12 @@ public inherited sharing class WorkflowTopology {
     }
   }
 
-  // Breadth-first walk from the initial step over the known edges.
+  // Breadth-first walk from the initial step over the known edges. It clears
+  // the old marks first, so a second call after new edges is correct.
   private static void markReachable(GraphBuilder b) {
+    for (Node n : b.graph.nodes) {
+      n.reachable = false;
+    }
     Node start = b.nodeByName.get(
       b.graph.initialStep == null ? '' : b.graph.initialStep
     );
@@ -548,10 +552,18 @@ public inherited sharing class WorkflowTopology {
     WorkflowTransitionProbe.Transitions t
   ) {
     String fromStep = overlay.nextStepsFrom;
+    Boolean newEdge = false;
     for (String successor : t.successorsOf(fromStep)) {
       overlay.nextSteps.add(successor);
-      // A version outside the graph probe can give a new step.
+      // A version outside the graph probe can give a new step and route.
       b.addNode(successor, false);
+      if (!b.hasEdge(fromStep, successor)) {
+        b.addEdge(fromStep, successor);
+        newEdge = true;
+      }
+    }
+    if (newEdge) {
+      refreshReachable(b);
     }
     Boolean threw = t.unresolvedSteps.contains(fromStep);
     if (threw) {
@@ -566,6 +578,17 @@ public inherited sharing class WorkflowTopology {
     if (overlay.nextSteps.isEmpty() && !overlay.canEnd) {
       overlay.nextStepsUnknownReason = NEXT_ROUTING_UNKNOWN;
     }
+  }
+
+  // Marks the reachable nodes again after the overlay adds an edge. A step
+  // that the new edge reaches is no longer an unreached step.
+  private static void refreshReachable(GraphBuilder b) {
+    Integer i = b.graph.incompleteReasons.indexOf(REASON_UNREACHED_STEPS);
+    if (i >= 0) {
+      b.graph.incompleteReasons.remove(i);
+    }
+    b.graph.gapsFound = !b.graph.incompleteReasons.isEmpty();
+    markReachable(b);
   }
 
   // The engine rule (WorkflowParallelJoin.proceedToJoin): the newest Completed

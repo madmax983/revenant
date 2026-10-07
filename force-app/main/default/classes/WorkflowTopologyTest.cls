@@ -1497,6 +1497,9 @@ public class WorkflowTopologyTest {
       );
       System.assertEquals(new List<String>{ MISSING }, graph.overlay.nextSteps);
       System.assertEquals(false, node(graph, MISSING).declared);
+      // The graph draws the route that the overlay found.
+      System.assert(hasEdge(graph.edges, MIDDLE, MISSING), 'Edge added');
+      System.assertEquals(true, node(graph, MISSING).reachable);
     }
   }
 

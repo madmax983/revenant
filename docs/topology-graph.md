@@ -62,7 +62,8 @@ flowchart LR
      `WorkflowParallelJoin`.
    - A `VersionedWorkflow` uses the stored `Definition_Version__c`. A null
      version is version 1. The probe also uses a version that the graph
-     does not probe (older than the newest 50).
+     does not probe (older than the newest 50). The graph then gets each
+     new route as an edge.
 
 ## What The Graph Shows
 
