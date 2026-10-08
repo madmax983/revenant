@@ -503,6 +503,190 @@ public class WorkflowTopologyTest {
   }
 
   /**
+   * @description Version 1 routing of Middle throws. Version 2 ends at Middle.
+   */
+  public class VersionThrowsWorkflow implements VersionedWorkflow {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, MIDDLE };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Gives the latest version.
+     * @return 2.
+     */
+    public Integer getLatestVersion() {
+      return 2;
+    }
+    /**
+     * @description Routes as version 2.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return getNextStep(current, result, 2);
+    }
+    /**
+     * @description Routes for a version. Version 1 throws for Middle.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @param version The version.
+     * @return The next step, or null.
+     */
+    public String getNextStep(
+      String current,
+      StepResult result,
+      Integer version
+    ) {
+      if (current == START) {
+        return MIDDLE;
+      }
+      if (current == MIDDLE && version == 1) {
+        throw new IllegalArgumentException('Version 1 needs step output.');
+      }
+      return null;
+    }
+  }
+
+  /**
+   * @description 60 versions. Versions 1 and 2 of Middle read step output:
+   * the null-output probe throws. Version 1 then goes to Start. Version 2
+   * ends. Version 3 goes to Start or ends. Later versions go to Start, so
+   * the graph probe finds no end at Middle.
+   */
+  public class OldVersionThrowsWorkflow implements VersionedWorkflow {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, MIDDLE };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Gives the latest version.
+     * @return 60.
+     */
+    public Integer getLatestVersion() {
+      return 60;
+    }
+    /**
+     * @description Routes as version 60.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return getNextStep(current, result, 60);
+    }
+    /**
+     * @description Routes for a version. Versions 1 and 2 read the output.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @param version The version.
+     * @return The next step, or null.
+     */
+    public String getNextStep(
+      String current,
+      StepResult result,
+      Integer version
+    ) {
+      if (current == START) {
+        return MIDDLE;
+      }
+      if (current == MIDDLE && version == 3) {
+        // The two probes differ: Start, then an end.
+        return result.directive().outputJson == null ? START : null;
+      }
+      if (current == MIDDLE && version <= 2) {
+        // A null output throws here. The output "{}" has length 2.
+        Integer size = result.directive().outputJson.length();
+        return version == 1 && size > 0 ? START : null;
+      }
+      return current == MIDDLE ? START : null;
+    }
+  }
+
+  /** @description getSteps() is empty. Start still routes to Middle. */
+  public class NoStepsWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares no step.
+     * @return An empty list.
+     */
+    public List<String> getSteps() {
+      return new List<String>();
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes Start to Middle.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return current == START ? MIDDLE : null;
+    }
+  }
+
+  /**
+   * @description Start splits into Approve and Reject, then goes to Finish.
+   * Approve -> Reject is a branch route that the join does not use.
+   */
+  public class SplitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, APPROVE, REJECT, FINISH };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes the steps.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      if (current == START) {
+        return FINISH;
+      }
+      if (current == APPROVE) {
+        return REJECT;
+      }
+      return null;
+    }
+  }
+
+  /**
    * @description Not a workflow. The graph must not make an instance of it.
    */
   public class NotAWorkflow {
@@ -556,6 +740,22 @@ public class WorkflowTopologyTest {
       Compensation_Stack__c = '["' + START + '"]'
     );
     insert inst;
+    return inst;
+  }
+
+  // A null version clears the field default (1) after the insert.
+  private static Workflow_Instance__c seedVersioned(
+    String workflowName,
+    String currentStep,
+    Integer version
+  ) {
+    Workflow_Instance__c inst = seedInstance(
+      workflowName,
+      'Running',
+      currentStep
+    );
+    inst.Definition_Version__c = version;
+    update inst;
     return inst;
   }
 
@@ -1255,7 +1455,409 @@ public class WorkflowTopologyTest {
       );
       System.assertEquals(3, graph.nodes.size(), 'No joined node');
       System.assertEquals(false, graph.gapsFound);
-      System.assertEquals(new List<String>{ FINISH }, graph.overlay.nextSteps);
+      // No row gives the spawning step, so the step after the join is not known.
+      System.assert(graph.overlay.nextSteps.isEmpty(), 'No branch successors');
+      System.assertEquals(null, graph.overlay.nextStepsFrom);
+      System.assertEquals(false, graph.overlay.canEnd);
+      System.assertEquals(
+        WorkflowTopology.NEXT_SPAWNING_STEP_UNKNOWN,
+        graph.overlay.nextStepsUnknownReason
+      );
+    }
+  }
+
+  // ==========================================
+  // NEXT STEPS (issue #290)
+  // ==========================================
+
+  @IsTest
+  static void versionedInstanceShowsOnlyTheSuccessorsOfItsVersion() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String wf = PREFIX + 'VersionedTopologyWorkflow';
+      Workflow_Instance__c v1 = seedVersioned(wf, MIDDLE, 1);
+      Workflow_Instance__c v2 = seedVersioned(wf, MIDDLE, 2);
+
+      WorkflowTopology.Graph g1 = WorkflowTopology.forInstance(v1.Id);
+      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id).overlay;
+
+      System.assert(hasEdge(g1.edges, MIDDLE, V2_ONLY), 'Graph keeps union');
+      System.assert(g1.overlay.nextSteps.isEmpty(), 'Version 1 ends here');
+      System.assertEquals(true, g1.overlay.canEnd);
+      System.assertEquals(MIDDLE, g1.overlay.nextStepsFrom);
+      System.assertEquals(null, g1.overlay.nextStepsUnknownReason);
+      System.assertEquals(new List<String>{ V2_ONLY }, o2.nextSteps);
+      System.assertEquals(false, o2.canEnd);
+    }
+  }
+
+  @IsTest
+  static void nullVersionRoutesAsVersionOne() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedVersioned(
+        PREFIX + 'VersionedTopologyWorkflow',
+        MIDDLE,
+        null
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assert(overlay.nextSteps.isEmpty(), 'The engine uses version 1');
+      System.assertEquals(true, overlay.canEnd);
+    }
+  }
+
+  @IsTest
+  static void versionOutsideTheProbeWindowStillRoutes() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedVersioned(
+        PREFIX + 'SixtyVersionsWorkflow',
+        MIDDLE,
+        1
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assert(
+        graph.incompleteReasons.contains(
+          WorkflowTopology.REASON_VERSIONS_CAPPED
+        )
+      );
+      System.assertEquals(new List<String>{ MISSING }, graph.overlay.nextSteps);
+      System.assertEquals(false, node(graph, MISSING).declared);
+      // The graph draws the route that the overlay found.
+      System.assert(hasEdge(graph.edges, MIDDLE, MISSING), 'Edge added');
+      System.assertEquals(true, node(graph, MISSING).reachable);
+    }
+  }
+
+  @IsTest
+  static void versionProbeThatThrowsGivesNotKnown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String wf = PREFIX + 'VersionThrowsWorkflow';
+      Workflow_Instance__c v1 = seedVersioned(wf, MIDDLE, 1);
+      Workflow_Instance__c v2 = seedVersioned(wf, MIDDLE, 2);
+
+      WorkflowTopology.Graph g1 = WorkflowTopology.forInstance(v1.Id);
+      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id).overlay;
+
+      System.assertEquals(true, node(g1, MIDDLE).terminal, 'Union: v2 ends');
+      System.assert(g1.overlay.nextSteps.isEmpty());
+      System.assertEquals(false, g1.overlay.canEnd, 'Version 1 threw');
+      System.assertEquals(
+        WorkflowTopology.NEXT_ROUTING_UNKNOWN,
+        g1.overlay.nextStepsUnknownReason
+      );
+      System.assertEquals(true, o2.canEnd);
+      System.assertEquals(null, o2.nextStepsUnknownReason);
+    }
+  }
+
+  @IsTest
+  static void partialProbeThrowMarksTheStepUnknown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String wf = PREFIX + 'OldVersionThrowsWorkflow';
+      Workflow_Instance__c inst = seedVersioned(wf, MIDDLE, 1);
+      System.assertEquals(
+        false,
+        node(WorkflowTopology.build(wf), MIDDLE).routingUnknown,
+        'The graph does not probe version 1'
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assertEquals(new List<String>{ START }, graph.overlay.nextSteps);
+      System.assertEquals(true, node(graph, MIDDLE).routingUnknown);
+      System.assert(
+        graph.incompleteReasons.contains(WorkflowTopology.REASON_ROUTING_THREW)
+      );
+    }
+  }
+
+  @IsTest
+  static void varyingProbeOfAnOldVersionMarksTheStepUnknown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedVersioned(
+        PREFIX + 'OldVersionThrowsWorkflow',
+        MIDDLE,
+        3
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assertEquals(new List<String>{ START }, graph.overlay.nextSteps);
+      System.assertEquals(true, graph.overlay.canEnd);
+      System.assertEquals(true, node(graph, MIDDLE).terminal, 'End mark');
+      System.assertEquals(true, node(graph, MIDDLE).routingUnknown);
+      System.assert(
+        graph.incompleteReasons.contains(WorkflowTopology.REASON_ROUTING_VARIES)
+      );
+    }
+  }
+
+  @IsTest
+  static void versionOutsideTheIntegerRangeGivesNotKnown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedVersioned(
+        PREFIX + 'VersionedTopologyWorkflow',
+        MIDDLE,
+        1
+      );
+      inst.Definition_Version__c = 3000000000L;
+      update inst;
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assert(overlay.nextSteps.isEmpty());
+      System.assertEquals(MIDDLE, overlay.nextStepsFrom);
+      System.assertEquals(
+        WorkflowTopology.NEXT_ROUTING_UNKNOWN,
+        overlay.nextStepsUnknownReason
+      );
+    }
+  }
+
+  @IsTest
+  static void splitShowsTheSuccessorsOfTheSpawningStep() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'SplitWorkflow',
+        'Running',
+        APPROVE + ',' + REJECT
+      );
+      // Oldest first. A Completed branch row and a Pending row do not count.
+      seedSteps(
+        inst.Id,
+        new List<String>{
+          FINISH + '|Completed',
+          START + '|OperatorSkipped',
+          APPROVE + '|Running',
+          REJECT + '|Completed',
+          FINISH + '|Pending'
+        }
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(
+        new List<String>{ APPROVE, REJECT },
+        overlay.currentSteps
+      );
+      System.assertEquals(START, overlay.nextStepsFrom, 'Spawning step');
+      System.assertEquals(new List<String>{ FINISH }, overlay.nextSteps);
+      System.assertEquals(false, overlay.canEnd);
+      System.assertEquals(null, overlay.nextStepsUnknownReason);
+    }
+  }
+
+  @IsTest
+  static void splitWhoseSpawningStepEndsCanEnd() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'SplitWorkflow',
+        'Running',
+        APPROVE + ',' + START
+      );
+      seedSteps(
+        inst.Id,
+        new List<String>{
+          FINISH + '|Completed',
+          APPROVE + '|Running',
+          START + '|Running'
+        }
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(FINISH, overlay.nextStepsFrom);
+      System.assert(overlay.nextSteps.isEmpty(), 'Not the branch routes');
+      System.assertEquals(true, overlay.canEnd);
+    }
+  }
+
+  @IsTest
+  static void splitUsesTheInstanceVersion() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String wf = PREFIX + 'VersionedTopologyWorkflow';
+      String branches = START + ',' + FINISH;
+      Workflow_Instance__c v1 = seedVersioned(wf, branches, 1);
+      Workflow_Instance__c v2 = seedVersioned(wf, branches, 2);
+      seedSteps(v1.Id, new List<String>{ MIDDLE + '|Completed' });
+      seedSteps(v2.Id, new List<String>{ MIDDLE + '|Completed' });
+
+      WorkflowTopology.Overlay o1 = WorkflowTopology.forInstance(v1.Id).overlay;
+      WorkflowTopology.Overlay o2 = WorkflowTopology.forInstance(v2.Id).overlay;
+
+      System.assertEquals(MIDDLE, o1.nextStepsFrom);
+      System.assert(o1.nextSteps.isEmpty());
+      System.assertEquals(true, o1.canEnd);
+      System.assertEquals(new List<String>{ V2_ONLY }, o2.nextSteps);
+    }
+  }
+
+  @IsTest
+  static void singleBranchIsRoutedAsASerialStep() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // No comma: the engine routes from the step itself.
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'SplitWorkflow',
+        'Running',
+        APPROVE
+      );
+      seedSteps(
+        inst.Id,
+        new List<String>{ START + '|Completed', APPROVE + '|Running' }
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(APPROVE, overlay.nextStepsFrom);
+      System.assertEquals(new List<String>{ REJECT }, overlay.nextSteps);
+    }
+  }
+
+  @IsTest
+  static void undeclaredCurrentStepIsProbedAsTheEngineDoes() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String retired = PREFIX + 'RetiredStep';
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'LinearWorkflow',
+        'Running',
+        retired
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(retired, overlay.nextStepsFrom);
+      System.assert(overlay.nextSteps.isEmpty());
+      System.assertEquals(true, overlay.canEnd, 'getNextStep gives null');
+      System.assertEquals(null, overlay.nextStepsUnknownReason);
+    }
+  }
+
+  @IsTest
+  static void emptyStepListStillRoutesTheRun() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'NoStepsWorkflow',
+        'Running',
+        START
+      );
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      System.assert(
+        graph.incompleteReasons.contains(
+          WorkflowTopology.REASON_DEFINITION_UNRESOLVED
+        )
+      );
+      System.assertEquals(new List<String>{ MIDDLE }, graph.overlay.nextSteps);
+      System.assertEquals(null, graph.overlay.nextStepsUnknownReason);
+    }
+  }
+
+  @IsTest
+  static void undeclaredSpawningStepIsProbed() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      String retired = PREFIX + 'RetiredStep';
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'SplitWorkflow',
+        'Running',
+        APPROVE + ',' + REJECT
+      );
+      // The branch names differ in case only. They are still branches.
+      seedSteps(
+        inst.Id,
+        new List<String>{
+          retired + '|Completed',
+          APPROVE.toUpperCase() + '|Completed',
+          REJECT.toLowerCase() + '|Completed'
+        }
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(retired, overlay.nextStepsFrom);
+      System.assertEquals(true, overlay.canEnd);
+    }
+  }
+
+  @IsTest
+  static void spawningRowOutsideTheReadRowsGivesNotKnown() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowTopology.pathLimit = 1;
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'SplitWorkflow',
+        'Running',
+        APPROVE + ',' + REJECT
+      );
+      // The query reads the newest 2 rows. Start is the third newest.
+      seedSteps(
+        inst.Id,
+        new List<String>{
+          START + '|Completed',
+          APPROVE + '|Completed',
+          REJECT + '|Running'
+        }
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assert(overlay.nextSteps.isEmpty());
+      System.assertEquals(null, overlay.nextStepsFrom);
+      System.assertEquals(
+        WorkflowTopology.NEXT_SPAWNING_STEP_UNKNOWN,
+        overlay.nextStepsUnknownReason
+      );
+    }
+  }
+
+  @IsTest
+  static void probeThatThrowsAndEndsIsNotAnEnd() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      // Version 2 of Middle: the null-output probe throws, the other ends.
+      Workflow_Instance__c inst = seedVersioned(
+        PREFIX + 'OldVersionThrowsWorkflow',
+        MIDDLE,
+        2
+      );
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assert(overlay.nextSteps.isEmpty());
+      System.assertEquals(false, overlay.canEnd, 'A probe threw');
+      System.assertEquals(
+        WorkflowTopology.NEXT_ROUTING_UNKNOWN,
+        overlay.nextStepsUnknownReason
+      );
+    }
+  }
+
+  @IsTest
+  static void stoppedRunHasNoNextStepState() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedInstance(
+        PREFIX + 'SplitWorkflow',
+        'Completed',
+        null
+      );
+      seedSteps(inst.Id, new List<String>{ START + '|Completed' });
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assert(overlay.nextSteps.isEmpty());
+      System.assertEquals(null, overlay.nextStepsFrom);
+      System.assertEquals(false, overlay.canEnd);
+      System.assertEquals(null, overlay.nextStepsUnknownReason);
     }
   }
 
@@ -1372,6 +1974,9 @@ public class WorkflowTopologyTest {
           'currentState',
           'path',
           'nextSteps',
+          'nextStepsFrom',
+          'canEnd',
+          'nextStepsUnknownReason',
           'pathTruncated'
         },
         keysOf(graph.overlay)

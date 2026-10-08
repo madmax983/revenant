@@ -31,6 +31,8 @@
  * version. The graph probes only the newest MAX_PROBED_VERSIONS versions, so a
  * large version number (for example a date) cannot use all the CPU time of a
  * dashboard request.
+ *
+ * Issue #290: probeStep probes one step for the version of one instance.
  */
 public inherited sharing class WorkflowTransitionProbe {
   /** The maximum number of versions that the graph probes. */
@@ -213,6 +215,53 @@ public inherited sharing class WorkflowTransitionProbe {
     }
   }
 
+  /**
+   * @description Probes one step as the engine routes an instance (issue
+   * #290). A VersionedWorkflow uses getNextStep(current, result, version), as
+   * WorkflowStepAdvance.resolveNextStepName does. Another definition uses
+   * getNextStep(current, result). It records no defect.
+   * @param def The workflow definition.
+   * @param stepName The step to probe.
+   * @param version The instance version. Null gives version 1, as in the engine.
+   * @return The transitions of the step.
+   */
+  public static Transitions probeStep(
+    WorkflowDefinition def,
+    String stepName,
+    Integer version
+  ) {
+    Transitions t = new Transitions();
+    Boolean versioned = def instanceof VersionedWorkflow;
+    Integer routed = version == null ? 1 : version;
+    Set<String> outcomes = new Set<String>();
+    for (StepResult probe : probeResults()) {
+      String successor;
+      try {
+        successor = versioned
+          ? ((VersionedWorkflow) def).getNextStep(stepName, probe, routed)
+          : def.getNextStep(stepName, probe);
+      } catch (Exception e) {
+        t.unresolvedSteps.add(stepName);
+        continue;
+      }
+      outcomes.add(String.isBlank(successor) ? '' : successor);
+      t.record(stepName, successor);
+    }
+    // As recordOutcome does: two outcomes show data-dependent routing.
+    if (outcomes.size() > 1) {
+      t.variedSteps.add(stepName);
+    }
+    return t;
+  }
+
+  // The COMPLETE-action results that each probe gives to getNextStep.
+  private static List<StepResult> probeResults() {
+    return new List<StepResult>{
+      StepResult.complete(null, null),
+      StepResult.complete(null, new Map<String, Object>())
+    };
+  }
+
   // Records one probe outcome. Two different outcomes in one pass show that
   // the routing of the step depends on step output.
   private static void recordOutcome(
@@ -273,10 +322,7 @@ public inherited sharing class WorkflowTransitionProbe {
     final WorkflowValidator.ValidationResult result;
     final Transitions transitions = new Transitions();
     Integer maxVersions;
-    final List<StepResult> probes = new List<StepResult>{
-      StepResult.complete(null, null),
-      StepResult.complete(null, new Map<String, Object>())
-    };
+    final List<StepResult> probes = probeResults();
 
     ProbeContext(
       List<String> declaredSteps,

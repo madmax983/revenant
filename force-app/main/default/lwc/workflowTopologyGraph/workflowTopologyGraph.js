@@ -69,6 +69,14 @@ const REASON_LABELS = {
     "The probe read only the newest versions. The routes of older versions are not in the graph.",
 };
 
+// Issue #290: why the overlay gives no next step.
+const NEXT_CAVEATS = {
+  SPAWNING_STEP_UNKNOWN:
+    "No step row shows the step that started the parallel branches. The step after the join is not known.",
+};
+const DEFAULT_NEXT_CAVEAT =
+  "Step output can route to other steps. This list shows only the routes that the probe found.";
+
 // Own keys only, so a code such as "toString" shows as it is.
 const labelFor = (labels, code) =>
   Object.prototype.hasOwnProperty.call(labels, code) ? labels[code] : code;
@@ -356,6 +364,23 @@ export default class WorkflowTopologyGraph extends LightningElement {
     );
   }
 
+  // The step that the engine routes from (issue #290). For a SPLIT it is the
+  // step that started the branches.
+  get nextFromNodes() {
+    const from = this.overlay && this.overlay.nextStepsFrom;
+    if (!from) {
+      return this.currentNodes;
+    }
+    const n = this.nodeByName.get(from);
+    return n ? [n] : [];
+  }
+
+  // True when the next steps come after the join of a SPLIT.
+  get nextAfterJoin() {
+    const from = this.overlay && this.overlay.nextStepsFrom;
+    return Boolean(from) && !this.currentSteps.includes(from);
+  }
+
   get nextLabel() {
     if (this.effectiveState === ENDED) {
       return "None. The run has ended.";
@@ -363,13 +388,20 @@ export default class WorkflowTopologyGraph extends LightningElement {
     if (this.inRollback) {
       return "None. The rollback runs.";
     }
-    const next = list(this.overlay && this.overlay.nextSteps);
+    const overlay = this.overlay || {};
+    const join = this.nextAfterJoin;
+    const next = list(overlay.nextSteps);
     if (next.length > 0) {
-      return next.map((name) => this.labelOf(name)).join(", ");
+      let text = next.map((name) => this.labelOf(name)).join(", ");
+      if (overlay.canEnd === true) {
+        text += " (or the run can end)";
+      }
+      return join ? `${text} (after the branches join)` : text;
     }
-    const nodes = this.currentNodes;
-    if (nodes.length && nodes.every((n) => n.terminal && !n.routingUnknown)) {
-      return "None. The run can end here.";
+    if (!overlay.nextStepsUnknownReason && overlay.canEnd === true) {
+      return join
+        ? "None. The run can end after the branches join."
+        : "None. The run can end here.";
     }
     return "No next step is known.";
   }
@@ -378,12 +410,28 @@ export default class WorkflowTopologyGraph extends LightningElement {
     if (this.effectiveState === ENDED || this.inRollback) {
       return false;
     }
-    const nodes = this.currentNodes;
+    if (this.overlay && this.overlay.nextStepsUnknownReason) {
+      return true;
+    }
+    const nodes = this.nextFromNodes;
     return (
       this.graph.gapsFound === true ||
       nodes.length === 0 ||
       nodes.some((n) => n.routingUnknown === true)
     );
+  }
+
+  get nextCaveat() {
+    const overlay = this.overlay || {};
+    const reason = overlay.nextStepsUnknownReason;
+    if (reason === "ROUTING_UNKNOWN") {
+      return overlay.nextStepsFrom
+        ? `No route is known from ${this.labelOf(overlay.nextStepsFrom)} for the version of this run.`
+        : "No current step is known.";
+    }
+    return reason && Object.prototype.hasOwnProperty.call(NEXT_CAVEATS, reason)
+      ? NEXT_CAVEATS[reason]
+      : DEFAULT_NEXT_CAVEAT;
   }
 
   // ---- SVG ----

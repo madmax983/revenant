@@ -80,6 +80,11 @@ public with sharing class WorkflowValidator {
     public Set<String> compensatableSteps = new Set<String>();
     /** The probe transitions, or null when the definition did not resolve. */
     public WorkflowTransitionProbe.Transitions transitions;
+    /**
+     * The definition instance, or null when it did not resolve (issue #290).
+     * Transient: JSON.serialize does not write it.
+     */
+    public transient WorkflowDefinition definition;
 
     /**
      * @description Creates an empty result bound to the workflow being validated.
@@ -159,6 +164,7 @@ public with sharing class WorkflowValidator {
       // Nothing further is checkable without a usable definition instance.
       return result;
     }
+    result.definition = def;
 
     // (b) The entry point must be present and declared. Author contract
     // methods may throw (e.g. reading malformed configuration); surface that as
