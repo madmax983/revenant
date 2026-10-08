@@ -9,9 +9,10 @@
  * A serial instance goes to `Suspended`. The sleep sweep wakes it when the
  * timer ends, or at once when the timer already ended.
  *
- * A parallel instance keeps the timer of each branch in `Wake_At__c`. A branch
- * that still sleeps is not run. The instance goes to `Suspended` with the
- * first deadline in `Sleep_Until__c`. The sleep sweep starts each branch.
+ * A parallel instance keeps the timer of each branch in `Wake_At__c`. Release
+ * does not run a branch whose deadline is in the future. If a branch sleeps,
+ * the instance is `Suspended` and `Sleep_Until__c` is the first deadline. The
+ * sleep sweep starts each sleeping branch when its timer ends.
  */
 public inherited sharing class WorkflowParkedTimer {
   /**
@@ -29,8 +30,8 @@ public inherited sharing class WorkflowParkedTimer {
   /**
    * @description Sets the status of each instance that leaves a park, and
    * clears its park time. A signal that arrived in the park stays `Received`,
-   * so the step must run and read it. Costs one SOQL for the branches of the
-   * parallel instances and one for the signals.
+   * so the step must run and read it. Costs at most one SOQL for branch
+   * timers and one for signals.
    *
    * A serial instance with a timer is `Suspended`. A parallel instance with a
    * branch that still sleeps is `Suspended`, and `Sleep_Until__c` is the first
@@ -39,7 +40,8 @@ public inherited sharing class WorkflowParkedTimer {
    * {@link WorkflowBranchResume#enqueueUnlessSleeping}.
    * @param instances The parked instances, with Sleep_Until__c, Current_Step__c
    * and Parked_At__c loaded.
-   * @return The Ids of the instances that need no worker: they wait for a timer.
+   * @return The Ids of the instances that start no worker. Each one is serial
+   * with a timer, or all its open branches wait for a timer.
    */
   public static Set<Id> settleAll(List<Workflow_Instance__c> instances) {
     Datetime now = Datetime.now();
@@ -74,7 +76,7 @@ public inherited sharing class WorkflowParkedTimer {
         inst.Status__c = 'Suspended';
         inst.Sleep_Until__c = b.firstWake(now);
         if (b.sleeping(now).size() >= b.open) {
-          waiting.add(inst.Id); // Every open branch sleeps.
+          waiting.add(inst.Id); // All open branches wait for a timer.
         }
       }
       inst.Parked_At__c = null;

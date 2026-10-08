@@ -70,7 +70,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     String stepName
   ) {
     List<Workflow_Instance__c> insts = [
-      SELECT Status__c, Sleep_Until__c
+      SELECT Status__c, Sleep_Until__c, Current_Step__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -87,6 +87,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
       return false;
     }
     if (String.isNotBlank(stepName)) {
+      Datetime now = Datetime.now();
       List<Workflow_Step_Execution__c> steps = [
         SELECT Id
         FROM Workflow_Step_Execution__c
@@ -94,6 +95,8 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
           Workflow_Instance__c = :instanceId
           AND Step_Name__c = :stepName
           AND Status__c = 'Pending'
+          AND (Wake_At__c = NULL
+          OR Wake_At__c <= :now)
         WITH SYSTEM_MODE
         LIMIT 1
       ];
@@ -102,13 +105,26 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
       }
     }
 
+    // A sibling branch can still sleep. Keep its deadline (issue #311).
     Workflow_Instance__c toUpdate = new Workflow_Instance__c(
       Id = instanceId,
-      Sleep_Until__c = null,
+      Sleep_Until__c = nextBranchWake(inst),
       Async_Job_Id__c = null
     );
     update as system toUpdate;
     return true;
+  }
+
+  private static Datetime nextBranchWake(Workflow_Instance__c inst) {
+    if (
+      String.isBlank(inst.Current_Step__c) ||
+      !inst.Current_Step__c.contains(',')
+    ) {
+      return null;
+    }
+    return WorkflowBranchTimer.load(new List<Workflow_Instance__c>{ inst })
+      .get(inst.Id)
+      .firstWake(Datetime.now());
   }
 
   /**

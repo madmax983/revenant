@@ -121,8 +121,8 @@ public inherited sharing class WorkflowStepAdmission {
         return true;
       }
       // A park clears the timer, so a later timer marks a wait that ended in
-      // the park (issue #240). The park time tells a signal from the park from
-      // an old one (issue #311). Write these fields only. The instance was
+      // the park (issue #240). The park time shows which signals are new
+      // (issue #311). Write only these fields. The instance was
       // read with no lock, so a full write can put back stale slot fields
       // (issue #136).
       Database.update(

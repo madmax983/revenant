@@ -30,6 +30,10 @@ public inherited sharing class WorkflowPauseResumeDrainer {
   @TestVisible
   private static Integer resumeChunkSize = 200;
 
+  // The branches that the test path started. Lets a test see the skip rule.
+  @TestVisible
+  private static Set<String> dispatchedInTest = new Set<String>();
+
   // Flips up to resumeChunkSize parked instances for the scope back to Running
   // and re-enqueues them (serial via bulk publish, parallel via branch fan-out).
   // Returns true if a full chunk was processed, meaning more may remain to drain.
@@ -420,6 +424,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
       );
       return;
     }
+    dispatchedInTest.add(instanceId + '|' + branch);
     if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
       System.enqueueJob(new WorkflowOrchestrator(instanceId, branch));
     }

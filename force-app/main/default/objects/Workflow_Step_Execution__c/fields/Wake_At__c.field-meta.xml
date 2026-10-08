@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Wake_At__c</fullName>
-    <description>Deadline of the timer wait of this step: a sleep or a timed wait (issue #311). Blank means no timer. Release and the sleep sweep read it for each parallel branch.</description>
+    <description>Deadline of the timer wait of this step: a sleep or a timed wait (issue #311). Blank means no timer. The engine sets it for every step. Release, resume and the sleep sweep read it for a parallel branch.</description>
     <externalId>false</externalId>
     <label>Wake At</label>
     <required>false</required>

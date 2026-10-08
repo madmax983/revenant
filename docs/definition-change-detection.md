@@ -65,13 +65,13 @@ Release writes the live fingerprint and shape, sets `Running`, re-arms step time
 A wait can end in the park and leave a timer. Release must not run that step early. Pause resume and hold release follow the same rules.
 
 - **Serial instance.** Release sets `Suspended` and does not enqueue. The sleep sweep wakes the instance when the timer ends.
-- **Parallel instance.** Each branch keeps its own timer in `Wake_At__c` on its step row. Release does not start a branch that still sleeps. It starts the other open branches. The instance is `Suspended`. `Sleep_Until__c` is the first deadline. The sleep sweep starts each branch when its timer ends. It keeps the next deadline on the instance.
-- **Signal.** A signal that arrived in the park keeps the instance `Running`, so the step reads it. A signal that arrived before the park does not. The gate writes the park time in `Parked_At__c`. Release compares it with the `CreatedDate` of the signal. A blank park time means the park is older than this field. Then any `Received` signal keeps the instance `Running`.
+- **Parallel instance.** Each branch keeps its own timer in `Wake_At__c` on its step row. Release does not start a branch that still sleeps. It starts the other open branches. A branch whose deadline already ended runs at release. The instance is `Suspended`. `Sleep_Until__c` is the first deadline. The sleep sweep starts each branch when its timer ends. It keeps the next deadline on the instance.
+- **Signal.** A signal that arrived in the park keeps the instance `Running`, so the step reads it. A signal that arrived before the park does not. Each park gate writes the park time in `Parked_At__c`. Release and resume compare it with the `CreatedDate` of each signal. A blank park time means the park is older than this field. Then any `Received` signal keeps the instance `Running`.
 
 ## Limits
 
 - The fingerprint covers the step list only. It does not cover `getNextStep()` logic or step code.
 - The engine does not migrate an instance to the new shape.
 - To change a shape without a park, implement `VersionedWorkflow` and route by version.
-- A parallel branch with a timed wait (a timeout step) runs the step again on release, if its timer ended in the park. The sweep does not route the timeout step of a parallel branch.
+- A parallel branch with a timed wait does not use its timeout route. When its timer ends, the engine runs the same step again. This is true for release and for the sleep sweep.
 - The engine never parks its own workflows (`WatchdogWorkflow`, `CleanupWorkflow`, `BulkRedriveWorkflow`, `BulkCancelWorkflow`, `ArchiveWorkflow`). A parked watchdog stops all sweeps.

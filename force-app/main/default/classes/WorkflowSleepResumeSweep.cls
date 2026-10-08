@@ -22,8 +22,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
     List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
     List<Id> parallelResumeIds = new List<Id>();
     List<Workflow_Step_Execution__c> timedWaitFallbackExecs = new List<Workflow_Step_Execution__c>();
-    // Issue #311: the timer of each parallel branch. The sweep starts each
-    // branch whose own timer ended, and keeps the next timer on the instance.
+    // Issue #311: timer of each parallel branch. The sweep starts each branch
+    // whose timer ended. It keeps the next timer on the instance.
     Datetime now;
     Map<Id, WorkflowBranchTimer.Branches> branchTimers = new Map<Id, WorkflowBranchTimer.Branches>();
     Map<Id, List<String>> dueBranches = new Map<Id, List<String>>();
@@ -178,7 +178,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
     if (!(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)) {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(b.instanceIds);
     }
-    // Issue #311: start each parallel branch whose own timer ended, by name.
+    // Start each parallel branch whose timer ended, by name.
     if (!b.dueBranches.isEmpty()) {
       WorkflowBranchResume.enqueueNamedBranches(b.dueBranches);
     }
@@ -261,8 +261,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
     } else {
       routeNonCompensatingResume(inst, latestStep, b);
     }
-    // A parallel branch that still sleeps keeps the instance asleep, with the
-    // next timer (issue #311).
+    // If a parallel branch still sleeps, the instance stays Suspended and keeps
+    // the next timer.
     Datetime next = b.nextWake.get(inst.Id);
     inst.Sleep_Until__c = next;
     if (next != null) {
@@ -308,8 +308,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
   }
 
-  // Issue #311: splits the sleeping branches of a parallel instance into the
-  // branches to start now and the next timer to keep.
+  // Finds the branches whose timer ended, to start them. Keeps the next timer.
   private static void planBranchTimers(
     Workflow_Instance__c inst,
     SleepResumeBatch b

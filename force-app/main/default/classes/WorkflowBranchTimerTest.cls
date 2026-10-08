@@ -1,6 +1,6 @@
 /**
  * @description Tests for the timer of each parallel branch (issue #311).
- * Written first (RED). A sleep or a timed wait records `Wake_At__c` on its
+ * A sleep or a timed wait records `Wake_At__c` on its
  * step row. Release, resume and hold release keep that deadline for a
  * parallel branch. The sleep sweep starts a due branch by name.
  */
@@ -55,16 +55,27 @@ public class WorkflowBranchTimerTest {
 
   private static Workflow_Instance__c load(Id instanceId) {
     return [
-      SELECT Id, Status__c, Current_Step__c, Sleep_Until__c, Parked_At__c
+      SELECT
+        Id,
+        Status__c,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Current_Step__c,
+        Sleep_Until__c,
+        Parked_At__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
     ];
   }
 
+  // The pause drain has its own record of the branches it starts.
   private static Boolean enqueued(Id instanceId, String step) {
     return WorkflowResumeEnqueue.enqueuedBranchKeys.contains(
-      instanceId + '::' + step
-    );
+        instanceId + '::' + step
+      ) ||
+      WorkflowPauseResumeDrainer.dispatchedInTest.contains(
+        instanceId + '|' + step
+      );
   }
 
   private static void releaseFrom(String park, Id instanceId) {
@@ -162,8 +173,8 @@ public class WorkflowBranchTimerTest {
     .Wake_At__c;
   }
 
-  // A branch that starts again must drop its old deadline. Else a later park
-  // release holds it for a timer that no longer applies.
+  // A branch that starts again must drop its old deadline. If not, a later
+  // release waits for a timer that no longer applies.
   @IsTest
   static void testStepStartClearsWake() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -209,11 +220,8 @@ public class WorkflowBranchTimerTest {
         Workflow_Instance__c after = load(inst.Id);
         System.assertEquals('Suspended', after.Status__c, park);
         System.assertEquals(wake, after.Sleep_Until__c, park + ': deadline');
-        // The pause drain has its own fan-out. It does not set the key.
-        if (park != 'Paused') {
-          System.assertEquals(false, enqueued(inst.Id, STEP_A), park + ': A');
-          System.assertEquals(true, enqueued(inst.Id, STEP_B), park + ': B');
-        }
+        System.assertEquals(false, enqueued(inst.Id, STEP_A), park + ': A');
+        System.assertEquals(true, enqueued(inst.Id, STEP_B), park + ': B');
       }
     }
   }
@@ -342,10 +350,8 @@ public class WorkflowBranchTimerTest {
         newBranch(inst.Id, STEP_B, null);
         releaseFrom(park, inst.Id);
         System.assertEquals('Running', load(inst.Id).Status__c, park);
-        if (park != 'Paused') {
-          System.assertEquals(true, enqueued(inst.Id, STEP_A), park);
-          System.assertEquals(true, enqueued(inst.Id, STEP_B), park);
-        }
+        System.assertEquals(true, enqueued(inst.Id, STEP_A), park);
+        System.assertEquals(true, enqueued(inst.Id, STEP_B), park);
       }
     }
   }
@@ -406,6 +412,103 @@ public class WorkflowBranchTimerTest {
       System.assertEquals('Running', after.Status__c);
       System.assertEquals(null, after.Sleep_Until__c);
       System.assertEquals(false, enqueued(inst.Id, STEP_A));
+    }
+  }
+
+  // A sibling branch keeps its deadline when another branch waits with no timer.
+  @IsTest
+  static void testUntimedWaitKeepsSiblingDeadline() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Running');
+      Datetime sibling = at(30);
+      inst.Sleep_Until__c = sibling;
+      update inst;
+      newBranch(inst.Id, STEP_A, sibling);
+      Workflow_Step_Execution__c exec = newBranch(inst.Id, STEP_B, null);
+      WorkflowStepSuspension.handleSuspendOutcome(
+        outcomeFor(inst, exec, StepResult.suspend())
+      );
+      System.assertEquals(sibling, load(inst.Id).Sleep_Until__c);
+    }
+  }
+
+  // A later sleep must not push the instance timer past an earlier sibling.
+  @IsTest
+  static void testSleepKeepsEarlierSiblingDeadline() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Running');
+      Datetime sibling = at(10);
+      inst.Sleep_Until__c = sibling;
+      update inst;
+      newBranch(inst.Id, STEP_A, sibling);
+      Workflow_Step_Execution__c exec = newBranch(inst.Id, STEP_B, null);
+      WorkflowStepSuspension.handleSleepOutcome(
+        outcomeFor(inst, exec, StepResult.sleep(3600))
+      );
+      System.assertEquals(sibling, load(inst.Id).Sleep_Until__c);
+    }
+  }
+
+  // A serial instance keeps the old sweep result.
+  @IsTest
+  static void testSweepSerialIsUnchanged() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      inst.Current_Step__c = STEP_A;
+      inst.Sleep_Until__c = at(-1);
+      update inst;
+      newBranch(inst.Id, STEP_A, null);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      Workflow_Instance__c after = load(inst.Id);
+      System.assertEquals('Running', after.Status__c);
+      System.assertEquals(null, after.Sleep_Until__c);
+      System.assertEquals(false, enqueued(inst.Id, STEP_A));
+    }
+  }
+
+  // Every park: a signal from the park runs the sleeping branch.
+  @IsTest
+  static void testSignalFromParkRunsSleepingBranchInEveryPark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      for (String park : PARKS) {
+        Workflow_Instance__c inst = newParallel(park);
+        inst.Parked_At__c = Datetime.now().addMinutes(-10);
+        update inst;
+        newBranch(inst.Id, STEP_A, at(45));
+        newBranch(inst.Id, STEP_B, null);
+        Workflow_Signal__c sig = new Workflow_Signal__c(
+          Workflow_Instance__c = inst.Id,
+          Correlation_Key__c = inst.Correlation_Key__c,
+          Signal_Name__c = 'Go',
+          Status__c = 'Received'
+        );
+        insert sig;
+        Test.setCreatedDate(sig.Id, Datetime.now().addMinutes(-1));
+        releaseFrom(park, inst.Id);
+        System.assertEquals('Running', load(inst.Id).Status__c, park);
+        System.assertEquals(true, enqueued(inst.Id, STEP_A), park);
+      }
+    }
+  }
+
+  // Every park: all open branches sleep, so no branch starts.
+  @IsTest
+  static void testAllBranchesSleepStartsNoWorkerInEveryPark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      for (String park : PARKS) {
+        Workflow_Instance__c inst = newParallel(park);
+        newBranch(inst.Id, STEP_A, at(20));
+        newBranch(inst.Id, STEP_B, at(50));
+        releaseFrom(park, inst.Id);
+        System.assertEquals('Suspended', load(inst.Id).Status__c, park);
+        System.assertEquals(false, enqueued(inst.Id, STEP_A), park);
+        System.assertEquals(false, enqueued(inst.Id, STEP_B), park);
+      }
     }
   }
 }

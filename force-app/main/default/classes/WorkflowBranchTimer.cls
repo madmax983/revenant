@@ -2,7 +2,7 @@
  * @description Timer of each parallel branch (issue #311). A sleep or a timed
  * wait stores its deadline in `Wake_At__c` on the step row. A park clears
  * `Sleep_Until__c`, which is one field for all branches. The row timer
- * survives the park. Release, resume and the sleep sweep read it here. All
+ * stays. Release, resume, hold release and the sleep sweep read it here. All
  * SOQL runs in system mode.
  */
 public inherited sharing class WorkflowBranchTimer {
@@ -14,9 +14,9 @@ public inherited sharing class WorkflowBranchTimer {
     public Integer open = 0;
 
     /**
-     * @description The deadlines that end after a time.
+     * @description Returns the branches whose deadline is after a time.
      * @param now The time to compare with.
-     * @return Branch name to deadline, for each branch that still sleeps.
+     * @return Branch name to deadline.
      */
     public Map<String, Datetime> sleeping(Datetime now) {
       Map<String, Datetime> result = new Map<String, Datetime>();
@@ -29,7 +29,7 @@ public inherited sharing class WorkflowBranchTimer {
     }
 
     /**
-     * @description The first deadline that ends after a time.
+     * @description Returns the earliest deadline that is after a time.
      * @param now The time to compare with.
      * @return The first deadline, or null when no branch sleeps.
      */
@@ -125,6 +125,32 @@ public inherited sharing class WorkflowBranchTimer {
       }
     }
     return keys;
+  }
+
+  /**
+   * @description Picks the `Sleep_Until__c` for an instance after a wait. A
+   * parallel instance keeps an earlier future deadline of a sibling branch.
+   * Else the sweep would not wake that sibling.
+   * @param existing The `Sleep_Until__c` now on the instance.
+   * @param own The deadline of this wait, or null when it has no timer.
+   * @param isParallel True when the step is a parallel branch.
+   * @return The value to store.
+   */
+  public static Datetime keepEarlier(
+    Datetime existing,
+    Datetime own,
+    Boolean isParallel
+  ) {
+    if (
+      isParallel != true ||
+      existing == null ||
+      existing <= Datetime.now() ||
+      (own != null &&
+      own <= existing)
+    ) {
+      return own;
+    }
+    return existing;
   }
 
   private static Boolean isFinished(String status) {

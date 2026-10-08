@@ -27,7 +27,8 @@ public inherited sharing class WorkflowBranchResume {
    * Release and resume variant of enqueueResumeBulk (issue #311). A `Suspended`
    * instance has a branch that still sleeps. That branch keeps its deadline: no
    * worker starts for it, and the sleep sweep starts it later. A `Running`
-   * instance runs every open branch, as a signal from the park may wake one.
+   * instance runs every open branch. A signal from the park may wake a
+   * sleeping branch.
    * @param parallelInstances the parallel instances that left a park, with
    *        Status__c as the park timer set it
    */
