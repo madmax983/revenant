@@ -114,6 +114,11 @@
     </fieldPermissions>
     <fieldPermissions>
         <editable>true</editable>
+        <field>Workflow_Instance__c.Parked_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
         <field>Workflow_Instance__c.Hold_Reason__c</field>
         <readable>true</readable>
     </fieldPermissions>
@@ -247,6 +252,11 @@
     <fieldPermissions>
         <editable>true</editable>
         <field>Workflow_Step_Execution__c.Timeout_At__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Workflow_Step_Execution__c.Wake_At__c</field>
         <readable>true</readable>
     </fieldPermissions>
     <fieldPermissions>

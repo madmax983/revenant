@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Parked_At__c</fullName>
+    <description>Time when the instance entered a park: DefinitionChanged, Held or Paused (issue #311). Release and resume compare it with the signal CreatedDate. Blank means not parked, or parked before this field existed.</description>
+    <externalId>false</externalId>
+    <label>Parked At</label>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>DateTime</type>
+</CustomField>
