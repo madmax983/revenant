@@ -62,13 +62,19 @@ public inherited sharing class WorkflowParkedTimer {
         timed.add(inst.Id);
       }
     }
-    timed.removeAll(signalledInPark(instances, timed));
+    Set<Id> signalled = signalledInPark(instances, timed);
+    timed.removeAll(signalled);
 
     Set<Id> waiting = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
       WorkflowBranchTimer.Branches b = branches.get(inst.Id);
       if (!timed.contains(inst.Id)) {
         inst.Status__c = 'Running';
+        if (b != null && signalled.contains(inst.Id)) {
+          // The signal runs every branch. An old deadline must not look like
+          // the timer of a sibling branch later.
+          inst.Sleep_Until__c = null;
+        }
       } else if (b == null) {
         inst.Status__c = 'Suspended';
         waiting.add(inst.Id);

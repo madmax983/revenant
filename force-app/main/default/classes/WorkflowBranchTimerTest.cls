@@ -351,6 +351,7 @@ public class WorkflowBranchTimerTest {
         releaseFrom(park, inst.Id);
         System.assertEquals('Running', load(inst.Id).Status__c, park);
         System.assertEquals(true, enqueued(inst.Id, STEP_A), park);
+        System.assertEquals(null, load(inst.Id).Sleep_Until__c, park);
         System.assertEquals(true, enqueued(inst.Id, STEP_B), park);
       }
     }
@@ -476,6 +477,7 @@ public class WorkflowBranchTimerTest {
       WorkflowEngine.disableQueueableInTest = true;
       for (String park : PARKS) {
         Workflow_Instance__c inst = newParallel(park);
+        inst.Sleep_Until__c = at(45);
         inst.Parked_At__c = Datetime.now().addMinutes(-10);
         update inst;
         newBranch(inst.Id, STEP_A, at(45));
