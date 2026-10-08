@@ -11,7 +11,9 @@
  *    (issue #241).
  * 2. {@link requestCascade} publishes one `CASCADE_CANCEL` `Workflow_Event__e`
  *    for each such parent. It runs no query. The event is `PublishAfterCommit`:
- *    a rolled-back failure sends no event.
+ *    a rolled-back failure sends no event. When the DML budget is spent, it
+ *    enqueues a {@link RetryJob} instead (issue #310). The job runs after commit
+ *    and has its own limits. With no Queueable slot, the request is lost.
  * 3. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
  *    transaction with its own governor limits.
  * 4. Each pass walks one page of the cancel traversal: the active children of a
@@ -92,7 +94,11 @@ public inherited sharing class WorkflowCascadeCancel {
       for (Id parentId : parentIds) {
         events.add(buildParentEvent(parentId));
       }
-      publish(events);
+      if (hasDmlBudget(events.size())) {
+        publish(events);
+      } else {
+        enqueueFallback(parentIds);
+      }
     } catch (Exception ex) {
       // Fire-and-forget: a cascade request must never fail the parent.
       System.debug(
@@ -417,11 +423,7 @@ public inherited sharing class WorkflowCascadeCancel {
     if (retries.isEmpty()) {
       return;
     }
-    // A test cannot chain Queueables.
-    Boolean canEnqueue =
-      Limits.getQueueableJobs() < Limits.getLimitQueueableJobs() &&
-      !(Test.isRunningTest() && System.isQueueable());
-    if (!canEnqueue) {
+    if (!canEnqueue()) {
       List<Workflow_Event__e> events = new List<Workflow_Event__e>();
       for (CascadeRequest req : retries) {
         events.add(req.toEvent());
@@ -430,6 +432,30 @@ public inherited sharing class WorkflowCascadeCancel {
       return;
     }
     System.enqueueJob(new RetryJob(retries), retryDelayMinutes(retries));
+  }
+
+  // Runs the requests in a RetryJob without delay (issue #310). Used when the
+  // DML budget is spent, so no event can be published. The job re-reads the
+  // parent state, so a parent that is no longer failed keeps its children.
+  private static void enqueueFallback(Set<Id> parentIds) {
+    if (!canEnqueue()) {
+      System.debug(
+        LoggingLevel.ERROR,
+        'Cascade cancel request lost: no DML budget and no Queueable slot'
+      );
+      return;
+    }
+    List<CascadeRequest> requests = new List<CascadeRequest>();
+    for (Id parentId : parentIds) {
+      requests.add(new CascadeRequest(parentId));
+    }
+    System.enqueueJob(new RetryJob(requests), 0);
+  }
+
+  // A test cannot chain Queueables.
+  private static Boolean canEnqueue() {
+    return Limits.getQueueableJobs() < Limits.getLimitQueueableJobs() &&
+      !(Test.isRunningTest() && System.isQueueable());
   }
 
   // Backoff: 1, 2, 4, 8 minutes for attempts 2 to 5 (Queueable maximum 10).
