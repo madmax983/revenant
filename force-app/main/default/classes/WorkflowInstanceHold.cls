@@ -195,6 +195,7 @@ public inherited sharing class WorkflowInstanceHold {
     if (inst.Concurrency_Parked__c && !inst.Concurrency_Slot_Held__c) {
       inst.Status__c = 'Suspended';
       inst.Sleep_Until__c = Datetime.now();
+      inst.Parked_At__c = null;
       return false;
     }
     return WorkflowParkedTimer.settle(inst);
@@ -228,7 +229,8 @@ public inherited sharing class WorkflowInstanceHold {
         Concurrency_Slot_Held__c,
         Held_At__c,
         Hold_Reason__c,
-        Sleep_Until__c
+        Sleep_Until__c,
+        Parked_At__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -267,7 +269,7 @@ public inherited sharing class WorkflowInstanceHold {
       String.isNotBlank(inst.Current_Step__c) &&
       inst.Current_Step__c.contains(',')
     ) {
-      WorkflowBranchResume.enqueueResumeBulk(
+      WorkflowBranchResume.enqueueUnlessSleeping(
         new List<Workflow_Instance__c>{ inst }
       );
       return;

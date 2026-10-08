@@ -77,6 +77,7 @@ public inherited sharing class WorkflowInstanceHoldGate {
     // Release re-arms the step timeouts.
     WorkflowOrchestratorEnqueue.abortScheduledJobs(locked.Id);
     locked.Status__c = STATUS;
+    locked.Parked_At__c = Datetime.now();
     locked.Sleep_Until__c = null;
     locked.Async_Job_Id__c = null;
     Database.update(locked, true, AccessLevel.SYSTEM_MODE);

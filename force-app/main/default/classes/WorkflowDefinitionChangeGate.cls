@@ -122,6 +122,7 @@ public inherited sharing class WorkflowDefinitionChangeGate {
     WorkflowOrchestratorEnqueue.abortScheduledJobs(locked.Id);
     locked.Status__c = STATUS;
     locked.Error_Message__c = reason;
+    locked.Parked_At__c = Datetime.now();
     locked.Sleep_Until__c = null;
     locked.Async_Job_Id__c = null;
     Database.update(locked, true, AccessLevel.SYSTEM_MODE);

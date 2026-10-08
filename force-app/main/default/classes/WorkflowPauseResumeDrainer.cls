@@ -124,6 +124,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
           Status__c,
           Compensation_Stack__c,
           Sleep_Until__c,
+          Parked_At__c,
           Workflow_Name__c,
           Concurrency_Parked__c,
           Concurrency_Slot_Held__c
@@ -141,6 +142,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
         Status__c,
         Compensation_Stack__c,
         Sleep_Until__c,
+        Parked_At__c,
         Workflow_Name__c,
         Concurrency_Parked__c,
         Concurrency_Slot_Held__c
@@ -304,7 +306,8 @@ public inherited sharing class WorkflowPauseResumeDrainer {
     );
     List<Workflow_Event__e> events = collectResumeBranchEvents(
       instances,
-      latestStatusByKey
+      latestStatusByKey,
+      WorkflowBranchTimer.sleepingKeys(instances, '|')
     );
     publishResumeEvents(events);
   }
@@ -358,12 +361,14 @@ public inherited sharing class WorkflowPauseResumeDrainer {
    * duplicate branches, and dispatches a worker per unfinished branch.
    * @param instances The resumed multi-branch instances to walk.
    * @param latestStatusByKey The latest status per (instance, branch) key.
+   * @param sleeping The (instance, branch) keys of branches that still sleep.
    * @return The RUN_STEP events to publish (empty in test context, where
    * dispatchBranch enqueues directly instead).
    */
   private static List<Workflow_Event__e> collectResumeBranchEvents(
     List<Workflow_Instance__c> instances,
-    Map<String, String> latestStatusByKey
+    Map<String, String> latestStatusByKey,
+    Set<String> sleeping
   ) {
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
     Set<String> branchKeys = new Set<String>();
@@ -373,6 +378,9 @@ public inherited sharing class WorkflowPauseResumeDrainer {
         String key = inst.Id + '|' + trimmed;
         if (latestStatusByKey.get(key) == 'Completed') {
           continue; // branch already finished — no worker needed
+        }
+        if (sleeping.contains(key)) {
+          continue; // the sleep sweep starts it when its timer ends
         }
         if (branchKeys.contains(key)) {
           continue; // already dispatched this (instance, branch)

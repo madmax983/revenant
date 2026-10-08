@@ -75,6 +75,7 @@ public inherited sharing class WorkflowStepSuspension {
       );
       instance.Sleep_Until__c = DateTime.now()
         .addSeconds(result.directive().timeout.seconds);
+      stepExec.Wake_At__c = instance.Sleep_Until__c;
     } else {
       // Explicit stepStateJson is preserved; no-arg suspend() nulls Output__c so
       // stale yield checkpoints from a prior YIELD in the same execution don't
@@ -89,6 +90,7 @@ public inherited sharing class WorkflowStepSuspension {
       // an earlier timed wait or a manual resume, or the watchdog would wake it
       // early. Reset the deadline defensively (issue #35).
       instance.Sleep_Until__c = null;
+      stepExec.Wake_At__c = null;
     }
     stepExec.Output__c = String.isNotBlank(suspendStateJson)
       ? WorkflowPayloadOffload.savePayloadIfNeeded(
@@ -131,6 +133,11 @@ public inherited sharing class WorkflowStepSuspension {
     stepExec.Status__c = 'Pending';
     // A sleep is a timer wait. It must not keep a signal wait type.
     stepExec.Wait_Type__c = null;
+    // The row keeps the deadline of this branch (issue #311). The park clears
+    // the instance timer. The row timer survives it.
+    Datetime wake = DateTime.now()
+      .addSeconds(result.directive().sleepDurationSeconds);
+    stepExec.Wake_At__c = wake;
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,
       WorkflowPayloadCodecs.encode(
@@ -142,8 +149,7 @@ public inherited sharing class WorkflowStepSuspension {
     WorkflowStepExecStore.saveStepExec(stepExec);
 
     instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
-    instance.Sleep_Until__c = DateTime.now()
-      .addSeconds(result.directive().sleepDurationSeconds);
+    instance.Sleep_Until__c = wake;
     instance.Async_Job_Id__c = WorkflowRetrySleepScheduler.scheduleSleepResume(
       instance.Id,
       stepExec.Step_Name__c,
@@ -181,6 +187,7 @@ public inherited sharing class WorkflowStepSuspension {
     }
     stepExec.Status__c = 'Pending';
     stepExec.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_CHILD;
+    stepExec.Wake_At__c = null;
     Map<String, Object> childInfo = new Map<String, Object>{
       'childWorkflowName' => result.directive().childWorkflowName,
       'childCorrelationKey' => result.directive().childCorrelationKey
@@ -241,6 +248,7 @@ public inherited sharing class WorkflowStepSuspension {
     }
     stepExec.Status__c = 'Pending';
     stepExec.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_CHILD;
+    stepExec.Wake_At__c = null;
     List<String> childKeys = new List<String>();
     for (StepResult.ChildRequest req : result.directive().childRequests) {
       childKeys.add(req.correlationKey);
@@ -305,10 +313,12 @@ public inherited sharing class WorkflowStepSuspension {
       state.put('$timeoutStep', result.directive().timeout.step);
       instance.Sleep_Until__c = DateTime.now()
         .addSeconds(result.directive().timeout.seconds);
+      stepExec.Wake_At__c = instance.Sleep_Until__c;
     } else {
       // A deadline-less approval wait must not inherit a stale timer left by an
       // earlier timed wait or a manual resume (issue #35).
       instance.Sleep_Until__c = null;
+      stepExec.Wake_At__c = null;
     }
     stepExec.Output__c = WorkflowPayloadOffload.savePayloadIfNeeded(
       instance.Id,

@@ -22,6 +22,12 @@ public inherited sharing class WorkflowSleepResumeSweep {
     List<Workflow_Instance__c> instancesToUpdate = new List<Workflow_Instance__c>();
     List<Id> parallelResumeIds = new List<Id>();
     List<Workflow_Step_Execution__c> timedWaitFallbackExecs = new List<Workflow_Step_Execution__c>();
+    // Issue #311: the timer of each parallel branch. The sweep starts each
+    // branch whose own timer ended, and keeps the next timer on the instance.
+    Datetime now;
+    Map<Id, WorkflowBranchTimer.Branches> branchTimers = new Map<Id, WorkflowBranchTimer.Branches>();
+    Map<Id, List<String>> dueBranches = new Map<Id, List<String>>();
+    Map<Id, Datetime> nextWake = new Map<Id, Datetime>();
   }
 
   /**
@@ -92,6 +98,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
 
     SleepResumeBatch b = new SleepResumeBatch();
+    b.now = now;
+    List<Workflow_Instance__c> multi = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c inst : readyToResume) {
       if (
         inst.Workflow_Step_Executions__r != null &&
@@ -99,7 +107,12 @@ public inherited sharing class WorkflowSleepResumeSweep {
       ) {
         b.latestStepByInstId.put(inst.Id, inst.Workflow_Step_Executions__r[0]);
       }
+      if (isParallel(inst)) {
+        multi.add(inst);
+      }
     }
+    // One SOQL for all parallel instances. None when no instance is parallel.
+    b.branchTimers = WorkflowBranchTimer.load(multi);
 
     for (Workflow_Instance__c inst : readyToResume) {
       resumeSuspendedInstance(inst, b);
@@ -164,6 +177,10 @@ public inherited sharing class WorkflowSleepResumeSweep {
     // carried to completion by a worker draining at Test.stopTest().
     if (!(Test.isRunningTest() && WorkflowEngine.disableQueueableInTest)) {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(b.instanceIds);
+    }
+    // Issue #311: start each parallel branch whose own timer ended, by name.
+    if (!b.dueBranches.isEmpty()) {
+      WorkflowBranchResume.enqueueNamedBranches(b.dueBranches);
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
     // no-op (runStep ignores it for a comma-separated Current_Step__c), so
@@ -244,7 +261,13 @@ public inherited sharing class WorkflowSleepResumeSweep {
     } else {
       routeNonCompensatingResume(inst, latestStep, b);
     }
-    inst.Sleep_Until__c = null;
+    // A parallel branch that still sleeps keeps the instance asleep, with the
+    // next timer (issue #311).
+    Datetime next = b.nextWake.get(inst.Id);
+    inst.Sleep_Until__c = next;
+    if (next != null) {
+      inst.Status__c = 'Suspended';
+    }
     inst.Async_Job_Id__c = null;
     b.instanceIds.add(inst.Id);
     b.instancesToUpdate.add(inst);
@@ -279,12 +302,40 @@ public inherited sharing class WorkflowSleepResumeSweep {
       inst.Current_Step__c = timedWaitTarget;
     }
     inst.Status__c = 'Running';
-    if (
-      String.isNotBlank(inst.Current_Step__c) &&
-      inst.Current_Step__c.contains(',')
-    ) {
+    if (isParallel(inst)) {
       b.parallelResumeIds.add(inst.Id);
+      planBranchTimers(inst, b);
     }
+  }
+
+  // Issue #311: splits the sleeping branches of a parallel instance into the
+  // branches to start now and the next timer to keep.
+  private static void planBranchTimers(
+    Workflow_Instance__c inst,
+    SleepResumeBatch b
+  ) {
+    WorkflowBranchTimer.Branches branches = b.branchTimers.get(inst.Id);
+    if (branches == null) {
+      return;
+    }
+    List<String> due = new List<String>();
+    for (String step : branches.wakes.keySet()) {
+      if (branches.wakes.get(step) <= b.now) {
+        due.add(step);
+      }
+    }
+    if (!due.isEmpty()) {
+      b.dueBranches.put(inst.Id, due);
+    }
+    Datetime next = branches.firstWake(b.now);
+    if (next != null) {
+      b.nextWake.put(inst.Id, next);
+    }
+  }
+
+  private static Boolean isParallel(Workflow_Instance__c inst) {
+    return String.isNotBlank(inst.Current_Step__c) &&
+      inst.Current_Step__c.contains(',');
   }
 
   // Extracts the $timeoutStep value from a step exec's Output__c if it is a

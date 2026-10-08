@@ -18,7 +18,13 @@ public inherited sharing class WorkflowDefinitionChangeService {
    */
   public static void release(Id instanceId) {
     List<Workflow_Instance__c> rows = [
-      SELECT Id, Status__c, Workflow_Name__c, Current_Step__c, Sleep_Until__c
+      SELECT
+        Id,
+        Status__c,
+        Workflow_Name__c,
+        Current_Step__c,
+        Sleep_Until__c,
+        Parked_At__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -90,7 +96,7 @@ public inherited sharing class WorkflowDefinitionChangeService {
       String.isNotBlank(inst.Current_Step__c) &&
       inst.Current_Step__c.contains(',')
     ) {
-      WorkflowBranchResume.enqueueResumeBulk(
+      WorkflowBranchResume.enqueueUnlessSleeping(
         new List<Workflow_Instance__c>{ inst }
       );
       return;

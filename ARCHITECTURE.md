@@ -78,8 +78,10 @@ is the concurrency gate that decides whether a step may run now.
   release a parked instance (issue #89)
 - `WorkflowInstanceHoldGate`, `WorkflowInstanceHold` — park one operator-held
   instance in `Held` at the next step boundary; hold and release API (issue #119)
-- `WorkflowParkedTimer` — on release or resume, keep an instance `Suspended`
-  while a timer from a wait that ended in the park is set (issue #240)
+- `WorkflowParkedTimer`, `WorkflowBranchTimer` — on release or resume, keep an
+  instance `Suspended` while a timer from a wait that ended in the park is set.
+  A parallel branch keeps its own timer in `Wake_At__c`. `Parked_At__c` tells a
+  signal from the park from an old one (issues #240, #311)
 - `WorkflowDeterminismGuard`, `WorkflowDecisionFingerprint` — strict
   determinism mode: record each wait decision with an inputs digest, and fail
   a re-run that changes its decision on equal inputs with

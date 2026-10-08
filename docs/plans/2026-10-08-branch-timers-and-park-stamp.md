@@ -17,31 +17,31 @@
 
 ## Brainstorm
 
-| #   | Idea                                                                          | Keep?                                      |
-| --- | ----------------------------------------------------------------------------- | ------------------------------------------ |
-| B1  | `Wake_At__c` on the step row. The sleep and timed-wait handlers set it.       | Yes. One timer for each branch.            |
-| B2  | `Parked_At__c` on the instance. The three park gates set it.                  | Yes. Compared with the signal date.        |
-| B3  | Release skips a branch with a future `Wake_At__c`. The instance stays asleep. | Yes. The deadline stays.                   |
-| B4  | The sweep starts each branch with a due `Wake_At__c`, by name.                | Yes. Drives the branch.                    |
-| B5  | The sweep keeps the next `Wake_At__c` in `Sleep_Until__c`.                    | Yes. Else a later branch has no wake.      |
-| B6  | Schedule a sleep job for each branch on release.                              | No. The sweep is the backstop. Less code.  |
-| B7  | Compare signals in SOQL with a bind.                                          | No. Each instance has its own park time.   |
-| B8  | Use `MAX(CreatedDate)` for each instance. Compare in Apex.                    | Yes. One grouped query.                    |
-| B9  | Reuse `Held_At__c` as the park stamp.                                         | No. It is the hold time, not the park time.|
+| #   | Idea                                                                          | Keep?                                       |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------- |
+| B1  | `Wake_At__c` on the step row. The sleep and timed-wait handlers set it.       | Yes. One timer for each branch.             |
+| B2  | `Parked_At__c` on the instance. The three park gates set it.                  | Yes. Compared with the signal date.         |
+| B3  | Release skips a branch with a future `Wake_At__c`. The instance stays asleep. | Yes. The deadline stays.                    |
+| B4  | The sweep starts each branch with a due `Wake_At__c`, by name.                | Yes. Drives the branch.                     |
+| B5  | The sweep keeps the next `Wake_At__c` in `Sleep_Until__c`.                    | Yes. Else a later branch has no wake.       |
+| B6  | Schedule a sleep job for each branch on release.                              | No. The sweep is the backstop. Less code.   |
+| B7  | Compare signals in SOQL with a bind.                                          | No. Each instance has its own park time.    |
+| B8  | Use `MAX(CreatedDate)` for each instance. Compare in Apex.                    | Yes. One grouped query.                     |
+| B9  | Reuse `Held_At__c` as the park stamp.                                         | No. It is the hold time, not the park time. |
 
 ## Reverse Brainstorm (how can this fail?)
 
-| Way to fail                                                | Prevention                                                           |
-| ---------------------------------------------------------- | -------------------------------------------------------------------- |
-| An old `Wake_At__c` delays a branch that ran again.        | Clear it when the step starts. Test.                                 |
-| A signal wake of a timed branch is lost.                   | Only release, resume and hold skip sleepers. Signal wake does not.   |
-| A later branch has no wake after the sweep woke the first. | The sweep keeps the next `Wake_At__c`. Test.                         |
-| The sweep and the sleep job start one branch two times.    | The job clears `Sleep_Until__c`. The sweep reads only due rows.      |
-| A park path has no stamp.                                  | A blank stamp means: any `Received` signal wins. Same as today.      |
-| A stale stamp hides a signal.                              | Release clears the stamp. Test.                                      |
-| A signal in the same second as the park is lost.           | Compare with `>=`. A tie runs the step.                              |
-| All branches sleep, but release enqueues them.             | The instance waits. No worker. Test.                                 |
-| Elapsed `Wake_At__c` at release is skipped.                | Only a future `Wake_At__c` sleeps. A due branch runs. Test.          |
+| Way to fail                                                | Prevention                                                         |
+| ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| An old `Wake_At__c` delays a branch that ran again.        | Clear it when the step starts. Test.                               |
+| A signal wake of a timed branch is lost.                   | Only release, resume and hold skip sleepers. Signal wake does not. |
+| A later branch has no wake after the sweep woke the first. | The sweep keeps the next `Wake_At__c`. Test.                       |
+| The sweep and the sleep job start one branch two times.    | The job clears `Sleep_Until__c`. The sweep reads only due rows.    |
+| A park path has no stamp.                                  | A blank stamp means: any `Received` signal wins. Same as today.    |
+| A stale stamp hides a signal.                              | Release clears the stamp. Test.                                    |
+| A signal in the same second as the park is lost.           | Compare with `>=`. A tie runs the step.                            |
+| All branches sleep, but release enqueues them.             | The instance waits. No worker. Test.                               |
+| Elapsed `Wake_At__c` at release is skipped.                | Only a future `Wake_At__c` sleeps. A due branch runs. Test.        |
 
 ## Six Hats
 
