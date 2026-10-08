@@ -205,7 +205,8 @@ public compensating-cancel entry point is `WorkflowCancellation.cancelWithCompen
   `WorkflowInstanceTrigger` (after update) publishes a `CASCADE_CANCEL`
   `Workflow_Event__e`. Each event reaps one page of the `WorkflowCancellation`
   traversal through its node cancel, with saga compensation, and publishes the
-  next level and the next page. A delayed `RetryJob` retries a failed pass. Toggle:
+  next level and the next page. A delayed `RetryJob` retries a failed pass. If
+  the DML budget is spent, a `RetryJob` with no delay runs the request instead. Toggle:
   `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c`.
 - `WorkflowCompensation`, `WorkflowCompensationRunner`,
   `WorkflowCompensationStepLog`, `WorkflowCompensationContext`,

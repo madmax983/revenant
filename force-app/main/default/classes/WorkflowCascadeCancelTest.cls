@@ -761,7 +761,7 @@ private class WorkflowCascadeCancelTest {
   // Uses all DML statements of the transaction.
   private static void spendDmlBudget() {
     while (Limits.getDmlStatements() < Limits.getLimitDmlStatements()) {
-      insert new Account(Name = 'Spend');
+      insert new Account(Name = nextKey('Spend'));
     }
   }
 
@@ -849,6 +849,8 @@ private class WorkflowCascadeCancelTest {
         'No slot: no extra job and no exception'
       );
       Test.stopTest();
+
+      System.assertEquals('Running', statusOf(pair[1].Id), 'Request lost');
     }
   }
 

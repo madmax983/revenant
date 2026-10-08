@@ -11,9 +11,10 @@
  *    (issue #241).
  * 2. {@link requestCascade} publishes one `CASCADE_CANCEL` `Workflow_Event__e`
  *    for each such parent. It runs no query. The event is `PublishAfterCommit`:
- *    a rolled-back failure sends no event. When the DML budget is spent, it
- *    enqueues a {@link RetryJob} instead (issue #310). The job runs after commit
- *    and has its own limits. With no Queueable slot, the request is lost.
+ *    a rolled-back failure sends no event. If the DML budget is spent, it
+ *    enqueues a {@link RetryJob} with no delay (issue #310). The job runs after
+ *    commit with its own limits. If no Queueable slot is free, the request is
+ *    lost.
  * 3. `WorkflowEventTriggerHandler` calls {@link handleEvents} in a new
  *    transaction with its own governor limits.
  * 4. Each pass walks one page of the cancel traversal: the active children of a
@@ -32,8 +33,8 @@
  * - One pass reads at most {@link maxNodesPerPass} + 1 rows for each event and
  *   cancels at most {@link maxNodesPerPass} nodes. The order is root first: a
  *   node is cancelled before its children.
- * - A failed pass rolls back. A delayed {@link RetryJob} runs each request
- *   alone, with backoff, at most {@link MAX_ATTEMPTS} attempts in total. A row
+ * - A failed pass rolls back. A {@link RetryJob} (delayed after a failed pass)
+ *   runs each request alone, with backoff, at most {@link MAX_ATTEMPTS} attempts in total. A row
  *   lock on a busy child clears; a bad node stops only its own request.
  * - Set `Revenant_Config__mdt.Cascade_Cancel_Children_On_Failure__c` (default
  *   on, surfaced as `WorkflowEngine.cascadeCancelChildrenOnFailure`) to false to
@@ -76,8 +77,9 @@ public inherited sharing class WorkflowCascadeCancel {
   private static Boolean failContinuationPublish = false;
 
   /**
-   * @description Publishes a cascade event for each failed parent. It runs no
-   * query. Fire-and-forget: it catches all catchable exceptions and guards its
+   * @description Publishes a cascade event for each failed parent. If the DML
+   * budget is spent, it enqueues a RetryJob instead. It runs no query.
+   * Fire-and-forget: it catches all catchable exceptions and guards its
    * budgets, so it does not roll back the parent's failure write.
    * @param parentIds instances that entered a failure state
    */
@@ -435,8 +437,7 @@ public inherited sharing class WorkflowCascadeCancel {
   }
 
   // Runs the requests in a RetryJob without delay (issue #310). Used when the
-  // DML budget is spent, so no event can be published. The job re-reads the
-  // parent state, so a parent that is no longer failed keeps its children.
+  // DML budget is spent, so no event can be published.
   private static void enqueueFallback(Set<Id> parentIds) {
     if (!canEnqueue()) {
       System.debug(
