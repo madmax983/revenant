@@ -754,6 +754,111 @@ private class WorkflowCascadeCancelTest {
     }
   }
 
+  // ============================================================
+  // Issue #310 — the DML budget is spent
+  // ============================================================
+
+  // Uses all DML statements of the transaction.
+  private static void spendDmlBudget() {
+    while (Limits.getDmlStatements() < Limits.getLimitDmlStatements()) {
+      insert new Account(Name = nextKey('Spend'));
+    }
+  }
+
+  // A failed parent with a running child and no cascade pass yet.
+  private static List<Workflow_Instance__c> failedParentWithChild() {
+    WorkflowEngine.disableQueueableInTest = true;
+    WorkflowEngine.cascadeCancelChildrenOnFailure = false;
+    Workflow_Instance__c parent = insertInstance(null, 'Failed');
+    Workflow_Instance__c child = insertInstance(parent.Id, 'Running');
+    WorkflowEngine.cascadeCancelChildrenOnFailure = true;
+    return new List<Workflow_Instance__c>{ parent, child };
+  }
+
+  @IsTest
+  static void failurePathWithoutDmlBudgetStillReapsChild() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> pair = failedParentWithChild();
+
+      Test.startTest();
+      spendDmlBudget();
+      WorkflowCascadeCancel.requestCascade(new Set<Id>{ pair[0].Id });
+      System.assertEquals(
+        1,
+        Limits.getQueueableJobs(),
+        'No DML budget: the request goes to one job'
+      );
+      Test.stopTest();
+
+      System.assertEquals('Failed', statusOf(pair[0].Id), 'Parent unchanged');
+      System.assertEquals('Cancelled', statusOf(pair[1].Id), 'Job reaps');
+    }
+  }
+
+  @IsTest
+  static void lateChildPathWithoutDmlBudgetStillReapsChild() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> pair = failedParentWithChild();
+
+      Test.startTest();
+      spendDmlBudget();
+      WorkflowCascadeCancel.requestCascadeForLateChildren(
+        new Set<Id>{ pair[0].Id }
+      );
+      System.assertEquals(
+        1,
+        Limits.getQueueableJobs(),
+        'No DML budget: the late child request goes to one job'
+      );
+      Test.stopTest();
+
+      System.assertEquals('Cancelled', statusOf(pair[1].Id), 'Job reaps');
+    }
+  }
+
+  @IsTest
+  static void noDmlBudgetWithToggleOffEnqueuesNothing() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> pair = failedParentWithChild();
+      WorkflowEngine.cascadeCancelChildrenOnFailure = false;
+
+      Test.startTest();
+      spendDmlBudget();
+      WorkflowCascadeCancel.requestCascade(new Set<Id>{ pair[0].Id });
+      System.assertEquals(0, Limits.getQueueableJobs(), 'Toggle off: no job');
+      Test.stopTest();
+
+      System.assertEquals('Running', statusOf(pair[1].Id), 'Child kept');
+    }
+  }
+
+  @IsTest
+  static void noDmlBudgetAndNoQueueableSlotDoesNotThrow() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<Workflow_Instance__c> pair = failedParentWithChild();
+
+      Test.startTest();
+      spendDmlBudget();
+      while (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+        System.enqueueJob(new WorkflowCascadeCancelTest.NoopJob());
+      }
+      WorkflowCascadeCancel.requestCascade(new Set<Id>{ pair[0].Id });
+      System.assertEquals(
+        Limits.getLimitQueueableJobs(),
+        Limits.getQueueableJobs(),
+        'No slot: no extra job and no exception'
+      );
+      Test.stopTest();
+
+      System.assertEquals('Running', statusOf(pair[1].Id), 'Request lost');
+    }
+  }
+
+  public class NoopJob implements Queueable {
+    public void execute(QueueableContext context) {
+    }
+  }
+
   @IsTest
   static void cascadeStopsRetryAfterMaxAttempts() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
