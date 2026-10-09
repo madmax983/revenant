@@ -51,8 +51,9 @@ org per run. Runs share one CI org. `scripts/ci-org/ci-org.mjs` does the work.
   An org that the CLI never finished creating cannot be found this way, and it ends at its
   expiry.
 - **No org is stranded by the cache.** The job looks up the new cache entry after the
-  save. If the entry is missing (the save only warns on failure), or the run was cancelled
-  before it, the last step deletes the new org.
+  save. The lookup runs under `always()`, so a cancel cannot skip it. If the entry is missing
+  (the save only warns on failure), or the run was cancelled before the save, the last step
+  deletes the new org. If the entry exists, the org stays.
 - **The expiry is saved with the URL.** A login from an auth URL does not restore the scratch org's expiry date, so `sf org display` may show none. The keeper saves the expiry in the encrypted file, and a borrower uses it when `sf` shows none. With no expiry from either, the borrower does not trust the org and makes a one-off org.
 - **Only `main` can share.** The cache is per branch. A pull request can read the cache
   that `main` saved, but a cache that a pull request saves is not visible to `main`
