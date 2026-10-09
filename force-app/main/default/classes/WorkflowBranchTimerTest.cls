@@ -188,7 +188,7 @@ public class WorkflowBranchTimerTest {
         false,
         WorkflowStepExecLock.acquireStepExecutionLog(ctx)
       );
-      update ctx.stepExec;
+      update as system ctx.stepExec;
       System.assertEquals(null, wakeOf(exec.Id));
       System.assertEquals(
         'Running',
@@ -282,7 +282,7 @@ public class WorkflowBranchTimerTest {
       Workflow_Instance__c inst = newParallel('DefinitionChanged');
       Workflow_Step_Execution__c done = newBranch(inst.Id, STEP_A, at(45));
       done.Status__c = 'Completed';
-      update done;
+      update as system done;
       newBranch(inst.Id, STEP_B, null);
       WorkflowDefinitionChangeService.release(inst.Id);
       System.assertEquals('Running', load(inst.Id).Status__c);
