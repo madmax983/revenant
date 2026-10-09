@@ -8,7 +8,7 @@ Every check runs in GitHub Actions. Each one also runs on your machine.
 | `ci.yml` | LWC Jest | `npm run test:unit:coverage` | No |
 | `ci.yml` | Global API | `npm run test:global-api`, with the packaged-view compile (`REQUIRE_APEX_LS=1`) | No |
 | `ci.yml` | Apex compile (apex-ls) | `npm run check:apex-compile`: every package folder, with no org. See the note below | No |
-| `ci.yml` | CI org script | `npm run test:ci-org`: tests for `scripts/ci-org` with a fake `sf` | No |
+| `ci.yml` | CI org script | `npm run test:ci-org`: tests for `scripts/ci-org` with a fake `sf`, and a check of the keeper steps in `apex-tests.yml` | No |
 | `ci.yml` | Code Analyzer | `sf code-analyzer run`, rule selector `recommended` (PMD, ESLint, regex, retire-js, CPD, flow). Fails at High or worse | No |
 | `ci.yml` | CI | One job that needs all of the above. Require this one in branch protection | No |
 | `apex-tests.yml` | Apex tests and coverage (label `run-org-tests`, nightly, on demand) | The shared CI org (or a one-off org), deploy, assign `Revenant_Admin` to the org user, make the user's file library (`scripts/ci-org/warm-file-library.apex`), all local Apex tests, org-wide coverage of at least `APEX_MIN_COVERAGE` (85) | Yes |
@@ -51,8 +51,9 @@ org per run. Runs share one CI org. `scripts/ci-org/ci-org.mjs` does the work.
   An org that the CLI never finished creating cannot be found this way, and it ends at its
   expiry.
 - **No org is stranded by the cache.** The job looks up the new cache entry after the
-  save. If the entry is missing (the save only warns on failure), or the run was cancelled
-  before it, the last step deletes the new org.
+  save. The lookup runs under `always()`, so a cancel cannot skip it. If the entry is
+  missing (the save only warns on failure), or the run was cancelled before the save, the
+  last step deletes the new org.
 - **The expiry is saved with the URL.** A login from an auth URL does not restore the scratch org's expiry date, so `sf org display` may show none. The keeper saves the expiry in the encrypted file, and a borrower uses it when `sf` shows none. With no expiry from either, the borrower does not trust the org and makes a one-off org.
 - **Only `main` can share.** The cache is per branch. A pull request can read the cache
   that `main` saved, but a cache that a pull request saves is not visible to `main`
