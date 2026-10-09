@@ -113,9 +113,9 @@ jobs:
           path: .ci-org
           key: ci-org-v2-${{ github.run_id }}-${{ github.run_attempt }}
       # actions/cache/save only warns when it fails, and it has no output. Look the entry
-      # up. A miss fails the job here, and the last step deletes the new org. It runs
-      # under always(), so a cancel after the save cannot skip it. A skipped lookup would
-      # make the last step delete an org that is in the cache.
+      # up. A miss fails the job here, and the last step deletes the new org. This step runs
+      # under always(), so a cancel cannot skip it. If it were skipped, the last step would
+      # delete an org that is in the cache.
       - name: Check that the shared CI org was cached
         id: cached
         if: always() && steps.org.outputs.save == 'true'
