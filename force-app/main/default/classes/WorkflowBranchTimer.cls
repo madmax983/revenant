@@ -131,18 +131,21 @@ public inherited sharing class WorkflowBranchTimer {
    * @description Picks the `Sleep_Until__c` for an instance after a wait. A
    * parallel instance keeps an earlier future deadline of a sibling branch.
    * Else the sweep would not wake that sibling.
-   * @param existing The `Sleep_Until__c` now on the instance.
+   * @param instance The instance. A serial wait does not read its timer.
    * @param own The deadline of this wait, or null when it has no timer.
    * @param isParallel True when the step is a parallel branch.
    * @return The value to store.
    */
   public static Datetime keepEarlier(
-    Datetime existing,
+    Workflow_Instance__c instance,
     Datetime own,
     Boolean isParallel
   ) {
+    if (isParallel != true) {
+      return own;
+    }
+    Datetime existing = instance.Sleep_Until__c;
     if (
-      isParallel != true ||
       existing == null ||
       existing <= Datetime.now() ||
       (own != null &&

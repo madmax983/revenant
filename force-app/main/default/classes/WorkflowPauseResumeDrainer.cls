@@ -425,6 +425,10 @@ public inherited sharing class WorkflowPauseResumeDrainer {
       return;
     }
     dispatchedInTest.add(instanceId + '|' + branch);
+    // Honor the engine's test opt-out, as the serial path does.
+    if (WorkflowEngine.disableQueueableInTest) {
+      return;
+    }
     if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
       System.enqueueJob(new WorkflowOrchestrator(instanceId, branch));
     }

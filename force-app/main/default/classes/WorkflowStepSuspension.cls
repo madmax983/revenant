@@ -76,7 +76,7 @@ public inherited sharing class WorkflowStepSuspension {
       stepExec.Wake_At__c = DateTime.now()
         .addSeconds(result.directive().timeout.seconds);
       instance.Sleep_Until__c = WorkflowBranchTimer.keepEarlier(
-        instance.Sleep_Until__c,
+        instance,
         stepExec.Wake_At__c,
         isParallel
       );
@@ -95,7 +95,7 @@ public inherited sharing class WorkflowStepSuspension {
       // early. Reset the deadline defensively (issue #35). A sibling branch
       // can own a deadline that is still ahead. Keep that one (issue #311).
       instance.Sleep_Until__c = WorkflowBranchTimer.keepEarlier(
-        instance.Sleep_Until__c,
+        instance,
         null,
         isParallel
       );
@@ -159,7 +159,7 @@ public inherited sharing class WorkflowStepSuspension {
 
     instance.Status__c = WorkflowInstanceHoldGate.waitStatus(instance);
     instance.Sleep_Until__c = WorkflowBranchTimer.keepEarlier(
-      instance.Sleep_Until__c,
+      instance,
       wake,
       isParallel
     );
@@ -327,7 +327,7 @@ public inherited sharing class WorkflowStepSuspension {
       stepExec.Wake_At__c = DateTime.now()
         .addSeconds(result.directive().timeout.seconds);
       instance.Sleep_Until__c = WorkflowBranchTimer.keepEarlier(
-        instance.Sleep_Until__c,
+        instance,
         stepExec.Wake_At__c,
         isParallel
       );
@@ -336,7 +336,7 @@ public inherited sharing class WorkflowStepSuspension {
       // earlier timed wait or a manual resume (issue #35). Keep the deadline
       // of a sibling branch (issue #311).
       instance.Sleep_Until__c = WorkflowBranchTimer.keepEarlier(
-        instance.Sleep_Until__c,
+        instance,
         null,
         isParallel
       );
