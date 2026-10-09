@@ -86,8 +86,19 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     if (inst.Status__c != 'Suspended' || inst.Sleep_Until__c == null) {
       return false;
     }
-    if (String.isNotBlank(stepName) && !ownsWake(inst, stepName)) {
+    Workflow_Step_Execution__c woken = String.isNotBlank(stepName)
+      ? ownedWake(inst, stepName)
+      : null;
+    if (String.isNotBlank(stepName) && woken == null) {
       return false;
+    }
+    if (woken != null && woken.Wake_At__c != null) {
+      // Claim the timer here. The sweep then does not start this branch again
+      // before its worker runs (issue #311).
+      update as system new Workflow_Step_Execution__c(
+        Id = woken.Id,
+        Wake_At__c = null
+      );
     }
 
     // A sibling branch can still sleep. Keep its deadline (issue #311).
@@ -103,9 +114,12 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
   // The named step must be Pending. A parallel branch must also own a due timer
   // (issue #311). Else a job for an old deadline could run a branch that has
   // started again. A serial step may have no timer: it started before this field.
-  private static Boolean ownsWake(Workflow_Instance__c inst, String stepName) {
+  private static Workflow_Step_Execution__c ownedWake(
+    Workflow_Instance__c inst,
+    String stepName
+  ) {
     List<Workflow_Step_Execution__c> steps = [
-      SELECT Wake_At__c
+      SELECT Id, Wake_At__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :inst.Id
@@ -115,16 +129,16 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
       LIMIT 1
     ];
     if (steps.isEmpty()) {
-      return false;
+      return null;
     }
     Boolean multi =
       String.isNotBlank(inst.Current_Step__c) &&
       inst.Current_Step__c.contains(',');
     Datetime wake = steps[0].Wake_At__c;
     if (wake == null) {
-      return !multi;
+      return multi ? null : steps[0];
     }
-    return wake <= Datetime.now();
+    return wake <= Datetime.now() ? steps[0] : null;
   }
 
   private static Datetime nextBranchWake(
