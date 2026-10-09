@@ -601,6 +601,7 @@ A sleep or a timed wait of a step now stores its deadline in a new field. A park
 - New fields: `Workflow_Step_Execution__c.Wake_At__c` and `Workflow_Instance__c.Parked_At__c`. They are blank on existing rows.
 - A parallel branch that sleeps in a park keeps its deadline on release, pause resume and hold release. The sleep sweep starts it.
 - If an instance has a timer, only a signal that arrived in the park keeps it `Running` on release. A signal from before the park does not. An instance that parked before this change has no park time. For it, any `Received` signal keeps the instance `Running`, as before.
+- A parallel branch that started a sleep before this change has no `Wake_At__c`. Its sleep job does nothing, and the sweep does not start it. Release or resume the instance after the upgrade, or wait until no parallel sleep is in flight.
 - Give your own permission sets read access to the two new fields if you report on them. `Revenant_Operator` and `Revenant_Admin` have it.
 
 See [docs/definition-change-detection.md](docs/definition-change-detection.md#timers-in-a-park).

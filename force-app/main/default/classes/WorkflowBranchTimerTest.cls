@@ -377,6 +377,16 @@ public class WorkflowBranchTimerTest {
       System.assertEquals(false, enqueued(inst.Id, STEP_B), 'B is not due');
       System.assertEquals('Suspended', after.Status__c, 'B still sleeps');
       System.assertEquals(next, after.Sleep_Until__c, 'Next wake is kept');
+      System.assertEquals(
+        null,
+        [
+          SELECT Wake_At__c
+          FROM Workflow_Step_Execution__c
+          WHERE Workflow_Instance__c = :inst.Id AND Step_Name__c = :STEP_A
+        ]
+        .Wake_At__c,
+        'The sweep claims the due timer'
+      );
     }
   }
 

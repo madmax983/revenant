@@ -27,6 +27,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
     Datetime now;
     Map<Id, WorkflowBranchTimer.Branches> branchTimers = new Map<Id, WorkflowBranchTimer.Branches>();
     Map<Id, List<String>> dueBranches = new Map<Id, List<String>>();
+    List<Workflow_Step_Execution__c> claimedRows = new List<Workflow_Step_Execution__c>();
     Map<Id, Datetime> nextWake = new Map<Id, Datetime>();
   }
 
@@ -180,6 +181,9 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
     // Start each parallel branch whose timer ended, by name.
     if (!b.dueBranches.isEmpty()) {
+      // Claim the timers first. A scheduled sleep job for the same branch then
+      // finds no due timer and starts nothing.
+      Database.update(b.claimedRows, true, AccessLevel.SYSTEM_MODE);
       WorkflowBranchResume.enqueueNamedBranches(b.dueBranches);
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
@@ -321,6 +325,12 @@ public inherited sharing class WorkflowSleepResumeSweep {
     for (String step : branches.wakes.keySet()) {
       if (branches.wakes.get(step) <= b.now) {
         due.add(step);
+        b.claimedRows.add(
+          new Workflow_Step_Execution__c(
+            Id = branches.rowIds.get(step),
+            Wake_At__c = null
+          )
+        );
       }
     }
     if (!due.isEmpty()) {

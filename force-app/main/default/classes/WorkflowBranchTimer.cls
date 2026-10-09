@@ -10,6 +10,8 @@ public inherited sharing class WorkflowBranchTimer {
   public class Branches {
     /** @description Branches that wait: the latest row is Pending and has a timer. */
     public Map<String, Datetime> wakes = new Map<String, Datetime>();
+    /** @description Step row Id of each branch in `wakes`. */
+    public Map<String, Id> rowIds = new Map<String, Id>();
     /** @description Branches that are not finished. */
     public Integer open = 0;
 
@@ -44,6 +46,10 @@ public inherited sharing class WorkflowBranchTimer {
     }
   }
 
+  // The last read of each instance. A release reads once to set the status and
+  // takes the same read to choose the branches to start. Taken one time.
+  private static Map<Id, Branches> loaded = new Map<Id, Branches>();
+
   /**
    * @description Reads the branch timers of parallel instances. Costs one SOQL
    * for all instances.
@@ -69,7 +75,7 @@ public inherited sharing class WorkflowBranchTimer {
     Set<String> seen = new Set<String>();
     // Newest first, so the first row of a branch is its latest.
     for (Workflow_Step_Execution__c row : [
-      SELECT Workflow_Instance__c, Step_Name__c, Status__c, Wake_At__c
+      SELECT Id, Workflow_Instance__c, Step_Name__c, Status__c, Wake_At__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c IN :namesById.keySet()
@@ -89,12 +95,14 @@ public inherited sharing class WorkflowBranchTimer {
         namesById.get(row.Workflow_Instance__c).remove(row.Step_Name__c);
       } else if (row.Status__c == 'Pending' && row.Wake_At__c != null) {
         branches.wakes.put(row.Step_Name__c, row.Wake_At__c);
+        branches.rowIds.put(row.Step_Name__c, row.Id);
       }
     }
     for (Id instId : result.keySet()) {
       // A branch with no row yet is open.
       result.get(instId).open = namesById.get(instId).size();
     }
+    loaded.putAll(result);
     return result;
   }
 
@@ -118,7 +126,7 @@ public inherited sharing class WorkflowBranchTimer {
     }
     Set<String> keys = new Set<String>();
     Datetime now = Datetime.now();
-    Map<Id, Branches> branches = load(asleep);
+    Map<Id, Branches> branches = take(asleep);
     for (Id instId : branches.keySet()) {
       for (String step : branches.get(instId).sleeping(now).keySet()) {
         keys.add(instId + separator + step);
@@ -154,6 +162,24 @@ public inherited sharing class WorkflowBranchTimer {
       return own;
     }
     return existing;
+  }
+
+  // Uses the read that settleAll made in this transaction, else reads again.
+  private static Map<Id, Branches> take(List<Workflow_Instance__c> instances) {
+    Map<Id, Branches> result = new Map<Id, Branches>();
+    List<Workflow_Instance__c> missing = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : instances) {
+      if (loaded.containsKey(inst.Id)) {
+        result.put(inst.Id, loaded.remove(inst.Id));
+      } else {
+        missing.add(inst);
+      }
+    }
+    result.putAll(load(missing));
+    for (Workflow_Instance__c inst : missing) {
+      loaded.remove(inst.Id);
+    }
+    return result;
   }
 
   private static Boolean isFinished(String status) {
