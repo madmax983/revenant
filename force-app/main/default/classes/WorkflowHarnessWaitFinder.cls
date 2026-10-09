@@ -95,7 +95,12 @@ public inherited sharing class WorkflowHarnessWaitFinder {
     String stepName
   ) {
     List<Workflow_Step_Execution__c> execs = [
-      SELECT Workflow_Instance__c, Status__c, SOQL_Query_Count__c, Output__c
+      SELECT
+        Workflow_Instance__c,
+        Status__c,
+        SOQL_Query_Count__c,
+        Output__c,
+        Wake_At__c
       FROM Workflow_Step_Execution__c
       WHERE Workflow_Instance__c IN :candidateIds AND Step_Name__c = :stepName
       WITH SYSTEM_MODE
@@ -151,6 +156,15 @@ public inherited sharing class WorkflowHarnessWaitFinder {
       String stepName
     ) {
       if (WorkflowHarnessSleep.isFrameworkWaitState(se.Output__c)) {
+        return false;
+      }
+      // Sleep_Until__c is one field for all branches (issue #311). A branch of
+      // a parallel instance sleeps only when its own row has a timer.
+      if (
+        String.isNotBlank(inst.Current_Step__c) &&
+        inst.Current_Step__c.contains(',') &&
+        se.Wake_At__c == null
+      ) {
         return false;
       }
       return hasWakeSignal(

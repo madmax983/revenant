@@ -44,7 +44,8 @@ public inherited sharing class WorkflowStepOutcome {
         CreatedDate,
         Progress__c,
         Causation_Id__c,
-        Admission_Priority__c
+        Admission_Priority__c,
+        Sleep_Until__c
       FROM Workflow_Instance__c
       WHERE Id = :outcome.instance.Id
       WITH SYSTEM_MODE

@@ -20,6 +20,49 @@ public inherited sharing class WorkflowBranchResume {
   public static void enqueueResumeBulk(
     List<Workflow_Instance__c> parallelInstances
   ) {
+    enqueueBranches(parallelInstances, new Set<String>());
+  }
+
+  /**
+   * Release and resume variant of enqueueResumeBulk (issue #311). A `Suspended`
+   * instance has a branch that still sleeps. That branch keeps its deadline: no
+   * worker starts for it, and the sleep sweep starts it later. A `Running`
+   * instance runs every open branch. A signal from the park may wake a
+   * sleeping branch.
+   * @param parallelInstances the parallel instances that left a park, with
+   *        Status__c as the park timer set it
+   */
+  public static void enqueueUnlessSleeping(
+    List<Workflow_Instance__c> parallelInstances
+  ) {
+    Set<String> skip = WorkflowBranchTimer.sleepingKeys(
+      parallelInstances,
+      '::'
+    );
+    enqueueBranches(parallelInstances, skip);
+  }
+
+  /**
+   * Starts the named branches (issue #311). The sleep sweep uses it for the
+   * branches whose own timer ended.
+   * @param stepsByInstance instance Id to the branch step names to start
+   */
+  public static void enqueueNamedBranches(
+    Map<Id, List<String>> stepsByInstance
+  ) {
+    publishBranchEvents(
+      buildBranchRunEvents(
+        stepsByInstance,
+        new Map<String, String>(),
+        new Set<String>()
+      )
+    );
+  }
+
+  private static void enqueueBranches(
+    List<Workflow_Instance__c> parallelInstances,
+    Set<String> skip
+  ) {
     if (parallelInstances == null || parallelInstances.isEmpty()) {
       return;
     }
@@ -32,11 +75,9 @@ public inherited sharing class WorkflowBranchResume {
       branchesByInstance.keySet(),
       allBranchNames
     );
-    List<Workflow_Event__e> branchEvents = buildBranchRunEvents(
-      branchesByInstance,
-      latestStatusByKey
+    publishBranchEvents(
+      buildBranchRunEvents(branchesByInstance, latestStatusByKey, skip)
     );
-    publishBranchEvents(branchEvents);
   }
 
   /**
@@ -103,11 +144,13 @@ public inherited sharing class WorkflowBranchResume {
    * branch job via {@link enqueueTestBranchJob} instead of emitting an event.
    * @param branchesByInstance instance id to its branch step names
    * @param latestStatusByKey "instanceId::stepName" to latest branch status
+   * @param skip "instanceId::stepName" keys of branches that must not start
    * @return the RUN_STEP events to publish (empty under test)
    */
   private static List<Workflow_Event__e> buildBranchRunEvents(
     Map<Id, List<String>> branchesByInstance,
-    Map<String, String> latestStatusByKey
+    Map<String, String> latestStatusByKey,
+    Set<String> skip
   ) {
     List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
     for (Id instId : branchesByInstance.keySet()) {
@@ -117,7 +160,10 @@ public inherited sharing class WorkflowBranchResume {
         if (status == 'Completed' || status == 'OperatorSkipped') {
           continue; // branch already finished
         }
-        if (WorkflowResumeEnqueue.enqueuedBranchKeys.contains(key)) {
+        if (
+          skip.contains(key) ||
+          WorkflowResumeEnqueue.enqueuedBranchKeys.contains(key)
+        ) {
           continue;
         }
         WorkflowResumeEnqueue.enqueuedBranchKeys.add(key);

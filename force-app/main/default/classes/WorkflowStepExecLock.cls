@@ -200,8 +200,10 @@ public inherited sharing class WorkflowStepExecLock {
       return null;
     }
     stepExec.Status__c = 'Running';
-    // The step is no longer parked. Clear the wait type.
+    // The step is no longer parked. Clear the wait type and the branch timer
+    // (issue #311), so an old deadline cannot hold a later park release.
     stepExec.Wait_Type__c = null;
+    stepExec.Wake_At__c = null;
     return stepExec;
   }
 

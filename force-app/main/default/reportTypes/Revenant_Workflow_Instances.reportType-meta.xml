@@ -118,6 +118,11 @@
         </columns>
         <columns>
             <checkedByDefault>false</checkedByDefault>
+            <field>Parked_At__c</field>
+            <table>Workflow_Instance__c</table>
+        </columns>
+        <columns>
+            <checkedByDefault>false</checkedByDefault>
             <field>Hold_Reason__c</field>
             <table>Workflow_Instance__c</table>
         </columns>

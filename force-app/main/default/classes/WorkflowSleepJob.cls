@@ -70,7 +70,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     String stepName
   ) {
     List<Workflow_Instance__c> insts = [
-      SELECT Status__c, Sleep_Until__c
+      SELECT Status__c, Sleep_Until__c, Current_Step__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -86,29 +86,74 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     if (inst.Status__c != 'Suspended' || inst.Sleep_Until__c == null) {
       return false;
     }
-    if (String.isNotBlank(stepName)) {
-      List<Workflow_Step_Execution__c> steps = [
-        SELECT Id
-        FROM Workflow_Step_Execution__c
-        WHERE
-          Workflow_Instance__c = :instanceId
-          AND Step_Name__c = :stepName
-          AND Status__c = 'Pending'
-        WITH SYSTEM_MODE
-        LIMIT 1
-      ];
-      if (steps.isEmpty()) {
-        return false;
-      }
+    Workflow_Step_Execution__c woken = String.isNotBlank(stepName)
+      ? ownedWake(inst, stepName)
+      : null;
+    if (String.isNotBlank(stepName) && woken == null) {
+      return false;
+    }
+    if (woken != null && woken.Wake_At__c != null) {
+      // Claim the timer here. The sweep then does not start this branch again
+      // before its worker runs (issue #311).
+      update as system new Workflow_Step_Execution__c(
+        Id = woken.Id,
+        Wake_At__c = null
+      );
     }
 
+    // A sibling branch can still sleep. Keep its deadline (issue #311).
     Workflow_Instance__c toUpdate = new Workflow_Instance__c(
       Id = instanceId,
-      Sleep_Until__c = null,
+      Sleep_Until__c = nextBranchWake(inst, stepName),
       Async_Job_Id__c = null
     );
     update as system toUpdate;
     return true;
+  }
+
+  // The named step must be Pending. A parallel branch must also own a due timer
+  // (issue #311). Else a job for an old deadline could run a branch that has
+  // started again. A serial step may have no timer: it started before this field.
+  private static Workflow_Step_Execution__c ownedWake(
+    Workflow_Instance__c inst,
+    String stepName
+  ) {
+    List<Workflow_Step_Execution__c> steps = [
+      SELECT Id, Wake_At__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Workflow_Instance__c = :inst.Id
+        AND Step_Name__c = :stepName
+        AND Status__c = 'Pending'
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (steps.isEmpty()) {
+      return null;
+    }
+    Boolean multi =
+      String.isNotBlank(inst.Current_Step__c) &&
+      inst.Current_Step__c.contains(',');
+    Datetime wake = steps[0].Wake_At__c;
+    if (wake == null) {
+      return multi ? null : steps[0];
+    }
+    return wake <= Datetime.now() ? steps[0] : null;
+  }
+
+  private static Datetime nextBranchWake(
+    Workflow_Instance__c inst,
+    String stepName
+  ) {
+    if (
+      String.isBlank(inst.Current_Step__c) ||
+      !inst.Current_Step__c.contains(',')
+    ) {
+      return null;
+    }
+    return WorkflowBranchTimer.load(new List<Workflow_Instance__c>{ inst })
+      .get(inst.Id)
+      .firstWakeExcept(stepName);
   }
 
   /**

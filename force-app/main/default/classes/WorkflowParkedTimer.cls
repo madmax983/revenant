@@ -1,18 +1,25 @@
 /**
- * @description Status for an instance that leaves a park (issue #240). A gate
- * park clears `Sleep_Until__c`. A timer on a parked instance therefore came
- * from a wait that finished after the park. Release or resume must not run
- * that step early, and must not skip its timeout route. A signal that arrived
- * in the park is the exception: the step runs and reads it. The instance goes to
- * `Suspended`. The sleep sweep wakes it when the timer ends, or at once when
- * the timer already ended.
+ * @description Status for an instance that leaves a park (issues #240, #311). A
+ * gate park clears `Sleep_Until__c`. A timer on a parked instance therefore
+ * came from a wait that finished after the park. Release or resume must not
+ * run that step early, and must not skip its timeout route. A signal that
+ * arrived in the park is the exception: the step runs and reads it. A signal
+ * from before the park is not. `Parked_At__c` tells them apart.
+ *
+ * A serial instance goes to `Suspended`. The sleep sweep wakes it when the
+ * timer ends, or at once when the timer already ended.
+ *
+ * A parallel instance keeps the timer of each branch in `Wake_At__c`. Release
+ * does not run a branch whose deadline is in the future. If a branch sleeps,
+ * the instance is `Suspended` and `Sleep_Until__c` is the first deadline. The
+ * sleep sweep starts each sleeping branch when its timer ends.
  */
 public inherited sharing class WorkflowParkedTimer {
   /**
-   * @description Sets the status of an instance that leaves a park: `Suspended`
-   * when it is serial, has a timer and no buffered signal, else `Running`.
-   * @param instance The parked instance, with Sleep_Until__c and
-   * Current_Step__c loaded.
+   * @description Sets the status of an instance that leaves a park. See
+   * {@link WorkflowParkedTimer#settleAll}.
+   * @param instance The parked instance, with Sleep_Until__c, Current_Step__c
+   * and Parked_At__c loaded.
    * @return True when the instance waits for its timer, so no step may run now.
    */
   public static Boolean settle(Workflow_Instance__c instance) {
@@ -21,39 +28,98 @@ public inherited sharing class WorkflowParkedTimer {
   }
 
   /**
-   * @description Sets the status of each instance that leaves a park. A signal
-   * that arrived in the park stays `Received`, so the step must run and read
-   * it. Costs one SOQL for all instances.
-   * @param instances The parked instances, with Sleep_Until__c and
-   * Current_Step__c loaded.
-   * @return The Ids of the serial instances that wait for their timer.
+   * @description Sets the status of each instance that leaves a park, and
+   * clears its park time. A signal that arrived in the park stays `Received`,
+   * so the step must run and read it. Costs at most one SOQL for branch
+   * timers and one for signals.
+   *
+   * A serial instance with a timer is `Suspended`. A parallel instance with a
+   * branch that still sleeps is `Suspended`, and `Sleep_Until__c` is the first
+   * deadline. Any other instance is `Running`. A parallel instance that is
+   * `Suspended` needs workers for its other branches. Use
+   * {@link WorkflowBranchResume#enqueueUnlessSleeping}.
+   * @param instances The parked instances, with Sleep_Until__c, Current_Step__c
+   * and Parked_At__c loaded.
+   * @return The Ids of the instances that start no worker. Each one is serial
+   * with a timer, or all its open branches wait for a timer.
    */
   public static Set<Id> settleAll(List<Workflow_Instance__c> instances) {
+    Datetime now = Datetime.now();
     Set<Id> timed = new Set<Id>();
+    List<Workflow_Instance__c> multi = new List<Workflow_Instance__c>();
     for (Workflow_Instance__c inst : instances) {
-      // A parallel instance has no worker that the sweep can start per branch.
-      // Release drives its open branches.
-      if (inst.Sleep_Until__c != null && !isParallel(inst)) {
+      if (isParallel(inst)) {
+        multi.add(inst);
+      } else if (inst.Sleep_Until__c != null) {
         timed.add(inst.Id);
       }
     }
-    if (!timed.isEmpty()) {
-      // One grouped row per instance, so a signal backlog cannot reach the row
-      // limit.
-      for (AggregateResult row : [
-        SELECT Workflow_Instance__c instId
-        FROM Workflow_Signal__c
-        WHERE Workflow_Instance__c IN :timed AND Status__c = 'Received'
-        WITH SYSTEM_MODE
-        GROUP BY Workflow_Instance__c
-      ]) {
-        timed.remove((Id) row.get('instId'));
+    Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.load(
+      multi
+    );
+    for (Workflow_Instance__c inst : multi) {
+      if (branches.get(inst.Id).firstWake(now) != null) {
+        timed.add(inst.Id);
       }
     }
+    Set<Id> signalled = signalledInPark(instances, timed);
+    timed.removeAll(signalled);
+
+    Set<Id> waiting = new Set<Id>();
     for (Workflow_Instance__c inst : instances) {
-      inst.Status__c = timed.contains(inst.Id) ? 'Suspended' : 'Running';
+      WorkflowBranchTimer.Branches b = branches.get(inst.Id);
+      if (!timed.contains(inst.Id)) {
+        inst.Status__c = 'Running';
+        if (b != null && signalled.contains(inst.Id)) {
+          // The signal runs every branch. An old deadline must not look like
+          // the timer of a sibling branch later.
+          inst.Sleep_Until__c = null;
+        }
+      } else if (b == null) {
+        inst.Status__c = 'Suspended';
+        waiting.add(inst.Id);
+      } else {
+        inst.Status__c = 'Suspended';
+        inst.Sleep_Until__c = b.firstWake(now);
+        if (b.sleeping(now).size() >= b.open) {
+          waiting.add(inst.Id); // All open branches wait for a timer.
+        }
+      }
+      inst.Parked_At__c = null;
     }
-    return timed;
+    return waiting;
+  }
+
+  // The Ids of the instances that have a signal from the park. A signal that
+  // arrived before the park is old. A blank park time counts every signal, as
+  // for a park from before the field existed. One grouped row for each
+  // instance, so a signal backlog cannot reach the row limit.
+  private static Set<Id> signalledInPark(
+    List<Workflow_Instance__c> instances,
+    Set<Id> timed
+  ) {
+    Set<Id> signalled = new Set<Id>();
+    if (timed.isEmpty()) {
+      return signalled;
+    }
+    Map<Id, Datetime> parkedAt = new Map<Id, Datetime>();
+    for (Workflow_Instance__c inst : instances) {
+      parkedAt.put(inst.Id, inst.Parked_At__c);
+    }
+    for (AggregateResult row : [
+      SELECT Workflow_Instance__c instId, MAX(CreatedDate) lastAt
+      FROM Workflow_Signal__c
+      WHERE Workflow_Instance__c IN :timed AND Status__c = 'Received'
+      WITH SYSTEM_MODE
+      GROUP BY Workflow_Instance__c
+    ]) {
+      Id instId = (Id) row.get('instId');
+      Datetime parked = parkedAt.get(instId);
+      if (parked == null || (Datetime) row.get('lastAt') >= parked) {
+        signalled.add(instId);
+      }
+    }
+    return signalled;
   }
 
   private static Boolean isParallel(Workflow_Instance__c inst) {
