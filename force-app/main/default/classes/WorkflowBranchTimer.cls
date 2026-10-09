@@ -31,6 +31,22 @@ public inherited sharing class WorkflowBranchTimer {
     }
 
     /**
+     * @description Returns the earliest deadline of the other branches, due or
+     * not. The sweep starts a branch that is due.
+     * @param step The branch to leave out.
+     * @return The earliest deadline, or null when no other branch has one.
+     */
+    public Datetime firstWakeExcept(String step) {
+      Datetime first = null;
+      for (String other : wakes.keySet()) {
+        if (other != step && (first == null || wakes.get(other) < first)) {
+          first = wakes.get(other);
+        }
+      }
+      return first;
+    }
+
+    /**
      * @description Returns the earliest deadline that is after a time.
      * @param now The time to compare with.
      * @return The first deadline, or null when no branch sleeps.

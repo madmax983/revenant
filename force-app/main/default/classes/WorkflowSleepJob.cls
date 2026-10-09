@@ -93,7 +93,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     // A sibling branch can still sleep. Keep its deadline (issue #311).
     Workflow_Instance__c toUpdate = new Workflow_Instance__c(
       Id = instanceId,
-      Sleep_Until__c = nextBranchWake(inst),
+      Sleep_Until__c = nextBranchWake(inst, stepName),
       Async_Job_Id__c = null
     );
     update as system toUpdate;
@@ -127,7 +127,10 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     return wake <= Datetime.now();
   }
 
-  private static Datetime nextBranchWake(Workflow_Instance__c inst) {
+  private static Datetime nextBranchWake(
+    Workflow_Instance__c inst,
+    String stepName
+  ) {
     if (
       String.isBlank(inst.Current_Step__c) ||
       !inst.Current_Step__c.contains(',')
@@ -136,7 +139,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
     return WorkflowBranchTimer.load(new List<Workflow_Instance__c>{ inst })
       .get(inst.Id)
-      .firstWake(Datetime.now());
+      .firstWakeExcept(stepName);
   }
 
   /**
