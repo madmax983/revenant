@@ -8,7 +8,7 @@
     "test:quickstart": "node --test scripts/quickstart/smoke.test.mjs scripts/quickstart/quickstart.test.mjs",
     "quickstart": "node scripts/quickstart/smoke.mjs",
     "test:determinism-lint": "cargo test --manifest-path tools/revenant-lint/Cargo.toml && npm --prefix tools/sf-plugin-revenant ci && npm --prefix tools/sf-plugin-revenant run build && npm --prefix tools/sf-plugin-revenant test",
-    "test:ci-org": "node --test scripts/ci-org/ci-org.test.mjs",
+    "test:ci-org": "node --test scripts/ci-org/ci-org.test.mjs scripts/ci-org/workflow.test.mjs",
     "check:apex-compile": "node scripts/apex-compile/check.mjs"
   },
   "devDependencies": {
