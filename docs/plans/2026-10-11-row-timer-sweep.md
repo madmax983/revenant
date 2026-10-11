@@ -32,7 +32,7 @@
 | B8  | Remove `keepEarlier`.                                                   | No. It still feeds the stall detector. It is a hint now.   |
 | B9  | A backfill class that stamps `Wake_At__c` from `Sleep_Until__c`.        | No. It cannot tell a sleeper from an unstarted branch.     |
 | B10 | A new field that marks a legacy job.                                    | No. More schema for a one-time gap.                        |
-| B11 | Sweep fallback: a due `Sleep_Until__c` with no timer runs open branches | Yes. It is the same wake as a signal. It never strands.    |
+| B11 | Sweep fallback: a due `Sleep_Until__c` with no timer runs the untimed Pending branches | Yes. It never strands a sleeper. A signal waiter and a lock retry are left out. |
 
 ## Reverse Brainstorm (how to fail)
 
@@ -46,6 +46,7 @@
 | A finished branch runs again.                                 | A branch with no active row and a finished row is skipped. Test.    |
 | The history read grows with the step count.                   | Assert the query rows with a long history. Test.                    |
 | The fallback runs branches that wait for a timer.             | The fallback applies only when no branch has a timer. Test.         |
+| The fallback runs a signal waiter or a lock retry.            | It runs only Pending rows with no wait type and no retry mark. Test.|
 | A paused definition fills the row query.                      | The instance query keeps the pause and hold filters.                |
 | The re-arm skips a branch whose timer ended.                  | Skip only a timer after now. Test.                                  |
 | The woken branch has no timeout.                              | The claim stamps `Timeout_At__c` for a step with a timeout. Test.   |
@@ -63,10 +64,10 @@
 ## Decision
 
 - `WorkflowSleepResumeSweep` runs a row query: Pending rows with `Wake_At__c <= now` on a `Suspended` parallel instance. The main query takes `Sleep_Until__c <= now OR Id IN :rowDue`.
-- `WorkflowBranchTimer.load` runs two bounded queries: the active rows, and the finished branches (grouped). `Branches` lists the open branches. It is the one read for release, signal wake and drain.
+- `WorkflowBranchTimer.load` runs two bounded queries: the active rows (Pending, Running, Retrying), and the finished branches (grouped). `Branches` lists the open branches. It is the one read for release, signal wake and drain.
 - `WorkflowBranchTimer.claim` clears `Wake_At__c`. Signal wake, release and drain call it for each branch they publish. The sweep and the sleep job call `woken`, which also stamps `Timeout_At__c`.
 - `WorkflowTimeoutReArm.reArmTimeoutsForResume` skips a row whose `Wake_At__c` is after now.
-- The sweep fallback: a parallel instance that the sweep selects by `Sleep_Until__c` and that has no row timer runs its open branches by name.
+- The sweep fallback: a parallel instance that the sweep selects by `Sleep_Until__c` and that has no row timer runs its untimed Pending branches by name. Those are the Pending rows with no wait type and no retry mark.
 - `keepEarlier` stays. `Sleep_Until__c` is a hint for the stall detector and the dashboard.
 
 ## Steps
