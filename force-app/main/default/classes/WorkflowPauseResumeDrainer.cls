@@ -316,7 +316,7 @@ public inherited sharing class WorkflowPauseResumeDrainer {
       WorkflowBranchTimer.sleepingKeys(instances, branches, '|'),
       claimed
     );
-    // The claim goes first. A failed publish rolls it back.
+    // Claim first. A failed publish rolls back the claim.
     WorkflowBranchTimer.claim(claimed);
     publishResumeEvents(events);
   }
@@ -326,8 +326,8 @@ public inherited sharing class WorkflowPauseResumeDrainer {
   // published (empty in test context, where dispatchBranch enqueues directly instead).
   /**
    * @description Walks each instance's open branches once, skipping sleeping and
-   * duplicate branches, and dispatches a worker per branch. A branch with a timer
-   * gives up the timer.
+   * duplicate branches, and dispatches a worker per branch. The method claims the
+   * timer of each branch that it starts.
    * @param instances The resumed multi-branch instances to walk.
    * @param branches The branches of those instances.
    * @param sleeping The (instance, branch) keys of branches that still sleep.

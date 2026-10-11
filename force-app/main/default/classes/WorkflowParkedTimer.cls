@@ -11,8 +11,9 @@
  *
  * A parallel instance keeps the timer of each branch in `Wake_At__c`. Release
  * does not run a branch whose deadline is in the future. If a branch sleeps,
- * the instance is `Suspended` and `Sleep_Until__c` is the first deadline. The
- * sleep sweep starts each sleeping branch when its timer ends.
+ * the instance is `Suspended` and `Sleep_Until__c` is the first deadline. It is
+ * a hint. The sleep sweep selects each branch by its own `Wake_At__c` and
+ * starts it when its timer ends.
  */
 public inherited sharing class WorkflowParkedTimer {
   /**

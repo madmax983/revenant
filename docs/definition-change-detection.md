@@ -65,7 +65,7 @@ Release writes the live fingerprint and shape, sets `Running`, re-arms step time
 A wait can end in the park and leave a timer. Release must not run that step early. Pause resume and hold release follow the same rules.
 
 - **Serial instance.** Release sets `Suspended` and does not enqueue. The sleep sweep wakes the instance when the timer ends.
-- **Parallel instance.** Each branch keeps its own timer in `Wake_At__c` on its step row. Release does not start a branch that still sleeps. It starts the other open branches. A branch whose deadline already ended runs at release. The instance is `Suspended`. `Sleep_Until__c` is the first deadline. It is a hint only. The sleep sweep reads the step rows: it starts each branch whose `Wake_At__c` ended, whatever `Sleep_Until__c` holds. A run that starts a branch (sweep, sleep job, signal wake, release) clears `Wake_At__c` in the same transaction. Release does not set `Timeout_At__c` on a sleeping branch. The timeout starts when the timer wakes the branch.
+- **Parallel instance.** Each branch keeps its own timer in `Wake_At__c` on its step row. Release does not start a branch that still sleeps. It starts the other open branches. A branch whose deadline already ended runs at release. The instance is `Suspended`. `Sleep_Until__c` is the first deadline. It is a hint only. The sleep sweep reads the step rows: it starts each branch whose `Wake_At__c` ended, even when `Sleep_Until__c` holds another value. A run that starts a branch (sweep, sleep job, signal wake, release) clears `Wake_At__c` in the same transaction. Release does not set `Timeout_At__c` on a sleeping branch. The timeout starts when the timer wakes the branch.
 - **Signal.** A signal that arrived in the park keeps the instance `Running`, so the step reads it. A signal that arrived before the park does not. Each park gate writes the park time in `Parked_At__c`. Release and resume compare it with the `CreatedDate` of each signal. A blank park time means the park is older than this field. Then any `Received` signal keeps the instance `Running`.
 
 ## Limits
@@ -73,6 +73,6 @@ A wait can end in the park and leave a timer. Release must not run that step ear
 - The fingerprint covers the step list only. It does not cover `getNextStep()` logic or step code.
 - The engine does not migrate an instance to the new shape.
 - To change a shape without a park, implement `VersionedWorkflow` and route by version.
-- The branch read costs two SOQL for all instances. It reads the active step rows and one grouped row for each finished branch. It does not read the step history.
+- The branch read costs at most two SOQL for all instances. It reads the active (Pending, Running or Retrying) step rows and one grouped row for each finished (Completed or OperatorSkipped) branch. It does not read the step history.
 - A parallel branch with a timed wait does not use its timeout route. When its timer ends, the engine runs the same step again. This is true for release and for the sleep sweep.
 - The engine never parks its own workflows (`WatchdogWorkflow`, `CleanupWorkflow`, `BulkRedriveWorkflow`, `BulkCancelWorkflow`, `ArchiveWorkflow`). A parked watchdog stops all sweeps.

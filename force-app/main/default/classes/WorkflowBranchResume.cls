@@ -15,7 +15,7 @@ public inherited sharing class WorkflowBranchResume {
    * Bulk variant of enqueueResume for the bulk signal() path: wakes the
    * incomplete branches of many parallel instances using the already-loaded
    * Current_Step__c values and a bounded read of the branch rows. A branch that
-   * starts here gives up its timer (issue #335).
+   * starts here loses its timer (claim, issue #335).
    * @param parallelInstances the parallel instances whose branches are re-enqueued
    */
   public static void enqueueResumeBulk(
@@ -73,8 +73,8 @@ public inherited sharing class WorkflowBranchResume {
     );
   }
 
-  // Starts each open branch that is not in `skip`, and claims its timer in the
-  // same transaction. The claim goes first. A failed publish rolls it back.
+  // Starts each open branch that is not in `skip`. Claims its timer in the same
+  // transaction, before the publish. A failed publish rolls back the claim.
   private static void enqueueBranches(
     List<Workflow_Instance__c> parallelInstances,
     Map<Id, WorkflowBranchTimer.Branches> branches,

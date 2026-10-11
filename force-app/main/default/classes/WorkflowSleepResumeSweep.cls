@@ -62,8 +62,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
       // parked, so a parked backlog cannot fill the batch of in-flight
       // sleepers. redriveParkedStarts sends those starts, bounded.
       redriveParkedStarts(now, pausedDefNames);
-      // Issue #335: a parallel branch with a due timer selects its instance,
-      // whatever `Sleep_Until__c` holds.
+      // Issue #335: a due branch timer selects its instance. The value of
+      // `Sleep_Until__c` does not matter.
       Set<Id> rowDue = dueRowInstanceIds(now, pausedDefNames);
       readyToResume = [
         SELECT
@@ -116,7 +116,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
         multi.add(inst);
       }
     }
-    // One SOQL for all parallel instances. None when no instance is parallel.
+    // At most two SOQL for all parallel instances. None when no instance is parallel.
     b.branchTimers = WorkflowBranchTimer.load(multi);
 
     for (Workflow_Instance__c inst : readyToResume) {
@@ -146,6 +146,10 @@ public inherited sharing class WorkflowSleepResumeSweep {
         AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
         AND Workflow_Instance__r.Workflow_Name__c NOT IN :pausedDefNames
         AND Workflow_Instance__r.Held_At__c = NULL
+        AND (Workflow_Instance__r.Global_Admission__c = NULL
+        OR Workflow_Instance__r.Global_Admission__c != :GlobalAdmissionPolicy.STATE_PARKED)
+        AND (Workflow_Instance__r.Concurrency_Parked__c = FALSE
+        OR Workflow_Instance__r.Concurrency_Slot_Held__c = TRUE)
       WITH SYSTEM_MODE
       ORDER BY Wake_At__c ASC
       LIMIT :watchdogResumeBatchSize
@@ -348,7 +352,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
   // Finds the branches whose timer ended, to start them. Keeps the next timer.
   // A sleep from before the row timers has no branch timer (issue #335). Its
   // instance timer ended. The sweep runs the Pending branches that have no
-  // timer, wait type or retry mark, so that no sleeper stays stranded. A branch
+  // timer, wait type or retry mark, so that a sleep from before the upgrade still wakes. A branch
   // that waits for a signal, or retries after a lock, does not run.
   private static void planBranchTimers(
     Workflow_Instance__c inst,

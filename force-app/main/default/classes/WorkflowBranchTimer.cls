@@ -1,7 +1,8 @@
 /**
  * @description Timer of each parallel branch (issues #311, #335). A sleep or a
- * timed wait stores its deadline in `Wake_At__c` on the step row. A park clears
- * `Sleep_Until__c`, which is one field for all branches. The row timer stays.
+ * timed wait stores its deadline in `Wake_At__c` on the step row. A gate park
+ * clears `Sleep_Until__c`. It is one field for all branches, so it is only a
+ * hint. The row timer stays.
  * Release, resume, hold release, signal wake and the sleep sweep read it here.
  * The read is bounded: it does not grow with the step history. A run that
  * starts a branch claims the timer in the same transaction. All SOQL and DML
@@ -10,7 +11,7 @@
 public inherited sharing class WorkflowBranchTimer {
   /** @description The branches of one parallel instance. */
   public class Branches {
-    /** @description Branches that wait: the latest row is Pending and has a timer. */
+    /** @description Branches with a Pending row that has a timer. */
     public Map<String, Datetime> wakes = new Map<String, Datetime>();
     /** @description Step row Id of each branch in `wakes`. */
     public Map<String, Id> rowIds = new Map<String, Id>();
@@ -69,12 +70,12 @@ public inherited sharing class WorkflowBranchTimer {
     }
   }
 
-  // The last release read of each instance. Taken one time.
+  // Holds the read of `loadForRelease` until `take` uses it one time.
   private static Map<Id, Branches> loaded = new Map<Id, Branches>();
 
   /**
-   * @description Reads the branch timers of parallel instances. Costs two SOQL
-   * for all instances, and one row for each active step and for each finished
+   * @description Reads the branch timers of parallel instances. Costs at most two
+   * SOQL for all instances, and one row for each active step and for each finished
    * branch. It does not read the older visits of a step.
    * @param multi The instances, with Current_Step__c loaded.
    * @return The branches by instance Id.
@@ -126,8 +127,8 @@ public inherited sharing class WorkflowBranchTimer {
     return result;
   }
 
-  // The branches with a Pending, Running or Retrying row. A Pending row with a timer
-  // sleeps. Few rows: one for each branch that runs or waits.
+  // Reads the branches with a Pending, Running or Retrying row. A Pending row with a timer
+  // sleeps. It returns one row for each branch that runs or waits.
   private static Set<String> readActive(
     Map<Id, Branches> result,
     Map<Id, List<String>> namesById,
@@ -172,9 +173,9 @@ public inherited sharing class WorkflowBranchTimer {
     return active;
   }
 
-  // The branches that finished at least one visit. One grouped row for each
-  // branch, so a long history cannot reach the row limit. Only branches with
-  // no active row need it.
+  // The branches that finished at least one visit. It returns one grouped
+  // row for each finished branch. A long history cannot reach the row limit.
+  // It reads only branches with no active row.
   private static Set<String> readFinished(
     Map<Id, List<String>> namesById,
     Set<String> active
@@ -241,8 +242,9 @@ public inherited sharing class WorkflowBranchTimer {
 
   /**
    * @description Builds the update that claims a branch timer. The run that
-   * starts the branch clears the timer in the same transaction. Else a park
-   * that stops the worker leaves a timer that holds a later release.
+   * starts the branch clears the timer in the same transaction. If a park
+   * stops the worker before it clears the timer, the stale timer blocks a
+   * later release.
    * @param rowId The Id of the step row.
    * @return The row to update.
    */
@@ -252,8 +254,8 @@ public inherited sharing class WorkflowBranchTimer {
 
   /**
    * @description Builds the update for a branch that its own timer wakes. It
-   * clears the timer and arms the step timeout. A release does not arm a
-   * sleeping branch, so the timeout starts when the timer ends (issue #335).
+   * clears the timer and arms the step timeout. Release does not arm a
+   * sleeping branch. The timeout starts when the timer ends (issue #335).
    * @param rowId The Id of the step row.
    * @param stepName The branch step name.
    * @param workflowName The workflow of the instance.
@@ -288,7 +290,7 @@ public inherited sharing class WorkflowBranchTimer {
   /**
    * @description Picks the `Sleep_Until__c` for an instance after a wait. A
    * parallel instance keeps an earlier future deadline of a sibling branch.
-   * Else the sweep would not wake that sibling.
+   * This keeps the hint for the stall detector and the dashboard.
    * @param instance The instance. A serial wait does not read its timer.
    * @param own The deadline of this wait, or null when it has no timer.
    * @param isParallel True when the step is a parallel branch.
@@ -315,8 +317,8 @@ public inherited sharing class WorkflowBranchTimer {
   }
 
   /**
-   * @description Returns the branches. It uses the read that settleAll made in
-   * this transaction, else reads again.
+   * @description Returns the branches. It uses the read that
+   * WorkflowParkedTimer.settleAll made in this transaction. Else it reads again.
    * @param instances The parallel instances.
    * @return The branches by instance Id.
    */
@@ -332,9 +334,5 @@ public inherited sharing class WorkflowBranchTimer {
     }
     result.putAll(load(missing));
     return result;
-  }
-
-  private static Boolean isFinished(String status) {
-    return status == 'Completed' || status == 'OperatorSkipped';
   }
 }

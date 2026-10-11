@@ -2,7 +2,7 @@
  * @description Tests for the row timer sweep (issue #335). The sweep finds a due
  * parallel branch from its own `Wake_At__c`. A run that a signal publishes
  * claims the timer. The branch read does not grow with the step history. A
- * sleeping branch has no `Timeout_At__c` until its timer ends. Written first (RED).
+ * sleeping branch has no `Timeout_At__c` until its timer ends.
  */
 @IsTest
 public class WorkflowRowTimerSweepTest {
@@ -263,7 +263,7 @@ public class WorkflowRowTimerSweepTest {
   // ============================================================
 
   // The branch has no row timer. The instance timer is due. The sweep runs the
-  // Pending branches that may sleep, by name. It does not leave them stranded.
+  // Pending branches that have no timer, wait type or retry mark, by name.
   @IsTest
   static void testDueInstanceTimerWithoutRowTimerRunsUntimedBranches() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -361,6 +361,7 @@ public class WorkflowRowTimerSweepTest {
       System.assertEquals(null, rowOf(inst.Id, STEP_A).Wake_At__c, 'Claimed');
       // The worker exits at the park. Then the park is released.
       WorkflowResumeEnqueue.enqueuedBranchKeys.clear();
+      WorkflowPauseResumeDrainer.dispatchedInTest.clear();
       Workflow_Instance__c parked = load(inst.Id);
       parked.Status__c = 'DefinitionChanged';
       update parked;
@@ -548,6 +549,118 @@ public class WorkflowRowTimerSweepTest {
         rowOf(inst.Id, TIMED_B).Timeout_At__c,
         'B still sleeps'
       );
+    }
+  }
+
+  // The finished-branch read is bounded too. Branch A has a long history and
+  // no active row, so the grouped query runs.
+  @IsTest
+  static void testFinishedBranchReadIsBounded() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      List<Workflow_Step_Execution__c> old = new List<Workflow_Step_Execution__c>();
+      for (Integer i = 0; i < 300; i++) {
+        old.add(
+          new Workflow_Step_Execution__c(
+            Workflow_Instance__c = inst.Id,
+            Step_Name__c = STEP_A,
+            Status__c = 'Completed',
+            Retry_Count__c = 0
+          )
+        );
+      }
+      insert old;
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      Workflow_Instance__c current = load(inst.Id);
+      Integer before = Limits.getQueryRows();
+      WorkflowBranchResume.enqueueResumeBulk(
+        new List<Workflow_Instance__c>{ current }
+      );
+      System.assert(
+        Limits.getQueryRows() - before < 50,
+        'Rows read: ' + (Limits.getQueryRows() - before)
+      );
+      System.assertEquals(false, enqueued(inst.Id, STEP_A), 'A is done');
+      System.assertEquals(true, enqueued(inst.Id, STEP_B));
+    }
+  }
+
+  // Many instances cost the same number of queries as one.
+  @IsTest
+  static void testManyInstancesShareTwoQueries() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 20; i++) {
+        insts.add(newParallel('Suspended'));
+      }
+      List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
+      for (Integer i = 0; i < insts.size(); i++) {
+        // Even: A is done. Odd: A has no row.
+        rows.add(
+          new Workflow_Step_Execution__c(
+            Workflow_Instance__c = insts[i].Id,
+            Step_Name__c = STEP_A,
+            Status__c = Math.mod(i, 2) == 0 ? 'Completed' : 'Pending',
+            Retry_Count__c = 0
+          )
+        );
+      }
+      insert rows;
+      Integer queries = Limits.getQueries();
+      Map<Id, WorkflowBranchTimer.Branches> loaded = WorkflowBranchTimer.load(
+        insts
+      );
+      System.assert(Limits.getQueries() - queries <= 2, 'Queries used');
+      for (Integer i = 0; i < insts.size(); i++) {
+        List<String> open = loaded.get(insts[i].Id).openNames;
+        System.assertEquals(
+          Math.mod(i, 2) == 0 ? 1 : 2,
+          open.size(),
+          'Open branches of instance ' + i
+        );
+      }
+    }
+  }
+
+  // A branch whose timer ended gets its timeout at release.
+  @IsTest
+  static void testReleaseArmsBranchWithElapsedTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel(
+        'Paused',
+        TIMED_WF,
+        TIMED_A + ',' + TIMED_B
+      );
+      newRow(inst.Id, TIMED_A, 'Pending', at(-5));
+      newRow(inst.Id, TIMED_B, 'Pending', null);
+      WorkflowPauseGate.resumeDefinition(TIMED_WF);
+      System.assertNotEquals(null, rowOf(inst.Id, TIMED_A).Timeout_At__c);
+    }
+  }
+
+  // The sleep job claims the timer and arms the timeout of a parallel branch.
+  // The test does not call stopTest, so the queued worker does not run.
+  @IsTest
+  static void testSleepJobClaimsAndArmsBranch() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = newParallel(
+        'Suspended',
+        TIMED_WF,
+        TIMED_A + ',' + TIMED_B
+      );
+      inst.Sleep_Until__c = at(-1);
+      update inst;
+      newRow(inst.Id, TIMED_A, 'Pending', at(-1));
+      newRow(inst.Id, TIMED_B, 'Pending', at(40));
+      Test.startTest();
+      new WorkflowSleepJob(inst.Id, TIMED_A).execute(null);
+      Workflow_Step_Execution__c woken = rowOf(inst.Id, TIMED_A);
+      System.assertEquals(null, woken.Wake_At__c, 'Claimed');
+      System.assertNotEquals(null, woken.Timeout_At__c, 'Armed');
+      System.assertNotEquals(null, rowOf(inst.Id, TIMED_B).Wake_At__c);
     }
   }
 }

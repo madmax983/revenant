@@ -2,7 +2,8 @@
  * @description Bulk step-deadline re-arming and transient-retry branch re-drive
  * for the Revenant engine. On resuming instances from a Paused park it re-stamps
  * a fresh watchdog `Timeout_At__c` on each current Pending/Running step (skipping
- * concurrency-bounded instances that have not yet won an admission slot) and
+ * concurrency-bounded instances that have not yet won an admission slot, and
+ * parallel branches whose `Wake_At__c` is after now) and
  * re-schedules their dynamic timeout jobs; it also re-drives parallel-branch
  * steps parked for a transient row-lock retry, re-arming only those rows and
  * bulk-publishing their RUN_STEP events in a single EventBus call. Extracted from
@@ -80,10 +81,11 @@ public inherited sharing class WorkflowTimeoutReArm {
   }
 
   /**
-   * Tells if a parallel branch still sleeps (issue #335). Its timeout starts
-   * when its timer wakes it. A deadline now would end before the timer.
+   * Returns true when the branch timer is after now (issue #335). The timeout
+   * starts when the timer wakes the branch. A deadline set now would end
+   * before the timer.
    * @param step the queried step row, with Wake_At__c
-   * @return true when the step timer is after now
+   * @return true when the branch still sleeps
    */
   private static Boolean isSleeping(Workflow_Step_Execution__c step) {
     return step.Wake_At__c != null && step.Wake_At__c > DateTime.now();

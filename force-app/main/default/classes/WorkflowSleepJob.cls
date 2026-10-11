@@ -94,8 +94,8 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
     if (woken != null && woken.Wake_At__c != null) {
       // Claim the timer here. The sweep then does not start this branch again
-      // before its worker runs (issue #311). Arm the timeout of the branch now
-      // that it wakes (issue #335).
+      // before its worker runs (issue #311). Also arm the step timeout,
+      // because the timer woke the branch (issue #335).
       update as system WorkflowBranchTimer.wokenRow(
         woken.Id,
         stepName,
