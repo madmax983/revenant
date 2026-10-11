@@ -33,6 +33,7 @@
  * dashboard request.
  *
  * Issue #290: probeStep probes one step for the version of one instance.
+ * Issue #332: probeStep can also probe with a stored output.
  */
 public inherited sharing class WorkflowTransitionProbe {
   /** The maximum number of versions that the graph probes. */
@@ -223,18 +224,25 @@ public inherited sharing class WorkflowTransitionProbe {
    * @param def The workflow definition.
    * @param stepName The step to probe.
    * @param version The instance version. Null gives version 1, as in the engine.
+   * @param output A stored output for a third probe (issue #332), or null.
+   * The probe gives it to StepResult.complete as the engine does.
    * @return The transitions of the step.
    */
   public static Transitions probeStep(
     WorkflowDefinition def,
     String stepName,
-    Integer version
+    Integer version,
+    String output
   ) {
     Transitions t = new Transitions();
     Boolean versioned = def instanceof VersionedWorkflow;
     Integer routed = version == null ? 1 : version;
     Set<String> outcomes = new Set<String>();
-    for (StepResult probe : probeResults()) {
+    List<StepResult> probes = probeResults();
+    if (output != null) {
+      probes.add(StepResult.complete(null, output));
+    }
+    for (StepResult probe : probes) {
       String successor;
       try {
         successor = versioned

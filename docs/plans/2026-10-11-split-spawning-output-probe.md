@@ -24,30 +24,30 @@ step after the join.
 
 ## Brainstorm
 
-| #   | Idea                                                                     | Keep?                                                      |
-| --- | ------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| B1  | Add `Output__c` to the 201-row step query.                               | No. Up to 201 large values in the heap.                    |
-| B2  | Read `Output__c` of the spawning row only, by `Id`.                      | Yes. 1 SOQL, one value.                                    |
-| B3  | Resolve the value with `resolvePayload`, as the engine does.             | No. It decodes. ADR 0002 point 8 forbids it.               |
-| B4  | Resolve with `resolveControlPayloadWithin`.                              | Yes. Offload file, owner check, size cap, no decode.       |
-| B5  | Add a third probe `StepResult.complete(null, output)`.                   | Yes. Same object as the engine gives.                      |
-| B6  | Use only the real output. Drop the synthetic probes.                     | No. The issue keeps the "?" rules.                         |
-| B7  | Decode an encoded value after a user-mode access check (ADR 0020).       | No. Codec code in a dashboard read. Outside the ADR.       |
-| B8  | Add a `NEXT_` reason when the overlay cannot read the output.            | No. The synthetic probes still give a hint. Less API.      |
-| B9  | `probeStep` gets an output argument. The serial path gives null.         | Yes. One method, no new probe class.                       |
+| #   | Idea                                                               | Keep?                                                 |
+| --- | ------------------------------------------------------------------ | ----------------------------------------------------- |
+| B1  | Add `Output__c` to the 201-row step query.                         | No. Up to 201 large values in the heap.               |
+| B2  | Read `Output__c` of the spawning row only, by `Id`.                | Yes. 1 SOQL, one value.                               |
+| B3  | Resolve the value with `resolvePayload`, as the engine does.       | No. It decodes. ADR 0002 point 8 forbids it.          |
+| B4  | Resolve with `resolveControlPayloadWithin`.                        | Yes. Offload file, owner check, size cap, no decode.  |
+| B5  | Add a third probe `StepResult.complete(null, output)`.             | Yes. Same object as the engine gives.                 |
+| B6  | Use only the real output. Drop the synthetic probes.               | No. The issue keeps the "?" rules.                    |
+| B7  | Decode an encoded value after a user-mode access check (ADR 0020). | No. Codec code in a dashboard read. Outside the ADR.  |
+| B8  | Add a `NEXT_` reason when the overlay cannot read the output.      | No. The synthetic probes still give a hint. Less API. |
+| B9  | `probeStep` gets an output argument. The serial path gives null.   | Yes. One method, no new probe class.                  |
 
 ## Reverse Brainstorm (failure modes)
 
-| Way to fail                                              | Prevention                                                          |
-| -------------------------------------------------------- | ------------------------------------------------------------------- |
+| Way to fail                                              | Prevention                                                           |
+| -------------------------------------------------------- | -------------------------------------------------------------------- |
 | A large file fills the heap. The read fails.             | Size cap before the read (`ContentSize`). Too large: no third probe. |
-| A forged marker reads the file of another instance.      | The owner check in `resolveControlPayloadWithin`. A marker stays.   |
-| The dashboard decodes ciphertext.                        | No codec call. An encoded value gives no third probe. Test.         |
-| A codec error fails the graph read.                      | No codec call, so no codec error. Test with a codec that throws.    |
-| A serial run gets more SOQL.                             | Read the output only for a `SPLIT` with a spawning row. Test.       |
-| The probe output differs from the engine output.         | Give the same `String` to `StepResult.complete`. Test.              |
-| A blank output adds a probe that the engine does not do. | Blank is the null probe. No third probe.                            |
-| The SOQL cost grows with history.                        | One row by `Id`. Offload: 3 SOQL. Fixed bound. Test.                |
+| A forged marker reads the file of another instance.      | The owner check in `resolveControlPayloadWithin`. A marker stays.    |
+| The dashboard decodes ciphertext.                        | No codec call. An encoded value gives no third probe. Test.          |
+| A codec error fails the graph read.                      | No codec call, so no codec error. Test with a codec that throws.     |
+| A serial run gets more SOQL.                             | Read the output only for a `SPLIT` with a spawning row. Test.        |
+| The probe output differs from the engine output.         | Give the same `String` to `StepResult.complete`. Test.               |
+| A blank output adds a probe that the engine does not do. | Blank is the null probe. No third probe.                             |
+| The SOQL cost grows with history.                        | One row by `Id`. Offload: 3 SOQL. Fixed bound. Test.                 |
 
 ## Six Thinking Hats
 

@@ -10,7 +10,9 @@
  * Read-only: no DML, no event, no job. The graph makes an instance of a class
  * only after ApexTypeImplementor shows that it is a deployed workflow
  * definition. The overlay does one query for the instance and one bounded
- * query for its step rows. The caller does the authorization check.
+ * query for its step rows. For a SPLIT, it reads the output of the spawning
+ * step: 1 query, and 3 more for an output in a file. The caller does the
+ * authorization check.
  */
 public inherited sharing class WorkflowTopology {
   /** The name is not a deployed definition, or getSteps() gave no step. */
@@ -84,6 +86,9 @@ public inherited sharing class WorkflowTopology {
   // Maximum step rows that the overlay reads. The newest rows are kept.
   @TestVisible
   private static Integer pathLimit = 200;
+  // Maximum bytes of a spawning output file that the overlay reads.
+  @TestVisible
+  private static Integer maxSpawningOutputBytes = 500000;
 
   /** @description The graph of one definition. The shape is pinned by a test. */
   public class Graph {
@@ -459,7 +464,7 @@ public inherited sharing class WorkflowTopology {
 
     Integer rowLimit = pathLimit + 1;
     List<Workflow_Step_Execution__c> newestFirst = [
-      SELECT Step_Name__c, Status__c
+      SELECT Id, Step_Name__c, Status__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c = :instance.Id
@@ -501,7 +506,8 @@ public inherited sharing class WorkflowTopology {
 
   // Issue #290: this method routes as the engine does. A serial run routes from its
   // current step. A SPLIT (a comma in Current_Step__c) routes after the join
-  // from its spawning step. The probe uses the stored instance version.
+  // from its spawning step, with its stored output (issue #332). The probe
+  // uses the stored instance version.
   private static void addNextSteps(
     Overlay overlay,
     Workflow_Instance__c instance,
@@ -511,8 +517,11 @@ public inherited sharing class WorkflowTopology {
     Boolean split =
       String.isNotBlank(instance.Current_Step__c) &&
       instance.Current_Step__c.contains(BRANCH_SEPARATOR);
+    Workflow_Step_Execution__c spawningRow = split
+      ? spawningRowOf(newestFirst, overlay.currentSteps)
+      : null;
     String fromStep = split
-      ? spawningStepOf(newestFirst, overlay.currentSteps)
+      ? spawningRow?.Step_Name__c
       : (overlay.currentSteps.isEmpty() ? null : overlay.currentSteps[0]);
     if (fromStep == null) {
       overlay.nextStepsUnknownReason = split
@@ -535,9 +544,35 @@ public inherited sharing class WorkflowTopology {
       WorkflowTransitionProbe.probeStep(
         b.definition,
         fromStep,
-        version == null ? null : version.intValue()
+        version == null ? null : version.intValue(),
+        spawningRow == null
+          ? null
+          : spawningOutputOf(spawningRow.Id, instance.Id)
       )
     );
+  }
+
+  // The output that the engine gives to the spawning step at the join
+  // (WorkflowParallelJoin.proceedToJoin). It reads an output file of the
+  // instance up to maxSpawningOutputBytes. It does not decode (ADR 0002). Null
+  // for a blank or encoded output, or for a file that it did not read.
+  private static String spawningOutputOf(Id rowId, Id instanceId) {
+    List<Workflow_Step_Execution__c> rows = [
+      SELECT Output__c
+      FROM Workflow_Step_Execution__c
+      WHERE Id = :rowId
+      WITH SYSTEM_MODE
+      LIMIT 1
+    ];
+    if (rows.isEmpty() || String.isBlank(rows[0].Output__c)) {
+      return null;
+    }
+    String output = WorkflowPayloadOffload.resolveControlPayloadWithin(
+      rows[0].Output__c,
+      instanceId,
+      maxSpawningOutputBytes
+    );
+    return WorkflowPayloadOffload.markerDocId(output) == null ? output : null;
   }
 
   private static Boolean isRoutableVersion(Decimal version) {
@@ -601,7 +636,7 @@ public inherited sharing class WorkflowTopology {
   // or OperatorSkipped row that is not a branch. Null when no row from the
   // query matches. Upper-case and lower-case letters are equal, as in SOQL
   // NOT IN.
-  private static String spawningStepOf(
+  private static Workflow_Step_Execution__c spawningRowOf(
     List<Workflow_Step_Execution__c> newestFirst,
     List<String> branches
   ) {
@@ -615,7 +650,7 @@ public inherited sharing class WorkflowTopology {
         String.isNotBlank(row.Step_Name__c) &&
         !branchKeys.contains(row.Step_Name__c.toLowerCase())
       ) {
-        return row.Step_Name__c;
+        return row;
       }
     }
     return null;
