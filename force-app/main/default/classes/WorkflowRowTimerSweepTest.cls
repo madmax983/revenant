@@ -741,4 +741,23 @@ public class WorkflowRowTimerSweepTest {
       }
     }
   }
+
+  // The claims must not use the last DML rows of the transaction. A dropped
+  // claim leaves the timer. The branch still starts.
+  @IsTest
+  static void testClaimKeepsDmlRowsFree() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      Datetime wake = at(45);
+      newRow(inst.Id, STEP_A, 'Pending', wake);
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowBranchTimer.claimReserve = Limits.getLimitDmlRows();
+      WorkflowBranchResume.enqueueResumeBulk(
+        new List<Workflow_Instance__c>{ load(inst.Id) }
+      );
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A still starts');
+      System.assertEquals(wake, rowOf(inst.Id, STEP_A).Wake_At__c, 'Kept');
+    }
+  }
 }

@@ -72,6 +72,10 @@ public inherited sharing class WorkflowBranchTimer {
     }
   }
 
+  // DML rows that `claim` leaves free for the caller (signal rows, instances).
+  @TestVisible
+  private static Integer claimReserve = 2000;
+
   // Most groups that one finished-branch query may return (the limit is 2,000).
   private static final Integer MAX_GROUPS = 1500;
 
@@ -317,11 +321,22 @@ public inherited sharing class WorkflowBranchTimer {
 
   /**
    * @description Saves the claimed rows. Call it before the run is published.
+   * It keeps `claimReserve` DML rows free for the caller. If the rows do not
+   * fit, it saves the first rows only. A branch whose claim is dropped still
+   * starts. Its step start clears the timer.
    * @param rows The rows from {@link #claimRow} or {@link #wokenRow}.
    */
   public static void claim(List<Workflow_Step_Execution__c> rows) {
-    if (!rows.isEmpty()) {
-      Database.update(rows, true, AccessLevel.SYSTEM_MODE);
+    Integer room =
+      Limits.getLimitDmlRows() -
+      Limits.getDmlRows() -
+      claimReserve;
+    List<Workflow_Step_Execution__c> fit = new List<Workflow_Step_Execution__c>();
+    for (Integer i = 0; i < rows.size() && i < room; i++) {
+      fit.add(rows[i]);
+    }
+    if (!fit.isEmpty()) {
+      Database.update(fit, true, AccessLevel.SYSTEM_MODE);
     }
   }
 
