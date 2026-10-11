@@ -35,6 +35,7 @@ flowchart LR
     V -->|probe getNextStep| P[WorkflowTransitionProbe]
     G -->|1 query| I[(Workflow_Instance__c)]
     G -->|1 bounded query| S[(Workflow_Step_Execution__c)]
+    G -->|SPLIT: 1 query, 3 more for a file| O[WorkflowPayloadOffload]
 ```
 
 1. **Gate.** The graph accepts only a deployed, concrete workflow
@@ -53,13 +54,20 @@ flowchart LR
    the newest such row is a rollback, and only when `<step>` is on
    `Compensation_Stack__c` and the status permits a live rollback.
 5. **Next steps** (issue #290). The overlay routes as the engine does. It
-   probes one step, `nextStepsFrom`, with the two `COMPLETE` results. As the
-   engine does, it probes a step that `getSteps()` does not declare:
+   probes one step, `nextStepsFrom`, with the two `COMPLETE` results. A
+   `SPLIT` can add a third probe (see below). As the engine does, it probes a step that `getSteps()` does not declare:
    - A serial run routes from its current step.
    - A `SPLIT` (a comma in `Current_Step__c`) routes after the join from
      its spawning step. The spawning step is the step of the newest
      `Completed` or `OperatorSkipped` row that is not a branch, as in
      `WorkflowParallelJoin`.
+   - For a `SPLIT`, a third probe uses the stored `Output__c` of the
+     spawning row, as the engine does at the join (issue #332). The overlay
+     reads a file only when the file is linked to the instance, is UTF-8
+     text, has 200,000 bytes or less and fits in the heap. It does not
+     decode (ADR 0002). A blank or encoded output, or a file that it does
+     not read, gives no third probe. The two `COMPLETE` probes stay. If the
+     third probe gives a different successor, the step gets **?**.
    - A `VersionedWorkflow` uses the stored `Definition_Version__c`. A null
      version is version 1. The probe also uses a version that the graph
      does not probe (older than the newest 50). The graph then gets each
@@ -83,11 +91,11 @@ job ends, Failed, Rollback runs, Parked, Ended.
 
 ## Best-Effort Routing
 
-`getNextStep` can use step output. The probe does not have step output, so
-the graph can miss routes. The graph does not show a missing route as
+`getNextStep` can use step output. The probe has only the spawning output
+of a `SPLIT`, so the graph can miss routes. The graph does not show a missing route as
 "no path":
 
-- A step gets **?** when `getNextStep` throws for a probe, or when the two
+- A step gets **?** when `getNextStep` throws for a probe, or when the
   probes give different successors. A step with **?** shows **End** only
   when a probe also gave no successor.
 - When the graph finds a gap, `gapsFound` is true. The graph then shows
@@ -175,8 +183,10 @@ give access to this class.
 - **Bounded.** The graph uses 1 SOQL for the type check in each
   transaction. The probe makes 2 `getNextStep` calls for each step, plus 2
   for each step and version (50 versions maximum). The overlay adds 2 SOQL:
-  the instance, and 1 step query with `LIMIT 201`. It adds 2 `getNextStep`
-  calls for the next steps. The cost does not grow with the step history.
+  the instance, and 1 step query with `LIMIT 201`. A `SPLIT` adds 1 SOQL
+  for the spawning output, and 3 more when the output is in a file (size,
+  link and file). The overlay adds 2 `getNextStep` calls for the next steps,
+  or 3 with a spawning output. The cost does not grow with the step history.
 - **No schema.** No new object, field, event or metadata type.
 
 ## Limits
