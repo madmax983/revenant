@@ -269,11 +269,11 @@ public class WorkflowRowTimerSweepTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newParallel('Suspended');
-      inst.Sleep_Until__c = at(-1);
+      inst.Sleep_Until__c = at(30);
       update inst;
       newRow(inst.Id, STEP_A, 'Pending', null);
       newRow(inst.Id, STEP_B, 'Pending', null);
-      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      WorkflowSleepResumeSweep.processSleepResumptions(at(60));
       System.assertEquals('Running', load(inst.Id).Status__c);
       System.assertEquals(true, enqueued(inst.Id, STEP_A));
       System.assertEquals(true, enqueued(inst.Id, STEP_B));
@@ -290,7 +290,7 @@ public class WorkflowRowTimerSweepTest {
         WF,
         STEP_A + ',' + STEP_B + ',' + STEP_C
       );
-      inst.Sleep_Until__c = at(-1);
+      inst.Sleep_Until__c = at(30);
       update inst;
       newRow(inst.Id, STEP_A, 'Pending', null);
       Workflow_Step_Execution__c signalWait = newRow(
@@ -309,7 +309,7 @@ public class WorkflowRowTimerSweepTest {
       );
       lockRetry.Transient_Retry_Count__c = 1;
       update lockRetry;
-      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      WorkflowSleepResumeSweep.processSleepResumptions(at(60));
       System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A may sleep');
       System.assertEquals(
         false,
@@ -661,6 +661,23 @@ public class WorkflowRowTimerSweepTest {
       System.assertEquals(null, woken.Wake_At__c, 'Claimed');
       System.assertNotEquals(null, woken.Timeout_At__c, 'Armed');
       System.assertNotEquals(null, rowOf(inst.Id, TIMED_B).Wake_At__c);
+    }
+  }
+
+  // A row that changed after the deadline is a branch that a run claimed or
+  // started. The fallback does not run it again.
+  @IsTest
+  static void testFallbackSkipsRowChangedAfterDeadline() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      inst.Sleep_Until__c = at(-30);
+      update inst;
+      newRow(inst.Id, STEP_A, 'Pending', null);
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals(false, enqueued(inst.Id, STEP_A));
+      System.assertEquals(false, enqueued(inst.Id, STEP_B));
     }
   }
 }

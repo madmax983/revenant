@@ -285,6 +285,11 @@ public inherited sharing class WorkflowSleepResumeSweep {
       b.instanceIds.add(inst.Id);
       return;
     }
+    // A parallel instance that only a row timer selected, and whose timer a
+    // sleep job claimed since, has nothing due. Leave it Suspended.
+    if (isParallel(inst) && !hasDueTimer(inst, b)) {
+      return;
+    }
     Workflow_Step_Execution__c latestStep = b.latestStepByInstId.get(inst.Id);
     if (
       latestStep != null &&
@@ -312,6 +317,25 @@ public inherited sharing class WorkflowSleepResumeSweep {
     inst.Async_Job_Id__c = null;
     b.instanceIds.add(inst.Id);
     b.instancesToUpdate.add(inst);
+  }
+
+  // True when the instance timer ended, or a branch timer ended.
+  private static Boolean hasDueTimer(
+    Workflow_Instance__c inst,
+    SleepResumeBatch b
+  ) {
+    if (inst.Sleep_Until__c != null && inst.Sleep_Until__c <= b.now) {
+      return true;
+    }
+    WorkflowBranchTimer.Branches branches = b.branchTimers.get(inst.Id);
+    if (branches != null) {
+      for (Datetime wake : branches.wakes.values()) {
+        if (wake <= b.now) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // Non-compensating resume path: detect a fired timed-wait and route to the
@@ -380,7 +404,12 @@ public inherited sharing class WorkflowSleepResumeSweep {
       inst.Sleep_Until__c != null &&
       inst.Sleep_Until__c <= b.now
     ) {
-      due.addAll(branches.untimedPending);
+      // A row that changed after the deadline is a claimed or new branch.
+      for (String step : branches.untimedPending.keySet()) {
+        if (branches.untimedPending.get(step) <= inst.Sleep_Until__c) {
+          due.add(step);
+        }
+      }
     }
     if (!due.isEmpty()) {
       b.dueBranches.put(inst.Id, due);

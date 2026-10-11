@@ -415,11 +415,11 @@ public class WorkflowBranchTimerTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newParallel('Suspended');
-      inst.Sleep_Until__c = at(-1);
+      inst.Sleep_Until__c = at(30);
       update inst;
       newBranch(inst.Id, STEP_A, null);
       newBranch(inst.Id, STEP_B, null);
-      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      WorkflowSleepResumeSweep.processSleepResumptions(at(60));
       Workflow_Instance__c after = load(inst.Id);
       System.assertEquals('Running', after.Status__c);
       System.assertEquals(null, after.Sleep_Until__c);

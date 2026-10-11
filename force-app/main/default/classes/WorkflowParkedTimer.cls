@@ -88,6 +88,7 @@ public inherited sharing class WorkflowParkedTimer {
       }
       inst.Parked_At__c = null;
     }
+    WorkflowBranchTimer.forget(waiting);
     return waiting;
   }
 

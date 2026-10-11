@@ -616,7 +616,7 @@ The sleep sweep now reads the step rows of `Suspended` parallel instances. `Slee
 - A run that publishes a branch clears its `Wake_At__c` in the same transaction: signal wake, release, pause resume, hold release, sweep and sleep job. A signal wake that comes before a park no longer leaves a timer on the row.
 - Release and resume do not set `Timeout_At__c` on a sleeping branch. The sweep and the sleep job set it when the timer wakes the branch.
 - Release, resume and signal wake read the active (Pending, Running or Retrying) step rows and one grouped row for each finished (Completed or OperatorSkipped) branch. They no longer read the full step history.
-- A parallel sleep from before issue #311 has no `Wake_At__c`. When its `Sleep_Until__c` ends and no branch has a timer, the sweep runs each `Pending` branch that has no timer, no wait type and no retry mark. No action is needed. If a park cleared `Sleep_Until__c`, release or resume the instance.
+- A parallel sleep from before issue #311 has no `Wake_At__c`. When its `Sleep_Until__c` ends and no branch has a timer, the sweep runs each `Pending` branch that has no timer, no wait type and no retry mark, and that did not change after the deadline. No action is needed. If a park cleared `Sleep_Until__c`, release or resume the instance.
 
 ---
 

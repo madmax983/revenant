@@ -17,9 +17,11 @@ public inherited sharing class WorkflowBranchTimer {
     public Map<String, Id> rowIds = new Map<String, Id>();
     /**
      * @description Branches whose Pending row has no timer, no wait type and no
-     * retry mark. A sleep from before the row timers looks like this (issue #335).
+     * retry mark, with the time of the last change. A sleep from before the row
+     * timers looks like this (issue #335). A branch that a run claimed later
+     * changed after the deadline.
      */
-    public List<String> untimedPending = new List<String>();
+    public Map<String, Datetime> untimedPending = new Map<String, Datetime>();
     /** @description Branches that are not finished, in `Current_Step__c` order. */
     public List<String> openNames = new List<String>();
 
@@ -143,7 +145,8 @@ public inherited sharing class WorkflowBranchTimer {
         Status__c,
         Wake_At__c,
         Wait_Type__c,
-        Transient_Retry_Count__c
+        Transient_Retry_Count__c,
+        LastModifiedDate
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c IN :namesById.keySet()
@@ -167,7 +170,7 @@ public inherited sharing class WorkflowBranchTimer {
         (row.Transient_Retry_Count__c == null ||
         row.Transient_Retry_Count__c == 0)
       ) {
-        branches.untimedPending.add(row.Step_Name__c);
+        branches.untimedPending.put(row.Step_Name__c, row.LastModifiedDate);
       }
     }
     return active;
@@ -238,6 +241,14 @@ public inherited sharing class WorkflowBranchTimer {
       }
     }
     return keys;
+  }
+
+  /**
+   * @description Drops the kept reads of instances that start no worker.
+   * @param instanceIds The instances.
+   */
+  public static void forget(Set<Id> instanceIds) {
+    loaded.keySet().removeAll(instanceIds);
   }
 
   /**
