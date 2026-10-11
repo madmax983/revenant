@@ -309,16 +309,23 @@ public inherited sharing class WorkflowPauseResumeDrainer {
     Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.take(
       instances
     );
-    List<Workflow_Step_Execution__c> claimed = new List<Workflow_Step_Execution__c>();
-    List<Workflow_Event__e> events = collectResumeBranchEvents(
+    Set<String> blocked = WorkflowBranchTimer.sleepingKeys(
       instances,
       branches,
-      WorkflowBranchTimer.sleepingKeys(instances, branches, '|'),
-      claimed
+      '|'
     );
-    // Claim first. A failed publish rolls back the claim.
-    WorkflowBranchTimer.claim(claimed);
-    publishResumeEvents(events);
+    // Claim first. A failed publish rolls back the claim. A branch whose claim
+    // does not fit stays asleep.
+    Set<String> held = WorkflowBranchTimer.claimStarting(
+      instances,
+      branches,
+      blocked,
+      '|'
+    );
+    blocked.addAll(held);
+    publishResumeEvents(
+      collectResumeBranchEvents(instances, branches, blocked)
+    );
   }
 
   // Walks each instance's open branches once, skipping sleeping and duplicate
@@ -326,20 +333,17 @@ public inherited sharing class WorkflowPauseResumeDrainer {
   // published (empty in test context, where dispatchBranch enqueues directly instead).
   /**
    * @description Walks each instance's open branches once, skipping sleeping and
-   * duplicate branches, and dispatches a worker per branch. The method claims the
-   * timer of each branch that it starts.
+   * duplicate branches, and dispatches a worker per branch.
    * @param instances The resumed multi-branch instances to walk.
    * @param branches The branches of those instances.
-   * @param sleeping The (instance, branch) keys of branches that still sleep.
-   * @param claimed Output accumulator of the timer claims (mutated in place).
+   * @param sleeping The (instance, branch) keys of branches that must not start.
    * @return The RUN_STEP events to publish (empty in test context, where
    * dispatchBranch enqueues directly instead).
    */
   private static List<Workflow_Event__e> collectResumeBranchEvents(
     List<Workflow_Instance__c> instances,
     Map<Id, WorkflowBranchTimer.Branches> branches,
-    Set<String> sleeping,
-    List<Workflow_Step_Execution__c> claimed
+    Set<String> sleeping
   ) {
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
     Set<String> branchKeys = new Set<String>();
@@ -355,9 +359,6 @@ public inherited sharing class WorkflowPauseResumeDrainer {
         }
         if (!branchKeys.add(key)) {
           continue; // already dispatched this (instance, branch)
-        }
-        if (open.rowIds.containsKey(branch)) {
-          claimed.add(WorkflowBranchTimer.claimRow(open.rowIds.get(branch)));
         }
         dispatchBranch(inst.Id, branch, events);
       }

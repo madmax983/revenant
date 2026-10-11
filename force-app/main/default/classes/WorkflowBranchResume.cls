@@ -74,35 +74,26 @@ public inherited sharing class WorkflowBranchResume {
   }
 
   // Starts each open branch that is not in `skip`. Claims its timer in the same
-  // transaction, before the publish. A failed publish rolls back the claim.
+  // transaction, before the publish. A failed publish rolls back the claim. A
+  // branch whose claim does not fit stays asleep.
   private static void enqueueBranches(
     List<Workflow_Instance__c> parallelInstances,
     Map<Id, WorkflowBranchTimer.Branches> branches,
     Set<String> skip
   ) {
+    Set<String> blocked = new Set<String>(skip);
+    blocked.addAll(
+      WorkflowBranchTimer.claimStarting(parallelInstances, branches, skip, '::')
+    );
     Map<Id, List<String>> namesByInstance = new Map<Id, List<String>>();
     for (Workflow_Instance__c inst : parallelInstances) {
       if (branches.containsKey(inst.Id)) {
         namesByInstance.put(inst.Id, branches.get(inst.Id).openNames);
       }
     }
-    Set<String> started = new Set<String>();
-    List<Workflow_Event__e> events = buildBranchRunEvents(
-      namesByInstance,
-      skip,
-      started
+    publishBranchEvents(
+      buildBranchRunEvents(namesByInstance, blocked, new Set<String>())
     );
-    List<Workflow_Step_Execution__c> claimed = new List<Workflow_Step_Execution__c>();
-    for (Id instId : namesByInstance.keySet()) {
-      WorkflowBranchTimer.Branches b = branches.get(instId);
-      for (String name : b.rowIds.keySet()) {
-        if (started.contains(instId + '::' + name)) {
-          claimed.add(WorkflowBranchTimer.claimRow(b.rowIds.get(name)));
-        }
-      }
-    }
-    WorkflowBranchTimer.claim(claimed);
-    publishBranchEvents(events);
   }
 
   /**

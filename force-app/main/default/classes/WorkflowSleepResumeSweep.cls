@@ -220,8 +220,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
     if (!b.dueBranches.isEmpty()) {
       // Claim the timers first. A scheduled sleep job for the same branch then
       // finds no due timer and starts nothing.
-      WorkflowBranchTimer.claim(b.claimedRows);
-      WorkflowBranchResume.enqueueNamedBranches(b.dueBranches);
+      Set<Id> saved = WorkflowBranchTimer.claim(b.claimedRows);
+      WorkflowBranchResume.enqueueNamedBranches(claimedOnly(b, saved));
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
     // no-op (runStep ignores it for a comma-separated Current_Step__c), so
@@ -250,6 +250,29 @@ public inherited sharing class WorkflowSleepResumeSweep {
         ]
       );
     }
+  }
+
+  // Drops the due branches whose claim did not fit. Their timers stay, so the
+  // next heartbeat selects them again.
+  private static Map<Id, List<String>> claimedOnly(
+    SleepResumeBatch b,
+    Set<Id> saved
+  ) {
+    Map<Id, List<String>> result = new Map<Id, List<String>>();
+    for (Id instId : b.dueBranches.keySet()) {
+      WorkflowBranchTimer.Branches branches = b.branchTimers.get(instId);
+      List<String> steps = new List<String>();
+      for (String step : b.dueBranches.get(instId)) {
+        Id rowId = branches.rowIds.get(step);
+        if (rowId == null || saved.contains(rowId)) {
+          steps.add(step);
+        }
+      }
+      if (!steps.isEmpty()) {
+        result.put(instId, steps);
+      }
+    }
+    return result;
   }
 
   // A suspended instance's resume is held when its definition is paused.

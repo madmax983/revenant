@@ -742,8 +742,8 @@ public class WorkflowRowTimerSweepTest {
     }
   }
 
-  // The claims must not use the last DML rows of the transaction. A dropped
-  // claim leaves the timer. The branch still starts.
+  // The claims must not use the last DML rows of the transaction. A branch
+  // whose claim does not fit stays asleep. Its timer stays for the sweep.
   @IsTest
   static void testClaimKeepsDmlRowsFree() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
@@ -756,8 +756,31 @@ public class WorkflowRowTimerSweepTest {
       WorkflowBranchResume.enqueueResumeBulk(
         new List<Workflow_Instance__c>{ load(inst.Id) }
       );
-      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A still starts');
+      System.assertEquals(false, enqueued(inst.Id, STEP_A), 'A stays asleep');
       System.assertEquals(wake, rowOf(inst.Id, STEP_A).Wake_At__c, 'Kept');
+      System.assertEquals(true, enqueued(inst.Id, STEP_B), 'B has no timer');
+    }
+  }
+
+  // A signal that wakes a sleeping branch arms its timeout. The release did
+  // not arm it while the branch slept.
+  @IsTest
+  static void testSignalWakeArmsSleepingBranch() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel(
+        'Suspended',
+        TIMED_WF,
+        TIMED_A + ',' + TIMED_B
+      );
+      newRow(inst.Id, TIMED_A, 'Pending', at(45));
+      newRow(inst.Id, TIMED_B, 'Pending', null);
+      WorkflowBranchResume.enqueueResumeBulk(
+        new List<Workflow_Instance__c>{ load(inst.Id) }
+      );
+      Workflow_Step_Execution__c woken = rowOf(inst.Id, TIMED_A);
+      System.assertEquals(null, woken.Wake_At__c, 'Claimed');
+      System.assertNotEquals(null, woken.Timeout_At__c, 'Armed');
     }
   }
 }

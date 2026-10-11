@@ -13,6 +13,8 @@ public inherited sharing class WorkflowBranchTimer {
   public class Branches {
     /** @description Branches with a Pending row that has a timer. */
     public Map<String, Datetime> wakes = new Map<String, Datetime>();
+    /** @description Workflow name of the instance, from its step rows. */
+    public String workflowName;
     /** @description Step row Id of each branch in `wakes`. */
     public Map<String, Id> rowIds = new Map<String, Id>();
     /**
@@ -153,7 +155,8 @@ public inherited sharing class WorkflowBranchTimer {
         Wake_At__c,
         Wait_Type__c,
         Transient_Retry_Count__c,
-        LastModifiedDate
+        LastModifiedDate,
+        Workflow_Instance__r.Workflow_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
         Workflow_Instance__c IN :namesById.keySet()
@@ -169,6 +172,7 @@ public inherited sharing class WorkflowBranchTimer {
         continue;
       }
       Branches branches = result.get(row.Workflow_Instance__c);
+      branches.workflowName = row.Workflow_Instance__r.Workflow_Name__c;
       if (row.Wake_At__c != null) {
         branches.wakes.put(row.Step_Name__c, row.Wake_At__c);
         branches.rowIds.put(row.Step_Name__c, row.Id);
@@ -322,11 +326,12 @@ public inherited sharing class WorkflowBranchTimer {
   /**
    * @description Saves the claimed rows. Call it before the run is published.
    * It keeps `claimReserve` DML rows free for the caller. If the rows do not
-   * fit, it saves the first rows only. A branch whose claim is dropped still
-   * starts. Its step start clears the timer.
+   * fit, it saves the first rows only. The caller must not start a branch
+   * whose claim is not saved.
    * @param rows The rows from {@link #claimRow} or {@link #wokenRow}.
+   * @return The Ids of the rows that it saved.
    */
-  public static void claim(List<Workflow_Step_Execution__c> rows) {
+  public static Set<Id> claim(List<Workflow_Step_Execution__c> rows) {
     Integer room =
       Limits.getLimitDmlRows() -
       Limits.getDmlRows() -
@@ -338,6 +343,50 @@ public inherited sharing class WorkflowBranchTimer {
     if (!fit.isEmpty()) {
       Database.update(fit, true, AccessLevel.SYSTEM_MODE);
     }
+    return new Map<Id, Workflow_Step_Execution__c>(fit).keySet();
+  }
+
+  /**
+   * @description Claims the timers of the branches that are about to start,
+   * and arms their timeout. A branch that starts now gets its timeout here.
+   * @param instances The parallel instances.
+   * @param branches The branches of those instances.
+   * @param skip Keys of branches that do not start (instance Id, separator,
+   * step name).
+   * @param separator The text between the instance Id and the step name.
+   * @return The keys of the branches whose claim did not fit. The caller must
+   * leave them asleep. Their timers stay and the sweep starts them later.
+   */
+  public static Set<String> claimStarting(
+    List<Workflow_Instance__c> instances,
+    Map<Id, Branches> branches,
+    Set<String> skip,
+    String separator
+  ) {
+    List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
+    Map<Id, String> keyByRow = new Map<Id, String>();
+    for (Workflow_Instance__c inst : instances) {
+      Branches b = branches.get(inst.Id);
+      if (b == null) {
+        continue;
+      }
+      for (String name : b.openNames) {
+        String key = inst.Id + separator + name;
+        if (b.rowIds.containsKey(name) && !skip.contains(key)) {
+          Id rowId = b.rowIds.get(name);
+          rows.add(wokenRow(rowId, name, b.workflowName));
+          keyByRow.put(rowId, key);
+        }
+      }
+    }
+    Set<Id> saved = claim(rows);
+    Set<String> held = new Set<String>();
+    for (Id rowId : keyByRow.keySet()) {
+      if (!saved.contains(rowId)) {
+        held.add(keyByRow.get(rowId));
+      }
+    }
+    return held;
   }
 
   /**
