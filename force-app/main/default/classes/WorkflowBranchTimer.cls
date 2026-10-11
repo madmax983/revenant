@@ -72,12 +72,15 @@ public inherited sharing class WorkflowBranchTimer {
     }
   }
 
+  // Most groups that one finished-branch query may return (the limit is 2,000).
+  private static final Integer MAX_GROUPS = 1500;
+
   // Holds the read of `loadForRelease` until `take` uses it one time.
   private static Map<Id, Branches> loaded = new Map<Id, Branches>();
 
   /**
-   * @description Reads the branch timers of parallel instances. Costs at most two
-   * SOQL for all instances, and one row for each active step and for each finished
+   * @description Reads the branch timers of parallel instances. Costs one SOQL for
+   * the active rows and one for each 1,500 finished branches, and one row for each active step and for each finished
    * branch. It does not read the older visits of a step.
    * @param multi The instances, with Current_Step__c loaded.
    * @return The branches by instance Id.
@@ -178,25 +181,50 @@ public inherited sharing class WorkflowBranchTimer {
 
   // The branches that finished at least one visit. It returns one grouped
   // row for each finished branch. A long history cannot reach the row limit.
-  // It reads only branches with no active row.
+  // It reads only branches with no active row. A grouped query returns at
+  // most 2,000 rows and cannot page, so each query asks for at most
+  // MAX_GROUPS instance and step name pairs.
   private static Set<String> readFinished(
     Map<Id, List<String>> namesById,
     Set<String> active
   ) {
+    Set<String> finished = new Set<String>();
     Set<Id> askIds = new Set<Id>();
     Set<String> askNames = new Set<String>();
     for (Id instId : namesById.keySet()) {
+      Set<String> need = new Set<String>();
       for (String name : namesById.get(instId)) {
         if (!active.contains(instId + '::' + name)) {
-          askIds.add(instId);
-          askNames.add(name);
+          need.add(name);
         }
       }
+      if (need.isEmpty()) {
+        continue;
+      }
+      Set<String> merged = new Set<String>(askNames);
+      merged.addAll(need);
+      if (
+        !askIds.isEmpty() && (askIds.size() + 1) * merged.size() > MAX_GROUPS
+      ) {
+        readFinishedChunk(askIds, askNames, finished);
+        askIds = new Set<Id>();
+        merged = need;
+      }
+      askIds.add(instId);
+      askNames = merged;
     }
-    Set<String> finished = new Set<String>();
-    if (askIds.isEmpty()) {
-      return finished;
+    if (!askIds.isEmpty()) {
+      readFinishedChunk(askIds, askNames, finished);
     }
+    return finished;
+  }
+
+  // One grouped query for the given instances and step names.
+  private static void readFinishedChunk(
+    Set<Id> askIds,
+    Set<String> askNames,
+    Set<String> finished
+  ) {
     for (AggregateResult row : [
       SELECT
         Workflow_Instance__c instId,
@@ -214,7 +242,6 @@ public inherited sharing class WorkflowBranchTimer {
         (Id) row.get('instId') + '::' + (String) row.get('stepName')
       );
     }
-    return finished;
   }
 
   /**

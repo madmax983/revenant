@@ -31,8 +31,8 @@ public inherited sharing class WorkflowParkedTimer {
   /**
    * @description Sets the status of each instance that leaves a park, and
    * clears its park time. A signal that arrived in the park stays `Received`,
-   * so the step must run and read it. Costs at most two SOQL for branch
-   * timers and one for signals.
+   * so the step must run and read it. Costs few SOQL for branch
+   * timers (see {@link WorkflowBranchTimer#load}) and one for signals.
    *
    * A serial instance with a timer is `Suspended`. A parallel instance with a
    * branch that still sleeps is `Suspended`, and `Sleep_Until__c` is the first

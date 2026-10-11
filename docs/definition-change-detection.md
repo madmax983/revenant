@@ -73,6 +73,6 @@ A wait can end in the park and leave a timer. Release must not run that step ear
 - The fingerprint covers the step list only. It does not cover `getNextStep()` logic or step code.
 - The engine does not migrate an instance to the new shape.
 - To change a shape without a park, implement `VersionedWorkflow` and route by version.
-- The branch read costs at most two SOQL for all instances. It reads the active (Pending, Running or Retrying) step rows and one grouped row for each finished (Completed or OperatorSkipped) branch. It does not read the step history.
+- The branch read costs one SOQL for the active rows, and one more for each 1,500 finished branches (a grouped query returns at most 2,000 rows). It reads the active (Pending, Running or Retrying) step rows and one grouped row for each finished (Completed or OperatorSkipped) branch. It does not read the step history.
 - A parallel branch with a timed wait does not use its timeout route. When its timer ends, the engine runs the same step again. This is true for release and for the sleep sweep.
 - The engine never parks its own workflows (`WatchdogWorkflow`, `CleanupWorkflow`, `BulkRedriveWorkflow`, `BulkCancelWorkflow`, `ArchiveWorkflow`). A parked watchdog stops all sweeps.

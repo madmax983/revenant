@@ -680,4 +680,65 @@ public class WorkflowRowTimerSweepTest {
       System.assertEquals(false, enqueued(inst.Id, STEP_B));
     }
   }
+
+  // A legacy sleeper and a branch with a due row timer wake together.
+  @IsTest
+  static void testFallbackRunsWithTheLastDueRowTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      inst.Sleep_Until__c = at(30);
+      update inst;
+      newRow(inst.Id, STEP_A, 'Pending', null);
+      newRow(inst.Id, STEP_B, 'Pending', at(40));
+      WorkflowSleepResumeSweep.processSleepResumptions(at(60));
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'Legacy sleeper');
+      System.assertEquals(true, enqueued(inst.Id, STEP_B), 'Due row timer');
+      System.assertEquals('Running', load(inst.Id).Status__c);
+    }
+  }
+
+  // A grouped query returns at most 2,000 rows. 200 instances with 11 finished
+  // branches each are 2,200 groups. The read must split the query.
+  @IsTest
+  static void testFinishedReadSplitsLargeBatches() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      List<String> names = new List<String>();
+      for (Integer i = 0; i < 11; i++) {
+        names.add('RowTimerStep' + i);
+      }
+      List<Workflow_Instance__c> insts = new List<Workflow_Instance__c>();
+      for (Integer i = 0; i < 200; i++) {
+        insts.add(
+          new Workflow_Instance__c(
+            Workflow_Name__c = WF,
+            Status__c = 'Suspended',
+            Current_Step__c = String.join(names, ','),
+            Correlation_Key__c = 'Split-' + i
+          )
+        );
+      }
+      insert insts;
+      List<Workflow_Step_Execution__c> rows = new List<Workflow_Step_Execution__c>();
+      for (Workflow_Instance__c inst : insts) {
+        for (String name : names) {
+          rows.add(
+            new Workflow_Step_Execution__c(
+              Workflow_Instance__c = inst.Id,
+              Step_Name__c = name,
+              Status__c = 'Completed',
+              Retry_Count__c = 0
+            )
+          );
+        }
+      }
+      insert rows;
+      Map<Id, WorkflowBranchTimer.Branches> loaded = WorkflowBranchTimer.load(
+        insts
+      );
+      for (Workflow_Instance__c inst : insts) {
+        System.assertEquals(0, loaded.get(inst.Id).openNames.size());
+      }
+    }
+  }
 }

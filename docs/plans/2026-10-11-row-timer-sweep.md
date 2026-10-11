@@ -64,7 +64,7 @@
 ## Decision
 
 - `WorkflowSleepResumeSweep` runs a row query: Pending rows with `Wake_At__c <= now` on a `Suspended` parallel instance. The main query takes `Sleep_Until__c <= now OR Id IN :rowDue`.
-- `WorkflowBranchTimer.load` runs at most two bounded queries: the active rows (Pending, Running, Retrying), and the finished branches (grouped). `Branches` lists the open branches. It is the one read for release, signal wake and drain.
+- `WorkflowBranchTimer.load` runs one query for the active rows (Pending, Running, Retrying). It runs one grouped query for each 1,500 finished branches, because a grouped query returns at most 2,000 rows. `Branches` lists the open branches. It is the one read for release, signal wake and drain.
 - `WorkflowBranchTimer.claim` clears `Wake_At__c`. Signal wake, release and drain call it for each branch they publish. The sweep and the sleep job call `woken`, which also stamps `Timeout_At__c`.
 - `WorkflowTimeoutReArm.reArmTimeoutsForResume` skips a row whose `Wake_At__c` is after now.
 - The sweep fallback: a parallel instance that the sweep selects by `Sleep_Until__c` and that has no row timer runs its untimed Pending branches by name. Those are the Pending rows with no wait type and no retry mark, last changed before the deadline.

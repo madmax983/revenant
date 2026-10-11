@@ -375,9 +375,10 @@ public inherited sharing class WorkflowSleepResumeSweep {
 
   // Finds the branches whose timer ended, to start them. Keeps the next timer.
   // A sleep from before the row timers has no branch timer (issue #335). Its
-  // instance timer ended. The sweep runs the Pending branches that have no
-  // timer, wait type or retry mark, so that a sleep from before the upgrade still wakes. A branch
-  // that waits for a signal, or retries after a lock, does not run.
+  // instance timer ended and no branch timer is left. The sweep then runs the
+  // Pending branches that have no timer, wait type or retry mark, so that a
+  // sleep from before the upgrade still wakes. A branch that waits for a
+  // signal, or retries after a lock, does not run.
   private static void planBranchTimers(
     Workflow_Instance__c inst,
     SleepResumeBatch b
@@ -400,7 +401,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
       }
     }
     if (
-      branches.wakes.isEmpty() &&
+      branches.firstWake(b.now) == null &&
       inst.Sleep_Until__c != null &&
       inst.Sleep_Until__c <= b.now
     ) {
