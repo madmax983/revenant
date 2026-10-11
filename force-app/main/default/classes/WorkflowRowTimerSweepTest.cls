@@ -1,0 +1,508 @@
+/**
+ * @description Tests for the row timer sweep (issue #335). The sweep finds a due
+ * parallel branch from its own `Wake_At__c`. A run that a signal publishes
+ * claims the timer. The branch read does not grow with the step history. A
+ * sleeping branch has no `Timeout_At__c` until its timer ends. Written first (RED).
+ */
+@IsTest
+public class WorkflowRowTimerSweepTest {
+  private static final String WF = 'WorkflowParkedOutcomeTest.ParkWorkflow';
+  private static final String STEP_A = 'WorkflowParkedOutcomeTest.ParkStep';
+  private static final String STEP_B = 'WorkflowParkedOutcomeTest.ParkStepB';
+  private static final String STEP_C = 'WorkflowParkedOutcomeTest.ParkStepC';
+  private static final String TIMED_WF = 'WorkflowRowTimerSweepTest.TimedWorkflow';
+  private static final String TIMED_A = 'WorkflowRowTimerSweepTest.TimedStepA';
+  private static final String TIMED_B = 'WorkflowRowTimerSweepTest.TimedStepB';
+
+  /** @description Definition with the two timed steps. */
+  public class TimedWorkflow implements WorkflowDefinition {
+    /**
+     * @description Returns the step list.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ TIMED_A, TIMED_B };
+    }
+    /**
+     * @description Returns the first step.
+     * @return The initial step name.
+     */
+    public String getInitialStep() {
+      return TIMED_A;
+    }
+    /**
+     * @description Ends after the step.
+     * @param current The completed step.
+     * @param result The step result.
+     * @return Always null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      return null;
+    }
+  }
+
+  /** @description Step with a timeout. */
+  public class TimedStepA implements WorkflowStep, TimeoutConfigurable {
+    /**
+     * @description Returns the timeout.
+     * @return 600 seconds.
+     */
+    public Integer getTimeoutSeconds() {
+      return 600;
+    }
+    /**
+     * @description Completes at once.
+     * @param context The step context.
+     * @return A success result.
+     */
+    public StepResult execute(StepContext context) {
+      return StepResult.complete(null, null);
+    }
+  }
+
+  /** @description Second step with a timeout. */
+  public class TimedStepB implements WorkflowStep, TimeoutConfigurable {
+    /**
+     * @description Returns the timeout.
+     * @return 600 seconds.
+     */
+    public Integer getTimeoutSeconds() {
+      return 600;
+    }
+    /**
+     * @description Completes at once.
+     * @param context The step context.
+     * @return A success result.
+     */
+    public StepResult execute(StepContext context) {
+      return StepResult.complete(null, null);
+    }
+  }
+
+  // A Datetime field keeps whole seconds. The test value has no milliseconds.
+  private static Datetime at(Integer minutes) {
+    return Datetime.newInstance(
+      (Datetime.now().addMinutes(minutes).getTime() / 1000) * 1000
+    );
+  }
+
+  private static Workflow_Instance__c newParallel(
+    String status,
+    String workflow,
+    String steps
+  ) {
+    Workflow_Instance__c inst = new Workflow_Instance__c(
+      Workflow_Name__c = workflow,
+      Status__c = status,
+      Current_Step__c = steps,
+      Correlation_Key__c = 'RowTimer-' + Crypto.getRandomInteger()
+    );
+    insert inst;
+    return inst;
+  }
+
+  private static Workflow_Instance__c newParallel(String status) {
+    return newParallel(status, WF, STEP_A + ',' + STEP_B);
+  }
+
+  private static Workflow_Step_Execution__c newRow(
+    Id instanceId,
+    String step,
+    String status,
+    Datetime wake
+  ) {
+    Workflow_Step_Execution__c exec = new Workflow_Step_Execution__c(
+      Workflow_Instance__c = instanceId,
+      Step_Name__c = step,
+      Status__c = status,
+      Retry_Count__c = 0,
+      Wake_At__c = wake
+    );
+    insert exec;
+    return exec;
+  }
+
+  private static Workflow_Instance__c load(Id instanceId) {
+    return [
+      SELECT
+        Id,
+        Status__c,
+        Workflow_Name__c,
+        Correlation_Key__c,
+        Current_Step__c,
+        Sleep_Until__c,
+        Parked_At__c
+      FROM Workflow_Instance__c
+      WHERE Id = :instanceId
+    ];
+  }
+
+  private static Workflow_Step_Execution__c rowOf(Id instanceId, String step) {
+    return [
+      SELECT Id, Wake_At__c, Timeout_At__c, Status__c
+      FROM Workflow_Step_Execution__c
+      WHERE Workflow_Instance__c = :instanceId AND Step_Name__c = :step
+      ORDER BY CreatedDate DESC, Id DESC
+      LIMIT 1
+    ];
+  }
+
+  private static Boolean enqueued(Id instanceId, String step) {
+    return WorkflowResumeEnqueue.enqueuedBranchKeys.contains(
+        instanceId + '::' + step
+      ) ||
+      WorkflowPauseResumeDrainer.dispatchedInTest.contains(
+        instanceId + '|' + step
+      );
+  }
+
+  private static WorkflowEngine.StepOutcomeContext outcomeFor(
+    Workflow_Instance__c inst,
+    Workflow_Step_Execution__c exec,
+    StepResult result
+  ) {
+    WorkflowEngine.StepOutcomeContext outcome = new WorkflowEngine.StepOutcomeContext();
+    outcome.instance = load(inst.Id);
+    outcome.stepExec = exec;
+    outcome.result = result;
+    outcome.isParallel = true;
+    return outcome;
+  }
+
+  // ============================================================
+  // THE SWEEP SELECTS BY THE TIMER OF THE BRANCH
+  // ============================================================
+
+  // Branch B is due while branch A runs. A then sleeps for longer. The instance
+  // timer moves to the deadline of A. B must still start.
+  @IsTest
+  static void testDueSiblingIsNotReplacedByLaterWait() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Running');
+      inst.Sleep_Until__c = at(-5);
+      update inst;
+      newRow(inst.Id, STEP_B, 'Pending', at(-5));
+      Workflow_Step_Execution__c own = newRow(inst.Id, STEP_A, 'Running', null);
+      WorkflowStepSuspension.handleSleepOutcome(
+        outcomeFor(inst, own, StepResult.sleep(3600))
+      );
+      System.assertNotEquals(
+        null,
+        load(inst.Id).Sleep_Until__c,
+        'The instance timer is the later deadline'
+      );
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals(true, enqueued(inst.Id, STEP_B), 'B is due');
+      System.assertEquals(false, enqueued(inst.Id, STEP_A), 'A still sleeps');
+      System.assertEquals(null, rowOf(inst.Id, STEP_B).Wake_At__c, 'B claimed');
+      System.assertEquals('Suspended', load(inst.Id).Status__c);
+    }
+  }
+
+  // The instance timer is blank. The row timer alone selects the instance.
+  @IsTest
+  static void testSweepSelectsDueRowWithBlankInstanceTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      newRow(inst.Id, STEP_A, 'Pending', at(-1));
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A is due');
+      System.assertEquals(false, enqueued(inst.Id, STEP_B), 'B has no timer');
+    }
+  }
+
+  // A future instance timer does not hide a due row timer.
+  @IsTest
+  static void testSweepSelectsDueRowWithFutureInstanceTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      inst.Sleep_Until__c = at(60);
+      update inst;
+      newRow(inst.Id, STEP_A, 'Pending', at(-1));
+      newRow(inst.Id, STEP_B, 'Pending', at(60));
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals(true, enqueued(inst.Id, STEP_A));
+      System.assertEquals(false, enqueued(inst.Id, STEP_B));
+      System.assertEquals(at(60), load(inst.Id).Sleep_Until__c);
+    }
+  }
+
+  // A serial instance keeps `Sleep_Until__c`. A stale row timer does not wake it.
+  @IsTest
+  static void testSweepIgnoresRowTimerOfSerialInstance() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended', WF, STEP_A);
+      newRow(inst.Id, STEP_A, 'Pending', at(-1));
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals('Suspended', load(inst.Id).Status__c);
+    }
+  }
+
+  // A row timer in the future selects nothing.
+  @IsTest
+  static void testSweepIgnoresFutureRowTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      newRow(inst.Id, STEP_A, 'Pending', at(30));
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals('Suspended', load(inst.Id).Status__c);
+      System.assertEquals(false, enqueued(inst.Id, STEP_A));
+    }
+  }
+
+  // ============================================================
+  // IN-FLIGHT SLEEP FROM BEFORE THE UPGRADE
+  // ============================================================
+
+  // The branch has no row timer. The instance timer is due. The sweep runs the
+  // open branches by name, as a signal does. It does not leave them stranded.
+  @IsTest
+  static void testDueInstanceTimerWithoutRowTimerRunsOpenBranches() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      inst.Sleep_Until__c = at(-1);
+      update inst;
+      newRow(inst.Id, STEP_A, 'Pending', null);
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals('Running', load(inst.Id).Status__c);
+      System.assertEquals(true, enqueued(inst.Id, STEP_A));
+      System.assertEquals(true, enqueued(inst.Id, STEP_B));
+    }
+  }
+
+  // The fallback does not apply while a branch still has a timer.
+  @IsTest
+  static void testFallbackWaitsWhileABranchTimerRemains() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      inst.Sleep_Until__c = at(-1);
+      update inst;
+      newRow(inst.Id, STEP_A, 'Pending', at(40));
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals('Suspended', load(inst.Id).Status__c);
+      System.assertEquals(false, enqueued(inst.Id, STEP_A));
+      System.assertEquals(false, enqueued(inst.Id, STEP_B));
+    }
+  }
+
+  // ============================================================
+  // A SIGNAL WAKE CLAIMS THE TIMER
+  // ============================================================
+
+  // A signal wakes the sleeping branch A. A park starts before the worker runs.
+  // The release must not treat A as asleep.
+  @IsTest
+  static void testSignalWakeClaimsTimerBeforeAPark() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      newRow(inst.Id, STEP_A, 'Pending', at(45));
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowBranchResume.enqueueResumeBulk(
+        new List<Workflow_Instance__c>{ load(inst.Id) }
+      );
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'Signal wakes A');
+      System.assertEquals(null, rowOf(inst.Id, STEP_A).Wake_At__c, 'Claimed');
+      // The worker exits at the park. Then the park is released.
+      WorkflowResumeEnqueue.enqueuedBranchKeys.clear();
+      Workflow_Instance__c parked = load(inst.Id);
+      parked.Status__c = 'DefinitionChanged';
+      update parked;
+      WorkflowDefinitionChangeService.release(inst.Id);
+      System.assertEquals('Running', load(inst.Id).Status__c);
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A runs at release');
+    }
+  }
+
+  // A branch that the signal did not run keeps its timer.
+  @IsTest
+  static void testSkippedBranchKeepsTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('DefinitionChanged');
+      Datetime wake = at(45);
+      newRow(inst.Id, STEP_A, 'Pending', wake);
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowDefinitionChangeService.release(inst.Id);
+      System.assertEquals(false, enqueued(inst.Id, STEP_A));
+      System.assertEquals(wake, rowOf(inst.Id, STEP_A).Wake_At__c);
+    }
+  }
+
+  // A release also claims an elapsed timer that it runs.
+  @IsTest
+  static void testReleaseClaimsElapsedTimer() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('DefinitionChanged');
+      newRow(inst.Id, STEP_A, 'Pending', at(-5));
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowDefinitionChangeService.release(inst.Id);
+      System.assertEquals(true, enqueued(inst.Id, STEP_A));
+      System.assertEquals(null, rowOf(inst.Id, STEP_A).Wake_At__c);
+    }
+  }
+
+  // ============================================================
+  // THE BRANCH READ DOES NOT GROW WITH THE HISTORY
+  // ============================================================
+
+  private static Workflow_Instance__c withLongHistory(String status) {
+    Workflow_Instance__c inst = newParallel(status);
+    List<Workflow_Step_Execution__c> old = new List<Workflow_Step_Execution__c>();
+    for (Integer i = 0; i < 300; i++) {
+      old.add(
+        new Workflow_Step_Execution__c(
+          Workflow_Instance__c = inst.Id,
+          Step_Name__c = STEP_A,
+          Status__c = 'Completed',
+          Retry_Count__c = 0
+        )
+      );
+    }
+    insert old;
+    newRow(inst.Id, STEP_A, 'Pending', at(45));
+    newRow(inst.Id, STEP_B, 'Pending', null);
+    return inst;
+  }
+
+  @IsTest
+  static void testSignalWakeReadIsBounded() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = withLongHistory('Suspended');
+      Workflow_Instance__c current = load(inst.Id);
+      Integer before = Limits.getQueryRows();
+      WorkflowBranchResume.enqueueResumeBulk(
+        new List<Workflow_Instance__c>{ current }
+      );
+      System.assert(
+        Limits.getQueryRows() - before < 50,
+        'Rows read: ' + (Limits.getQueryRows() - before)
+      );
+      System.assertEquals(true, enqueued(inst.Id, STEP_A));
+      System.assertEquals(true, enqueued(inst.Id, STEP_B));
+    }
+  }
+
+  @IsTest
+  static void testSettleReadIsBounded() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = withLongHistory('DefinitionChanged');
+      Workflow_Instance__c current = load(inst.Id);
+      Integer before = Limits.getQueryRows();
+      WorkflowParkedTimer.settleAll(new List<Workflow_Instance__c>{ current });
+      System.assert(
+        Limits.getQueryRows() - before < 50,
+        'Rows read: ' + (Limits.getQueryRows() - before)
+      );
+      System.assertEquals('Suspended', current.Status__c, 'A sleeps');
+    }
+  }
+
+  @IsTest
+  static void testPauseDrainReadIsBounded() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = withLongHistory('Paused');
+      Integer before = Limits.getQueryRows();
+      WorkflowPauseGate.resumeDefinition(WF);
+      System.assert(
+        Limits.getQueryRows() - before < 150,
+        'Rows read: ' + (Limits.getQueryRows() - before)
+      );
+      System.assertEquals(true, enqueued(inst.Id, STEP_B));
+    }
+  }
+
+  // ============================================================
+  // WHICH BRANCHES ARE OPEN
+  // ============================================================
+
+  // A branch that ran again is open. A finished branch is not. A branch with no
+  // row yet is open.
+  @IsTest
+  static void testSignalWakeRunsLoopingAndNewBranchesOnly() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel(
+        'Suspended',
+        WF,
+        STEP_A + ',' + STEP_B + ',' + STEP_C
+      );
+      newRow(inst.Id, STEP_A, 'Completed', null);
+      newRow(inst.Id, STEP_A, 'Pending', null);
+      newRow(inst.Id, STEP_B, 'Completed', null);
+      WorkflowBranchResume.enqueueResumeBulk(
+        new List<Workflow_Instance__c>{ load(inst.Id) }
+      );
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A ran again');
+      System.assertEquals(false, enqueued(inst.Id, STEP_B), 'B is done');
+      System.assertEquals(true, enqueued(inst.Id, STEP_C), 'C has no row');
+    }
+  }
+
+  // ============================================================
+  // A SLEEPING BRANCH HAS NO TIMEOUT UNTIL ITS TIMER ENDS
+  // ============================================================
+
+  @IsTest
+  static void testReleaseDoesNotArmSleepingBranch() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel(
+        'Paused',
+        TIMED_WF,
+        TIMED_A + ',' + TIMED_B
+      );
+      newRow(inst.Id, TIMED_A, 'Pending', at(45));
+      newRow(inst.Id, TIMED_B, 'Pending', null);
+      WorkflowPauseGate.resumeDefinition(TIMED_WF);
+      System.assertEquals(
+        null,
+        rowOf(inst.Id, TIMED_A).Timeout_At__c,
+        'A sleeps'
+      );
+      System.assertNotEquals(
+        null,
+        rowOf(inst.Id, TIMED_B).Timeout_At__c,
+        'B starts now'
+      );
+    }
+  }
+
+  @IsTest
+  static void testSweepArmsBranchWhenTimerWakesIt() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel(
+        'Suspended',
+        TIMED_WF,
+        TIMED_A + ',' + TIMED_B
+      );
+      newRow(inst.Id, TIMED_A, 'Pending', at(-1));
+      newRow(inst.Id, TIMED_B, 'Pending', at(40));
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      Workflow_Step_Execution__c woken = rowOf(inst.Id, TIMED_A);
+      System.assertEquals(null, woken.Wake_At__c, 'Claimed');
+      System.assertNotEquals(null, woken.Timeout_At__c, 'Armed');
+      System.assertEquals(
+        null,
+        rowOf(inst.Id, TIMED_B).Timeout_At__c,
+        'B still sleeps'
+      );
+    }
+  }
+}
