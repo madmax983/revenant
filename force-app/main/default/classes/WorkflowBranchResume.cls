@@ -1,7 +1,8 @@
 /**
  * @description Parallel-branch resume fan-out for the workflow engine. Wakes the
- * still-incomplete branches of one or more parallel instances by resolving each
- * branch's latest status in a single batched step-execution query and publishing
+ * still-incomplete branches of one or more parallel instances. It reads the open
+ * branches with {@link WorkflowBranchTimer} (bounded, not the step history),
+ * claims their timers, and publishes
  * one RUN_STEP event per unfinished branch in a single EventBus call (bounding the
  * publish/DML-statement cost when many parallel instances wake at once). Split out
  * of {@link WorkflowResumeEnqueue} to keep each resume unit under the complexity
@@ -13,14 +14,21 @@ public inherited sharing class WorkflowBranchResume {
   /**
    * Bulk variant of enqueueResume for the bulk signal() path: wakes the
    * incomplete branches of many parallel instances using the already-loaded
-   * Current_Step__c values and ONE step-execution query across all of them,
-   * instead of two queries per instance.
+   * Current_Step__c values and a bounded read of the branch rows. A branch that
+   * starts here gives up its timer (issue #335).
    * @param parallelInstances the parallel instances whose branches are re-enqueued
    */
   public static void enqueueResumeBulk(
     List<Workflow_Instance__c> parallelInstances
   ) {
-    enqueueBranches(parallelInstances, new Set<String>());
+    if (parallelInstances == null || parallelInstances.isEmpty()) {
+      return;
+    }
+    enqueueBranches(
+      parallelInstances,
+      WorkflowBranchTimer.load(parallelInstances),
+      new Set<String>()
+    );
   }
 
   /**
@@ -35,16 +43,22 @@ public inherited sharing class WorkflowBranchResume {
   public static void enqueueUnlessSleeping(
     List<Workflow_Instance__c> parallelInstances
   ) {
-    Set<String> skip = WorkflowBranchTimer.sleepingKeys(
-      parallelInstances,
-      '::'
+    if (parallelInstances == null || parallelInstances.isEmpty()) {
+      return;
+    }
+    Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.take(
+      parallelInstances
     );
-    enqueueBranches(parallelInstances, skip);
+    enqueueBranches(
+      parallelInstances,
+      branches,
+      WorkflowBranchTimer.sleepingKeys(parallelInstances, branches, '::')
+    );
   }
 
   /**
    * Starts the named branches (issue #311). The sleep sweep uses it for the
-   * branches whose own timer ended.
+   * branches whose own timer ended. The sweep claims those timers.
    * @param stepsByInstance instance Id to the branch step names to start
    */
   public static void enqueueNamedBranches(
@@ -53,113 +67,66 @@ public inherited sharing class WorkflowBranchResume {
     publishBranchEvents(
       buildBranchRunEvents(
         stepsByInstance,
-        new Map<String, String>(),
+        new Set<String>(),
         new Set<String>()
       )
     );
   }
 
+  // Starts each open branch that is not in `skip`, and claims its timer in the
+  // same transaction. The claim goes first. A failed publish rolls it back.
   private static void enqueueBranches(
     List<Workflow_Instance__c> parallelInstances,
+    Map<Id, WorkflowBranchTimer.Branches> branches,
     Set<String> skip
   ) {
-    if (parallelInstances == null || parallelInstances.isEmpty()) {
-      return;
-    }
-    Set<String> allBranchNames = new Set<String>();
-    Map<Id, List<String>> branchesByInstance = mapBranchesByInstance(
-      parallelInstances,
-      allBranchNames
-    );
-    Map<String, String> latestStatusByKey = loadLatestBranchStatuses(
-      branchesByInstance.keySet(),
-      allBranchNames
-    );
-    publishBranchEvents(
-      buildBranchRunEvents(branchesByInstance, latestStatusByKey, skip)
-    );
-  }
-
-  /**
-   * Maps each parallel instance to its trimmed branch step names and collects
-   * every branch name across the batch for a single step-execution lookup.
-   * @param parallelInstances the parallel instances whose Current_Step__c
-   *        comma lists to split into branch names
-   * @param allBranchNames output accumulator populated with every branch name
-   *        seen across the batch (mutated in place)
-   * @return a map of instance id to its ordered list of branch step names
-   */
-  private static Map<Id, List<String>> mapBranchesByInstance(
-    List<Workflow_Instance__c> parallelInstances,
-    Set<String> allBranchNames
-  ) {
-    Map<Id, List<String>> branchesByInstance = new Map<Id, List<String>>();
+    Map<Id, List<String>> namesByInstance = new Map<Id, List<String>>();
     for (Workflow_Instance__c inst : parallelInstances) {
-      List<String> branches = new List<String>();
-      for (String b : inst.Current_Step__c.split(',')) {
-        branches.add(b.trim());
-        allBranchNames.add(b.trim());
+      if (branches.containsKey(inst.Id)) {
+        namesByInstance.put(inst.Id, branches.get(inst.Id).openNames);
       }
-      branchesByInstance.put(inst.Id, branches);
     }
-    return branchesByInstance;
+    Set<String> started = new Set<String>();
+    List<Workflow_Event__e> events = buildBranchRunEvents(
+      namesByInstance,
+      skip,
+      started
+    );
+    List<Workflow_Step_Execution__c> claimed = new List<Workflow_Step_Execution__c>();
+    for (Id instId : namesByInstance.keySet()) {
+      WorkflowBranchTimer.Branches b = branches.get(instId);
+      for (String name : b.rowIds.keySet()) {
+        if (started.contains(instId + '::' + name)) {
+          claimed.add(WorkflowBranchTimer.claimRow(b.rowIds.get(name)));
+        }
+      }
+    }
+    WorkflowBranchTimer.claim(claimed);
+    publishBranchEvents(events);
   }
 
   /**
-   * Loads the latest step-execution status per (instance, branch step name)
-   * across the whole batch in a single query. Newest-first ordering means the
-   * first row seen for a key is the latest, so earlier map entries win.
-   * @param instanceIds the parallel instance ids to load branch statuses for
-   * @param allBranchNames the branch step names to restrict the query to
-   * @return a map of "instanceId::stepName" to the latest execution status
-   */
-  private static Map<String, String> loadLatestBranchStatuses(
-    Set<Id> instanceIds,
-    Set<String> allBranchNames
-  ) {
-    Map<String, String> latestStatusByKey = new Map<String, String>();
-    for (Workflow_Step_Execution__c se : [
-      SELECT Workflow_Instance__c, Step_Name__c, Status__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c IN :instanceIds
-        AND Step_Name__c IN :allBranchNames
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-    ]) {
-      String key = se.Workflow_Instance__c + '::' + se.Step_Name__c;
-      if (!latestStatusByKey.containsKey(key)) {
-        latestStatusByKey.put(key, se.Status__c);
-      }
-    }
-    return latestStatusByKey;
-  }
-
-  /**
-   * Builds the RUN_STEP events for every incomplete, not-yet-enqueued branch,
+   * Builds the RUN_STEP events for every given branch that is not yet enqueued,
    * so they can be published in ONE EventBus call (one publish per branch would
    * risk the publish/DML statement limit when many parallel instances wake at
-   * once). Skips branches already Completed/OperatorSkipped and branches
-   * already enqueued this transaction; under test it directly enqueues the
-   * branch job via {@link enqueueTestBranchJob} instead of emitting an event.
-   * @param branchesByInstance instance id to its branch step names
-   * @param latestStatusByKey "instanceId::stepName" to latest branch status
+   * once). Skips branches already enqueued this transaction; under test it
+   * directly enqueues the branch job via {@link enqueueTestBranchJob} instead
+   * of emitting an event.
+   * @param branchesByInstance instance id to the branch step names to start
    * @param skip "instanceId::stepName" keys of branches that must not start
+   * @param started output accumulator of the "instanceId::stepName" keys that
+   *        this call starts (mutated in place)
    * @return the RUN_STEP events to publish (empty under test)
    */
   private static List<Workflow_Event__e> buildBranchRunEvents(
     Map<Id, List<String>> branchesByInstance,
-    Map<String, String> latestStatusByKey,
-    Set<String> skip
+    Set<String> skip,
+    Set<String> started
   ) {
     List<Workflow_Event__e> branchEvents = new List<Workflow_Event__e>();
     for (Id instId : branchesByInstance.keySet()) {
       for (String b : branchesByInstance.get(instId)) {
         String key = instId + '::' + b;
-        String status = latestStatusByKey.get(key);
-        if (status == 'Completed' || status == 'OperatorSkipped') {
-          continue; // branch already finished
-        }
         if (
           skip.contains(key) ||
           WorkflowResumeEnqueue.enqueuedBranchKeys.contains(key)
@@ -167,6 +134,7 @@ public inherited sharing class WorkflowBranchResume {
           continue;
         }
         WorkflowResumeEnqueue.enqueuedBranchKeys.add(key);
+        started.add(key);
         if (Test.isRunningTest()) {
           enqueueTestBranchJob(instId, b);
         } else {

@@ -62,6 +62,9 @@ public inherited sharing class WorkflowSleepResumeSweep {
       // parked, so a parked backlog cannot fill the batch of in-flight
       // sleepers. redriveParkedStarts sends those starts, bounded.
       redriveParkedStarts(now, pausedDefNames);
+      // Issue #335: a parallel branch with a due timer selects its instance,
+      // whatever `Sleep_Until__c` holds.
+      Set<Id> rowDue = dueRowInstanceIds(now, pausedDefNames);
       readyToResume = [
         SELECT
           Id,
@@ -83,7 +86,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
         FROM Workflow_Instance__c
         WHERE
           Status__c = 'Suspended'
-          AND Sleep_Until__c <= :now
+          AND (Sleep_Until__c <= :now
+          OR Id IN :rowDue)
           AND Workflow_Name__c NOT IN :pausedDefNames
           AND Held_At__c = NULL
           AND (Global_Admission__c = NULL
@@ -120,6 +124,35 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
 
     flushSleepResumptions(b);
+  }
+
+  // Issue #335: the instances with a parallel branch whose own timer ended.
+  // `Sleep_Until__c` is one field for all branches. Another branch can have
+  // replaced the deadline, so the sweep reads the step rows. A serial instance
+  // keeps `Sleep_Until__c`. The pause and hold filters keep a paused backlog
+  // out of the bounded batch. Cost: 1 SOQL, at most one batch of rows.
+  private static Set<Id> dueRowInstanceIds(
+    Datetime now,
+    Set<String> pausedDefNames
+  ) {
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Step_Execution__c row : [
+      SELECT Workflow_Instance__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Status__c = 'Pending'
+        AND Wake_At__c <= :now
+        AND Workflow_Instance__r.Status__c = 'Suspended'
+        AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
+        AND Workflow_Instance__r.Workflow_Name__c NOT IN :pausedDefNames
+        AND Workflow_Instance__r.Held_At__c = NULL
+      WITH SYSTEM_MODE
+      ORDER BY Wake_At__c ASC
+      LIMIT :watchdogResumeBatchSize
+    ]) {
+      ids.add(row.Workflow_Instance__c);
+    }
+    return ids;
   }
 
   // Issue #136: sends due parked starts to the gate, oldest start first, not
@@ -183,7 +216,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
     if (!b.dueBranches.isEmpty()) {
       // Claim the timers first. A scheduled sleep job for the same branch then
       // finds no due timer and starts nothing.
-      Database.update(b.claimedRows, true, AccessLevel.SYSTEM_MODE);
+      WorkflowBranchTimer.claim(b.claimedRows);
       WorkflowBranchResume.enqueueNamedBranches(b.dueBranches);
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
@@ -313,6 +346,10 @@ public inherited sharing class WorkflowSleepResumeSweep {
   }
 
   // Finds the branches whose timer ended, to start them. Keeps the next timer.
+  // A sleep from before the row timers has no branch timer (issue #335). Its
+  // instance timer ended. The sweep runs the Pending branches that have no
+  // timer, wait type or retry mark, so that no sleeper stays stranded. A branch
+  // that waits for a signal, or retries after a lock, does not run.
   private static void planBranchTimers(
     Workflow_Instance__c inst,
     SleepResumeBatch b
@@ -326,12 +363,20 @@ public inherited sharing class WorkflowSleepResumeSweep {
       if (branches.wakes.get(step) <= b.now) {
         due.add(step);
         b.claimedRows.add(
-          new Workflow_Step_Execution__c(
-            Id = branches.rowIds.get(step),
-            Wake_At__c = null
+          WorkflowBranchTimer.wokenRow(
+            branches.rowIds.get(step),
+            step,
+            inst.Workflow_Name__c
           )
         );
       }
+    }
+    if (
+      branches.wakes.isEmpty() &&
+      inst.Sleep_Until__c != null &&
+      inst.Sleep_Until__c <= b.now
+    ) {
+      due.addAll(branches.untimedPending);
     }
     if (!due.isEmpty()) {
       b.dueBranches.put(inst.Id, due);

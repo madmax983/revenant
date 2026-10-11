@@ -30,7 +30,7 @@ public inherited sharing class WorkflowParkedTimer {
   /**
    * @description Sets the status of each instance that leaves a park, and
    * clears its park time. A signal that arrived in the park stays `Received`,
-   * so the step must run and read it. Costs at most one SOQL for branch
+   * so the step must run and read it. Costs at most two SOQL for branch
    * timers and one for signals.
    *
    * A serial instance with a timer is `Suspended`. A parallel instance with a
@@ -54,7 +54,7 @@ public inherited sharing class WorkflowParkedTimer {
         timed.add(inst.Id);
       }
     }
-    Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.load(
+    Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.loadForRelease(
       multi
     );
     for (Workflow_Instance__c inst : multi) {
@@ -81,7 +81,7 @@ public inherited sharing class WorkflowParkedTimer {
       } else {
         inst.Status__c = 'Suspended';
         inst.Sleep_Until__c = b.firstWake(now);
-        if (b.sleeping(now).size() >= b.open) {
+        if (b.sleeping(now).size() >= b.openNames.size()) {
           waiting.add(inst.Id); // All open branches wait for a timer.
         }
       }

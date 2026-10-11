@@ -220,14 +220,15 @@ public class WorkflowRowTimerSweepTest {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newParallel('Suspended');
-      inst.Sleep_Until__c = at(60);
+      Datetime later = at(60);
+      inst.Sleep_Until__c = later;
       update inst;
       newRow(inst.Id, STEP_A, 'Pending', at(-1));
-      newRow(inst.Id, STEP_B, 'Pending', at(60));
+      newRow(inst.Id, STEP_B, 'Pending', later);
       WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
       System.assertEquals(true, enqueued(inst.Id, STEP_A));
       System.assertEquals(false, enqueued(inst.Id, STEP_B));
-      System.assertEquals(at(60), load(inst.Id).Sleep_Until__c);
+      System.assertEquals(later, load(inst.Id).Sleep_Until__c);
     }
   }
 
@@ -262,9 +263,9 @@ public class WorkflowRowTimerSweepTest {
   // ============================================================
 
   // The branch has no row timer. The instance timer is due. The sweep runs the
-  // open branches by name, as a signal does. It does not leave them stranded.
+  // Pending branches that may sleep, by name. It does not leave them stranded.
   @IsTest
-  static void testDueInstanceTimerWithoutRowTimerRunsOpenBranches() {
+  static void testDueInstanceTimerWithoutRowTimerRunsUntimedBranches() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newParallel('Suspended');
@@ -276,6 +277,50 @@ public class WorkflowRowTimerSweepTest {
       System.assertEquals('Running', load(inst.Id).Status__c);
       System.assertEquals(true, enqueued(inst.Id, STEP_A));
       System.assertEquals(true, enqueued(inst.Id, STEP_B));
+    }
+  }
+
+  // A branch that waits for a signal, or retries after a lock, is not a sleeper.
+  @IsTest
+  static void testFallbackRunsOnlyUntimedSleepers() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel(
+        'Suspended',
+        WF,
+        STEP_A + ',' + STEP_B + ',' + STEP_C
+      );
+      inst.Sleep_Until__c = at(-1);
+      update inst;
+      newRow(inst.Id, STEP_A, 'Pending', null);
+      Workflow_Step_Execution__c signalWait = newRow(
+        inst.Id,
+        STEP_B,
+        'Pending',
+        null
+      );
+      signalWait.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_GENERIC;
+      update signalWait;
+      Workflow_Step_Execution__c lockRetry = newRow(
+        inst.Id,
+        STEP_C,
+        'Pending',
+        null
+      );
+      lockRetry.Transient_Retry_Count__c = 1;
+      update lockRetry;
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A may sleep');
+      System.assertEquals(
+        false,
+        enqueued(inst.Id, STEP_B),
+        'B waits for a signal'
+      );
+      System.assertEquals(
+        false,
+        enqueued(inst.Id, STEP_C),
+        'C has its own retry'
+      );
     }
   }
 

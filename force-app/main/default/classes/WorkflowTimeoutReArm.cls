@@ -38,6 +38,7 @@ public inherited sharing class WorkflowTimeoutReArm {
         Id,
         Workflow_Instance__c,
         Step_Name__c,
+        Wake_At__c,
         Workflow_Instance__r.Workflow_Name__c
       FROM Workflow_Step_Execution__c
       WHERE
@@ -79,6 +80,16 @@ public inherited sharing class WorkflowTimeoutReArm {
   }
 
   /**
+   * Tells if a parallel branch still sleeps (issue #335). Its timeout starts
+   * when its timer wakes it. A deadline now would end before the timer.
+   * @param step the queried step row, with Wake_At__c
+   * @return true when the step timer is after now
+   */
+  private static Boolean isSleeping(Workflow_Step_Execution__c step) {
+    return step.Wake_At__c != null && step.Wake_At__c > DateTime.now();
+  }
+
+  /**
    * Re-stamps a fresh watchdog deadline on each non-deferred active step that has
    * a positive configured timeout, then persists them in a single update.
    * @param steps the queried Pending/Running step rows
@@ -90,7 +101,7 @@ public inherited sharing class WorkflowTimeoutReArm {
   ) {
     List<Workflow_Step_Execution__c> toUpdate = new List<Workflow_Step_Execution__c>();
     for (Workflow_Step_Execution__c step : steps) {
-      if (deferIds.contains(step.Workflow_Instance__c)) {
+      if (deferIds.contains(step.Workflow_Instance__c) || isSleeping(step)) {
         continue;
       }
       Integer timeout = WorkflowStepTimeoutConfig.getStepTimeoutSeconds(
@@ -125,7 +136,7 @@ public inherited sharing class WorkflowTimeoutReArm {
     Set<Id> deferIds
   ) {
     for (Workflow_Step_Execution__c step : steps) {
-      if (deferIds.contains(step.Workflow_Instance__c)) {
+      if (deferIds.contains(step.Workflow_Instance__c) || isSleeping(step)) {
         continue;
       }
       WorkflowTimeoutScheduler.scheduleTimeoutJobIfNeeded(
