@@ -690,7 +690,8 @@ public class WorkflowTopologyTest {
 
   /**
    * @description Start splits into Approve and Reject. After the join, Start
-   * goes to Finish only when its output asks for it (issue #332).
+   * goes to Finish only when its output asks for it (issue #332). A marker
+   * output goes to Approve.
    */
   public class OutputSplitWorkflow implements WorkflowDefinition {
     /**
@@ -715,10 +716,14 @@ public class WorkflowTopologyTest {
      */
     public String getNextStep(String current, StepResult result) {
       String output = result.directive().outputJson;
-      if (current == START && output != null && output.contains('finish-now')) {
-        return FINISH;
+      if (current != START || output == null) {
+        return null;
       }
-      return null;
+      // A marker must never reach the probe. Approve shows it if it does.
+      if (output.contains('$attachmentId')) {
+        return APPROVE;
+      }
+      return output.contains('finish-now') ? FINISH : null;
     }
   }
 
@@ -859,7 +864,7 @@ public class WorkflowTopologyTest {
     };
   }
 
-  // An output above the inline limit, so it goes into a file.
+  // The output is above the inline limit, so it goes into a file.
   private static String offloadedOutput(Id instanceId) {
     String text = '{"route":"finish-now","pad":"' + 'x'.repeat(100001) + '"}';
     String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
@@ -1947,7 +1952,7 @@ public class WorkflowTopologyTest {
         'The output routes to Finish after the join'
       );
       System.assert(hasEdge(graph.edges, START, FINISH), 'Edge added');
-      // The synthetic probes stay: they end, so the step varies ("?").
+      // The synthetic probes give no successor, so the step varies ("?").
       System.assertEquals(true, overlay.canEnd);
       System.assertEquals(true, node(graph, START).routingUnknown);
       System.assert(
@@ -2013,6 +2018,52 @@ public class WorkflowTopologyTest {
   }
 
   @IsTest
+  static void spawningFileOfAnotherInstanceIsNotRead() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c other = seedOutputSplit();
+      Workflow_Instance__c inst = seedOutputSplit();
+      // A forged marker: the file is linked to the other instance only.
+      seedSpawningRows(inst.Id, offloadedOutput(other.Id));
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(START, overlay.nextStepsFrom);
+      System.assert(overlay.nextSteps.isEmpty(), 'File and marker not probed');
+      System.assertEquals(true, overlay.canEnd);
+    }
+  }
+
+  @IsTest
+  static void spawningFileThatIsNotTextIsNotRead() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedOutputSplit();
+      // 0xFF is not UTF-8, so the file read throws.
+      ContentVersion cv = new ContentVersion(
+        Title = 'Binary',
+        PathOnClient = 'binary.bin',
+        VersionData = EncodingUtil.base64Decode('/w==')
+      );
+      insert cv;
+      Id docId = [
+        SELECT ContentDocumentId
+        FROM ContentVersion
+        WHERE Id = :cv.Id
+      ]
+      .ContentDocumentId;
+      WorkflowPayloadOffload.linkToOwner(docId, inst.Id);
+      seedSpawningRows(inst.Id, '{"$attachmentId":"' + docId + '"}');
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(START, overlay.nextStepsFrom);
+      System.assert(overlay.nextSteps.isEmpty(), 'File not probed');
+      System.assertEquals(true, overlay.canEnd);
+    }
+  }
+
+  @IsTest
   static void spawningOutputReadHasAFixedQueryCost() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       Workflow_Instance__c serial = seedInstance(
@@ -2038,8 +2089,15 @@ public class WorkflowTopologyTest {
       WorkflowTopology.forInstance(offloaded.Id);
       Integer offloadedCost = Limits.getQueries() - before;
 
+      // A file above the cap costs only the size query.
+      WorkflowTopology.maxSpawningOutputBytes = 10;
+      before = Limits.getQueries();
+      WorkflowTopology.forInstance(offloaded.Id);
+      Integer cappedCost = Limits.getQueries() - before;
+
       System.assertEquals(serialCost + 1, inlineCost, 'Output row read');
       System.assertEquals(inlineCost + 3, offloadedCost, 'Size, link, file');
+      System.assertEquals(inlineCost + 1, cappedCost, 'Size only');
     }
   }
 

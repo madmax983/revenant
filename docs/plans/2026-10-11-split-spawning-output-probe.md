@@ -47,7 +47,9 @@ step after the join.
 | A serial run gets more SOQL.                             | Read the output only for a `SPLIT` with a spawning row. Test.        |
 | The probe output differs from the engine output.         | Give the same `String` to `StepResult.complete`. Test.               |
 | A blank output adds a probe that the engine does not do. | Blank is the null probe. No third probe.                             |
-| The SOQL cost grows with history.                        | One row by `Id`. Offload: 3 SOQL. Fixed bound. Test.                 |
+| Author code parses a large output. The heap fails.       | Cap 200,000 bytes, not 500,000. Review finding.                      |
+| A marker names a binary file. The read throws.           | Catch the error. No third probe. Test.                               |
+| The SOQL cost grows with history.                        | One row by `Id`. Offload: 3 more SOQL. Fixed bound. Test.            |
 
 ## Six Thinking Hats
 
@@ -66,7 +68,8 @@ step after the join.
 ## Decision
 
 - Read `Output__c` of the spawning row by `Id` (1 SOQL).
-- Resolve it with `resolveControlPayloadWithin`, cap 500 000 bytes.
+- Resolve it with `resolveControlPayloadWithin`, cap 200,000 bytes. A
+  resolve error gives no third probe.
 - No third probe when the value is blank, encoded or still a marker.
 - Else probe with `StepResult.complete(null, output)` and the two synthetic
   probes. The "?" and `canEnd` rules do not change.

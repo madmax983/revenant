@@ -86,9 +86,11 @@ public inherited sharing class WorkflowTopology {
   // Maximum step rows that the overlay reads. The newest rows are kept.
   @TestVisible
   private static Integer pathLimit = 200;
-  // Maximum bytes of a spawning output file that the overlay reads.
+  // Maximum bytes of a spawning output file that the overlay reads. Author
+  // getNextStep can parse the output in this synchronous read, so the cap is
+  // low.
   @TestVisible
-  private static Integer maxSpawningOutputBytes = 500000;
+  private static Integer maxSpawningOutputBytes = 200000;
 
   /** @description The graph of one definition. The shape is pinned by a test. */
   public class Graph {
@@ -554,8 +556,9 @@ public inherited sharing class WorkflowTopology {
 
   // The output that the engine gives to the spawning step at the join
   // (WorkflowParallelJoin.proceedToJoin). It reads an output file of the
-  // instance up to maxSpawningOutputBytes. It does not decode (ADR 0002). Null
-  // for a blank or encoded output, or for a file that it did not read.
+  // instance up to maxSpawningOutputBytes. It does not decode (ADR 0002). It
+  // gives null for a blank or encoded output, or for a file that it does not
+  // read.
   private static String spawningOutputOf(Id rowId, Id instanceId) {
     List<Workflow_Step_Execution__c> rows = [
       SELECT Output__c
@@ -567,11 +570,17 @@ public inherited sharing class WorkflowTopology {
     if (rows.isEmpty() || String.isBlank(rows[0].Output__c)) {
       return null;
     }
-    String output = WorkflowPayloadOffload.resolveControlPayloadWithin(
-      rows[0].Output__c,
-      instanceId,
-      maxSpawningOutputBytes
-    );
+    String output;
+    try {
+      output = WorkflowPayloadOffload.resolveControlPayloadWithin(
+        rows[0].Output__c,
+        instanceId,
+        maxSpawningOutputBytes
+      );
+    } catch (Exception e) {
+      // For example a file that is not UTF-8 text. The graph read continues.
+      return null;
+    }
     return WorkflowPayloadOffload.markerDocId(output) == null ? output : null;
   }
 

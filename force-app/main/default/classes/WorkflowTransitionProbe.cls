@@ -224,8 +224,8 @@ public inherited sharing class WorkflowTransitionProbe {
    * @param def The workflow definition.
    * @param stepName The step to probe.
    * @param version The instance version. Null gives version 1, as in the engine.
-   * @param output A stored output for a third probe (issue #332), or null.
-   * The probe gives it to StepResult.complete as the engine does.
+   * @param output The stored output for a third probe, or null for no third
+   * probe (issue #332). As in the engine.
    * @return The transitions of the step.
    */
   public static Transitions probeStep(
@@ -255,7 +255,7 @@ public inherited sharing class WorkflowTransitionProbe {
       outcomes.add(String.isBlank(successor) ? '' : successor);
       t.record(stepName, successor);
     }
-    // As recordOutcome does: two outcomes show data-dependent routing.
+    // As recordOutcome does: two or more outcomes show data-dependent routing.
     if (outcomes.size() > 1) {
       t.variedSteps.add(stepName);
     }

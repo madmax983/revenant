@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-30
+- **Amended:** 2026-10-11 (#332)
 - **Issue:** #141
 
 ## Context
@@ -36,14 +37,16 @@ static graph cannot be complete.
    (for example a date) does not use all the CPU time of a dashboard
    request. `WorkflowValidator.validate(name)` still probes every version.
 8. The awaited-signal descriptor comes from the instance detail (#84). The
-   overlay does not read `Output__c`.
+   overlay reads `Output__c` of the `SPLIT` spawning row only (#332). It
+   does not decode (ADR 0002).
 9. A new `WorkflowTopologyController` holds the endpoints.
    `WorkflowDashboardController` is at the PMD `ExcessivePublicCount` limit.
 
 ## Consequences
 
 - No new schema, event, job or metadata type.
-- The overlay uses 2 SOQL. The step query has `LIMIT 201`.
+- The overlay uses 2 SOQL. The step query has `LIMIT 201`. A `SPLIT` adds
+  1, and 3 more for an output in a file.
 - The graph does not show routes that only versions older than the newest
   50 use. It shows the reason `VERSIONS_CAPPED`.
 - An author can mark a data-dependent step: `getNextStep` throws for an
