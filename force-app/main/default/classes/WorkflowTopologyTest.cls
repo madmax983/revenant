@@ -15,6 +15,8 @@ public class WorkflowTopologyTest {
   private static final String V2_ONLY = PREFIX + 'VersionTwoStep';
   private static final String STAGE = PREFIX + 'Stage_Compensate';
   private static final String START_COMP = PREFIX + 'StartStep_Compensate';
+  // The spawning output that routes Start to Finish (issue #332).
+  private static final String ROUTE_FINISH = '{"route":"finish-now"}';
 
   // ==========================================
   // FIXTURE STEPS
@@ -687,6 +689,69 @@ public class WorkflowTopologyTest {
   }
 
   /**
+   * @description Start splits into Approve and Reject. After the join, Start
+   * goes to Finish only when its output asks for it (issue #332).
+   */
+  public class OutputSplitWorkflow implements WorkflowDefinition {
+    /**
+     * @description Declares the steps.
+     * @return The step names.
+     */
+    public List<String> getSteps() {
+      return new List<String>{ START, APPROVE, REJECT, FINISH };
+    }
+    /**
+     * @description Names the first step.
+     * @return The first step.
+     */
+    public String getInitialStep() {
+      return START;
+    }
+    /**
+     * @description Routes Start by its output.
+     * @param current The step that completed.
+     * @param result The step result.
+     * @return The next step, or null.
+     */
+    public String getNextStep(String current, StepResult result) {
+      String output = result.directive().outputJson;
+      if (current == START && output != null && output.contains('finish-now')) {
+        return FINISH;
+      }
+      return null;
+    }
+  }
+
+  /**
+   * @description Keeps the plaintext in the envelope. Decode throws and counts
+   * the calls, so a test can show that the overlay does not decode.
+   */
+  private class RefusingCodec implements PayloadCodec {
+    private Integer decodeCalls = 0;
+
+    /**
+     * @description Gives the plaintext back.
+     * @param plaintext The payload text.
+     * @param ctx The payload context.
+     * @return The same text.
+     */
+    public String encode(String plaintext, CodecContext ctx) {
+      return plaintext;
+    }
+
+    /**
+     * @description Counts the call and throws.
+     * @param stored The stored text.
+     * @param ctx The payload context.
+     * @return Never returns.
+     */
+    public String decode(String stored, CodecContext ctx) {
+      decodeCalls++;
+      throw new IllegalArgumentException('The overlay must not decode.');
+    }
+  }
+
+  /**
    * @description Not a workflow. The graph must not make an instance of it.
    */
   public class NotAWorkflow {
@@ -757,6 +822,53 @@ public class WorkflowTopologyTest {
     inst.Definition_Version__c = version;
     update inst;
     return inst;
+  }
+
+  // A SPLIT of Approve and Reject. The Start row holds the output.
+  private static Workflow_Instance__c seedOutputSplit() {
+    return seedInstance(
+      PREFIX + 'OutputSplitWorkflow',
+      'Running',
+      APPROVE + ',' + REJECT
+    );
+  }
+
+  // Oldest first: Start (the spawning step, with its output), then the
+  // branches.
+  private static void seedSpawningRows(Id instanceId, String output) {
+    insert new List<Workflow_Step_Execution__c>{
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = instanceId,
+        Step_Name__c = START,
+        Status__c = 'Completed',
+        Output__c = output,
+        Retry_Count__c = 0
+      ),
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = instanceId,
+        Step_Name__c = APPROVE,
+        Status__c = 'Completed',
+        Retry_Count__c = 0
+      ),
+      new Workflow_Step_Execution__c(
+        Workflow_Instance__c = instanceId,
+        Step_Name__c = REJECT,
+        Status__c = 'Running',
+        Retry_Count__c = 0
+      )
+    };
+  }
+
+  // An output above the inline limit, so it goes into a file.
+  private static String offloadedOutput(Id instanceId) {
+    String text = '{"route":"finish-now","pad":"' + 'x'.repeat(100001) + '"}';
+    String marker = WorkflowPayloadOffload.savePayloadIfNeeded(
+      instanceId,
+      text,
+      'Output_Start'
+    );
+    System.assert(marker.startsWith('{"$attachmentId"'), 'Offloaded');
+    return marker;
   }
 
   private static void seedSteps(Id instanceId, List<String> namesAndStatuses) {
@@ -1816,6 +1928,118 @@ public class WorkflowTopologyTest {
         WorkflowTopology.NEXT_SPAWNING_STEP_UNKNOWN,
         overlay.nextStepsUnknownReason
       );
+    }
+  }
+
+  @IsTest
+  static void splitProbesTheSpawningStepWithItsInlineOutput() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedOutputSplit();
+      seedSpawningRows(inst.Id, ROUTE_FINISH);
+
+      WorkflowTopology.Graph graph = WorkflowTopology.forInstance(inst.Id);
+
+      WorkflowTopology.Overlay overlay = graph.overlay;
+      System.assertEquals(START, overlay.nextStepsFrom);
+      System.assertEquals(
+        new List<String>{ FINISH },
+        overlay.nextSteps,
+        'The output routes to Finish after the join'
+      );
+      System.assert(hasEdge(graph.edges, START, FINISH), 'Edge added');
+      // The synthetic probes stay: they end, so the step varies ("?").
+      System.assertEquals(true, overlay.canEnd);
+      System.assertEquals(true, node(graph, START).routingUnknown);
+      System.assert(
+        graph.incompleteReasons.contains(WorkflowTopology.REASON_ROUTING_VARIES)
+      );
+      System.assertEquals(null, overlay.nextStepsUnknownReason);
+    }
+  }
+
+  @IsTest
+  static void splitProbesAnOffloadedSpawningOutput() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c inst = seedOutputSplit();
+      seedSpawningRows(inst.Id, offloadedOutput(inst.Id));
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(START, overlay.nextStepsFrom);
+      System.assertEquals(new List<String>{ FINISH }, overlay.nextSteps);
+    }
+  }
+
+  @IsTest
+  static void encodedSpawningOutputIsNotDecoded() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      RefusingCodec codec = new RefusingCodec();
+      WorkflowPayloadCodecs.setCodec(codec);
+      Workflow_Instance__c inst = seedOutputSplit();
+      String encoded = WorkflowPayloadCodecs.encode(
+        ROUTE_FINISH,
+        CodecContext.PayloadKind.STEP_OUTPUT
+      );
+      System.assert(WorkflowPayloadCodecs.isEncoded(encoded), 'Envelope');
+      seedSpawningRows(inst.Id, encoded);
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      // ADR 0002: the dashboard does not decode. Only the synthetic probes run.
+      System.assertEquals(0, codec.decodeCalls, 'No decode');
+      System.assertEquals(START, overlay.nextStepsFrom);
+      System.assert(overlay.nextSteps.isEmpty(), 'Envelope not probed');
+      System.assertEquals(true, overlay.canEnd);
+      System.assertEquals(null, overlay.nextStepsUnknownReason);
+    }
+  }
+
+  @IsTest
+  static void spawningOutputAboveTheSizeCapIsNotRead() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowTopology.maxSpawningOutputBytes = 10;
+      Workflow_Instance__c inst = seedOutputSplit();
+      seedSpawningRows(inst.Id, offloadedOutput(inst.Id));
+
+      WorkflowTopology.Overlay overlay = WorkflowTopology.forInstance(inst.Id)
+        .overlay;
+
+      System.assertEquals(START, overlay.nextStepsFrom);
+      System.assert(overlay.nextSteps.isEmpty(), 'Marker not probed');
+      System.assertEquals(true, overlay.canEnd);
+    }
+  }
+
+  @IsTest
+  static void spawningOutputReadHasAFixedQueryCost() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      Workflow_Instance__c serial = seedInstance(
+        PREFIX + 'OutputSplitWorkflow',
+        'Running',
+        START
+      );
+      seedSpawningRows(serial.Id, ROUTE_FINISH);
+      Workflow_Instance__c inline = seedOutputSplit();
+      seedSpawningRows(inline.Id, ROUTE_FINISH);
+      Workflow_Instance__c offloaded = seedOutputSplit();
+      seedSpawningRows(offloaded.Id, offloadedOutput(offloaded.Id));
+      // The first read fills the per-transaction caches.
+      WorkflowTopology.forInstance(serial.Id);
+
+      Integer before = Limits.getQueries();
+      WorkflowTopology.forInstance(serial.Id);
+      Integer serialCost = Limits.getQueries() - before;
+      before = Limits.getQueries();
+      WorkflowTopology.forInstance(inline.Id);
+      Integer inlineCost = Limits.getQueries() - before;
+      before = Limits.getQueries();
+      WorkflowTopology.forInstance(offloaded.Id);
+      Integer offloadedCost = Limits.getQueries() - before;
+
+      System.assertEquals(serialCost + 1, inlineCost, 'Output row read');
+      System.assertEquals(inlineCost + 3, offloadedCost, 'Size, link, file');
     }
   }
 
