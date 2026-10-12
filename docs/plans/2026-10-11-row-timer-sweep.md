@@ -79,3 +79,7 @@
 5. GREEN 4: the timeout re-arm and the claim stamp.
 6. REFACTOR: remove the old history reads. Update the docs.
 7. Review from four angles. Fix each finding.
+
+## Dropped claims (issue #339)
+
+The sweep claims the timers before it updates the instances. An instance whose due branches all miss the DML budget stays `Suspended` and keeps its timers. The next heartbeat selects it again.

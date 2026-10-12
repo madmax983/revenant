@@ -204,6 +204,15 @@ public inherited sharing class WorkflowSleepResumeSweep {
     if (!b.timedWaitFallbackExecs.isEmpty()) {
       Database.insert(b.timedWaitFallbackExecs, true, AccessLevel.SYSTEM_MODE);
     }
+    // Claim the timers before the instance update (issue #339). An instance
+    // whose due branches all miss the DML budget stays Suspended with its
+    // timers. The next heartbeat selects it again.
+    Map<Id, List<String>> startable = new Map<Id, List<String>>();
+    if (!b.dueBranches.isEmpty()) {
+      // A scheduled sleep job for the same branch then finds no due timer.
+      startable = claimedOnly(b, WorkflowBranchTimer.claim(b.claimedRows));
+      keepDroppedSuspended(b, startable);
+    }
     if (!b.instancesToUpdate.isEmpty()) {
       for (Workflow_Instance__c inst : b.instancesToUpdate) {
         WorkflowEngine.resumedInstanceIds.add(inst.Id);
@@ -217,11 +226,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(b.instanceIds);
     }
     // Start each parallel branch whose timer ended, by name.
-    if (!b.dueBranches.isEmpty()) {
-      // Claim the timers first. A scheduled sleep job for the same branch then
-      // finds no due timer and starts nothing.
-      Set<Id> saved = WorkflowBranchTimer.claim(b.claimedRows);
-      WorkflowBranchResume.enqueueNamedBranches(claimedOnly(b, saved));
+    if (!startable.isEmpty()) {
+      WorkflowBranchResume.enqueueNamedBranches(startable);
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
     // no-op (runStep ignores it for a comma-separated Current_Step__c), so
@@ -273,6 +279,44 @@ public inherited sharing class WorkflowSleepResumeSweep {
       }
     }
     return result;
+  }
+
+  // Removes the instances that have due branches and no claim that fit from
+  // the resume. They stay Suspended and keep `Sleep_Until__c`.
+  private static void keepDroppedSuspended(
+    SleepResumeBatch b,
+    Map<Id, List<String>> startable
+  ) {
+    Set<Id> dropped = new Set<Id>();
+    for (Id instId : b.dueBranches.keySet()) {
+      if (!startable.containsKey(instId)) {
+        dropped.add(instId);
+      }
+    }
+    if (dropped.isEmpty()) {
+      return;
+    }
+    List<Workflow_Instance__c> keep = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : b.instancesToUpdate) {
+      if (!dropped.contains(inst.Id)) {
+        keep.add(inst);
+      }
+    }
+    b.instancesToUpdate = keep;
+    List<Id> ids = new List<Id>();
+    for (Id instId : b.instanceIds) {
+      if (!dropped.contains(instId)) {
+        ids.add(instId);
+      }
+    }
+    b.instanceIds = ids;
+    List<Id> resume = new List<Id>();
+    for (Id instId : b.parallelResumeIds) {
+      if (!dropped.contains(instId)) {
+        resume.add(instId);
+      }
+    }
+    b.parallelResumeIds = resume;
   }
 
   // A suspended instance's resume is held when its definition is paused.

@@ -762,6 +762,44 @@ public class WorkflowRowTimerSweepTest {
     }
   }
 
+  // No claim fits. The instance stays Suspended with its timers. The next
+  // heartbeat selects it and starts the branch (issue #339).
+  @IsTest
+  static void testDroppedClaimKeepsInstanceSuspended() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      Datetime wake = at(-1);
+      newRow(inst.Id, STEP_A, 'Pending', wake);
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      Integer reserve = WorkflowBranchTimer.claimReserve;
+      WorkflowBranchTimer.claimReserve = Limits.getLimitDmlRows();
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      Workflow_Instance__c kept = load(inst.Id);
+      System.assertEquals('Suspended', kept.Status__c, 'Stays Suspended');
+      System.assertEquals(wake, rowOf(inst.Id, STEP_A).Wake_At__c, 'Kept');
+      System.assertEquals(false, enqueued(inst.Id, STEP_A), 'A not started');
+      WorkflowBranchTimer.claimReserve = reserve;
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'Next beat');
+      System.assertEquals('Running', load(inst.Id).Status__c, 'Resumed');
+    }
+  }
+
+  // One due branch fits. The instance resumes and starts it.
+  @IsTest
+  static void testInstanceResumesWhenOneClaimFits() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      newRow(inst.Id, STEP_A, 'Pending', at(-1));
+      newRow(inst.Id, STEP_B, 'Pending', null);
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals('Running', load(inst.Id).Status__c, 'Resumed');
+      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A started');
+    }
+  }
+
   // A signal that wakes a sleeping branch arms its timeout. The release did
   // not arm it while the branch slept.
   @IsTest
