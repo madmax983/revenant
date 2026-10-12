@@ -70,7 +70,7 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     String stepName
   ) {
     List<Workflow_Instance__c> insts = [
-      SELECT Status__c, Sleep_Until__c, Current_Step__c
+      SELECT Status__c, Sleep_Until__c, Current_Step__c, Workflow_Name__c
       FROM Workflow_Instance__c
       WHERE Id = :instanceId
       WITH SYSTEM_MODE
@@ -94,10 +94,12 @@ public inherited sharing class WorkflowSleepJob implements Schedulable {
     }
     if (woken != null && woken.Wake_At__c != null) {
       // Claim the timer here. The sweep then does not start this branch again
-      // before its worker runs (issue #311).
-      update as system new Workflow_Step_Execution__c(
-        Id = woken.Id,
-        Wake_At__c = null
+      // before its worker runs (issue #311). Also arm the step timeout,
+      // because the timer woke the branch (issue #335).
+      update as system WorkflowBranchTimer.wokenRow(
+        woken.Id,
+        stepName,
+        inst.Workflow_Name__c
       );
     }
 

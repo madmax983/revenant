@@ -601,10 +601,22 @@ A sleep or a timed wait of a step now stores its deadline in a new field. A park
 - New fields: `Workflow_Step_Execution__c.Wake_At__c` and `Workflow_Instance__c.Parked_At__c`. They are blank on existing rows.
 - A parallel branch that sleeps in a park keeps its deadline on release, pause resume and hold release. The sleep sweep starts it.
 - If an instance has a timer, only a signal that arrived in the park keeps it `Running` on release. A signal from before the park does not. An instance that parked before this change has no park time. For it, any `Received` signal keeps the instance `Running`, as before.
-- A parallel branch that started a sleep before this change has no `Wake_At__c`. Its sleep job does nothing, and the sweep does not start it. Release or resume the instance after the upgrade, or wait until no parallel sleep is in flight.
+- A parallel branch that started a sleep before this change has no `Wake_At__c`. Its sleep job does nothing. See the next section for the sweep fallback.
 - Give your own permission sets read access to the two new fields if you report on them. `Revenant_Operator` and `Revenant_Admin` have it.
 
 See [docs/definition-change-detection.md](docs/definition-change-detection.md#timers-in-a-park).
+
+---
+
+## Changed: the sweep selects a parallel branch by its own timer (issue #335)
+
+The sleep sweep now reads the step rows of `Suspended` parallel instances. `Sleep_Until__c` is a hint for these instances. No schema change.
+
+- The sweep starts each branch with a `Pending` row whose `Wake_At__c` ended. Another branch can no longer hide a due branch.
+- A run that publishes a branch clears its `Wake_At__c` in the same transaction: signal wake, release, pause resume, hold release, sweep and sleep job. A signal wake that comes before a park no longer leaves a timer on the row.
+- Release and resume do not set `Timeout_At__c` on a sleeping branch. The sweep, the sleep job and a signal wake set it when they wake the branch.
+- Release, resume and signal wake read the active (Pending, Running or Retrying) step rows and one grouped row for each finished (Completed or OperatorSkipped) branch. They no longer read the full step history.
+- A parallel sleep from before issue #311 has no `Wake_At__c`. When its `Sleep_Until__c` ends and no branch has a timer, the sweep runs each `Pending` branch that has no timer, no wait type and no retry mark, and that did not change after the deadline. No action is needed. If a park cleared `Sleep_Until__c`, release or resume the instance.
 
 ---
 

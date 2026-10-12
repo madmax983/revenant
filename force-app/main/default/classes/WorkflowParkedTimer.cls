@@ -11,8 +11,9 @@
  *
  * A parallel instance keeps the timer of each branch in `Wake_At__c`. Release
  * does not run a branch whose deadline is in the future. If a branch sleeps,
- * the instance is `Suspended` and `Sleep_Until__c` is the first deadline. The
- * sleep sweep starts each sleeping branch when its timer ends.
+ * the instance is `Suspended` and `Sleep_Until__c` is the first deadline. It is
+ * a hint. The sleep sweep selects each branch by its own `Wake_At__c` and
+ * starts it when its timer ends.
  */
 public inherited sharing class WorkflowParkedTimer {
   /**
@@ -30,8 +31,8 @@ public inherited sharing class WorkflowParkedTimer {
   /**
    * @description Sets the status of each instance that leaves a park, and
    * clears its park time. A signal that arrived in the park stays `Received`,
-   * so the step must run and read it. Costs at most one SOQL for branch
-   * timers and one for signals.
+   * so the step must run and read it. Costs few SOQL for branch
+   * timers (see {@link WorkflowBranchTimer#load}) and one for signals.
    *
    * A serial instance with a timer is `Suspended`. A parallel instance with a
    * branch that still sleeps is `Suspended`, and `Sleep_Until__c` is the first
@@ -54,7 +55,7 @@ public inherited sharing class WorkflowParkedTimer {
         timed.add(inst.Id);
       }
     }
-    Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.load(
+    Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.loadForRelease(
       multi
     );
     for (Workflow_Instance__c inst : multi) {
@@ -81,12 +82,13 @@ public inherited sharing class WorkflowParkedTimer {
       } else {
         inst.Status__c = 'Suspended';
         inst.Sleep_Until__c = b.firstWake(now);
-        if (b.sleeping(now).size() >= b.open) {
+        if (b.sleeping(now).size() >= b.openNames.size()) {
           waiting.add(inst.Id); // All open branches wait for a timer.
         }
       }
       inst.Parked_At__c = null;
     }
+    WorkflowBranchTimer.forget(waiting);
     return waiting;
   }
 

@@ -62,6 +62,9 @@ public inherited sharing class WorkflowSleepResumeSweep {
       // parked, so a parked backlog cannot fill the batch of in-flight
       // sleepers. redriveParkedStarts sends those starts, bounded.
       redriveParkedStarts(now, pausedDefNames);
+      // Issue #335: a due branch timer selects its instance. The value of
+      // `Sleep_Until__c` does not matter.
+      Set<Id> rowDue = dueRowInstanceIds(now, pausedDefNames);
       readyToResume = [
         SELECT
           Id,
@@ -83,7 +86,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
         FROM Workflow_Instance__c
         WHERE
           Status__c = 'Suspended'
-          AND Sleep_Until__c <= :now
+          AND (Sleep_Until__c <= :now
+          OR Id IN :rowDue)
           AND Workflow_Name__c NOT IN :pausedDefNames
           AND Held_At__c = NULL
           AND (Global_Admission__c = NULL
@@ -112,7 +116,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
         multi.add(inst);
       }
     }
-    // One SOQL for all parallel instances. None when no instance is parallel.
+    // At most two SOQL for all parallel instances. None when no instance is parallel.
     b.branchTimers = WorkflowBranchTimer.load(multi);
 
     for (Workflow_Instance__c inst : readyToResume) {
@@ -120,6 +124,39 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
 
     flushSleepResumptions(b);
+  }
+
+  // Issue #335: the instances with a parallel branch whose own timer ended.
+  // `Sleep_Until__c` is one field for all branches. Another branch can have
+  // replaced the deadline, so the sweep reads the step rows. A serial instance
+  // keeps `Sleep_Until__c`. The pause and hold filters keep a paused backlog
+  // out of the bounded batch. Cost: 1 SOQL, at most one batch of rows.
+  private static Set<Id> dueRowInstanceIds(
+    Datetime now,
+    Set<String> pausedDefNames
+  ) {
+    Set<Id> ids = new Set<Id>();
+    for (Workflow_Step_Execution__c row : [
+      SELECT Workflow_Instance__c
+      FROM Workflow_Step_Execution__c
+      WHERE
+        Status__c = 'Pending'
+        AND Wake_At__c <= :now
+        AND Workflow_Instance__r.Status__c = 'Suspended'
+        AND Workflow_Instance__r.Current_Step__c LIKE '%,%'
+        AND Workflow_Instance__r.Workflow_Name__c NOT IN :pausedDefNames
+        AND Workflow_Instance__r.Held_At__c = NULL
+        AND (Workflow_Instance__r.Global_Admission__c = NULL
+        OR Workflow_Instance__r.Global_Admission__c != :GlobalAdmissionPolicy.STATE_PARKED)
+        AND (Workflow_Instance__r.Concurrency_Parked__c = FALSE
+        OR Workflow_Instance__r.Concurrency_Slot_Held__c = TRUE)
+      WITH SYSTEM_MODE
+      ORDER BY Wake_At__c ASC
+      LIMIT :watchdogResumeBatchSize
+    ]) {
+      ids.add(row.Workflow_Instance__c);
+    }
+    return ids;
   }
 
   // Issue #136: sends due parked starts to the gate, oldest start first, not
@@ -183,8 +220,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
     if (!b.dueBranches.isEmpty()) {
       // Claim the timers first. A scheduled sleep job for the same branch then
       // finds no due timer and starts nothing.
-      Database.update(b.claimedRows, true, AccessLevel.SYSTEM_MODE);
-      WorkflowBranchResume.enqueueNamedBranches(b.dueBranches);
+      Set<Id> saved = WorkflowBranchTimer.claim(b.claimedRows);
+      WorkflowBranchResume.enqueueNamedBranches(claimedOnly(b, saved));
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
     // no-op (runStep ignores it for a comma-separated Current_Step__c), so
@@ -213,6 +250,29 @@ public inherited sharing class WorkflowSleepResumeSweep {
         ]
       );
     }
+  }
+
+  // Drops the due branches whose claim did not fit. Their timers stay, so the
+  // next heartbeat selects them again.
+  private static Map<Id, List<String>> claimedOnly(
+    SleepResumeBatch b,
+    Set<Id> saved
+  ) {
+    Map<Id, List<String>> result = new Map<Id, List<String>>();
+    for (Id instId : b.dueBranches.keySet()) {
+      WorkflowBranchTimer.Branches branches = b.branchTimers.get(instId);
+      List<String> steps = new List<String>();
+      for (String step : b.dueBranches.get(instId)) {
+        Id rowId = branches.rowIds.get(step);
+        if (rowId == null || saved.contains(rowId)) {
+          steps.add(step);
+        }
+      }
+      if (!steps.isEmpty()) {
+        result.put(instId, steps);
+      }
+    }
+    return result;
   }
 
   // A suspended instance's resume is held when its definition is paused.
@@ -248,6 +308,11 @@ public inherited sharing class WorkflowSleepResumeSweep {
       b.instanceIds.add(inst.Id);
       return;
     }
+    // A parallel instance that only a row timer selected, and whose timer a
+    // sleep job claimed since, has nothing due. Leave it Suspended.
+    if (isParallel(inst) && !hasDueTimer(inst, b)) {
+      return;
+    }
     Workflow_Step_Execution__c latestStep = b.latestStepByInstId.get(inst.Id);
     if (
       latestStep != null &&
@@ -275,6 +340,25 @@ public inherited sharing class WorkflowSleepResumeSweep {
     inst.Async_Job_Id__c = null;
     b.instanceIds.add(inst.Id);
     b.instancesToUpdate.add(inst);
+  }
+
+  // True when the instance timer ended, or a branch timer ended.
+  private static Boolean hasDueTimer(
+    Workflow_Instance__c inst,
+    SleepResumeBatch b
+  ) {
+    if (inst.Sleep_Until__c != null && inst.Sleep_Until__c <= b.now) {
+      return true;
+    }
+    WorkflowBranchTimer.Branches branches = b.branchTimers.get(inst.Id);
+    if (branches != null) {
+      for (Datetime wake : branches.wakes.values()) {
+        if (wake <= b.now) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // Non-compensating resume path: detect a fired timed-wait and route to the
@@ -313,6 +397,11 @@ public inherited sharing class WorkflowSleepResumeSweep {
   }
 
   // Finds the branches whose timer ended, to start them. Keeps the next timer.
+  // A sleep from before the row timers has no branch timer (issue #335). Its
+  // instance timer ended and no branch timer is left. The sweep then runs the
+  // Pending branches that have no timer, wait type or retry mark, so that a
+  // sleep from before the upgrade still wakes. A branch that waits for a
+  // signal, or retries after a lock, does not run.
   private static void planBranchTimers(
     Workflow_Instance__c inst,
     SleepResumeBatch b
@@ -326,11 +415,24 @@ public inherited sharing class WorkflowSleepResumeSweep {
       if (branches.wakes.get(step) <= b.now) {
         due.add(step);
         b.claimedRows.add(
-          new Workflow_Step_Execution__c(
-            Id = branches.rowIds.get(step),
-            Wake_At__c = null
+          WorkflowBranchTimer.wokenRow(
+            branches.rowIds.get(step),
+            step,
+            inst.Workflow_Name__c
           )
         );
+      }
+    }
+    if (
+      branches.firstWake(b.now) == null &&
+      inst.Sleep_Until__c != null &&
+      inst.Sleep_Until__c <= b.now
+    ) {
+      // A row that changed after the deadline is a claimed or new branch.
+      for (String step : branches.untimedPending.keySet()) {
+        if (branches.untimedPending.get(step) <= inst.Sleep_Until__c) {
+          due.add(step);
+        }
       }
     }
     if (!due.isEmpty()) {

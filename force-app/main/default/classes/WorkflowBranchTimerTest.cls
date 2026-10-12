@@ -408,21 +408,23 @@ public class WorkflowBranchTimerTest {
     }
   }
 
-  // A parallel instance with no branch timer keeps the old sweep result.
+  // A parallel instance with a due instance timer and no branch timer is a sleep
+  // from before the row timers. The sweep runs its untimed branches (issue #335).
   @IsTest
-  static void testSweepWithoutBranchTimersIsUnchanged() {
+  static void testSweepWithoutBranchTimersRunsUntimedBranches() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newParallel('Suspended');
-      inst.Sleep_Until__c = at(-1);
+      inst.Sleep_Until__c = at(30);
       update inst;
       newBranch(inst.Id, STEP_A, null);
       newBranch(inst.Id, STEP_B, null);
-      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      WorkflowSleepResumeSweep.processSleepResumptions(at(60));
       Workflow_Instance__c after = load(inst.Id);
       System.assertEquals('Running', after.Status__c);
       System.assertEquals(null, after.Sleep_Until__c);
-      System.assertEquals(false, enqueued(inst.Id, STEP_A));
+      System.assertEquals(true, enqueued(inst.Id, STEP_A));
+      System.assertEquals(true, enqueued(inst.Id, STEP_B));
     }
   }
 

@@ -298,99 +298,69 @@ public inherited sharing class WorkflowPauseResumeDrainer {
   // single EventBus.publish; the test path dispatches per branch directly.
   /**
    * @description Fans out a resume enqueue per unfinished parallel branch, mirroring
-   * WorkflowBranchResume.enqueueResumeBulk: resolve per-branch status, collect the
-   * RUN_STEP events for unfinished branches, then publish them in one call.
+   * WorkflowBranchResume.enqueueResumeBulk: read the open branches (bounded, not the
+   * step history), claim their timers, collect the RUN_STEP events, then publish
+   * them in one call.
    * @param instances The resumed multi-branch instances to fan out.
    */
   private static void enqueueResumeBulkParallel(
     List<Workflow_Instance__c> instances
   ) {
-    Map<String, String> latestStatusByKey = resolveLatestBranchStatus(
+    Map<Id, WorkflowBranchTimer.Branches> branches = WorkflowBranchTimer.take(
       instances
     );
-    List<Workflow_Event__e> events = collectResumeBranchEvents(
+    Set<String> blocked = WorkflowBranchTimer.sleepingKeys(
       instances,
-      latestStatusByKey,
-      WorkflowBranchTimer.sleepingKeys(instances, '|')
+      branches,
+      '|'
     );
-    publishResumeEvents(events);
+    // Claim first. A failed publish rolls back the claim. A branch whose claim
+    // does not fit stays asleep.
+    Set<String> held = WorkflowBranchTimer.claimStarting(
+      instances,
+      branches,
+      blocked,
+      '|'
+    );
+    blocked.addAll(held);
+    publishResumeEvents(
+      collectResumeBranchEvents(instances, branches, blocked)
+    );
   }
 
-  // Current_Step__c retains every branch name until the join, including ones
-  // whose step row is already Completed. Resolve the latest status per
-  // (instance, branch) so completed branches can be skipped — driving a no-op
-  // worker per finished branch would waste the resume publish/DML budget and
-  // could roll back the resume (mirrors WorkflowBranchResume.enqueueResumeBulk).
-  /**
-   * @description Resolves the latest status per (instance, branch) so already
-   * Completed branches can be skipped, keyed by "instanceId|stepName".
-   * @param instances The resumed multi-branch instances whose branches to resolve.
-   * @return The latest status per (instance, branch) key.
-   */
-  private static Map<String, String> resolveLatestBranchStatus(
-    List<Workflow_Instance__c> instances
-  ) {
-    Set<Id> instanceIds = new Set<Id>();
-    Set<String> branchNames = new Set<String>();
-    for (Workflow_Instance__c inst : instances) {
-      instanceIds.add(inst.Id);
-      for (String branch : inst.Current_Step__c.split(',')) {
-        branchNames.add(branch.trim());
-      }
-    }
-
-    Map<String, String> latestStatusByKey = new Map<String, String>();
-    for (Workflow_Step_Execution__c se : [
-      SELECT Workflow_Instance__c, Step_Name__c, Status__c
-      FROM Workflow_Step_Execution__c
-      WHERE
-        Workflow_Instance__c IN :instanceIds
-        AND Step_Name__c IN :branchNames
-      WITH SYSTEM_MODE
-      ORDER BY CreatedDate DESC, Id DESC
-    ]) {
-      String statusKey = se.Workflow_Instance__c + '|' + se.Step_Name__c;
-      if (!latestStatusByKey.containsKey(statusKey)) {
-        latestStatusByKey.put(statusKey, se.Status__c);
-      }
-    }
-    return latestStatusByKey;
-  }
-
-  // Walks each instance's branches once, skipping completed and duplicate branches, and
-  // dispatches a worker for each unfinished branch. Returns the RUN_STEP events to be
+  // Walks each instance's open branches once, skipping sleeping and duplicate
+  // branches, and dispatches a worker for each. Returns the RUN_STEP events to be
   // published (empty in test context, where dispatchBranch enqueues directly instead).
   /**
-   * @description Walks each instance's branches once, skipping Completed and
-   * duplicate branches, and dispatches a worker per unfinished branch.
+   * @description Walks each instance's open branches once, skipping sleeping and
+   * duplicate branches, and dispatches a worker per branch.
    * @param instances The resumed multi-branch instances to walk.
-   * @param latestStatusByKey The latest status per (instance, branch) key.
-   * @param sleeping The (instance, branch) keys of branches that still sleep.
+   * @param branches The branches of those instances.
+   * @param sleeping The (instance, branch) keys of branches that must not start.
    * @return The RUN_STEP events to publish (empty in test context, where
    * dispatchBranch enqueues directly instead).
    */
   private static List<Workflow_Event__e> collectResumeBranchEvents(
     List<Workflow_Instance__c> instances,
-    Map<String, String> latestStatusByKey,
+    Map<Id, WorkflowBranchTimer.Branches> branches,
     Set<String> sleeping
   ) {
     List<Workflow_Event__e> events = new List<Workflow_Event__e>();
     Set<String> branchKeys = new Set<String>();
     for (Workflow_Instance__c inst : instances) {
-      for (String branch : inst.Current_Step__c.split(',')) {
-        String trimmed = branch.trim();
-        String key = inst.Id + '|' + trimmed;
-        if (latestStatusByKey.get(key) == 'Completed') {
-          continue; // branch already finished — no worker needed
-        }
+      WorkflowBranchTimer.Branches open = branches.get(inst.Id);
+      if (open == null) {
+        continue;
+      }
+      for (String branch : open.openNames) {
+        String key = inst.Id + '|' + branch;
         if (sleeping.contains(key)) {
           continue; // the sleep sweep starts it when its timer ends
         }
-        if (branchKeys.contains(key)) {
+        if (!branchKeys.add(key)) {
           continue; // already dispatched this (instance, branch)
         }
-        branchKeys.add(key);
-        dispatchBranch(inst.Id, trimmed, events);
+        dispatchBranch(inst.Id, branch, events);
       }
     }
     return events;
