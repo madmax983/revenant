@@ -27,7 +27,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
     Datetime now;
     Map<Id, WorkflowBranchTimer.Branches> branchTimers = new Map<Id, WorkflowBranchTimer.Branches>();
     Map<Id, List<String>> dueBranches = new Map<Id, List<String>>();
-    List<Workflow_Step_Execution__c> claimedRows = new List<Workflow_Step_Execution__c>();
+    Map<Id, List<Workflow_Step_Execution__c>> claimedRows = new Map<Id, List<Workflow_Step_Execution__c>>();
     Map<Id, Datetime> nextWake = new Map<Id, Datetime>();
   }
 
@@ -204,6 +204,14 @@ public inherited sharing class WorkflowSleepResumeSweep {
     if (!b.timedWaitFallbackExecs.isEmpty()) {
       Database.insert(b.timedWaitFallbackExecs, true, AccessLevel.SYSTEM_MODE);
     }
+    // Claim the timers before the instance update (issue #339). An instance
+    // whose claims do not all fit stays Suspended with its timers. The next
+    // heartbeat selects it again.
+    Map<Id, List<String>> startable = new Map<Id, List<String>>();
+    if (!b.dueBranches.isEmpty()) {
+      startable = claimWhole(b);
+      keepDroppedSuspended(b, startable);
+    }
     if (!b.instancesToUpdate.isEmpty()) {
       for (Workflow_Instance__c inst : b.instancesToUpdate) {
         WorkflowEngine.resumedInstanceIds.add(inst.Id);
@@ -217,11 +225,8 @@ public inherited sharing class WorkflowSleepResumeSweep {
       WorkflowOrchestratorEnqueue.enqueueOrchestrators(b.instanceIds);
     }
     // Start each parallel branch whose timer ended, by name.
-    if (!b.dueBranches.isEmpty()) {
-      // Claim the timers first. A scheduled sleep job for the same branch then
-      // finds no due timer and starts nothing.
-      Set<Id> saved = WorkflowBranchTimer.claim(b.claimedRows);
-      WorkflowBranchResume.enqueueNamedBranches(claimedOnly(b, saved));
+    if (!startable.isEmpty()) {
+      WorkflowBranchResume.enqueueNamedBranches(startable);
     }
     // For a resumed parallel instance the blank-stepName orchestrator above is a
     // no-op (runStep ignores it for a comma-separated Current_Step__c), so
@@ -252,27 +257,65 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
   }
 
-  // Drops the due branches whose claim did not fit. Their timers stay, so the
-  // next heartbeat selects them again.
-  private static Map<Id, List<String>> claimedOnly(
-    SleepResumeBatch b,
-    Set<Id> saved
-  ) {
+  // Claims the timers of whole instances, in order, while they fit the DML
+  // budget. A scheduled sleep job for the same branch then finds no due timer.
+  // An instance that does not fit is not claimed at all, so that no due timer
+  // is left on a Running instance. Returns the branches to start.
+  private static Map<Id, List<String>> claimWhole(SleepResumeBatch b) {
+    Integer room = WorkflowBranchTimer.claimRoom();
+    List<Workflow_Step_Execution__c> fit = new List<Workflow_Step_Execution__c>();
     Map<Id, List<String>> result = new Map<Id, List<String>>();
     for (Id instId : b.dueBranches.keySet()) {
-      WorkflowBranchTimer.Branches branches = b.branchTimers.get(instId);
-      List<String> steps = new List<String>();
-      for (String step : b.dueBranches.get(instId)) {
-        Id rowId = branches.rowIds.get(step);
-        if (rowId == null || saved.contains(rowId)) {
-          steps.add(step);
+      List<Workflow_Step_Execution__c> rows = b.claimedRows.get(instId);
+      Integer size = rows == null ? 0 : rows.size();
+      if (size <= room) {
+        room -= size;
+        if (size > 0) {
+          fit.addAll(rows);
         }
-      }
-      if (!steps.isEmpty()) {
-        result.put(instId, steps);
+        result.put(instId, b.dueBranches.get(instId));
       }
     }
+    WorkflowBranchTimer.claim(fit);
     return result;
+  }
+
+  // Keeps an instance Suspended when its claims were not saved. It keeps
+  // `Sleep_Until__c` and the timers.
+  private static void keepDroppedSuspended(
+    SleepResumeBatch b,
+    Map<Id, List<String>> startable
+  ) {
+    Set<Id> dropped = new Set<Id>();
+    for (Id instId : b.dueBranches.keySet()) {
+      if (!startable.containsKey(instId)) {
+        dropped.add(instId);
+      }
+    }
+    if (dropped.isEmpty()) {
+      return;
+    }
+    List<Workflow_Instance__c> keep = new List<Workflow_Instance__c>();
+    for (Workflow_Instance__c inst : b.instancesToUpdate) {
+      if (!dropped.contains(inst.Id)) {
+        keep.add(inst);
+      }
+    }
+    b.instancesToUpdate = keep;
+    List<Id> ids = new List<Id>();
+    for (Id instId : b.instanceIds) {
+      if (!dropped.contains(instId)) {
+        ids.add(instId);
+      }
+    }
+    b.instanceIds = ids;
+    List<Id> resume = new List<Id>();
+    for (Id instId : b.parallelResumeIds) {
+      if (!dropped.contains(instId)) {
+        resume.add(instId);
+      }
+    }
+    b.parallelResumeIds = resume;
   }
 
   // A suspended instance's resume is held when its definition is paused.
@@ -414,13 +457,17 @@ public inherited sharing class WorkflowSleepResumeSweep {
     for (String step : branches.wakes.keySet()) {
       if (branches.wakes.get(step) <= b.now) {
         due.add(step);
-        b.claimedRows.add(
-          WorkflowBranchTimer.wokenRow(
-            branches.rowIds.get(step),
-            step,
-            inst.Workflow_Name__c
-          )
-        );
+        if (!b.claimedRows.containsKey(inst.Id)) {
+          b.claimedRows.put(inst.Id, new List<Workflow_Step_Execution__c>());
+        }
+        b.claimedRows.get(inst.Id)
+          .add(
+            WorkflowBranchTimer.wokenRow(
+              branches.rowIds.get(step),
+              step,
+              inst.Workflow_Name__c
+            )
+          );
       }
     }
     if (

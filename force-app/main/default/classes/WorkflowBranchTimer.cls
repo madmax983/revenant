@@ -324,6 +324,14 @@ public inherited sharing class WorkflowBranchTimer {
   }
 
   /**
+   * @description Returns how many rows `claim` can save now.
+   * @return The free DML rows above `claimReserve`.
+   */
+  public static Integer claimRoom() {
+    return Limits.getLimitDmlRows() - Limits.getDmlRows() - claimReserve;
+  }
+
+  /**
    * @description Saves the claimed rows. Call it before the run is published.
    * It keeps `claimReserve` DML rows free for the caller. If the rows do not
    * fit, it saves the first rows only. The caller must not start a branch
@@ -332,10 +340,7 @@ public inherited sharing class WorkflowBranchTimer {
    * @return The Ids of the rows that it saved.
    */
   public static Set<Id> claim(List<Workflow_Step_Execution__c> rows) {
-    Integer room =
-      Limits.getLimitDmlRows() -
-      Limits.getDmlRows() -
-      claimReserve;
+    Integer room = claimRoom();
     List<Workflow_Step_Execution__c> fit = new List<Workflow_Step_Execution__c>();
     for (Integer i = 0; i < rows.size() && i < room; i++) {
       fit.add(rows[i]);
