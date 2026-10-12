@@ -82,4 +82,4 @@
 
 ## Dropped claims (issue #339)
 
-The sweep claims the timers before it updates the instances. An instance whose due branches all miss the DML budget stays `Suspended` and keeps its timers. The next heartbeat selects it again.
+The sweep claims the timers before it updates the instances. The sweep claims the timers of a whole instance or none. An instance whose claims do not all fit stays `Suspended` and keeps its timers. The next heartbeat selects it again.

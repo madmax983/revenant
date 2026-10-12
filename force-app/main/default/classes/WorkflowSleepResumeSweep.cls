@@ -27,7 +27,7 @@ public inherited sharing class WorkflowSleepResumeSweep {
     Datetime now;
     Map<Id, WorkflowBranchTimer.Branches> branchTimers = new Map<Id, WorkflowBranchTimer.Branches>();
     Map<Id, List<String>> dueBranches = new Map<Id, List<String>>();
-    List<Workflow_Step_Execution__c> claimedRows = new List<Workflow_Step_Execution__c>();
+    Map<Id, List<Workflow_Step_Execution__c>> claimedRows = new Map<Id, List<Workflow_Step_Execution__c>>();
     Map<Id, Datetime> nextWake = new Map<Id, Datetime>();
   }
 
@@ -205,12 +205,11 @@ public inherited sharing class WorkflowSleepResumeSweep {
       Database.insert(b.timedWaitFallbackExecs, true, AccessLevel.SYSTEM_MODE);
     }
     // Claim the timers before the instance update (issue #339). An instance
-    // whose due branches all miss the DML budget stays Suspended with its
-    // timers. The next heartbeat selects it again.
+    // whose claims do not all fit stays Suspended with its timers. The next
+    // heartbeat selects it again.
     Map<Id, List<String>> startable = new Map<Id, List<String>>();
     if (!b.dueBranches.isEmpty()) {
-      // A scheduled sleep job for the same branch then finds no due timer.
-      startable = claimedOnly(b, WorkflowBranchTimer.claim(b.claimedRows));
+      startable = claimWhole(b);
       keepDroppedSuspended(b, startable);
     }
     if (!b.instancesToUpdate.isEmpty()) {
@@ -258,31 +257,31 @@ public inherited sharing class WorkflowSleepResumeSweep {
     }
   }
 
-  // Drops the due branches whose claim did not fit. Their timers stay, so the
-  // next heartbeat selects them again.
-  private static Map<Id, List<String>> claimedOnly(
-    SleepResumeBatch b,
-    Set<Id> saved
-  ) {
+  // Claims the timers of whole instances, in order, while they fit the DML
+  // budget. A scheduled sleep job for the same branch then finds no due timer.
+  // An instance that does not fit is not claimed at all, so that no due timer
+  // is left on a Running instance. Returns the branches to start.
+  private static Map<Id, List<String>> claimWhole(SleepResumeBatch b) {
+    Integer room = WorkflowBranchTimer.claimRoom();
+    List<Workflow_Step_Execution__c> fit = new List<Workflow_Step_Execution__c>();
     Map<Id, List<String>> result = new Map<Id, List<String>>();
     for (Id instId : b.dueBranches.keySet()) {
-      WorkflowBranchTimer.Branches branches = b.branchTimers.get(instId);
-      List<String> steps = new List<String>();
-      for (String step : b.dueBranches.get(instId)) {
-        Id rowId = branches.rowIds.get(step);
-        if (rowId == null || saved.contains(rowId)) {
-          steps.add(step);
+      List<Workflow_Step_Execution__c> rows = b.claimedRows.get(instId);
+      Integer size = rows == null ? 0 : rows.size();
+      if (size <= room) {
+        room -= size;
+        if (size > 0) {
+          fit.addAll(rows);
         }
-      }
-      if (!steps.isEmpty()) {
-        result.put(instId, steps);
+        result.put(instId, b.dueBranches.get(instId));
       }
     }
+    WorkflowBranchTimer.claim(fit);
     return result;
   }
 
-  // Removes the instances that have due branches and no claim that fit from
-  // the resume. They stay Suspended and keep `Sleep_Until__c`.
+  // Keeps an instance Suspended when its claims were not saved. It keeps
+  // `Sleep_Until__c` and the timers.
   private static void keepDroppedSuspended(
     SleepResumeBatch b,
     Map<Id, List<String>> startable
@@ -458,13 +457,17 @@ public inherited sharing class WorkflowSleepResumeSweep {
     for (String step : branches.wakes.keySet()) {
       if (branches.wakes.get(step) <= b.now) {
         due.add(step);
-        b.claimedRows.add(
-          WorkflowBranchTimer.wokenRow(
-            branches.rowIds.get(step),
-            step,
-            inst.Workflow_Name__c
-          )
-        );
+        if (!b.claimedRows.containsKey(inst.Id)) {
+          b.claimedRows.put(inst.Id, new List<Workflow_Step_Execution__c>());
+        }
+        b.claimedRows.get(inst.Id)
+          .add(
+            WorkflowBranchTimer.wokenRow(
+              branches.rowIds.get(step),
+              step,
+              inst.Workflow_Name__c
+            )
+          );
       }
     }
     if (

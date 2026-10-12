@@ -777,18 +777,49 @@ public class WorkflowRowTimerSweepTest {
       WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
       Workflow_Instance__c kept = load(inst.Id);
       System.assertEquals('Suspended', kept.Status__c, 'Stays Suspended');
-      System.assertEquals(wake, rowOf(inst.Id, STEP_A).Wake_At__c, 'Kept');
+      System.assertEquals(
+        wake,
+        rowOf(inst.Id, STEP_A).Wake_At__c,
+        'Timer kept'
+      );
       System.assertEquals(false, enqueued(inst.Id, STEP_A), 'A not started');
       WorkflowBranchTimer.claimReserve = reserve;
       WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
-      System.assertEquals(true, enqueued(inst.Id, STEP_A), 'Next beat');
+      System.assertEquals(
+        true,
+        enqueued(inst.Id, STEP_A),
+        'Next beat starts A'
+      );
       System.assertEquals('Running', load(inst.Id).Status__c, 'Resumed');
     }
   }
 
-  // One due branch fits. The instance resumes and starts it.
+  // Two due branches and room for one claim. The sweep claims whole instances,
+  // so the instance stays Suspended and no timer is lost.
   @IsTest
-  static void testInstanceResumesWhenOneClaimFits() {
+  static void testPartialClaimKeepsInstanceSuspended() {
+    System.runAs(new User(Id = UserInfo.getUserId())) {
+      WorkflowEngine.disableQueueableInTest = true;
+      Workflow_Instance__c inst = newParallel('Suspended');
+      Datetime wake = at(-1);
+      newRow(inst.Id, STEP_A, 'Pending', wake);
+      newRow(inst.Id, STEP_B, 'Pending', wake);
+      WorkflowBranchTimer.claimReserve =
+        Limits.getLimitDmlRows() -
+        Limits.getDmlRows() -
+        1;
+      WorkflowSleepResumeSweep.processSleepResumptions(Datetime.now());
+      System.assertEquals('Suspended', load(inst.Id).Status__c, 'Suspended');
+      System.assertEquals(wake, rowOf(inst.Id, STEP_A).Wake_At__c, 'A kept');
+      System.assertEquals(wake, rowOf(inst.Id, STEP_B).Wake_At__c, 'B kept');
+      System.assertEquals(false, enqueued(inst.Id, STEP_A), 'A not started');
+      System.assertEquals(false, enqueued(inst.Id, STEP_B), 'B not started');
+    }
+  }
+
+  // The claim fits. The instance resumes and starts the branch.
+  @IsTest
+  static void testInstanceResumesWhenClaimFits() {
     System.runAs(new User(Id = UserInfo.getUserId())) {
       WorkflowEngine.disableQueueableInTest = true;
       Workflow_Instance__c inst = newParallel('Suspended');
