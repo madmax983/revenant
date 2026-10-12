@@ -300,7 +300,7 @@ public class WorkflowRowTimerSweepTest {
         null
       );
       signalWait.Wait_Type__c = WorkflowWaitDescriptorService.TYPE_GENERIC;
-      update signalWait;
+      update as system signalWait;
       Workflow_Step_Execution__c lockRetry = newRow(
         inst.Id,
         STEP_C,
@@ -308,7 +308,7 @@ public class WorkflowRowTimerSweepTest {
         null
       );
       lockRetry.Transient_Retry_Count__c = 1;
-      update lockRetry;
+      update as system lockRetry;
       WorkflowSleepResumeSweep.processSleepResumptions(at(60));
       System.assertEquals(true, enqueued(inst.Id, STEP_A), 'A may sleep');
       System.assertEquals(
